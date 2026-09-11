@@ -197,10 +197,22 @@ func (a *App) resetAgent(cause error) {
 }
 
 func (a *App) abortAndResetAgent(reason string) {
+	a.finalizeAbortedRun()
 	if a.agent != nil {
 		a.agent.Abort()
 	}
 	a.resetAgent(errors.New(reason))
+}
+
+// finalizeAbortedRun commits the transcript of a run that is being canceled from
+// the UI. An aborted run reports no further tool results, so the streaming
+// assistant/thinking blocks and any tool row that was still running must be
+// terminalized here: the running row would otherwise stay pinned in the managed
+// viewport, and the streamed text would disappear when the next run starts
+// streaming into a fresh message slot.
+func (a *App) finalizeAbortedRun() {
+	a.commitActiveStream()
+	a.finalizeInterruptedTools()
 }
 
 func (a *App) finishRequestTimer() {

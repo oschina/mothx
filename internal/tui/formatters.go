@@ -103,6 +103,9 @@ func bashCommandStatus(tr i18n.Translator, result toolResult) string {
 	if result.status == toolResultStatusRunning {
 		return tr.Text(i18n.MsgToolCommandRunning)
 	}
+	if result.status == toolResultStatusInterrupted {
+		return tr.Text(i18n.MsgToolModalStateCanceled)
+	}
 	if result.toolError != "" || strings.EqualFold(result.executionState, "interrupted") || strings.EqualFold(result.executionState, "failed") {
 		return tr.Text(i18n.MsgToolCommandFailed)
 	}

@@ -51,6 +51,11 @@ func (a *App) renderToolResult(result toolResult) string {
 		}
 		return renderBashToolResult(a.translator, result)
 	}
+	if result.status == toolResultStatusInterrupted {
+		// The tool never produced a result (the run was canceled or the stream
+		// ended first), so report the terminal state instead of an empty summary.
+		return toolStyle.Render(fmt.Sprintf("%s %s", formatToolHeader(result), a.translator.Text(i18n.MsgToolModalStateCanceled)))
+	}
 	// Compact mode: single-line summary for all tool types
 	if a.compactMode {
 		header := formatToolHeader(result)
@@ -83,11 +88,16 @@ func (a *App) renderToolResult(result toolResult) string {
 }
 
 func renderBashToolResult(tr i18n.Translator, result toolResult) string {
+	header := toolStyle.Render(formatBashCommandLine(tr, result))
 	summary := result.summary
+	if summary == "" && result.status == toolResultStatusInterrupted {
+		// An interrupted command has no output; the header already carries the
+		// terminal state.
+		return header
+	}
 	if summary == "" {
 		summary = "..."
 	}
-	header := toolStyle.Render(formatBashCommandLine(tr, result))
 	if strings.Contains(summary, "\n") {
 		return header + "\n" + summary
 	}

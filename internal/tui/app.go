@@ -101,8 +101,9 @@ type queuedPromptStartMsg struct{}
 type toolResultStatus string
 
 const (
-	toolResultStatusRunning   toolResultStatus = "running"
-	toolResultStatusCompleted toolResultStatus = "completed"
+	toolResultStatusRunning     toolResultStatus = "running"
+	toolResultStatusCompleted   toolResultStatus = "completed"
+	toolResultStatusInterrupted toolResultStatus = "interrupted"
 )
 
 // toolResult stores tool result information
@@ -1197,6 +1198,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.manualCompactionActive = msg.compacting
 		a.pendingAbortReason = ""
 		a.runTerminalHandled = false
+		// A running tool row can only belong to the run that is being replaced:
+		// its terminal result can no longer reach this transcript. Commit it now
+		// so the new run never renders underneath a stale running row.
+		a.finalizeInterruptedTools()
 		a.spinnerIndex = 0
 		a.requestStart = time.Now()
 		a.lastDuration = 0
@@ -1287,6 +1292,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.eventCh != nil && msg.eventCh != a.eventCh {
 			return a, nil
 		}
+		// The event stream ended without a terminal run event, so no tool result
+		// can reach the transcript anymore.
+		a.finalizeInterruptedTools()
 		a.isThinking = false
 		a.manualCompactionActive = false
 		a.finishRequestTimer()
@@ -1665,6 +1673,7 @@ func (a *App) abortPendingRequest(reason string) tea.Cmd {
 	if a.agent != nil {
 		a.abortAndResetAgent("aborted")
 	} else {
+		a.finalizeAbortedRun()
 		a.resetAgent(fmt.Errorf("aborted"))
 	}
 	// No further events from the cancelled stream belong to the active UI run.

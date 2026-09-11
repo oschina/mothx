@@ -232,6 +232,8 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 			a.run.finish(state)
 			a.run = nil
 		}
+		// No tool can still be executing once the run is terminal.
+		a.finalizeInterruptedTools()
 		// The durable transition and lease release above complete before a
 		// queued prompt may create its successor run.
 		a.isThinking = false
@@ -322,6 +324,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 		if a.runTerminalHandled {
 			return a.listenAgentEvents()
 		}
+		a.finalizeInterruptedTools()
 		if isOutputTruncationStopReason(event.StopReason) {
 			a.addMessage(warningStyle.Render(a.translator.Text(i18n.MsgOutputTruncated)))
 		}
@@ -362,6 +365,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 		if a.runTerminalHandled {
 			return a.listenAgentEvents()
 		}
+		a.finalizeInterruptedTools()
 		a.commitActiveStream()
 		if a.agentManagementEnabled() && a.agentMgr != nil && a.agent != nil {
 			a.agentMgr.MarkError(a.agent.ID(), errors.New(a.formatAgentError(event, observedError)))
@@ -653,6 +657,13 @@ func (a *App) appendToolResult(event agent.Event) {
 		return
 	}
 
+	if a.hasToolEntry(event.ToolCallID, toolResultStatusInterrupted) {
+		// No running row is waiting for this result and the call was already
+		// committed as canceled when the run terminalized. A late straggler from
+		// the aborted run must not open a second transcript row for the same call.
+		return
+	}
+
 	msgIdx := len(a.messages)
 	resultEntry := toolResult{
 		toolCallID:     event.ToolCallID,
@@ -670,6 +681,31 @@ func (a *App) appendToolResult(event agent.Event) {
 	a.toolResults = append(a.toolResults, resultEntry)
 	a.messages = append(a.messages, "")
 	a.printMessageOnce(msgIdx)
+}
+
+// finalizeInterruptedTools terminalizes tool rows that were still running when
+// the run reached a terminal outcome (cancellation, failure, or a dropped event
+// stream). renderLiveTranscriptContent keeps a running tool in the managed
+// viewport until its terminal result arrives, so a row left in the running state
+// would stay pinned above the input forever instead of moving to terminal
+// scrollback. Rows that already carry a result are untouched.
+func (a *App) finalizeInterruptedTools() {
+	changed := false
+	for i := range a.toolResults {
+		result := &a.toolResults[i]
+		if result.status != toolResultStatusRunning {
+			continue
+		}
+		result.status = toolResultStatusInterrupted
+		result.executionState = "interrupted"
+		// The running row was never printed; commit the terminal row exactly once.
+		a.printMessageOnce(result.msgIndex)
+		changed = true
+	}
+	if changed {
+		a.invalidateToolModalCache()
+		a.updateViewportContent()
+	}
 }
 
 func toolEventErrorMessage(err error) string {
