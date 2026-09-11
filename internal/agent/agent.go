@@ -760,6 +760,20 @@ func (a *Agent) Abort() {
 	})
 }
 
+// Aborted reports whether Abort has been called on this Agent instance. Abort
+// is one-shot and permanent: once the abort channel is closed the instance can
+// never start another run. Callers that cache an Agent (for example a
+// front-end reusing it across prompts) must discard it after an abort instead
+// of reusing it, otherwise every later run would be canceled immediately.
+func (a *Agent) Aborted() bool {
+	select {
+	case <-a.abort:
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *Agent) callbackSnapshot() ([]provider.Message, *AgentContext) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

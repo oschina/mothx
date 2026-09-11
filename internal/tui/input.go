@@ -174,6 +174,18 @@ func (a *App) finishManagedAgent(cause error) {
 	}
 }
 
+// discardAgent drops the cached main Agent without touching the active run. Use
+// it when the Agent instance itself can no longer be reused (for example after
+// a Runtime-originated abort) and a fresh instance must be built.
+func (a *App) discardAgent(cause error) {
+	if a.agent == nil {
+		return
+	}
+	a.finishManagedAgent(cause)
+	a.agent = nil
+	a.agentHistoryLoaded = false
+}
+
 func (a *App) resetAgent(cause error) {
 	if a.run != nil {
 		run := a.run
@@ -181,11 +193,7 @@ func (a *App) resetAgent(cause error) {
 		run.finish(agentruntime.RunStateCancelled)
 		a.run = nil
 	}
-	if a.agent != nil {
-		a.finishManagedAgent(cause)
-	}
-	a.agent = nil
-	a.agentHistoryLoaded = false
+	a.discardAgent(cause)
 }
 
 func (a *App) abortAndResetAgent(reason string) {
@@ -638,7 +646,17 @@ func (a *App) ensureSession() error {
 // ensureAgent lazily constructs the main agent and loads session history.
 func (a *App) ensureAgent() {
 	if a.agent != nil {
-		return
+		if !a.agent.Aborted() {
+			return
+		}
+		// Agent.Abort is one-shot and permanent. A Runtime-originated abort (for
+		// example a lost execution lease) closes the abort channel even when the
+		// run terminalizes as failed rather than canceled, so the cached instance
+		// can never run again. Reusing it would cancel every later run
+		// immediately ("The run was cancelled.: context canceled"); discard it and
+		// build a fresh one. a.run already belongs to the new submission, so
+		// discardAgent must not touch it.
+		a.discardAgent(errors.New("agent instance was aborted"))
 	}
 	runtimeAgent, err := a.buildRuntimeAgent()
 	if err != nil || runtimeAgent == nil {
