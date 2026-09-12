@@ -173,9 +173,36 @@ func (d *DeliveryDAO) UpdateProgress(ctx context.Context, executor bun.IDB, oper
 	return result.RowsAffected()
 }
 
+// TransientDeliveryFailureCodes returns the canonical set of delivery failure
+// codes that may be reopened for another retry window (reconnect recovery or an
+// explicit operator retry). Only transport-level failures qualify: a permanent
+// platform rejection (for example a WeChat 4xx error code) or a broken recovery
+// projection must stay failed instead of being retried forever.
+//
+// This is the single definition behind the ReopenTransientFailure SQL fence and
+// the runtime/operator predicate (agentruntime.DeliveryFailureRetryable), so the
+// operator entry and the persistence guard cannot drift apart.
+func TransientDeliveryFailureCodes() []string {
+	return []string{"delivery_retries_exhausted", "transport_error"}
+}
+
+// IsTransientDeliveryFailure reports whether a failed operation with this code
+// may be reopened.
+func IsTransientDeliveryFailure(failureCode string) bool {
+	for _, code := range TransientDeliveryFailureCodes() {
+		if code == failureCode {
+			return true
+		}
+	}
+	return false
+}
+
 // ReopenTransientFailure returns an exhausted operation to retry_wait and
 // restarts its retry window. It is the reconnect/operator recovery path for
 // operations that were abandoned after their budget ran out.
+//
+// The failure_code fence mirrors TransientDeliveryFailureCodes, which is also
+// the predicate the ACP operator entry uses to explain a refusal.
 func (d *DeliveryDAO) ReopenTransientFailure(ctx context.Context, executor bun.IDB, operationID, windowStartedAt, updatedAt string) (int64, error) {
 	result, err := executor.NewUpdate().Model((*DeliveryOperationRecord)(nil)).
 		Set("status = ?", "retry_wait").
@@ -183,7 +210,8 @@ func (d *DeliveryDAO) ReopenTransientFailure(ctx context.Context, executor bun.I
 		Set("next_attempt_at = NULL").
 		Set("retry_window_started_at = ?", windowStartedAt).
 		Set("updated_at = ?", updatedAt).
-		Where("id = ? AND status = ?", operationID, "failed").Exec(ctx)
+		Where("id = ? AND status = ?", operationID, "failed").
+		Where("failure_code IN (?)", bun.In(TransientDeliveryFailureCodes())).Exec(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -199,7 +227,7 @@ func (d *DeliveryDAO) FailedTransientIDsByPlatform(ctx context.Context, executor
 		Join("JOIN delivery_intents AS i ON i.id = o.intent_id").
 		Where("i.platform = ?", platform).
 		Where("o.status = ?", "failed").
-		Where("o.failure_code IN (?)", bun.In([]string{"delivery_retries_exhausted", "transport_error"})).
+		Where("o.failure_code IN (?)", bun.In(TransientDeliveryFailureCodes())).
 		OrderExpr("o.sequence ASC, o.created_at ASC").
 		Scan(ctx, &ids)
 	return ids, err

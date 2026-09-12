@@ -46,11 +46,13 @@ subagent_wait(timeout_ms: 30000)
 
 成员生命周期卡片来自 canonical child event 的投影。成员完成只更新自己的状态，并在活跃 lead 的 agent-loop 边界投递；它不会自行启动新的 lead run。
 
+成员需要决策时向 lead 提问，而不是向用户提问：问题会进入会话邮箱（以 `[MEMBER_QUESTION]` steering 消息，或 `subagent_wait` 中 `status: question` 的待处理条目投递），由 lead 用 `subagent_answer(handle: "<成员>", question_id: "…", answer: "…")` 回答；用户只看到该提问在 lead 事件流上的投影。阻塞式 `delegate_subagent` 子 Agent 不会提问，因为它的调用方正停在工具调用里，无人能作答。
+
 ## 与 ESM 的关系
 
 主角团与 Enable Supervisor Mode（ESM）组合使用时不会创建第二套任务调度器。只有用户能创建、编辑、恢复或清除 ESM 目标。只有会话确实空闲且目标仍可自动运行时，既有 ESM continuation 才会启动下一次 lead run；成员终态事件不是续跑触发器。
 
-团队绑定的 ESM worker 会保留 lead 身份与名册。ESM 的 critic、audit 和 recovery 角色仍保持隔离，不会获得成员调度工具。
+团队绑定的 ESM worker 会保留 lead 身份与名册，也保留成员调度：该 worker continuation 会消费成员通知，并在收尾前等待成员。ESM 的 critic、audit 和 recovery 角色仍保持隔离：既不获得成员调度工具，也不会消费或等待会话成员。
 
 ## 添加本地主角包
 

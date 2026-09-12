@@ -309,3 +309,36 @@ func TestReopenFailedDeliveryOperationRecoversDependentFailures(t *testing.T) {
 		t.Fatalf("dependent operation after reopen = %#v, want retry_wait", fileAfter)
 	}
 }
+
+// TestReopenFailedDeliveryOperationRefusesPermanentFailures guards the SQL
+// fence behind the operator retry: a permanent platform failure must stay failed
+// instead of being reopened into another doomed attempt (the ACP entry refuses
+// it explicitly; this blocks any other caller).
+func TestReopenFailedDeliveryOperationRefusesPermanentFailures(t *testing.T) {
+	sessionDir, _ := deliveryFixture(t)
+	createDeliveryFixturePlan(t, sessionDir, "delivery-session")
+	ctx := context.Background()
+
+	claimed, err := ClaimDeliveryOperation(ctx, sessionDir, "delivery-op-caption", "test-worker", time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatalf("claim operation: %v", err)
+	}
+	if err := UpdateDeliveryOperation(ctx, sessionDir, "delivery-op-caption", "test-worker", claimed.LeaseEpoch, "failed", "", "", nil, "unsupported_media_kind", nil); err != nil {
+		t.Fatalf("mark permanent failure: %v", err)
+	}
+
+	reopened, err := ReopenFailedDeliveryOperation(ctx, sessionDir, "delivery-op-caption", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("reopen permanent failure: %v", err)
+	}
+	if reopened {
+		t.Fatal("a permanent failure must not be reopened")
+	}
+	operation, err := GetDeliveryOperation(ctx, sessionDir, "delivery-op-caption")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.Status != "failed" || operation.FailureCode != "unsupported_media_kind" {
+		t.Fatalf("operation = %#v, want the original permanent failure", operation)
+	}
+}

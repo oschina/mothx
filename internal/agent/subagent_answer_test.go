@@ -116,3 +116,38 @@ func TestSubAgentAnswerToolResolvesMemberQuestion(t *testing.T) {
 		t.Fatal("expected an error when question_id is missing")
 	}
 }
+
+// TestSubAgentAnswerToolRejectsQuestionsThatAreNotPending guards the delivery
+// report of subagent_answer: HandleQuestionResponse ignores unknown IDs, so a
+// lead would otherwise be told "Answered ..." for a question that was already
+// resolved, expired, or never belonged to that member — and could end its run
+// believing the member had been unblocked.
+func TestSubAgentAnswerToolRejectsQuestionsThatAreNotPending(t *testing.T) {
+	_, mgr := newTestFactoryAndManager(t)
+	member := New(Config{ID: "member-2", Mode: "yolo"}, tools.NewRegistry(t.TempDir(), nil))
+	mgr.Register(NewAgentAdapter(member))
+	tool := NewSubAgentAnswerTool(mgr)
+
+	// Unknown question ID.
+	if _, err := tool.Execute(context.Background(), map[string]any{
+		"handle": "member-2", "question_id": "question-member-2-404", "answer": "a",
+	}); err == nil {
+		t.Fatal("expected an error for a question that is not pending")
+	}
+
+	// Answered once, the same ID must not report success again.
+	answerCh := make(chan string, 1)
+	member.questionMu.Lock()
+	member.pendingQuestions["question-member-2-1"] = answerCh
+	member.questionMu.Unlock()
+	if _, err := tool.Execute(context.Background(), map[string]any{
+		"handle": "member-2", "question_id": "question-member-2-1", "answer": "use sqlite",
+	}); err != nil {
+		t.Fatalf("first answer: %v", err)
+	}
+	if _, err := tool.Execute(context.Background(), map[string]any{
+		"handle": "member-2", "question_id": "question-member-2-1", "answer": "use sqlite again",
+	}); err == nil {
+		t.Fatal("expected an error for a question that was already answered")
+	}
+}

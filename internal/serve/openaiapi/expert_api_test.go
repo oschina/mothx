@@ -91,8 +91,11 @@ func TestServerExpertCatalogAndSessionBindingUseRuntime(t *testing.T) {
 	if state.Expert != nil || sess.Runtime.TeamExpertActive() || sess.AgentMgr != nil {
 		t.Fatalf("unbound runtime state = state=%#v manager=%#v", state, sess.AgentMgr)
 	}
-	if _, ok := sess.Registry.Get("subagent_spawn"); ok {
-		t.Fatal("subagent_spawn remained after unbinding the only team capability")
+	// Every canonical sub-agent tool must be gone, not just the spawn tool.
+	for _, name := range coreagent.SubAgentToolNames() {
+		if _, ok := sess.Registry.Get(name); ok {
+			t.Fatalf("%s remained after unbinding the only team capability", name)
+		}
 	}
 }
 

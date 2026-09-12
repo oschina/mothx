@@ -15,6 +15,15 @@ import (
 // operation waiting for operator attention.
 func deliveryManageFixture(t *testing.T) (*server, *syncedBuffer, string, string) {
 	t.Helper()
+	srv, output, sessionDir, sessionID, _ := deliveryManageFixtureWithFailure(t, "delivery_retries_exhausted", "failed")
+	return srv, output, sessionDir, sessionID
+}
+
+// deliveryManageFixtureWithFailure is the same fixture with a chosen terminal
+// failure code and status (an empty status leaves the operation pending) so the
+// retry-refusal contract can be covered.
+func deliveryManageFixtureWithFailure(t *testing.T, failureCode, status string) (*server, *syncedBuffer, string, string, string) {
+	t.Helper()
 	workDir := t.TempDir()
 	sessionDir := filepath.Join(workDir, "sessions")
 	mgr := session.New(workDir, sessionDir)
@@ -36,12 +45,14 @@ func deliveryManageFixture(t *testing.T) (*server, *syncedBuffer, string, string
 	if err := session.CreateDeliveryPlan(context.Background(), sessionDir, plan); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := session.ClaimDeliveryOperation(context.Background(), sessionDir, "acp-delivery-op", "acp-worker", time.Now().UTC(), time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := session.UpdateDeliveryOperation(context.Background(), sessionDir, "acp-delivery-op", "acp-worker", claimed.LeaseEpoch, "failed", "", "", nil, "delivery_retries_exhausted", nil); err != nil {
-		t.Fatal(err)
+	if status != "" {
+		claimed, err := session.ClaimDeliveryOperation(context.Background(), sessionDir, "acp-delivery-op", "acp-worker", time.Now().UTC(), time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := session.UpdateDeliveryOperation(context.Background(), sessionDir, "acp-delivery-op", "acp-worker", claimed.LeaseEpoch, status, "", "", nil, failureCode, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	output := &syncedBuffer{}
@@ -49,7 +60,7 @@ func deliveryManageFixture(t *testing.T) (*server, *syncedBuffer, string, string
 	settings := config.DefaultSettings()
 	settings.SessionDir = sessionDir
 	srv.settings = settings
-	return srv, output, sessionDir, sessionID
+	return srv, output, sessionDir, sessionID, "acp-delivery-op"
 }
 
 // TestManageDeliveriesListProjectsFailures guards the Desktop-facing retry
@@ -96,5 +107,45 @@ func TestManageDeliveriesRetryReopensAndClearsTheFailure(t *testing.T) {
 	message := callManageFixture(t, srv, output, 4, "mothx/manage/deliveries/retry", map[string]any{})
 	if message["error"] == nil {
 		t.Fatalf("retry without operationId = %#v, want an error", message)
+	}
+}
+
+// TestManageDeliveriesRetryRefusesNonRetryableOperations guards the operator
+// entry against its own projection: list reports retryable=false for permanent
+// failures (platform 4xx, unsupported media, broken projection), and a retry
+// must refuse those instead of reopening them into another doomed attempt. An
+// operation that is not failed at all must not be clobbered back into
+// retry_wait, and an unknown ID must be reported as missing.
+func TestManageDeliveriesRetryRefusesNonRetryableOperations(t *testing.T) {
+	srv, output, sessionDir, _, operationID := deliveryManageFixtureWithFailure(t, "unsupported_media_kind", "failed")
+
+	code, _ := manageFixtureError(t, callManageFixture(t, srv, output, 1, "mothx/manage/deliveries/retry", map[string]any{"operationId": operationID}))
+	if code != "delivery_not_retryable" {
+		t.Fatalf("error code = %q, want delivery_not_retryable", code)
+	}
+	operation, err := session.GetDeliveryOperation(context.Background(), sessionDir, operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.Status != "failed" || operation.FailureCode != "unsupported_media_kind" {
+		t.Fatalf("operation after a refused retry = %#v, want the original permanent failure", operation)
+	}
+
+	pendingSrv, pendingOutput, pendingDir, _, pendingID := deliveryManageFixtureWithFailure(t, "", "")
+	code, _ = manageFixtureError(t, callManageFixture(t, pendingSrv, pendingOutput, 2, "mothx/manage/deliveries/retry", map[string]any{"operationId": pendingID}))
+	if code != "delivery_not_reopenable" {
+		t.Fatalf("error code for a pending operation = %q, want delivery_not_reopenable", code)
+	}
+	pending, err := session.GetDeliveryOperation(context.Background(), pendingDir, pendingID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Status != "pending" {
+		t.Fatalf("pending operation status = %q, want it untouched", pending.Status)
+	}
+
+	code, _ = manageFixtureError(t, callManageFixture(t, srv, output, 3, "mothx/manage/deliveries/retry", map[string]any{"operationId": "missing-operation"}))
+	if code != "delivery_not_found" {
+		t.Fatalf("error code for an unknown operation = %q, want delivery_not_found", code)
 	}
 }

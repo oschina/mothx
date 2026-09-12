@@ -156,6 +156,9 @@ func (s *KnowledgeBaseService) runLibrarian(ctx context.Context, base session.Kn
 		Provider: p, ProviderName: providerName, Model: model, Settings: cloneKnowledgeSettings(settings), Mode: mode, ThinkingLevel: thinking,
 		ExtraContext: librarianRoleInstructions(base), MaxIterations: 8,
 		ConversationTurnID: "turn-" + runID, RunID: runID, ConversationTurn: true, RuntimeOwnsTurnEnd: true,
+		// The librarian is a query bridge, not the session's lead: it must not
+		// wait for the session's expert-team members or drain their notifications.
+		AuxiliaryRole: true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("build librarian agent: %w", err)

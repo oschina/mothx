@@ -137,3 +137,48 @@ func waitApprovalEvent(t *testing.T, ch <-chan Event) Event {
 		return Event{}
 	}
 }
+
+// TestRequestEventsDoNotParkWithoutAConsumerWhenCanceled guards the request
+// sends themselves: the cancellation select in RequestToolApproval/
+// RequestQuestion is only reachable after the request event is delivered, so a
+// bare channel send used to park a cancelled run forever when its consumer had
+// stopped reading. Both requests now go through the context-aware send.
+func TestRequestEventsDoNotParkWithoutAConsumerWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	approvalAgent := New(Config{ID: "agent-approval-send", Mode: "agent"}, tools.NewRegistry(t.TempDir(), nil))
+	// The loop always registers the run context before it can request anything.
+	approvalAgent.setRunContext(ctx)
+	cancel()
+
+	approvalCh := make(chan Event) // unbuffered, no reader
+	approvalDone := make(chan struct{})
+	go func() {
+		if approved := approvalAgent.RequestToolApproval(ctx, approvalCh, "call-1", "bash", map[string]any{"command": "ls"}); approved {
+			t.Error("approval must not be granted for a cancelled run")
+		}
+		close(approvalDone)
+	}()
+	select {
+	case <-approvalDone:
+	case <-time.After(time.Second):
+		t.Fatal("RequestToolApproval parked on the request send without a consumer")
+	}
+
+	questionAgent := New(Config{ID: "agent-question-send", Mode: "agent"}, tools.NewRegistry(t.TempDir(), nil))
+	questionAgent.setRunContext(ctx)
+	questionCh := make(chan Event)
+	questionDone := make(chan struct{})
+	go func() {
+		if answer := questionAgent.RequestQuestion(ctx, questionCh, "pick one", []string{"a"}, ""); answer != "" {
+			t.Errorf("question answer = %q, want empty for a cancelled run", answer)
+		}
+		close(questionDone)
+	}()
+	select {
+	case <-questionDone:
+	case <-time.After(time.Second):
+		t.Fatal("RequestQuestion parked on the request send without a consumer")
+	}
+}

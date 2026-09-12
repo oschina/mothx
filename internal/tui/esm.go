@@ -544,6 +544,9 @@ func (a *App) runESMRoleAgentWithTimeoutForRole(ctx context.Context, eventCh cha
 		MultiAgent:    &teamWorker,
 		DelegateMode:  &no,
 		Workflows:     &no,
+		// Only the team-bound worker continuation is the session's lead in ESM
+		// mode, so only it may drain member notifications and wait for members.
+		OwnsSessionMailbox: teamWorker,
 	})
 	if err != nil {
 		return esmRoleResult{}, err

@@ -370,7 +370,7 @@ func (a *webESMRuntimeAdapter) RunRole(parent context.Context, req esm.RoleReque
 	}
 	teamWorker := req.Role == esm.RoleWorker && a.sess.Runtime != nil && a.sess.Runtime.TeamExpertActive()
 	no := false
-	child, err := mgr.Create(agent.AgentOptions{ID: agentpkg.AgentID(runID), IsSubAgent: true, Mode: effectiveMode, WorkDir: a.workDir, Tools: req.Tools, MaxIterations: req.MaxIterations, MultiAgent: &teamWorker, DelegateMode: &no, Workflows: &no})
+	child, err := mgr.Create(agent.AgentOptions{ID: agentpkg.AgentID(runID), IsSubAgent: true, Mode: effectiveMode, WorkDir: a.workDir, Tools: req.Tools, MaxIterations: req.MaxIterations, MultiAgent: &teamWorker, DelegateMode: &no, Workflows: &no, OwnsSessionMailbox: teamWorker})
 	if err != nil {
 		return esm.RoleResult{}, err
 	}

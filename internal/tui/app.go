@@ -1726,9 +1726,11 @@ func (a *App) abortPendingRequest(reason string) tea.Cmd {
 		a.resetAgent(fmt.Errorf("aborted"))
 	}
 	// No further events from the cancelled stream belong to the active UI run,
-	// but the stream must still be consumed: the Agent loop's event sends are not
-	// context-aware, so abandoning a full buffer would park the aborted run
-	// forever (it could never reach its terminal event or close its turn).
+	// but the stream must still be consumed: every ordinary send (including the
+	// approval/question requests) stops once the run context is done, while the
+	// terminal events (EventRunFinished/EventDone/EventError/agentEndEvent) keep
+	// their unconditional send. Abandoning a full buffer would park the aborted
+	// run on one of those and it could never close its turn.
 	a.retireEventStream()
 	a.clearApprovalState()
 	a.clearQuestionState()

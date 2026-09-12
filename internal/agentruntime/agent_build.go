@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"context"
 	"fmt"
 
 	agentpkg "github.com/startvibecoding/mothx/agent"
@@ -51,6 +52,12 @@ type AgentBuildOptions struct {
 	RuntimeOwnsTurnEnd     bool
 	RuntimeOwnsUserEntry   bool
 	UserEntryID            string
+	// AuxiliaryRole marks a build that is not the session's conversational lead
+	// even though it runs on the session's own manager (the legacy knowledge
+	// librarian query bridge). Such a build never receives the team member
+	// mailbox hooks: it must not wait for the session's members nor consume
+	// member notifications that belong to the lead.
+	AuxiliaryRole bool
 }
 
 // AgentBuildOptionsFromConfig converts the legacy Agent.Config shape used by
@@ -139,6 +146,21 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 	mailbox := r.Mailbox
 	r.mu.RUnlock()
 	expertIdentity, expertRoster := projectExpertBuild(expertBinding, &opts)
+	// Only the session's conversational lead owns the team mailbox. Transient
+	// builds (side questions, knowledge-base indexing) pass a nil session
+	// manager, and auxiliary roles built over the session manager opt out, so
+	// neither blocks on the session's members nor consumes member notifications
+	// that belong to the lead.
+	steeringMessages := opts.GetSteeringMessages
+	var followUpMessages func(context.Context) []provider.Message
+	if manager != nil && !opts.AuxiliaryRole {
+		steeringMessages = composeSteering(mailbox, opts.GetSteeringMessages)
+		// A team lead must not end its run (and cancel the members it is still
+		// waiting for) just because a turn produced no tool calls: the follow-up
+		// hook waits for members and keeps adapter steering responsive while it
+		// waits.
+		followUpMessages = agent.ComposeFollowUps(mailbox, opts.GetSteeringMessages)
+	}
 	settings := opts.Settings
 	if settings == nil {
 		settings = &config.Settings{}
@@ -210,12 +232,8 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 		MaxIterations: opts.MaxIterations, ContextPressureThreshold: opts.ContextPressure,
 		BudgetPressureThreshold: opts.BudgetPressure, BeforeToolCall: beforeToolCall, BeforeToolExecute: beforeToolExecute,
 		AfterToolCall:       opts.AfterToolCall,
-		GetSteeringMessages: composeSteering(mailbox, opts.GetSteeringMessages),
-		// A team lead must not end its run (and cancel the members it is still
-		// waiting for) just because a turn produced no tool calls: the follow-up
-		// hook waits for members and keeps adapter steering responsive while it
-		// waits.
-		GetFollowUpMessages: agent.ComposeFollowUps(mailbox, opts.GetSteeringMessages),
+		GetSteeringMessages: steeringMessages,
+		GetFollowUpMessages: followUpMessages,
 		ForcedMode:          policy.ForcedMode(),
 	}, registry), nil
 }

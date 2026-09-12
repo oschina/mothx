@@ -62,6 +62,14 @@ Member lifecycle cards are projections of canonical child events. A member
 completion updates its own status and is delivered to an active lead at an
 agent-loop boundary. It never starts a new lead run by itself.
 
+A member that needs a decision asks the lead instead of the human. The question
+is queued for the lead (delivered as a `[MEMBER_QUESTION]` steering message, or
+as a `subagent_wait` pending entry with status `question`) and is answered with
+`subagent_answer(handle: "<member>", question_id: "…", answer: "…")`; the user
+only sees the question projected on the lead's stream. A blocking
+`delegate_subagent` child cannot ask questions, because its caller is parked
+inside the tool call that would have to answer it.
+
 ## ESM interaction
 
 Expert Teams work with Enable Supervisor Mode (ESM) without creating a second
@@ -70,9 +78,11 @@ objective. When a session is truly idle and the objective is still runnable,
 the normal ESM continuation path may start the next lead run; member terminal
 events are not continuation triggers.
 
-For a team-bound ESM worker, the lead identity and roster are retained. ESM
-critic, audit, and recovery roles remain isolated and do not receive member
-scheduling tools.
+For a team-bound ESM worker, the lead identity and roster are retained,
+including member scheduling: the worker continuation drains member
+notifications and waits for members before its run may end. ESM critic, audit,
+and recovery roles remain isolated: they do not receive member scheduling tools
+and never drain or wait on the session's members.
 
 ## Add local bundles
 

@@ -2124,14 +2124,11 @@ func (s *server) manageDeliveriesSessionDir() (string, error) {
 }
 
 // deliveryFailureRetryable reports whether the operation's failure is
-// transport-level and therefore reopenable by the operator.
+// transport-level and therefore reopenable by the operator. The canonical
+// predicate lives in the Runtime so the operator entry and the SQL fence in
+// internal/dao cannot drift apart.
 func deliveryFailureRetryable(failureCode string) bool {
-	switch failureCode {
-	case "delivery_retries_exhausted", "transport_error":
-		return true
-	default:
-		return false
-	}
+	return agentruntime.DeliveryFailureRetryable(failureCode)
 }
 
 func (s *server) handleManageDeliveriesList(req rpcRequest) {
@@ -2186,6 +2183,28 @@ func (s *server) handleManageDeliveriesRetry(req rpcRequest) {
 	sessionDir, err := s.manageDeliveriesSessionDir()
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "manage_unavailable", err.Error(), nil))
+		return
+	}
+	// The retry entry is an operator action, so it must refuse what the list
+	// projection already marks as not retryable: reopening a permanent failure
+	// (platform 4xx, unsupported media, broken projection) would just deliver the
+	// same failure again, and an in-flight or already delivered operation must
+	// never be clobbered back into retry_wait.
+	operation, err := session.GetDeliveryOperation(context.Background(), sessionDir, in.OperationID)
+	if err != nil {
+		if errors.Is(err, session.ErrDeliveryOperationAbsent) {
+			s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "delivery_not_found", fmt.Sprintf("delivery operation %s does not exist", in.OperationID), nil))
+			return
+		}
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "manage_unavailable", fmt.Sprintf("delivery operation %s is not readable: %v", in.OperationID, err), nil))
+		return
+	}
+	if operation.Status != "failed" {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "delivery_not_reopenable", fmt.Sprintf("delivery operation %s is %s, only a failed operation can be retried", in.OperationID, operation.Status), nil))
+		return
+	}
+	if !deliveryFailureRetryable(operation.FailureCode) {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "delivery_not_retryable", fmt.Sprintf("delivery operation %s failed permanently (%s)", in.OperationID, operation.FailureCode), nil))
 		return
 	}
 	reopened, err := session.ReopenFailedDeliveryOperation(context.Background(), sessionDir, in.OperationID, time.Now().UTC())

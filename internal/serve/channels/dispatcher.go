@@ -157,7 +157,10 @@ func (d *Dispatcher) channelToolDefinitionsLocked(platform string) []ChannelTool
 	// decides the default checked state; the user can still enable/disable
 	// them per session from the WebUI.
 	add("delegate_subagent", true, multiAgentEnabled)
-	for _, name := range []string{"subagent_spawn", "subagent_status", "subagent_send", "subagent_destroy"} {
+	// Every sub-agent tool is listed so the WebUI can project the same surface the
+	// session registry actually registers (multiAgentEnabled only decides the
+	// default checked state).
+	for _, name := range agent.SubAgentToolNames() {
 		add(name, true, multiAgentEnabled)
 	}
 	for _, name := range []string{"workflow_lint", "workflow_run", "workflow_status", "workflow_cancel"} {

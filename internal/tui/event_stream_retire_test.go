@@ -8,9 +8,11 @@ import (
 )
 
 // TestRetireEventStreamKeepsDrainingProducer guards the abort path: the Agent
-// loop sends events without selecting on a context, so a stream abandoned with
-// a full buffer would block the aborted run forever. retireEventStream must
-// detach the UI channel and keep consuming it until the producer closes it.
+// loop keeps sending its terminal events (EventRunFinished/EventDone/EventError/
+// agentEndEvent) unconditionally even after the run context is done, so a stream
+// abandoned with a full buffer would block the aborted run forever.
+// retireEventStream must detach the UI channel and keep consuming it until the
+// producer closes it.
 func TestRetireEventStreamKeepsDrainingProducer(t *testing.T) {
 	a := &App{}
 	ch := make(chan agent.Event) // unbuffered: any unread send blocks

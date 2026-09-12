@@ -941,12 +941,22 @@ func (a *Agent) RunWithUserMessage(ctx context.Context, msg provider.Message) <-
 
 		// Run agent loop
 		a.loop(contextWithEventSink(ctx, sink), ch)
-		if dropped := a.droppedEvents.Load(); dropped > 0 {
-			log.Printf("[agent] run %s dropped %d event(s): the consumer stopped reading before the run ended", a.id, dropped)
-		}
+		a.logDroppedEvents()
 	}()
 
 	return ch
+}
+
+// logDroppedEvents reports events that could not be delivered because the run
+// ended while its consumer had stopped reading (see sendEvent). Every run entry
+// point calls it after the loop returns so the drop is never silent.
+func (a *Agent) logDroppedEvents() {
+	if a == nil {
+		return
+	}
+	if dropped := a.droppedEvents.Load(); dropped > 0 {
+		log.Printf("[agent] run %s dropped %d event(s): the consumer stopped reading before the run ended", a.id, dropped)
+	}
 }
 
 func (a *Agent) beginConversationTurn(msg provider.Message) (conversationTurnStore, bool) {
@@ -1049,6 +1059,7 @@ func (a *Agent) RunWithMessages(ctx context.Context, messages []provider.Message
 		a.context.Messages = messages
 		a.mu.Unlock()
 		a.loop(contextWithEventSink(ctx, sink), ch)
+		a.logDroppedEvents()
 	}()
 
 	return ch
@@ -1073,6 +1084,7 @@ func (a *Agent) RunWithLoadedHistory(ctx context.Context) <-chan Event {
 			return
 		}
 		a.loop(contextWithEventSink(ctx, sink), ch)
+		a.logDroppedEvents()
 	}()
 
 	return ch
@@ -1306,10 +1318,6 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 	streamTimeoutRetries := 0
 	const maxStreamTimeoutRetries = 2
 
-	// A turn whose answer was cut off by the output limit is not a success unless
-	// escalation or a continuation actually recovered it.
-	truncated := false
-
 	// Empty-response detection: a provider may return an effectively empty
 	// turn (no text/thinking/toolCall + stub usage) on transient errors (e.g.
 	// some OpenAI-compatible gateways return usage {1,1,2} with HTTP 200). Such
@@ -1335,6 +1343,12 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 		}
 
 		a.sendEvent(ch, Event{Type: EventTurnStart})
+
+		// A turn whose answer was cut off by the output limit is not a success
+		// unless escalation or a continuation actually recovered it. The flag is
+		// scoped to this turn: a later turn that completes normally (for example
+		// after a follow-up injection kept the run open) must not inherit it.
+		truncated := false
 
 		// Process pending steering messages
 		if a.config.GetSteeringMessages != nil {
@@ -1694,6 +1708,17 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 		if len(toolCalls) == 0 {
 			if a.injectFollowUpMessages(runCtx, ch) {
 				continue
+			}
+			if err := runCtx.Err(); err != nil {
+				// The run was cancelled while this turn was in flight; the follow-up
+				// hook returns as soon as the run context is done. Terminalize here
+				// like the loop-entry cancellation path: reporting success would make
+				// adapters that derive their state from the terminal event (ACP) turn
+				// a user cancellation into a normal completion.
+				a.emitRunFinished(ch, TaskCanceled, "aborted", err, nil, nil)
+				ch <- Event{Type: EventError, Error: err, StopReason: "aborted"}
+				ch <- a.agentEndEvent()
+				return
 			}
 			contextUsage := a.GetContextUsage()
 			a.sendEvent(ch, Event{Type: EventTurnEnd, TurnMessage: assistantMsg, ContextUsage: contextUsage})

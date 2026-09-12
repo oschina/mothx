@@ -1380,7 +1380,7 @@ func (s *server) refreshSessionExpertTools(rt *sessionRuntime) error {
 	if rt == nil || rt.runtime == nil || rt.registry == nil {
 		return fmt.Errorf("session runtime is unavailable")
 	}
-	for _, name := range []string{"subagent_spawn", "subagent_status", "subagent_send", "subagent_destroy", "subagent_wait"} {
+	for _, name := range agent.SubAgentToolNames() {
 		rt.registry.Remove(name)
 	}
 	rt.agentMgr = nil

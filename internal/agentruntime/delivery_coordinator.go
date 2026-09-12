@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/startvibecoding/mothx/internal/dao"
 	"github.com/startvibecoding/mothx/internal/session"
 )
 
@@ -32,6 +33,15 @@ type DeliveryExecutor func(context.Context, session.DeliveryOperation) (Delivery
 // being retried. Platform transports can be disconnected or rate-limited for
 // minutes, and a small attempt count would abandon the reply long before that.
 const DefaultDeliveryRetryWindow = 10 * time.Minute
+
+// DeliveryFailureRetryable reports whether a failed delivery operation may be
+// reopened for another retry window (reconnect recovery or an explicit operator
+// retry). The canonical definition lives in dao.TransientDeliveryFailureCodes,
+// which also backs the ReopenTransientFailure SQL fence, so the operator entry
+// cannot authorize a reopen the persistence guard would refuse.
+func DeliveryFailureRetryable(failureCode string) bool {
+	return dao.IsTransientDeliveryFailure(failureCode)
+}
 
 // DeliveryCoordinator is the Runtime-owned claim/fence/retry boundary for
 // durable delivery outbox operations.

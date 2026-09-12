@@ -56,6 +56,8 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | [`subagent_spawn`](#subagent_---子-agent-委托) | 多 Agent | 派生出完全隔离的子 Agent | 子 Agent 级权限限制 | 仅多 Agent 模式 |
 | [`subagent_status`](#subagent_---子-agent-委托) | 多 Agent | 查询子 Agent 执行状态与结果 | 只读 | 仅多 Agent 模式 |
 | [`subagent_send`](#subagent_---子-agent-委托) | 多 Agent | 向子 Agent 发送后续追问或指令 | 发送消息 | 仅多 Agent 模式 |
+| [`subagent_wait`](#subagent_---子-agent-委托) | 多 Agent | 关键路径被阻塞时等待成员活动 | 有界等待（2.5s-120s） | 仅多 Agent 模式 |
+| [`subagent_answer`](#subagent_---子-agent-委托) | 多 Agent | 回答成员的阻塞提问，让其继续执行 | 提问作用域 | 仅多 Agent 模式 |
 | [`subagent_destroy`](#subagent_---子-agent-委托) | 多 Agent | 销毁子 Agent 释放其上下文资源 | 销毁释放 | 仅多 Agent 模式 |
 | [`delegate_subagent`](#delegate_subagent---阻塞式单子-agent-委托) | 委托模式 | 同步执行一个子 Agent 任务 | 子 Agent 级权限限制 | 仅 Delegate 模式 |
 | [`workflow_run`](#workflow_run---动态-javascript-workflow) | Workflow | 执行 JavaScript workflow 并编排 worker agent | 子 Agent 级权限限制 | 仅 Workflow 模式 |
@@ -432,6 +434,24 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 ```json
 { "handle": "subagent-job-1", "message": "同时请把 helper_test.go 里的包引入路径修复一下。" }
 ```
+
+#### `subagent_wait`
+阻塞等待，直到有成员/子 Agent 的完成通知进入会话邮箱，或到达有界超时。只返回待处理摘要（成员 ID、状态，以及等待回答的成员的 `question_id`）；完成内容会在下一个迭代边界自动投递。
+
+| 参数名 | 类型 | 必填 | 描述 |
+|--------|------|------|------|
+| `timeout_ms` | integer | - | 最长等待毫秒数，限制在 2500-120000（默认 30000）。 |
+
+#### `subagent_answer`
+回答运行中成员向 lead（而不是向用户）提出的阻塞提问。提问以 `[MEMBER_QUESTION]` steering 消息或 `subagent_wait` 中 `status: question` 的待处理条目送达；在回答之前该成员一直阻塞。
+
+| 参数名 | 类型 | 必填 | 描述 |
+|--------|------|------|------|
+| `handle` | string | ✓ | 提问成员的处理句柄。 |
+| `question_id` | string | ✓ | 来自 `[MEMBER_QUESTION]` 消息或等待摘要的提问 ID。 |
+| `answer` | string | ✓ | 成员继续执行所需的回答。 |
+
+若提问已不在待处理状态（已回答、已过期或属于其他成员），工具会返回错误而不是静默成功。
 
 #### `subagent_destroy`
 销毁该子 Agent 的运行时上下文并彻底回收一切临时资源。

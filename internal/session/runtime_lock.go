@@ -21,9 +21,11 @@ const (
 	runtimeHeartbeatEvery = 3 * time.Second
 	// runtimeHeartbeatRetry bounds how long a failed renewal is retried before
 	// the owner gives up. It must cover transient SQLite write contention, whose
-	// single statement may block for busy_timeout (10s), while staying below the
-	// TTL: past that point another process could have taken over unseen, and
-	// continuing to run would allow unproven side effects.
+	// single statement may block for busy_timeout (10s). With the 3s heartbeat
+	// interval the worst-case detection lands at roughly one TTL, so the real
+	// safety guarantee is the DAO fence (owner/epoch/token): a competing process
+	// can only take over through Acquire, which bumps the epoch, and a displaced
+	// owner can never renew again.
 	runtimeHeartbeatRetry = runtimeLeaseTTL - runtimeHeartbeatEvery
 )
 

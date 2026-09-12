@@ -445,7 +445,7 @@ func (a *Agent) prepareRequestMessages(sessionContextMsg provider.Message, ch ch
 		if toolName == "" {
 			toolName = "tool"
 		}
-		ch <- Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Context guard omitted oversized %s output; asking model to retry with a narrower scope.", toolName)}
+		a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Context guard omitted oversized %s output; asking model to retry with a narrower scope.", toolName)})
 	}
 
 	return nil, fmt.Errorf("estimated request still exceeds context after omitting oversized tool outputs")
@@ -740,7 +740,7 @@ func (a *Agent) compact(ctx context.Context, ch chan<- Event, force bool) error 
 		}
 	}()
 
-	ch <- Event{Type: EventCompactionStart}
+	a.sendEvent(ch, Event{Type: EventCompactionStart})
 
 	// Snapshot messages under lock
 	a.mu.RLock()
@@ -766,10 +766,10 @@ func (a *Agent) compact(ctx context.Context, ch chan<- Event, force bool) error 
 		})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			ch <- Event{Type: EventCompactionEnd, StatusMessage: "Context compaction canceled", StopReason: "canceled"}
+			a.sendEvent(ch, Event{Type: EventCompactionEnd, StatusMessage: "Context compaction canceled", StopReason: "canceled"})
 			return err
 		}
-		ch <- Event{Type: EventCompactionEnd, Error: err}
+		a.sendEvent(ch, Event{Type: EventCompactionEnd, Error: err})
 		return fmt.Errorf("compaction failed: %w", err)
 	}
 
@@ -803,14 +803,14 @@ func (a *Agent) compact(ctx context.Context, ch chan<- Event, force bool) error 
 	if a.config.Session != nil {
 		if _, err := a.config.Session.AppendCompaction(result.Summary, firstKeptEntryID, result.TokensBefore); err != nil {
 			// Non-fatal: compaction worked, just couldn't persist the metadata
-			ch <- Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Failed to persist compaction: %v", err)}
+			a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Failed to persist compaction: %v", err)})
 		}
 	}
 
-	ch <- Event{
+	a.sendEvent(ch, Event{
 		Type:          EventCompactionEnd,
 		StatusMessage: fmt.Sprintf("Context compacted: %d tokens", result.TokensBefore),
-	}
+	})
 
 	return nil
 }
@@ -825,12 +825,12 @@ func (a *Agent) tryRecoverContextOverflow(ctx context.Context, ch chan<- Event, 
 		return false
 	}
 	*retried = true
-	ch <- Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Context too large (%v); compacting context and retrying...", cause)}
+	a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Context too large (%v); compacting context and retrying...", cause)})
 	if err := a.CompactForced(ctx, ch); err != nil {
 		// The summarization request itself no longer fits the context window;
 		// fall back to deterministic truncation so the session can recover
 		// instead of failing on every subsequent message.
-		ch <- Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Context compaction failed (%v); dropping oldest messages to fit the context window...", err)}
+		a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Context compaction failed (%v); dropping oldest messages to fit the context window...", err)})
 		a.truncateHistoryForOverflow(ch)
 	}
 	return true
@@ -850,8 +850,8 @@ func (a *Agent) tryRetryStreamTimeout(ctx context.Context, ch chan<- Event, retr
 	}
 	*retried++
 	msg := fmt.Sprintf("⚠️ 供应商响应超时（长时间未收到数据），正在自动重试第 %d/%d 次…", *retried, maxRetries)
-	ch <- Event{Type: EventStatus, StatusMessage: msg}
-	ch <- Event{Type: EventRetry, RetryAttempt: *retried, RetryMaxAttempts: maxRetries, RetryReason: "timeout"}
+	a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: msg})
+	a.sendEvent(ch, Event{Type: EventRetry, RetryAttempt: *retried, RetryMaxAttempts: maxRetries, RetryReason: "timeout"})
 	return true
 }
 
@@ -953,9 +953,9 @@ func (a *Agent) truncateHistoryForOverflow(ch chan<- Event) {
 		}
 		if _, err := a.config.Session.AppendCompaction(note, firstKeptEntryID, tokensBefore); err != nil {
 			// Non-fatal: in-memory state is already truncated.
-			ch <- Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Failed to persist context recovery: %v", err)}
+			a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Failed to persist context recovery: %v", err)})
 		}
 	}
 
-	ch <- Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Context recovery: dropped %d oldest messages after provider context overflow", cut)}
+	a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Context recovery: dropped %d oldest messages after provider context overflow", cut)})
 }

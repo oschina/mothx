@@ -581,6 +581,13 @@ func forwardMemberQuestion(ctx context.Context, manager *AgentManager, parentEve
 	if manager == nil {
 		return
 	}
+	if manager.Mailbox == nil {
+		// No expert team is bound, so the manager has no lead mailbox: the question
+		// is only projected on the parent stream and nobody can answer it. Report
+		// the miss instead of letting the member block silently until its own
+		// timeout. Binding a team (or installing the session mailbox) is the fix.
+		log.Printf("[agent] member %s asked question %s but the session has no lead mailbox; the member cannot be answered", childID, e.QuestionID)
+	}
 	displayName := ""
 	if meta != nil {
 		displayName = meta.MemberDisplayName
@@ -975,6 +982,15 @@ func (t *SubAgentAnswerTool) Execute(ctx context.Context, params map[string]any)
 	handler, ok := target.(agentpkg.QuestionHandler)
 	if !ok {
 		return tools.ToolResult{}, fmt.Errorf("sub-agent %q does not accept answers", handle)
+	}
+	// HandleQuestionResponse ignores unknown IDs, so report the miss instead of a
+	// false success: a lead that believes a blocked member was unblocked may end
+	// its run while the member keeps waiting for an answer that never arrives.
+	if deliverer, ok := target.(interface{ DeliverQuestionAnswer(string, string) bool }); ok {
+		if !deliverer.DeliverQuestionAnswer(questionID, answer) {
+			return tools.ToolResult{}, fmt.Errorf("question %s is not pending on %s: it was already answered, expired, or never belonged to that member", questionID, handle)
+		}
+		return tools.NewTextToolResult(fmt.Sprintf("Answered %s's question %s.", handle, questionID)), nil
 	}
 	handler.HandleQuestionResponse(questionID, answer)
 	return tools.NewTextToolResult(fmt.Sprintf("Answered %s's question %s.", handle, questionID)), nil

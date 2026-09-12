@@ -310,7 +310,7 @@ func removeTUISubAgentTools(registry interface{ Remove(string) }) {
 	if registry == nil {
 		return
 	}
-	for _, name := range []string{"subagent_spawn", "subagent_status", "subagent_send", "subagent_destroy", "subagent_wait"} {
+	for _, name := range agent.SubAgentToolNames() {
 		registry.Remove(name)
 	}
 }

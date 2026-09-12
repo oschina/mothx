@@ -93,8 +93,12 @@ func TestExpertCommandListsShowsBindsAndUnbindsRuntimeExpert(t *testing.T) {
 	if app.runtime.TeamExpertActive() || app.agentManagementEnabled() {
 		t.Fatal("unbound app with no explicit multi-agent flags must disable team capability")
 	}
-	if _, ok := app.registry.Get("subagent_spawn"); ok {
-		t.Fatal("sub-agent tool remained after the team expert was unbound")
+	// Every canonical sub-agent tool must be gone, not just the spawn tool: a
+	// hand-copied removal list in the adapter is the N6 class of bug.
+	for _, name := range agent.SubAgentToolNames() {
+		if _, ok := app.registry.Get(name); ok {
+			t.Fatalf("sub-agent tool %s remained after the team expert was unbound", name)
+		}
 	}
 }
 

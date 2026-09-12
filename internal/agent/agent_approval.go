@@ -131,14 +131,17 @@ func (a *Agent) RequestToolApproval(ctx context.Context, ch chan<- Event, toolCa
 	a.pendingApprovals[approvalID] = responseCh
 	a.approvalMu.Unlock()
 
-	// Send approval request event
-	ch <- Event{
+	// Send approval request event. It goes through the context-aware send so a
+	// cancelled run stops here instead of parking on a full channel whose
+	// consumer already stopped reading (the cancellation select below would never
+	// be reached).
+	a.sendEvent(ch, Event{
 		Type:         EventToolApprovalRequest,
 		ToolCallID:   toolCallID,
 		ApprovalID:   approvalID,
 		ApprovalTool: toolName,
 		ApprovalArgs: args,
-	}
+	})
 
 	// Wait for response, abort, or run cancellation. Watching ctx.Done() is what
 	// lets a cancelled run finish: without it a child agent parked in an approval
@@ -188,13 +191,16 @@ func (a *Agent) RequestQuestion(ctx context.Context, ch chan<- Event, question s
 	a.pendingQuestions[questionID] = responseCh
 	a.questionMu.Unlock()
 
-	ch <- Event{
+	// The question request follows the same context-aware send contract as the
+	// approval request: a cancelled run must not park on an undeliverable event
+	// before it can honor ctx.Done below.
+	a.sendEvent(ch, Event{
 		Type:            EventQuestionRequest,
 		QuestionID:      questionID,
 		QuestionText:    question,
 		QuestionOptions: options,
 		QuestionContext: context,
-	}
+	})
 
 	select {
 	case answer := <-responseCh:
@@ -212,15 +218,33 @@ func (a *Agent) RequestQuestion(ctx context.Context, ch chan<- Event, question s
 	}
 }
 
-// HandleQuestionResponse processes the user's answer to a question.
+// HandleQuestionResponse processes the user's answer to a question. It keeps the
+// silent contract for protocol adapters (an unknown or already resolved ID is
+// ignored); callers that answer on another agent's behalf must use
+// DeliverQuestionAnswer so they never report a false success.
 func (a *Agent) HandleQuestionResponse(questionID string, answer string) {
+	a.DeliverQuestionAnswer(questionID, answer)
+}
+
+// DeliverQuestionAnswer resolves a pending question and reports whether the
+// answer was actually delivered. Callers that answer on someone else's behalf
+// (subagent_answer routing a member's question to its lead) use the result to
+// distinguish a delivered answer from a question that was already resolved,
+// expired, or never existed — reporting success there would tell the lead a
+// blocked member had been unblocked when it was not.
+func (a *Agent) DeliverQuestionAnswer(questionID string, answer string) bool {
+	if a == nil || questionID == "" {
+		return false
+	}
 	a.questionMu.Lock()
 	defer a.questionMu.Unlock()
-
-	if ch, ok := a.pendingQuestions[questionID]; ok {
-		ch <- answer
-		delete(a.pendingQuestions, questionID)
+	ch, ok := a.pendingQuestions[questionID]
+	if !ok {
+		return false
 	}
+	ch <- answer
+	delete(a.pendingQuestions, questionID)
+	return true
 }
 
 // AskQuestion implements the tools.QuestionAsker interface.

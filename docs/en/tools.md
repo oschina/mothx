@@ -56,6 +56,8 @@ Tool completion events may stream out of order, while provider continuation mess
 | [`subagent_spawn`](#subagent_---delegated-work) | Multi-Agent | Spawn isolated sub-agents | Sub-agent scoped limits | Multi-Agent Mode |
 | [`subagent_status`](#subagent_---delegated-work) | Multi-Agent | Query sub-agent status | Read-only | Multi-Agent Mode |
 | [`subagent_send`](#subagent_---delegated-work) | Multi-Agent | Send commands to sub-agents | Send message | Multi-Agent Mode |
+| [`subagent_wait`](#subagent_---delegated-work) | Multi-Agent | Wait for member activity when the critical path is blocked | Bounded wait (2.5s-120s) | Multi-Agent Mode |
+| [`subagent_answer`](#subagent_---delegated-work) | Multi-Agent | Answer a member's blocking question so it can continue | Question scoped | Multi-Agent Mode |
 | [`subagent_destroy`](#subagent_---delegated-work) | Multi-Agent | Remove sub-agents & clean up | Destroy | Multi-Agent Mode |
 | [`delegate_subagent`](#delegate_subagent---blocking-single-sub-agent-delegation) | Delegate | Run one synchronous sub-agent task | Sub-agent scoped limits | Delegate Mode |
 | [`workflow_run`](#workflow_run---dynamic-javascript-workflows) | Workflow | Run a JavaScript workflow with worker agents | Worker-agent scoped limits | Workflow Mode |
@@ -432,6 +434,24 @@ Appends additional guidance or questions to an active sub-agent.
 ```json
 { "handle": "subagent-job-1", "message": "Also fix imports in helper_test.go." }
 ```
+
+#### `subagent_wait`
+Blocks until a spawned member or sub-agent completion lands in the session mailbox, or the bounded timeout elapses. It returns only a pending summary (member id, status, and a `question_id` for members waiting on an answer); completion content is delivered automatically at the next iteration boundary.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `timeout_ms` | integer | - | Maximum wait in milliseconds, clamped to 2500-120000 (default 30000). |
+
+#### `subagent_answer`
+Answers a blocking question a running member asked the lead instead of the human. The question arrives as a `[MEMBER_QUESTION]` steering message or as a `subagent_wait` pending entry with status `question`; the member stays blocked until this tool resolves it.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `handle` | string | ✓ | Member handle that asked the question. |
+| `question_id` | string | ✓ | Question ID from the `[MEMBER_QUESTION]` message or the wait summary. |
+| `answer` | string | ✓ | Answer the member continues with. |
+
+A question that is no longer pending (already answered, expired, or belonging to another member) is reported as an error instead of a silent success.
 
 #### `subagent_destroy`
 Cleans up logs and releases the sub-agent container/process context.

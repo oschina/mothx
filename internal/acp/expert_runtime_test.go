@@ -3,6 +3,7 @@ package acp
 import (
 	"testing"
 
+	"github.com/startvibecoding/mothx/internal/agent"
 	"github.com/startvibecoding/mothx/internal/agentruntime"
 	"github.com/startvibecoding/mothx/internal/config"
 	"github.com/startvibecoding/mothx/internal/provider"
@@ -102,7 +103,10 @@ func TestRefreshSessionExpertToolsTracksRuntimeBinding(t *testing.T) {
 	if rt.agentMgr != nil {
 		t.Fatal("unbound session kept a team agent manager")
 	}
-	if _, ok := registry.Get("subagent_spawn"); ok {
-		t.Fatal("unbound session kept team subagent_spawn")
+	// Every canonical sub-agent tool must be gone, not just the spawn tool.
+	for _, name := range agent.SubAgentToolNames() {
+		if _, ok := registry.Get(name); ok {
+			t.Fatalf("unbound session kept team %s", name)
+		}
 	}
 }

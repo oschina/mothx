@@ -827,6 +827,13 @@ func (a *AgentAdapter) HandleApprovalResponse(id string, approved bool) {
 func (a *AgentAdapter) HandleQuestionResponse(questionID string, answer string) {
 	a.inner.HandleQuestionResponse(questionID, answer)
 }
+
+// DeliverQuestionAnswer exposes the atomic answer delivery to callers that
+// answer on another agent's behalf; it is intentionally not part of the public
+// QuestionHandler interface so existing implementers keep compiling.
+func (a *AgentAdapter) DeliverQuestionAnswer(questionID string, answer string) bool {
+	return a.inner.DeliverQuestionAnswer(questionID, answer)
+}
 func (a *AgentAdapter) Run(ctx context.Context, userMsg string) <-chan agentpkg.Event {
 	return WrapEventChan(a.inner.Run(ctx, userMsg))
 }

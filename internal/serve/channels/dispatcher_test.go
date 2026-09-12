@@ -976,7 +976,7 @@ func TestResolveSessionCronOnlyDoesNotExposeSubAgentTools(t *testing.T) {
 	if sess.ID == sessionKey("ws", "test-user") {
 		t.Fatal("channel session ID must not be the routing key")
 	}
-	for _, name := range []string{"subagent_spawn", "subagent_status", "subagent_send", "subagent_destroy"} {
+	for _, name := range agent.SubAgentToolNames() {
 		if _, ok := sess.Registry.Get(name); ok {
 			t.Fatalf("cron-only session should not expose %s", name)
 		}
@@ -1100,7 +1100,7 @@ func TestToolCatalogMultiAgentFlagControlsDefaultOnly(t *testing.T) {
 	// Catalog: multi-agent tools must be available but unchecked by default.
 	for _, item := range d.ToolCatalog("wechat") {
 		switch item.Name {
-		case "delegate_subagent", "subagent_spawn", "subagent_status", "subagent_send", "subagent_destroy",
+		case "delegate_subagent", "subagent_spawn", "subagent_status", "subagent_send", "subagent_destroy", "subagent_wait", "subagent_answer",
 			"workflow_lint", "workflow_run", "workflow_status", "workflow_cancel", "browser":
 			if !item.Available {
 				t.Errorf("catalog %q available=%v, want selectable even when multiAgent/browser is off", item.Name, item.Available)

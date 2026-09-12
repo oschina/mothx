@@ -152,9 +152,14 @@ type AgentOptions struct {
 	Session            *session.Manager
 	IsSubAgent         bool                                                        // persist this agent outside the user-continuable session tables
 	ApprovalHandler    func(toolCallID, toolName string, args map[string]any) bool // per-agent approval override
-	MultiAgent         *bool                                                       // optional prompt override
-	DelegateMode       *bool                                                       // optional prompt override
-	Workflows          *bool                                                       // optional prompt override
+	// OwnsSessionMailbox opts an IsSubAgent role back into the session member
+	// mailbox. The mailbox belongs to the conversational lead, so auxiliary roles
+	// (ESM critic/audit/recovery) must not inherit it; a team-bound ESM worker
+	// continuation is the session's lead in ESM mode and sets this explicitly.
+	OwnsSessionMailbox bool
+	MultiAgent         *bool // optional prompt override
+	DelegateMode       *bool // optional prompt override
+	Workflows          *bool // optional prompt override
 }
 
 // Create creates a new Agent with per-agent Registry.
@@ -232,12 +237,9 @@ func (f *AgentFactory) Create(opts AgentOptions) agentpkg.Agent {
 	// Decision 5: Sub-agents cannot spawn sub-agents
 	// Remove subagent_* tools from sub-agent registries
 	if opts.ParentID != "" {
-		registry.Remove("subagent_spawn")
-		registry.Remove("subagent_status")
-		registry.Remove("subagent_send")
-		registry.Remove("subagent_destroy")
-		registry.Remove("subagent_wait")
-		registry.Remove("subagent_answer")
+		for _, name := range SubAgentToolNames() {
+			registry.Remove(name)
+		}
 		registry.Remove("delegate_subagent")
 	}
 	for _, name := range opts.ExcludeTools {
@@ -335,7 +337,11 @@ func (f *AgentFactory) Create(opts AgentOptions) agentpkg.Agent {
 		BeforeToolCall:     beforeToolCall,
 		BeforeToolExecute:  f.beforeToolExecute,
 	}
-	if opts.ParentID == "" && f.memberMailbox != nil {
+	// The session mailbox belongs to the conversational lead: an auxiliary role
+	// (ESM critic/audit/recovery runs are created with IsSubAgent and no parent)
+	// must neither block on the session's members nor drain their notifications.
+	// A team-bound ESM worker continuation acts as the lead and opts back in.
+	if opts.ParentID == "" && f.memberMailbox != nil && (!opts.IsSubAgent || opts.OwnsSessionMailbox) {
 		loopCfg.GetSteeringMessages = f.memberMailbox.DrainSteering
 		// Member notifications that arrive while the lead is producing its last
 		// turn must reach it before the run may end: without this hook the lead
