@@ -118,8 +118,23 @@ func NewAgentManager(opts AgentManagerOptions) (*agent.AgentManager, error) {
 		},
 	)
 	manager := agent.NewAgentManager(factory)
+	// The session mailbox is installed for every session, not only for teams: a
+	// member's question or completion must reach an active lead wherever members
+	// can run (multi-agent, delegate, or workflow modes), and subagent_wait must
+	// not be a dead tool outside a team binding. Only a bound team may hold its
+	// run open for members, so the wrap-up wait stays team-only and unattended
+	// entry points never gain a multi-minute wait.
+	var members *agent.MemberDefRegistry
+	expertID := ""
+	teamBound := false
 	if expertBinding != nil {
-		manager.SetMemberContext(agent.NewMemberDefRegistry(expertBinding.MemberDefs), mailbox, expertBinding.ID)
+		members = agent.NewMemberDefRegistry(expertBinding.MemberDefs)
+		expertID = expertBinding.ID
+		teamBound = expertBinding.Team
+	}
+	if mailbox != nil || expertBinding != nil {
+		manager.SetMemberContext(members, mailbox, expertID)
+		manager.SetMemberWaitEnabled(teamBound)
 	}
 	return manager, nil
 }

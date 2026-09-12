@@ -435,6 +435,10 @@ func (s *Scheduler) executeJobContext(ctx context.Context, job CronJob) {
 				WorkDir:    workDir,
 				Session:    sess,
 				MultiAgent: &multiAgentPrompt,
+				// A scheduled job is never the session's conversational lead: it must
+				// not drain or wait on the session's expert-team members, even when
+				// the job targets an existing session.
+				AuxiliaryRole: true,
 			})
 			if err != nil {
 				lastErr = fmt.Errorf("create agent: %w", err)

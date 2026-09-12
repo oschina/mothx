@@ -45,6 +45,12 @@ type AgentFactory struct {
 	// agents (for example an ESM worker continuation), never for child agents.
 	manager       *AgentManager
 	memberMailbox *MemberMailbox
+	// memberWaitEnabled records whether this manager's lead may hold its run open
+	// for still-running members (a bound expert team). Sessions without a team
+	// still receive member notifications through the steering drain, but their
+	// runs may end while members are running: unattended entry points must not
+	// inherit a multi-minute wait. Installed by AgentManager during assembly.
+	memberWaitEnabled bool
 }
 
 // NewAgentFactory creates a factory with shared configuration.
@@ -157,9 +163,14 @@ type AgentOptions struct {
 	// (ESM critic/audit/recovery) must not inherit it; a team-bound ESM worker
 	// continuation is the session's lead in ESM mode and sets this explicitly.
 	OwnsSessionMailbox bool
-	MultiAgent         *bool // optional prompt override
-	DelegateMode       *bool // optional prompt override
-	Workflows          *bool // optional prompt override
+	// AuxiliaryRole marks an agent that is not the session's conversational lead
+	// even though its shape matches one (a parentless, non-subagent run such as a
+	// session-bound cron job). Auxiliary agents never drain or wait on the
+	// session's members, and take precedence over OwnsSessionMailbox.
+	AuxiliaryRole bool
+	MultiAgent    *bool // optional prompt override
+	DelegateMode  *bool // optional prompt override
+	Workflows     *bool // optional prompt override
 }
 
 // Create creates a new Agent with per-agent Registry.
@@ -341,13 +352,17 @@ func (f *AgentFactory) Create(opts AgentOptions) agentpkg.Agent {
 	// (ESM critic/audit/recovery runs are created with IsSubAgent and no parent)
 	// must neither block on the session's members nor drain their notifications.
 	// A team-bound ESM worker continuation acts as the lead and opts back in.
-	if opts.ParentID == "" && f.memberMailbox != nil && (!opts.IsSubAgent || opts.OwnsSessionMailbox) {
+	if opts.ParentID == "" && !opts.AuxiliaryRole && f.memberMailbox != nil && (!opts.IsSubAgent || opts.OwnsSessionMailbox) {
 		loopCfg.GetSteeringMessages = f.memberMailbox.DrainSteering
 		// Member notifications that arrive while the lead is producing its last
 		// turn must reach it before the run may end: without this hook the lead
 		// would stop (and cancel the members it is still waiting for) before ever
-		// seeing their completions or questions.
-		loopCfg.GetFollowUpMessages = ComposeFollowUps(f.memberMailbox, nil)
+		// seeing their completions or questions. Only a bound expert team holds
+		// the run open for members; elsewhere the notification is delivered at the
+		// next iteration or the next run instead of extending this one.
+		if f.memberWaitEnabled {
+			loopCfg.GetFollowUpMessages = ComposeFollowUps(f.memberMailbox, nil)
+		}
 	}
 
 	a := NewWithLoopConfig(loopCfg, registry)

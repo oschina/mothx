@@ -288,9 +288,9 @@ type ChannelSession struct {
 	Manager    *session.Manager
 	SandboxMgr *sandbox.Manager
 	Registry   *tools.Registry
-	// AgentMgr is session-scoped when a team expert is bound. The dispatcher
-	// still owns a legacy shared manager for ordinary channel multi-agent mode,
-	// but a team roster/mailbox must not cross channel sessions.
+	// AgentMgr is the session-scoped manager that owns this session's member
+	// mailbox (and a bound team's roster). The dispatcher-wide manager stays as a
+	// process-level fallback for tools that do not carry session member state.
 	AgentMgr   *agent.AgentManager
 	MCPClients []*mcp.Client // connected MCP clients (nil if none)
 	Mode       string
@@ -758,21 +758,36 @@ func (d *Dispatcher) ensureAgentManager() *agent.AgentManager {
 	return d.agentMgr
 }
 
-// newTeamExpertAgentManager creates the manager that owns a bound team's
-// roster and completion mailbox. It intentionally does not reuse d.agentMgr:
-// the latter predates session-scoped expert resources and has no authoritative
-// session Manager or ExpertBinding.
-func (d *Dispatcher) newTeamExpertAgentManager(runtime *agentruntime.SessionRuntime, snapshot dispatcherRuntimeSnapshot) *agent.AgentManager {
-	if runtime == nil || !runtime.TeamExpertActive() || snapshot.provider == nil || snapshot.model == nil || snapshot.settings == nil {
+// sessionHasSubAgentTools reports whether the session's tool selection actually
+// registered any canonical sub-agent tool.
+func sessionHasSubAgentTools(reg *tools.Registry) bool {
+	if reg == nil {
+		return false
+	}
+	for _, name := range agent.SubAgentToolNames() {
+		if _, ok := reg.Get(name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// newSessionAgentManager creates the session-scoped manager that owns this
+// session's member mailbox (and a bound team's roster). It intentionally does
+// not reuse d.agentMgr: the latter is shared across sessions, predates the
+// session's Runtime, and has no session mailbox, so a member's question or
+// completion would have no wake path (N8).
+func (d *Dispatcher) newSessionAgentManager(runtime *agentruntime.SessionRuntime, snapshot dispatcherRuntimeSnapshot) *agent.AgentManager {
+	if runtime == nil || snapshot.provider == nil || snapshot.model == nil || snapshot.settings == nil {
 		return nil
 	}
 	manager, err := agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
 		Runtime: runtime, Provider: snapshot.provider, ProviderName: snapshot.providerName,
 		Model: snapshot.model, Settings: snapshot.settings, Allow: snapshot.allow,
-		MultiAgentEnabled: true,
+		MultiAgentEnabled: snapshot.multiAgent || runtime.TeamExpertActive(),
 	})
 	if err != nil {
-		log.Printf("[channels] create team expert agent manager: %v", err)
+		log.Printf("[channels] create session agent manager: %v", err)
 		return nil
 	}
 	manager.AddStatusListener(d.forwardChildTerminalStatus)
@@ -1881,8 +1896,9 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 	if err != nil {
 		return nil, fmt.Errorf("attach channel session runtime: %w", err)
 	}
-	teamAgentMgr := d.newTeamExpertAgentManager(sessionRuntime, dispatcherRuntimeSnapshot{
+	sessionAgentMgr := d.newSessionAgentManager(sessionRuntime, dispatcherRuntimeSnapshot{
 		settings: d.settings, provider: d.provider, providerName: d.providerName, model: d.model, allow: d.allow,
+		multiAgent: multiAgentEnabled,
 	})
 	if err := sessionRuntime.ConnectConfiguredMCP(context.Background(), agentruntime.MCPPolicy{
 		Optional: true,
@@ -1903,12 +1919,17 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 			}
 		}
 	}
-	if teamAgentMgr != nil {
-		// A team binding is a Runtime policy capability, not an adapter-local
-		// optional toggle. Re-register after channel-specific removals so an
-		// explicit stale tool preference cannot detach the authoritative roster
-		// manager from a persisted team session.
-		agent.RegisterSubAgentTools(reg, teamAgentMgr)
+	if sessionAgentMgr != nil && (sessionRuntime.TeamExpertActive() || sessionHasSubAgentTools(reg)) {
+		// The session-scoped manager owns this session's member mailbox, so member
+		// questions and completions reach this session's lead (and subagent_wait
+		// observes the same mailbox). Re-register after channel-specific removals so
+		// the sub-agent tools never stay attached to the dispatcher-wide manager,
+		// which is shared across sessions and has no session mailbox.
+		//
+		// Only tools the session actually selected are re-pointed: a team binding is a
+		// Runtime policy capability (not an adapter-local toggle), while an ordinary
+		// multi-agent selection must still be able to keep them switched off.
+		agent.RegisterSubAgentTools(reg, sessionAgentMgr)
 	}
 	sess := &ChannelSession{
 		Execution:  &agentruntime.ExecutionRuntime{},
@@ -1920,7 +1941,7 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 		WorkDir:    workDir,
 		Manager:    mgr,
 		Registry:   reg,
-		AgentMgr:   teamAgentMgr,
+		AgentMgr:   sessionAgentMgr,
 		SandboxMgr: sbMgr,
 		MCPClients: mcpClients,
 		Mode:       "yolo",

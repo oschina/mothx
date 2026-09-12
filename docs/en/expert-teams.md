@@ -70,6 +70,10 @@ only sees the question projected on the lead's stream. A blocking
 `delegate_subagent` child cannot ask questions, because its caller is parked
 inside the tool call that would have to answer it.
 
+The mailbox path is available in every session that can spawn members, not only
+in team sessions; only a team-bound session also holds its run open for
+still-running members at the wrap-up turn.
+
 ## ESM interaction
 
 Expert Teams work with Enable Supervisor Mode (ESM) without creating a second

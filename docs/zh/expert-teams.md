@@ -48,6 +48,8 @@ subagent_wait(timeout_ms: 30000)
 
 成员需要决策时向 lead 提问，而不是向用户提问：问题会进入会话邮箱（以 `[MEMBER_QUESTION]` steering 消息，或 `subagent_wait` 中 `status: question` 的待处理条目投递），由 lead 用 `subagent_answer(handle: "<成员>", question_id: "…", answer: "…")` 回答；用户只看到该提问在 lead 事件流上的投影。阻塞式 `delegate_subagent` 子 Agent 不会提问，因为它的调用方正停在工具调用里，无人能作答。
 
+该邮箱通路在所有能派生成员的会话中都可用，不限于团队会话；只有绑定团队的会话才会在收尾轮为仍在运行的成员保持 run 打开。
+
 ## 与 ESM 的关系
 
 主角团与 Enable Supervisor Mode（ESM）组合使用时不会创建第二套任务调度器。只有用户能创建、编辑、恢复或清除 ESM 目标。只有会话确实空闲且目标仍可自动运行时，既有 ESM continuation 才会启动下一次 lead run；成员终态事件不是续跑触发器。

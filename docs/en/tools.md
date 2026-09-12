@@ -412,6 +412,8 @@ Enables creating and managing cron-like scheduled tasks that execute in the back
 
 When MothX is launched in multi-agent mode (`--multi-agent`), the main agent can spin up completely separate sub-agents to parallelize work. Sub-agents run in their own session contexts, have separate memories, separate temporary files, and isolated logs.
 
+Member questions and completions are delivered to an active lead through the session mailbox (as steering messages) in every session that can spawn members; only a session bound to an expert **team** also holds its run open for still-running members at the wrap-up turn. Other sessions end the turn normally and see the notification at their next iteration or next run.
+
 #### `subagent_spawn`
 Launches a sub-agent to handle a focused prompt task asynchronously.
 

@@ -95,6 +95,23 @@ func (m *AgentManager) SetMemberContext(members *MemberDefRegistry, mailbox *Mem
 	}
 }
 
+// SetMemberWaitEnabled records whether this manager's lead may hold its run open
+// for still-running members. It is true only for a bound expert team: other
+// sessions still deliver member questions and completions through the mailbox
+// steering drain, but a run may end while members are running so unattended
+// entry points never inherit the team's bounded member wait. Callers must set
+// this during assembly, before any run starts.
+func (m *AgentManager) SetMemberWaitEnabled(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.factory != nil {
+		m.factory.memberWaitEnabled = enabled
+	}
+}
+
 // NotifyMemberQuestion queues a member's blocking question for the lead. The
 // mailbox is the only wake path: a blocked subagent_wait returns on the activity
 // signal, and the question is injected as a steering message at the lead's next

@@ -150,16 +150,20 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 	// builds (side questions, knowledge-base indexing) pass a nil session
 	// manager, and auxiliary roles built over the session manager opt out, so
 	// neither blocks on the session's members nor consumes member notifications
-	// that belong to the lead.
+	// that belong to the lead. Every session drains member notifications; only a
+	// bound expert team holds its run open for members.
+	teamBound := expertBinding != nil && expertBinding.Team
 	steeringMessages := opts.GetSteeringMessages
 	var followUpMessages func(context.Context) []provider.Message
 	if manager != nil && !opts.AuxiliaryRole {
 		steeringMessages = composeSteering(mailbox, opts.GetSteeringMessages)
-		// A team lead must not end its run (and cancel the members it is still
-		// waiting for) just because a turn produced no tool calls: the follow-up
-		// hook waits for members and keeps adapter steering responsive while it
-		// waits.
-		followUpMessages = agent.ComposeFollowUps(mailbox, opts.GetSteeringMessages)
+		if teamBound {
+			// A team lead must not end its run (and cancel the members it is still
+			// waiting for) just because a turn produced no tool calls: the follow-up
+			// hook waits for members and keeps adapter steering responsive while it
+			// waits.
+			followUpMessages = agent.ComposeFollowUps(mailbox, opts.GetSteeringMessages)
+		}
 	}
 	settings := opts.Settings
 	if settings == nil {
