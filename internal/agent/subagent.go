@@ -116,10 +116,14 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 	defer cancel()
 
 	a, err := t.manager.Create(AgentOptions{
-		ParentID:          parentID,
-		Mode:              mode,
-		WorkDir:           workDir,
-		Tools:             toolFilter,
+		ParentID: parentID,
+		Mode:     mode,
+		WorkDir:  workDir,
+		Tools:    toolFilter,
+		// A blocking delegate's caller is parked inside this tool call, so nobody
+		// could ever answer a child question. Remove the tool instead of letting
+		// the child block until its run is torn down with "no answer received".
+		ExcludeTools:      []string{"question"},
 		SystemPromptExtra: extra,
 		MaxIterations:     maxIter,
 	})
@@ -149,6 +153,11 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 			})
 		}
 		ForwardChildAgentEvent(runCtx, parentEventCh, a.ID(), e)
+		// Members ask the lead, not the human: a blocking question must reach a
+		// wake path instead of being consumed and dropped here.
+		if e.Type == agentpkg.EventQuestionRequest {
+			forwardMemberQuestion(runCtx, t.manager, parentEventCh, a.ID(), e, nil)
+		}
 		if e.Type == agentpkg.EventToolCall {
 			toolCallCount++
 			if e.ToolName != "" {
@@ -418,6 +427,11 @@ func (t *SubAgentSpawnTool) Execute(ctx context.Context, params map[string]any) 
 				})
 			}
 			ForwardChildAgentEvent(runCtx, parentEventCh, a.ID(), e, eventMeta)
+			// Members ask the lead, not the human: queue the question so a blocked
+			// subagent_wait returns and the lead can answer with subagent_answer.
+			if e.Type == agentpkg.EventQuestionRequest {
+				forwardMemberQuestion(runCtx, t.manager, parentEventCh, a.ID(), e, &eventMeta)
+			}
 			switch e.Type {
 			case agentpkg.EventRunFinished:
 				switch e.Status {
@@ -539,6 +553,39 @@ func restrictMemberTools(requested, allowed []string) []string {
 		result = append(result, name)
 	}
 	return result
+}
+
+// forwardMemberQuestion routes a member's question to the lead instead of the
+// human. It projects the request on the parent stream (so adapters can render
+// "member asks the lead") and queues it in the session mailbox, which is what
+// actually wakes the lead. The member keeps waiting for subagent_answer.
+func forwardMemberQuestion(ctx context.Context, manager *AgentManager, parentEventCh chan<- Event, childID agentpkg.AgentID, e agentpkg.Event, meta *ChildEventMeta) {
+	if parentEventCh != nil {
+		ev := Event{
+			Type:            EventQuestionRequest,
+			AgentID:         childID,
+			QuestionID:      e.QuestionID,
+			QuestionText:    e.QuestionText,
+			QuestionOptions: append([]string(nil), e.QuestionOptions...),
+			QuestionContext: e.QuestionContext,
+		}
+		if meta != nil {
+			ev.MemberID = meta.MemberID
+			ev.ExpertID = meta.ExpertID
+			ev.MemberDisplayName = meta.MemberDisplayName
+			ev.MemberEmoji = meta.MemberEmoji
+			ev.MemberRole = meta.MemberRole
+		}
+		_ = sendParentEvent(ctx, parentEventCh, ev)
+	}
+	if manager == nil {
+		return
+	}
+	displayName := ""
+	if meta != nil {
+		displayName = meta.MemberDisplayName
+	}
+	manager.NotifyMemberQuestion(string(childID), displayName, e.QuestionID, e.QuestionText, e.QuestionOptions)
 }
 
 func sendParentEvent(ctx context.Context, ch chan<- Event, ev Event) (ok bool) {
@@ -772,6 +819,9 @@ func (t *SubAgentSendTool) Execute(ctx context.Context, params map[string]any) (
 				})
 			}
 			ForwardChildAgentEvent(runCtx, parentEventCh, a.ID(), e)
+			if e.Type == agentpkg.EventQuestionRequest {
+				forwardMemberQuestion(runCtx, t.manager, parentEventCh, a.ID(), e, nil)
+			}
 			switch e.Type {
 			case agentpkg.EventRunFinished:
 				switch e.Status {
@@ -868,6 +918,66 @@ func (n *memberNotifier) notify(status, payload string) {
 		Status:      status,
 		Payload:     payload,
 	})
+}
+
+// SubAgentAnswerTool answers a blocking question a running member asked the
+// lead. The question is delivered as a [MEMBER_QUESTION] steering message (or a
+// subagent_wait pending entry with status "question"); the member stays blocked
+// until this tool resolves it.
+type SubAgentAnswerTool struct {
+	manager *AgentManager
+}
+
+func NewSubAgentAnswerTool(m *AgentManager) *SubAgentAnswerTool {
+	return &SubAgentAnswerTool{manager: m}
+}
+
+func (t *SubAgentAnswerTool) Name() string { return "subagent_answer" }
+func (t *SubAgentAnswerTool) Description() string {
+	return "Answer a question a running sub-agent asked you (the lead). Use the member handle and question_id from the [MEMBER_QUESTION] message; the member unblocks and continues its task."
+}
+func (t *SubAgentAnswerTool) PromptSnippet() string {
+	return "Answer a member's blocking question so it can continue"
+}
+func (t *SubAgentAnswerTool) PromptGuidelines() []string {
+	return []string{
+		"When a [MEMBER_QUESTION] message or a subagent_wait entry with status \"question\" appears, answer it with subagent_answer instead of ignoring it",
+		"Pass the exact question_id from the message; use the member handle as the target",
+	}
+}
+
+func (t *SubAgentAnswerTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"handle": {"type": "string", "description": "The sub-agent handle ID that asked the question"},
+			"question_id": {"type": "string", "description": "The question_id from the [MEMBER_QUESTION] message"},
+			"answer": {"type": "string", "description": "The answer for the member to continue with"}
+		},
+		"required": ["handle", "question_id", "answer"]
+	}`)
+}
+
+func (t *SubAgentAnswerTool) Execute(ctx context.Context, params map[string]any) (tools.ToolResult, error) {
+	handle, _ := params["handle"].(string)
+	questionID, _ := params["question_id"].(string)
+	answer, _ := params["answer"].(string)
+	if strings.TrimSpace(handle) == "" || strings.TrimSpace(questionID) == "" || strings.TrimSpace(answer) == "" {
+		return tools.ToolResult{}, fmt.Errorf("handle, question_id and answer are required")
+	}
+	if t.manager == nil {
+		return tools.ToolResult{}, fmt.Errorf("sub-agent manager is not available")
+	}
+	target, ok := t.manager.Get(agentpkg.AgentID(handle))
+	if !ok {
+		return tools.ToolResult{}, fmt.Errorf("sub-agent %q not found", handle)
+	}
+	handler, ok := target.(agentpkg.QuestionHandler)
+	if !ok {
+		return tools.ToolResult{}, fmt.Errorf("sub-agent %q does not accept answers", handle)
+	}
+	handler.HandleQuestionResponse(questionID, answer)
+	return tools.NewTextToolResult(fmt.Sprintf("Answered %s's question %s.", handle, questionID)), nil
 }
 
 // memberTerminalPayload returns the error text for a failed/canceled/incomplete

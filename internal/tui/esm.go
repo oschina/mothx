@@ -469,8 +469,15 @@ func (a *App) startESMSubAgentContinuation(obj *esm.Objective) tea.Cmd {
 	manager := a.agentMgr
 	mode := a.esmRoleMode()
 	eventCh := make(chan internalagent.Event, 100)
+	ctx, cancel := context.WithCancel(context.Background())
+	a.esmMu.Lock()
+	if a.esmRunCancel != nil {
+		a.esmRunCancel()
+	}
+	a.esmRunCancel = cancel
+	a.esmMu.Unlock()
 	return func() tea.Msg {
-		go a.runESMSubAgentSupervisor(context.Background(), eventCh, manager, store, sessionID, runID, workDir, mode)
+		go a.runESMSubAgentSupervisor(ctx, eventCh, manager, store, sessionID, runID, workDir, mode)
 		return agentStreamStartMsg{
 			input:      "",
 			eventCh:    eventCh,
@@ -651,8 +658,13 @@ func (a *App) abortActiveESMAgent() {
 	a.esmMu.Lock()
 	id := a.esmActiveAgentID
 	a.esmActiveAgentID = ""
+	cancel := a.esmRunCancel
+	a.esmRunCancel = nil
 	manager := a.agentMgr
 	a.esmMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	if id != "" && manager != nil {
 		_ = manager.Destroy(id)
 	}

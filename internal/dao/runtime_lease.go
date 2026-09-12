@@ -73,12 +73,18 @@ func (d *RuntimeLeaseDAO) ActiveRunIDs(ctx context.Context, executor bun.IDB, se
 	return ids, err
 }
 
+// Renew extends the lease owned by the caller. Matching owner, epoch, and token
+// is the fencing condition: a competing process can only take over through
+// Acquire, which bumps the epoch, so an expired row that still carries our
+// identity is still ours and must stay renewable. Requiring expires_at > now
+// here would permanently kill a live owner after any stall longer than the TTL
+// even though no other process ever took the lease.
 func (d *RuntimeLeaseDAO) Renew(ctx context.Context, record *RuntimeLeaseRecord, ttl int64) (int64, error) {
 	result, err := d.db.NewUpdate().Model((*RuntimeLeaseRecord)(nil)).
 		Set("heartbeat_at = CAST(strftime('%s','now') AS INTEGER)").
 		Set("expires_at = CAST(strftime('%s','now') AS INTEGER) + ?", ttl).
 		Set("updated_at = CAST(strftime('%s','now') AS INTEGER)").
-		Where("session_id = ? AND owner_instance_id = ? AND epoch = ? AND lease_token_hash = ? AND state = ? AND expires_at > CAST(strftime('%s','now') AS INTEGER)", record.SessionID, record.OwnerID, record.Epoch, record.TokenHash, "active").Exec(ctx)
+		Where("session_id = ? AND owner_instance_id = ? AND epoch = ? AND lease_token_hash = ? AND state = ?", record.SessionID, record.OwnerID, record.Epoch, record.TokenHash, "active").Exec(ctx)
 	if err != nil {
 		return 0, err
 	}

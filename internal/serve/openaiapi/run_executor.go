@@ -82,6 +82,14 @@ func (e *RunExecutor) Execute(ctx context.Context, sess *APISession, a *agent.Ag
 		case <-ctx.Done():
 			result.Status = "canceled"
 			result.Error = ctx.Err().Error()
+			// Terminal events are sent unconditionally by the Agent loop, so a
+			// buffer that filled up before the cancellation could still park the
+			// aborted run on its next send and it could never finish its terminal
+			// bookkeeping. Keep consuming the retired stream in the background.
+			go func() {
+				for range eventCh {
+				}
+			}()
 			return result, nil
 		default:
 		}

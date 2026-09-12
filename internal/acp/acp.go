@@ -59,8 +59,12 @@ func esmSteeringMessages(settings *config.Settings, sessionID string) func() []p
 
 // Decision deadline defaults. RunOptions/CLI flags/env may extend them; the
 // zero value always falls back to these documented ACP defaults.
+// defaultPermissionTimeout bounds how long an ACP approval decision may stay
+// pending. It is aligned with the question deadline: reading a risky command
+// routinely takes longer than a few seconds, and a short deadline denies the
+// tool call while the user is still deciding.
 const (
-	defaultPermissionTimeout = 30 * time.Second
+	defaultPermissionTimeout = 5 * time.Minute
 	defaultQuestionTimeout   = 5 * time.Minute
 )
 
@@ -1621,6 +1625,7 @@ func (s *server) handleInitialize(req rpcRequest) {
 				"manageExperts",
 				"manageKnowledgeBases",
 				"manageEnv",
+				"manageDeliveries",
 				"knowledgeGraphIndex",
 				"knowledgeBaseContext",
 			},

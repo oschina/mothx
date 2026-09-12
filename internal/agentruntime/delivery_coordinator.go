@@ -28,12 +28,22 @@ type DeliveryResult struct {
 // delivery rows directly.
 type DeliveryExecutor func(context.Context, session.DeliveryOperation) (DeliveryResult, error)
 
+// DefaultDeliveryRetryWindow bounds how long a transient delivery failure keeps
+// being retried. Platform transports can be disconnected or rate-limited for
+// minutes, and a small attempt count would abandon the reply long before that.
+const DefaultDeliveryRetryWindow = 10 * time.Minute
+
 // DeliveryCoordinator is the Runtime-owned claim/fence/retry boundary for
 // durable delivery outbox operations.
 type DeliveryCoordinator struct {
 	SessionDir string
 	Owner      string
 	Lease      time.Duration
+	// RetryWindow is the wall-clock budget for transient failures. Zero uses
+	// DefaultDeliveryRetryWindow.
+	RetryWindow time.Duration
+	// MaxRetries is an optional hard attempt cap in addition to RetryWindow.
+	// Zero disables it (the window is the production bound).
 	MaxRetries int
 }
 
@@ -41,7 +51,7 @@ func NewDeliveryCoordinator(sessionDir, owner string) *DeliveryCoordinator {
 	if strings.TrimSpace(owner) == "" {
 		owner = "delivery-worker-" + session.GenerateID()
 	}
-	return &DeliveryCoordinator{SessionDir: sessionDir, Owner: owner, Lease: 30 * time.Second, MaxRetries: 5}
+	return &DeliveryCoordinator{SessionDir: sessionDir, Owner: owner, Lease: 30 * time.Second, RetryWindow: DefaultDeliveryRetryWindow}
 }
 
 func (c *DeliveryCoordinator) Claim(ctx context.Context, operationID string, now time.Time) (*session.DeliveryOperation, error) {
@@ -115,7 +125,7 @@ func (c *DeliveryCoordinator) ReconcileDue(ctx context.Context, now time.Time, e
 			result.FailureCode = "transport_error"
 			result.NextAttemptAt = ptrDeliveryTime(now.Add(deliveryRetryDelay(operation.AttemptCount)))
 		}
-		if result.Status == "retry_wait" && c.MaxRetries > 0 && operation.AttemptCount >= c.MaxRetries {
+		if result.Status == "retry_wait" && c.retryExhausted(operation, now) {
 			result.Status = "failed"
 			result.NextAttemptAt = nil
 			result.FailureCode = "delivery_retries_exhausted"
@@ -138,6 +148,32 @@ func (c *DeliveryCoordinator) ReconcileDue(ctx context.Context, now time.Time, e
 		processed++
 	}
 	return processed, nil
+}
+
+// retryExhausted reports whether a transient delivery failure has consumed its
+// retry budget. The wall-clock window is the production bound; MaxRetries stays
+// available as an explicit attempt cap for callers that want one.
+func (c *DeliveryCoordinator) retryExhausted(operation *session.DeliveryOperation, now time.Time) bool {
+	if c == nil || operation == nil {
+		return false
+	}
+	if c.MaxRetries > 0 && operation.AttemptCount >= c.MaxRetries {
+		return true
+	}
+	window := c.RetryWindow
+	if window <= 0 {
+		window = DefaultDeliveryRetryWindow
+	}
+	start := operation.CreatedAt
+	if operation.RetryWindowStartedAt != nil && !operation.RetryWindowStartedAt.IsZero() {
+		// An explicit retry restarts the budget instead of counting from the
+		// original creation time.
+		start = *operation.RetryWindowStartedAt
+	}
+	if start.IsZero() {
+		return false
+	}
+	return now.Sub(start) >= window
 }
 
 func deliveryRetryDelay(attempt int) time.Duration {

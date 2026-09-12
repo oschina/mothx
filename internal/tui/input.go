@@ -364,11 +364,15 @@ func (a *App) handleInputSubmit() tea.Cmd {
 			var num int
 			if _, err := fmt.Sscanf(answer, "%d", &num); err == nil && num > 0 && num <= len(a.currentQuestion.options) {
 				answer = a.currentQuestion.options[num-1]
-				a.agent.HandleQuestionResponse(a.pendingQuestionID, answer)
+				if err := a.resolveQuestionAnswer(answer); err != nil {
+					a.addCommandError(fmt.Sprintf("Failed to record answer: %v", err))
+				}
 				a.addMessage(statusStyle.Render(fmt.Sprintf("✅ Selected: %s", answer)))
 			} else {
 				// Custom text input, including out-of-range numbers.
-				a.agent.HandleQuestionResponse(a.pendingQuestionID, answer)
+				if err := a.resolveQuestionAnswer(answer); err != nil {
+					a.addCommandError(fmt.Sprintf("Failed to record answer: %v", err))
+				}
 				a.addMessage(statusStyle.Render(fmt.Sprintf("✅ Answer: %s", answer)))
 			}
 		}
@@ -575,6 +579,28 @@ func (a *App) submitBackgroundInput(input string) tea.Cmd {
 		runID, err := submitter(request)
 		return backgroundSubmittedMsg{Input: input, Submission: runInput, RunID: runID, Err: err}
 	}
+}
+
+// resolveQuestionAnswer answers the pending question through the Runtime
+// decision service so the resolution is persisted for the run ledger, then
+// unblocks the agent. A ledger failure falls back to the direct response so the
+// asking agent can never stay parked on a question that was already answered.
+func (a *App) resolveQuestionAnswer(answer string) error {
+	questionID := a.pendingQuestionID
+	if a.run == nil || questionID == "" {
+		if a.agent != nil {
+			a.agent.HandleQuestionResponse(questionID, answer)
+		}
+		return nil
+	}
+	run := a.run
+	if err := run.resolveDecision(questionID, agentruntime.DecisionQuestion, answer); err != nil {
+		if a.agent != nil {
+			a.agent.HandleQuestionResponse(questionID, answer)
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *App) discardPendingInput() {

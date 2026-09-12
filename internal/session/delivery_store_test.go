@@ -185,3 +185,127 @@ func TestUncertainDeliveryCascadesUncertainDependent(t *testing.T) {
 }
 
 func ptrTime(value time.Time) *time.Time { return &value }
+
+// TestReopenFailedDeliveryOperationRestartsRetryWindow guards the recovery path
+// for operations that exhausted their retry budget: only a failed operation can
+// be reopened, and the reopen clears the failure and stamps a fresh window.
+func TestReopenFailedDeliveryOperationRestartsRetryWindow(t *testing.T) {
+	sessionDir, _ := deliveryFixture(t)
+	createDeliveryFixturePlan(t, sessionDir, "delivery-session")
+	ctx := context.Background()
+
+	if reopened, err := ReopenFailedDeliveryOperation(ctx, sessionDir, "delivery-op-caption", time.Now().UTC()); err != nil {
+		t.Fatalf("reopen pending operation: %v", err)
+	} else if reopened {
+		t.Fatal("a pending operation must not be reopened")
+	}
+
+	claimed, err := ClaimDeliveryOperation(ctx, sessionDir, "delivery-op-caption", "test-worker", time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatalf("claim operation: %v", err)
+	}
+	if err := UpdateDeliveryOperation(ctx, sessionDir, "delivery-op-caption", "test-worker", claimed.LeaseEpoch, "failed", "", "", nil, "delivery_retries_exhausted", nil); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+	reopenedAt := time.Now().UTC()
+	reopened, err := ReopenFailedDeliveryOperation(ctx, sessionDir, "delivery-op-caption", reopenedAt)
+	if err != nil {
+		t.Fatalf("reopen failed operation: %v", err)
+	}
+	if !reopened {
+		t.Fatal("failed operation was not reopened")
+	}
+
+	operation, err := GetDeliveryOperation(ctx, sessionDir, "delivery-op-caption")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.Status != "retry_wait" || operation.FailureCode != "" || operation.NextAttemptAt != nil {
+		t.Fatalf("reopened operation = %#v", operation)
+	}
+	if operation.RetryWindowStartedAt == nil || operation.RetryWindowStartedAt.Sub(reopenedAt).Abs() > time.Second {
+		t.Fatalf("retry window start = %v, want ~%v", operation.RetryWindowStartedAt, reopenedAt)
+	}
+
+	// A second reopen must be a no-op: the operation is no longer failed.
+	again, err := ReopenFailedDeliveryOperation(ctx, sessionDir, "delivery-op-caption", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("second reopen: %v", err)
+	}
+	if again {
+		t.Fatal("retry_wait operation must not be reopened again")
+	}
+}
+
+// TestListFailedTransientDeliveryOperations guards the reconnect scan: only
+// transport-level failures for the requested platform are reported, never
+// permanent projection failures or other platforms.
+func TestListFailedTransientDeliveryOperations(t *testing.T) {
+	sessionDir, _ := deliveryFixture(t)
+	createDeliveryFixturePlan(t, sessionDir, "delivery-session")
+	ctx := context.Background()
+
+	captionClaim, err := ClaimDeliveryOperation(ctx, sessionDir, "delivery-op-caption", "test-worker", time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatalf("claim caption operation: %v", err)
+	}
+	if err := UpdateDeliveryOperation(ctx, sessionDir, "delivery-op-caption", "test-worker", captionClaim.LeaseEpoch, "failed", "", "", nil, "delivery_retries_exhausted", nil); err != nil {
+		t.Fatalf("mark transient failure: %v", err)
+	}
+	// The dependent operation cannot be claimed while its dependency is failed,
+	// so mark it failed through the unleased row identity instead.
+	if err := WriteRootDatabase(ctx, sessionDir, func(tx *dao.Tx) error {
+		_, err := dao.NewDeliveryDAO(nil).UpdateResult(ctx, tx, "delivery-op-file", "", 0, "failed", "", "", "{}", "delivery_projection_missing", nil, time.Now().UTC().Format(time.RFC3339Nano))
+		return err
+	}); err != nil {
+		t.Fatalf("mark permanent failure: %v", err)
+	}
+
+	ids, err := ListFailedTransientDeliveryOperations(ctx, sessionDir, "wechat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != "delivery-op-caption" {
+		t.Fatalf("failed transient ids = %v, want [delivery-op-caption]", ids)
+	}
+	if ids, err := ListFailedTransientDeliveryOperations(ctx, sessionDir, "feishu"); err != nil || len(ids) != 0 {
+		t.Fatalf("other platform ids = %v, err = %v", ids, err)
+	}
+}
+
+// TestReopenFailedDeliveryOperationRecoversDependentFailures guards the
+// cascade: an attachment terminalized only because its caption failed must be
+// retried too once the caption is reopened.
+func TestReopenFailedDeliveryOperationRecoversDependentFailures(t *testing.T) {
+	sessionDir, _ := deliveryFixture(t)
+	createDeliveryFixturePlan(t, sessionDir, "delivery-session")
+	ctx := context.Background()
+
+	// Fail the caption and let dependency propagation terminalize the file.
+	claimed, err := ClaimDeliveryOperation(ctx, sessionDir, "delivery-op-caption", "test-worker", time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatalf("claim caption operation: %v", err)
+	}
+	if err := UpdateDeliveryOperation(ctx, sessionDir, "delivery-op-caption", "test-worker", claimed.LeaseEpoch, "failed", "", "", nil, "delivery_retries_exhausted", nil); err != nil {
+		t.Fatalf("mark caption failed: %v", err)
+	}
+	fileBefore, err := GetDeliveryOperation(ctx, sessionDir, "delivery-op-file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileBefore.Status != "failed" || fileBefore.FailureCode != "dependency_failed" {
+		t.Fatalf("dependent operation = %#v, want failed/dependency_failed", fileBefore)
+	}
+
+	reopened, err := ReopenFailedDeliveryOperation(ctx, sessionDir, "delivery-op-caption", time.Now().UTC())
+	if err != nil || !reopened {
+		t.Fatalf("reopen caption = %v, %v", reopened, err)
+	}
+	fileAfter, err := GetDeliveryOperation(ctx, sessionDir, "delivery-op-file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileAfter.Status != "retry_wait" || fileAfter.FailureCode != "" {
+		t.Fatalf("dependent operation after reopen = %#v, want retry_wait", fileAfter)
+	}
+}

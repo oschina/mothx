@@ -308,13 +308,17 @@ type App struct {
 	esmRunSessionID    string
 	esmRunID           string
 	esmActiveAgentID   agentpkg.AgentID
-	esmRunTokens       int64
-	esmSupervisorRun   bool
-	esmRoleRunner      esmRoleRunner
-	esmPanelOpen       bool
-	esmPanelScroll     int
-	esmPanelObjective  *esm.Objective
-	esmPanelErr        error
+	// esmRunCancel cancels the supervisor-run context. Background-context
+	// supervisors kept spawning roles after an abort because nothing owned their
+	// lifetime; the App now does.
+	esmRunCancel      context.CancelFunc
+	esmRunTokens      int64
+	esmSupervisorRun  bool
+	esmRoleRunner     esmRoleRunner
+	esmPanelOpen      bool
+	esmPanelScroll    int
+	esmPanelObjective *esm.Objective
+	esmPanelErr       error
 
 	// Spinner state
 	spinnerIndex int
@@ -958,6 +962,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.esmPanelOpen {
 			switch {
 			case msg.Type == tea.KeyCtrlC:
+				a.finalizeForQuit()
 				a.stopPrintLoop()
 				return a, tea.Quit
 			case msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlE || (msg.Type == tea.KeyRunes && string(msg.Runes) == "q"):
@@ -1065,6 +1070,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Special keys are processed immediately; regular text input is batched.
 		switch msg.Type {
 		case tea.KeyCtrlC:
+			a.finalizeForQuit()
 			return a, tea.Quit
 		case tea.KeyEsc:
 			if a.isThinking || a.waitingForApproval || a.waitingForQuestion {
@@ -1293,8 +1299,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		// The event stream ended without a terminal run event, so no tool result
-		// can reach the transcript anymore.
+		// can reach the transcript anymore. The run must still be terminalized:
+		// leaving a.run set would swallow every later submission into the queue and
+		// keep the session's execution lease alive indefinitely.
 		a.finalizeInterruptedTools()
+		if a.run != nil {
+			a.finalizeAbortedRun()
+			a.run.finish(agentruntime.RunStateFailed)
+			a.run = nil
+		}
 		a.isThinking = false
 		a.manualCompactionActive = false
 		a.finishRequestTimer()
@@ -1303,7 +1316,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.stopReason != "" {
 			a.addMessage(statusStyle.Render(a.translator.Text(i18n.MsgSessionEndedPrefix)) + msg.stopReason)
 		}
-		return a, a.timer.Stop()
+		return a, tea.Batch(a.timer.Stop(), a.scheduleNextQueuedPrompt())
 	}
 
 	// Update components
@@ -1667,6 +1680,42 @@ func (a *App) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
+// retireEventStream detaches the UI from the current run's event stream and
+// keeps draining it in the background until the producer closes it. Retiring
+// (rather than dropping) the channel matters because terminal events
+// (EventRunFinished/EventDone/EventAgentEnd) are always sent unconditionally: a
+// stream abandoned with a full buffer could still park the aborted run forever,
+// leaking its goroutine and leaving its conversation turn open.
+func (a *App) retireEventStream() {
+	ch := a.eventCh
+	a.eventCh = nil
+	if ch == nil {
+		return
+	}
+	go func() {
+		for range ch {
+		}
+	}()
+}
+
+// finalizeForQuit terminalizes an in-flight run before the process exits. The
+// Runtime shutdown that follows only requests cancellation; the loop owner (this
+// adapter) must still write the terminal state, otherwise the run is later
+// recovered as failed instead of the cancellation the user asked for.
+func (a *App) finalizeForQuit() {
+	a.abortActiveESMAgent()
+	if a.run != nil {
+		a.finalizeAbortedRun()
+		run := a.run
+		run.cancel()
+		run.finish(agentruntime.RunStateCancelled)
+		a.run = nil
+	}
+	a.isThinking = false
+	a.manualCompactionActive = false
+	a.finishRequestTimer()
+}
+
 func (a *App) abortPendingRequest(reason string) tea.Cmd {
 	a.pendingAbortReason = reason
 	a.abortActiveESMAgent()
@@ -1676,8 +1725,11 @@ func (a *App) abortPendingRequest(reason string) tea.Cmd {
 		a.finalizeAbortedRun()
 		a.resetAgent(fmt.Errorf("aborted"))
 	}
-	// No further events from the cancelled stream belong to the active UI run.
-	a.eventCh = nil
+	// No further events from the cancelled stream belong to the active UI run,
+	// but the stream must still be consumed: the Agent loop's event sends are not
+	// context-aware, so abandoning a full buffer would park the aborted run
+	// forever (it could never reach its terminal event or close its turn).
+	a.retireEventStream()
 	a.clearApprovalState()
 	a.clearQuestionState()
 	a.clearQueuedInput()
@@ -1687,7 +1739,9 @@ func (a *App) abortPendingRequest(reason string) tea.Cmd {
 	a.manualCompactionActive = false
 	a.finishRequestTimer()
 	a.addMessage(statusStyle.Render(a.translator.Text(i18n.MsgAborted)))
-	return a.timer.Stop()
+	// Prompts queued while the aborted run was active must still run: nothing else
+	// restarts the queue because the aborted run's terminal event is retired.
+	return tea.Batch(a.timer.Stop(), a.scheduleNextQueuedPrompt())
 }
 
 // handlePaste handles large pastes by creating markers

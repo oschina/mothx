@@ -111,12 +111,12 @@ func TestACPInitializeProjectsArtifactSwitchDefaultAndOverride(t *testing.T) {
 }
 
 func TestACPDecisionTimeoutFallsBackToDefaultsAndHonorsConfiguration(t *testing.T) {
-	if defaultPermissionTimeout != 30*time.Second || defaultQuestionTimeout != 5*time.Minute {
-		t.Fatalf("decision timeout defaults = %v / %v, want 30s / 5m", defaultPermissionTimeout, defaultQuestionTimeout)
+	if defaultPermissionTimeout != 5*time.Minute || defaultQuestionTimeout != 5*time.Minute {
+		t.Fatalf("decision timeout defaults = %v / %v, want 5m / 5m (approval aligned with question)", defaultPermissionTimeout, defaultQuestionTimeout)
 	}
 	zero := &server{}
 	if got := zero.effectivePermissionTimeout(); got != defaultPermissionTimeout {
-		t.Fatalf("default permission timeout = %v, want 30s", got)
+		t.Fatalf("default permission timeout = %v, want 5m", got)
 	}
 	if got := zero.effectiveQuestionTimeout(); got != defaultQuestionTimeout {
 		t.Fatalf("default question timeout = %v, want 5m", got)
@@ -146,7 +146,7 @@ func TestACPRequestPermissionHonorsConfiguredTimeout(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 	if elapsed < 40*time.Millisecond || elapsed > 5*time.Second {
-		t.Fatalf("permission timeout elapsed = %v, want the configured 40ms instead of the 30s default", elapsed)
+		t.Fatalf("permission timeout elapsed = %v, want the configured 40ms instead of the 5m default", elapsed)
 	}
 	if !strings.Contains(output.String(), `"method":"session/request_permission"`) {
 		t.Fatalf("permission request was not projected: %s", output.String())

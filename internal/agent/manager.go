@@ -85,9 +85,55 @@ func (m *AgentManager) SetMemberContext(members *MemberDefRegistry, mailbox *Mem
 	m.Members = members
 	m.Mailbox = mailbox
 	m.ExpertID = expertID
+	if mailbox != nil {
+		// The lead's follow-up hook waits for members through the mailbox; the
+		// manager is the only owner of "is a child still running".
+		mailbox.SetRunningPredicate(m.HasRunningChildren)
+	}
 	if m.factory != nil {
 		m.factory.memberMailbox = mailbox
 	}
+}
+
+// NotifyMemberQuestion queues a member's blocking question for the lead. The
+// mailbox is the only wake path: a blocked subagent_wait returns on the activity
+// signal, and the question is injected as a steering message at the lead's next
+// iteration boundary so the lead can answer it with subagent_answer instead of
+// the member blocking on an answer that can never arrive.
+func (m *AgentManager) NotifyMemberQuestion(memberID, displayName, questionID, question string, options []string) {
+	if m == nil {
+		return
+	}
+	m.Mailbox.Enqueue(MemberCompletion{
+		Kind:        MemberItemQuestion,
+		MemberID:    memberID,
+		DisplayName: displayName,
+		Status:      MemberStatusQuestion,
+		Payload:     question,
+		QuestionID:  questionID,
+		Options:     append([]string(nil), options...),
+	})
+}
+
+// HasRunningChildren reports whether any managed child (a spawned member or a
+// delegated task) is still running. Team leads use it to avoid ending their run
+// while member results are still in flight.
+func (m *AgentManager) HasRunningChildren() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for id := range m.parentOf {
+		status, ok := m.statuses[id]
+		if !ok {
+			continue
+		}
+		if status.State == "ready" || status.State == "running" {
+			return true
+		}
+	}
+	return false
 }
 
 // AddStatusListener registers a listener for terminal lifecycle transitions

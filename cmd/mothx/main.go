@@ -189,13 +189,13 @@ func registerRootFlags(fs *pflag.FlagSet, flags *cliFlags) {
 func registerACPFlags(fs *pflag.FlagSet, flags *cliFlags) {
 	registerSharedProviderFlags(fs, flags)
 	registerSharedExecutionFlags(fs, flags, "Enable configured web search provider for this ACP run")
-	fs.StringVar(&flags.acpPermissionTimeout, "permission-timeout", "", "Approval decision timeout for ACP session/request_permission (Go duration, e.g. 30m; env MOTHX_ACP_PERMISSION_TIMEOUT; default 30s)")
+	fs.StringVar(&flags.acpPermissionTimeout, "permission-timeout", "", "Approval decision timeout for ACP session/request_permission (Go duration, e.g. 30m; env MOTHX_ACP_PERMISSION_TIMEOUT; default 5m)")
 	fs.StringVar(&flags.acpQuestionTimeout, "question-timeout", "", "Question decision timeout for ACP question requests (Go duration, e.g. 30m; env MOTHX_ACP_QUESTION_TIMEOUT; default 5m)")
 }
 
 // resolveACPTimeout resolves one ACP decision timeout. The explicit flag wins
 // over the environment variable; invalid or non-positive values are ignored so
-// the zero value lets acp.Run fall back to its documented defaults (30s for
+// the zero value lets acp.Run fall back to its documented defaults (5m for
 // approvals, 5m for questions).
 func resolveACPTimeout(flagValue, envKey string) time.Duration {
 	for _, candidate := range []string{flagValue, os.Getenv(envKey)} {

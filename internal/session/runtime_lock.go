@@ -19,7 +19,12 @@ import (
 const (
 	runtimeLeaseTTL       = 15 * time.Second
 	runtimeHeartbeatEvery = 3 * time.Second
-	runtimeHeartbeatRetry = 2 * time.Second
+	// runtimeHeartbeatRetry bounds how long a failed renewal is retried before
+	// the owner gives up. It must cover transient SQLite write contention, whose
+	// single statement may block for busy_timeout (10s), while staying below the
+	// TTL: past that point another process could have taken over unseen, and
+	// continuing to run would allow unproven side effects.
+	runtimeHeartbeatRetry = runtimeLeaseTTL - runtimeHeartbeatEvery
 )
 
 var (
@@ -291,9 +296,15 @@ func leaseHeartbeat(lease *runtimeLease) {
 // renewRuntimeLease retries transient SQLite failures for a bounded interval.
 // Continuing an Agent after that interval would permit external side effects
 // after the lease can no longer be proven live, so the caller must cancel it.
+// A single renewal attempt can block for the SQLite busy timeout, so the budget
+// is checked before each attempt and a successful renewal of our own row (the
+// DAO fences on owner/epoch/token) always wins.
 func renewRuntimeLease(lease *runtimeLease) bool {
 	deadline := time.Now().Add(runtimeHeartbeatRetry)
 	for {
+		if time.Now().After(deadline) {
+			return false
+		}
 		db, err := OpenRootDB(lease.sessionDir)
 		if err == nil {
 			result, updateErr := dao.NewRuntimeLeaseDAO(db.Bun()).Renew(context.Background(), &dao.RuntimeLeaseRecord{SessionID: lease.sessionID, OwnerID: lease.ownerID, Epoch: lease.epoch, TokenHash: lease.tokenHash}, int64(runtimeLeaseTTL/time.Second))
@@ -306,9 +317,6 @@ func renewRuntimeLease(lease *runtimeLease) bool {
 					return false
 				}
 			}
-		}
-		if !time.Now().Before(deadline) {
-			return false
 		}
 		select {
 		case <-lease.stop:

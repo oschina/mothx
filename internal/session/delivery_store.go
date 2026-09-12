@@ -53,11 +53,14 @@ type DeliveryOperation struct {
 	AttemptCount      int
 	NextAttemptAt     *time.Time
 	FailureCode       string
-	LeaseOwner        string
-	LeaseEpoch        int64
-	LeaseExpiresAt    *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// RetryWindowStartedAt restarts the transient retry budget after an explicit
+	// retry; nil means the budget started at CreatedAt.
+	RetryWindowStartedAt *time.Time
+	LeaseOwner           string
+	LeaseEpoch           int64
+	LeaseExpiresAt       *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // DeliveryPlan is created in the same transaction that terminalizes its Run.
@@ -374,6 +377,113 @@ func RequeueDeliveryOperation(ctx context.Context, sessionDir, operationID, owne
 	return UpdateDeliveryOperation(ctx, sessionDir, operationID, owner, epoch, "retry_wait", "", "", nil, failureCode, &nextAttemptAt)
 }
 
+// ReopenFailedDeliveryOperation returns an operation that exhausted its retry
+// budget to retry_wait and restarts its retry window. Reconnect recovery and an
+// explicit operator retry both use it; only a failed operation can be reopened
+// so an in-flight or delivered operation is never clobbered.
+func ReopenFailedDeliveryOperation(ctx context.Context, sessionDir, operationID string, now time.Time) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(operationID) == "" {
+		return false, fmt.Errorf("delivery operation ID is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	stamp := now.UTC().Format(time.RFC3339Nano)
+	reopened := false
+	err := WriteRootDatabase(ctx, sessionDir, func(tx *dao.Tx) error {
+		changed, err := dao.NewDeliveryDAO(nil).ReopenTransientFailure(ctx, tx, operationID, stamp, stamp)
+		if err != nil {
+			return err
+		}
+		if changed != 1 {
+			return nil
+		}
+		reopened = true
+		deliveryDAO := dao.NewDeliveryDAO(nil)
+		intentID, err := deliveryDAO.IntentID(ctx, tx, operationID)
+		if err != nil {
+			return err
+		}
+		// Operations that were terminalized only because this dependency failed
+		// must get another chance, otherwise a reopened caption would still be
+		// followed by a permanently failed attachment.
+		if _, err := deliveryDAO.ReopenDependentFailures(ctx, tx, intentID, stamp, stamp); err != nil {
+			return err
+		}
+		return refreshDeliveryIntentStatusByIDTx(ctx, tx, intentID, now)
+	})
+	if err != nil {
+		return false, err
+	}
+	return reopened, nil
+}
+
+// ListFailedTransientDeliveryOperations returns one platform's operations that
+// exhausted their retry budget on a transport-level failure, in delivery order.
+// Reconnect recovery uses it to grant another retry window.
+func ListFailedTransientDeliveryOperations(ctx context.Context, sessionDir, platform string) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(sessionDir) == "" || strings.TrimSpace(platform) == "" {
+		return nil, nil
+	}
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		return nil, err
+	}
+	return dao.NewDeliveryDAO(db.Bun()).FailedTransientIDsByPlatform(ctx, db.Bun(), platform)
+}
+
+// DeliveryFailure is the operator-facing view of one delivery operation that
+// needs attention. It never carries payload, provider state, or transport
+// context.
+type DeliveryFailure struct {
+	OperationID   string
+	IntentID      string
+	SessionID     string
+	RunID         string
+	Platform      string
+	TargetID      string
+	OperationKind string
+	Status        string
+	FailureCode   string
+	AttemptCount  int
+	UpdatedAt     time.Time
+}
+
+// ListDeliveryFailures lists operations that need operator attention (failed
+// or uncertain), optionally narrowed to one session.
+func ListDeliveryFailures(ctx context.Context, sessionDir, sessionID string, limit int) ([]DeliveryFailure, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(sessionDir) == "" {
+		return nil, nil
+	}
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := dao.NewDeliveryDAO(db.Bun()).ListFailureRows(ctx, db.Bun(), sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	failures := make([]DeliveryFailure, 0, len(rows))
+	for _, row := range rows {
+		failures = append(failures, DeliveryFailure{
+			OperationID: row.OperationID, IntentID: row.IntentID, SessionID: row.SessionID, RunID: row.RunID,
+			Platform: row.Platform, TargetID: row.TargetID, OperationKind: row.OperationKind,
+			Status: row.Status, FailureCode: row.FailureCode, AttemptCount: row.AttemptCount,
+			UpdatedAt: parseSessionTimestamp(row.UpdatedAt),
+		})
+	}
+	return failures, nil
+}
+
 // RefreshDeliveryIntentStatus recomputes the intent aggregate after an
 // operation result. An intent is delivered only when all operations are
 // delivered/unsupported; failed and uncertain operations remain visible.
@@ -492,6 +602,10 @@ func deliveryOperationFromRecord(record *dao.DeliveryOperationRecord) DeliveryOp
 	if record.LeaseExpiresAt != nil {
 		value := time.UnixMilli(*record.LeaseExpiresAt)
 		operation.LeaseExpiresAt = &value
+	}
+	if record.RetryWindowStartedAt != nil && *record.RetryWindowStartedAt != "" {
+		value := parseSessionTimestamp(*record.RetryWindowStartedAt)
+		operation.RetryWindowStartedAt = &value
 	}
 	return operation
 }

@@ -58,6 +58,7 @@ func (rt *channelRuntime) reconcileDurableDeliveries(ctx context.Context) {
 		if !ok {
 			continue
 		}
+		rt.reopenFailedDeliveries(ctx, name)
 		coordinator := agentruntime.NewDeliveryCoordinator(rt.sessionDir, "serve-delivery-recovery-"+name)
 		processed, err := coordinator.ReconcileDue(ctx, time.Now().UTC(), func(execCtx context.Context, operation session.DeliveryOperation) (agentruntime.DeliveryResult, error) {
 			request, projectionErr := rt.deliveryRecoveryRequest(execCtx, operation)
@@ -85,6 +86,52 @@ func (rt *channelRuntime) reconcileDurableDeliveries(ctx context.Context) {
 			log.Printf("[serve] durable %s delivery recovery processed %d operation(s)", name, processed)
 		}
 	}
+}
+
+// reopenFailedDeliveries gives operations that exhausted a retry window another
+// chance while the platform is connected. A disconnected or rate-limited
+// platform can outlast one retry window, and without this the reply would be
+// permanently lost even after the transport recovered. Each operation is
+// reopened at most once per process, so a genuinely undeliverable target cannot
+// loop forever across reconnects.
+func (rt *channelRuntime) reopenFailedDeliveries(ctx context.Context, platform string) {
+	if rt == nil || strings.TrimSpace(rt.sessionDir) == "" {
+		return
+	}
+	ids, err := session.ListFailedTransientDeliveryOperations(ctx, rt.sessionDir, platform)
+	if err != nil {
+		log.Printf("[serve] list failed %s deliveries: %v", platform, err)
+		return
+	}
+	for _, id := range ids {
+		if !rt.markDeliveryReopened(platform, id) {
+			continue
+		}
+		reopened, err := session.ReopenFailedDeliveryOperation(ctx, rt.sessionDir, id, time.Now().UTC())
+		if err != nil {
+			log.Printf("[serve] reopen %s delivery %s: %v", platform, id, err)
+			continue
+		}
+		if reopened {
+			log.Printf("[serve] reopened %s delivery %s for another retry window", platform, id)
+		}
+	}
+}
+
+// markDeliveryReopened reports whether this process has not yet reopened the
+// operation.
+func (rt *channelRuntime) markDeliveryReopened(platform, operationID string) bool {
+	rt.deliveryReopenedMu.Lock()
+	defer rt.deliveryReopenedMu.Unlock()
+	if rt.deliveryReopened == nil {
+		rt.deliveryReopened = make(map[string]struct{})
+	}
+	key := platform + "\x00" + operationID
+	if _, seen := rt.deliveryReopened[key]; seen {
+		return false
+	}
+	rt.deliveryReopened[key] = struct{}{}
+	return true
 }
 
 func (rt *channelRuntime) deliveryRecoveryRequest(ctx context.Context, operation session.DeliveryOperation) (messaging.DurableDeliveryRequest, error) {

@@ -138,3 +138,93 @@ func deliveryCoordinatorFixture(t *testing.T) (string, string) {
 	}
 	return sessionDir, mgr.GetHeader().ID
 }
+
+// TestDeliveryCoordinatorRetriesTransientFailuresWithinTheWindow guards the
+// production retry budget: a platform that is briefly disconnected must not
+// lose the reply after a handful of attempts. Only an operation older than the
+// retry window is abandoned.
+func TestDeliveryCoordinatorRetriesTransientFailuresWithinTheWindow(t *testing.T) {
+	sessionDir, sessionID := deliveryCoordinatorFixture(t)
+	now := time.Now().UTC()
+	plan := session.DeliveryPlan{Intent: session.DeliveryIntent{ID: "window-intent", SessionID: sessionID, RunID: "coord-run", Platform: "wechat", TargetID: "chat", Status: "pending", CreatedAt: now, UpdatedAt: now}, Operations: []session.DeliveryOperation{{ID: "window-op", IntentID: "window-intent", OperationKey: "caption", OperationKind: "send_text", Sequence: 1, IdempotencyKey: "window-op", PayloadDigest: "sha256:x", Status: "pending", CreatedAt: now, UpdatedAt: now}}}
+	if err := session.CreateDeliveryPlan(t.Context(), sessionDir, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	// A young operation keeps being retried well past the old five-attempt cap.
+	coordinator := NewDeliveryCoordinator(sessionDir, "window-worker")
+	for attempt := 0; attempt < 8; attempt++ {
+		processed, err := coordinator.ReconcileDue(t.Context(), now.Add(time.Duration(attempt)*time.Minute), func(context.Context, session.DeliveryOperation) (DeliveryResult, error) {
+			return DeliveryResult{}, errors.New("provider unavailable")
+		})
+		if err != nil {
+			t.Fatalf("reconcile %d: %v", attempt, err)
+		}
+		if processed != 1 {
+			t.Fatalf("reconcile %d processed = %d", attempt, processed)
+		}
+	}
+	op, err := session.GetDeliveryOperation(t.Context(), sessionDir, "window-op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != "retry_wait" || op.AttemptCount < 6 {
+		t.Fatalf("operation inside the retry window = %#v, want retry_wait with all attempts used", op)
+	}
+
+	// Past the window the operation is abandoned as before.
+	if _, err := coordinator.ReconcileDue(t.Context(), now.Add(DefaultDeliveryRetryWindow+time.Minute), func(context.Context, session.DeliveryOperation) (DeliveryResult, error) {
+		return DeliveryResult{}, errors.New("provider unavailable")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	op, err = session.GetDeliveryOperation(t.Context(), sessionDir, "window-op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != "failed" || op.FailureCode != "delivery_retries_exhausted" {
+		t.Fatalf("operation past the retry window = %#v, want failed/delivery_retries_exhausted", op)
+	}
+}
+
+// TestDeliveryCoordinatorReopenedOperationGetsAFreshWindow guards the recovery
+// hand-off: after an operation exhausted its budget, reopening it (reconnect or
+// operator retry) must restart the retry window instead of failing it again on
+// the next claim because the original creation time is old.
+func TestDeliveryCoordinatorReopenedOperationGetsAFreshWindow(t *testing.T) {
+	sessionDir, sessionID := deliveryCoordinatorFixture(t)
+	now := time.Now().UTC()
+	plan := session.DeliveryPlan{Intent: session.DeliveryIntent{ID: "reopen-intent", SessionID: sessionID, RunID: "coord-run", Platform: "wechat", TargetID: "chat", Status: "pending", CreatedAt: now, UpdatedAt: now}, Operations: []session.DeliveryOperation{{ID: "reopen-op", IntentID: "reopen-intent", OperationKey: "caption", OperationKind: "send_text", Sequence: 1, IdempotencyKey: "reopen-op", PayloadDigest: "sha256:x", Status: "pending", CreatedAt: now, UpdatedAt: now}}}
+	if err := session.CreateDeliveryPlan(t.Context(), sessionDir, plan); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := NewDeliveryCoordinator(sessionDir, "reopen-worker")
+	fail := func(context.Context, session.DeliveryOperation) (DeliveryResult, error) {
+		return DeliveryResult{}, errors.New("provider unavailable")
+	}
+	if _, err := coordinator.ReconcileDue(t.Context(), now.Add(DefaultDeliveryRetryWindow+time.Minute), fail); err != nil {
+		t.Fatal(err)
+	}
+	op, err := session.GetDeliveryOperation(t.Context(), sessionDir, "reopen-op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != "failed" {
+		t.Fatalf("operation = %#v, want failed after the retry window", op)
+	}
+
+	reopenedAt := now.Add(DefaultDeliveryRetryWindow + 2*time.Minute)
+	if reopened, err := session.ReopenFailedDeliveryOperation(t.Context(), sessionDir, "reopen-op", reopenedAt); err != nil || !reopened {
+		t.Fatalf("reopen = %v, %v", reopened, err)
+	}
+	if _, err := coordinator.ReconcileDue(t.Context(), reopenedAt.Add(time.Minute), fail); err != nil {
+		t.Fatal(err)
+	}
+	op, err = session.GetDeliveryOperation(t.Context(), sessionDir, "reopen-op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != "retry_wait" || op.AttemptCount < 2 {
+		t.Fatalf("operation after reopen = %#v, want a retry inside the fresh window", op)
+	}
+}

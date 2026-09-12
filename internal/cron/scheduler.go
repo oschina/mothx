@@ -381,7 +381,13 @@ func (s *Scheduler) executeJobContext(ctx context.Context, job CronJob) {
 			execution.SetRunStore(agentruntime.RunStore{SessionDir: s.sessionDir})
 			execution.SetEventSink(agentruntime.SessionRunEventSink{SessionDir: s.sessionDir})
 			var beginErr error
-			runCtx, beginErr = execution.BeginDurable(ctx, agentruntime.DurableRun{
+			// A cron run must survive the scheduler being stopped: saving settings or
+			// restarting the cron runtime used to cancel every in-flight job through
+			// the scheduler context. Detach the durable run from that lifecycle and
+			// bound it with the same generous lease the job record uses.
+			runCtxParent, cancelRunCtx := context.WithTimeout(context.WithoutCancel(ctx), runningLeaseTimeout)
+			defer cancelRunCtx()
+			runCtx, beginErr = execution.BeginDurable(runCtxParent, agentruntime.DurableRun{
 				ID: runID, SessionID: job.SessionID, WorkDir: workDir,
 				Source: runSource, Mode: effectiveMode, Status: "running", StartedAt: startedAt,
 			}, agentruntime.RunEvent{

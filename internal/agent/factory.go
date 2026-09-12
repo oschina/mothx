@@ -131,16 +131,21 @@ type AgentOptions struct {
 	// Member metadata is a display snapshot for a named expert-team child.
 	// AgentFactory does not interpret it; AgentManager retains it alongside the
 	// child lifecycle so adapters can project the same canonical identity.
-	MemberID           string
-	ExpertID           string
-	MemberDisplayName  string
-	MemberEmoji        string
-	MemberRole         string
-	Mode               string
-	Model              *provider.Model
-	WorkDir            string
-	Tools              []string // optional: tool filter
-	SystemPromptExtra  string   // extra context for this agent
+	MemberID          string
+	ExpertID          string
+	MemberDisplayName string
+	MemberEmoji       string
+	MemberRole        string
+	Mode              string
+	Model             *provider.Model
+	WorkDir           string
+	Tools             []string // optional: tool filter
+	// ExcludeTools removes tools from the resolved child registry after the
+	// standard mode/tool filtering. Used for children whose callers cannot answer
+	// a tool's interactive contract (for example a blocking delegate child that
+	// must not ask questions).
+	ExcludeTools       []string
+	SystemPromptExtra  string // extra context for this agent
 	MaxIterations      int
 	ToolExecutionMode  string
 	MaxToolConcurrency int
@@ -232,7 +237,11 @@ func (f *AgentFactory) Create(opts AgentOptions) agentpkg.Agent {
 		registry.Remove("subagent_send")
 		registry.Remove("subagent_destroy")
 		registry.Remove("subagent_wait")
+		registry.Remove("subagent_answer")
 		registry.Remove("delegate_subagent")
+	}
+	for _, name := range opts.ExcludeTools {
+		registry.Remove(name)
 	}
 
 	// Build extra context: factory-level + per-agent
@@ -328,6 +337,11 @@ func (f *AgentFactory) Create(opts AgentOptions) agentpkg.Agent {
 	}
 	if opts.ParentID == "" && f.memberMailbox != nil {
 		loopCfg.GetSteeringMessages = f.memberMailbox.DrainSteering
+		// Member notifications that arrive while the lead is producing its last
+		// turn must reach it before the run may end: without this hook the lead
+		// would stop (and cancel the members it is still waiting for) before ever
+		// seeing their completions or questions.
+		loopCfg.GetFollowUpMessages = ComposeFollowUps(f.memberMailbox, nil)
 	}
 
 	a := NewWithLoopConfig(loopCfg, registry)

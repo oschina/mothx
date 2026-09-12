@@ -12,6 +12,7 @@ func RegisterSubAgentTools(registry *tools.Registry, manager *AgentManager) {
 	registry.Register(NewSubAgentSpawnTool(manager))
 	registry.Register(NewSubAgentStatusTool(manager))
 	registry.Register(NewSubAgentSendTool(manager))
+	registry.Register(NewSubAgentAnswerTool(manager))
 	registry.Register(NewSubAgentDestroyTool(manager))
 	registry.Register(NewSubAgentWaitTool(manager))
 }

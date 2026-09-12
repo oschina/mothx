@@ -777,6 +777,7 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 		a.addCommandStatus(a.translator.Text(i18n.MsgConversationCleared))
 
 	case "/quit":
+		a.finalizeForQuit()
 		a.stopPrintLoop()
 		return tea.Quit
 	case "/sessions":

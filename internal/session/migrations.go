@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 42
+const currentSchemaVersion = 43
 
 type schemaMigration struct {
 	version int
@@ -593,6 +593,19 @@ var schemaMigrations = []schemaMigration{
 	// this no-op marker only; each knowledge base now owns a separate SQLite
 	// file and its own schema below.
 	{version: 42, name: "create_desktop_knowledge_base_graph", apply: func(*sql.Tx) error { return nil }},
+	// A delayed or rate-limited platform may exhaust one retry window; an
+	// explicit retry (operator action or reconnect recovery) restarts the budget
+	// from this timestamp instead of resurrecting the original creation time.
+	{version: 43, name: "add_delivery_operations_retry_window_started_at", apply: func(tx *sql.Tx) error {
+		exists, err := tableExists(tx, "delivery_operations")
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+		return addColumnIfMissing(tx, "delivery_operations", "retry_window_started_at", "TEXT")
+	}},
 }
 
 func createResponseRuntimeTables(tx *sql.Tx) error {

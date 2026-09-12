@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/startvibecoding/mothx/internal/agentruntime"
 	"github.com/startvibecoding/mothx/internal/config"
 	"github.com/startvibecoding/mothx/internal/tools"
 	"github.com/startvibecoding/mothx/internal/tui/i18n"
@@ -188,7 +189,9 @@ func (a *App) finishApproval(approved bool, label string, approveQueuedAllowed b
 	if approvalIdx >= 0 {
 		a.printMessageOnce(approvalIdx)
 	}
-	a.handleApprovalResponse(a.pendingApprovalID, approved)
+	if err := a.resolveApprovalDecision(a.currentApproval, approved); err != nil {
+		a.addCommandError(fmt.Sprintf("Failed to record approval: %v", err))
+	}
 	if approved {
 		a.addMessage(statusStyle.Render("✅ " + label))
 	} else {
@@ -225,7 +228,9 @@ func (a *App) approveQueuedAllowedBashApprovals() int {
 	approved := 0
 	for _, p := range a.approvalQueue {
 		if p.toolName == "bash" && a.allow.MatchBashCommand(approvalCommand(p.args)) {
-			a.handlePendingApprovalResponse(p, true)
+			if err := a.resolveApprovalDecision(p, true); err != nil {
+				a.addCommandError(fmt.Sprintf("Failed to record approval: %v", err))
+			}
 			approved++
 			continue
 		}
@@ -233,6 +238,29 @@ func (a *App) approveQueuedAllowedBashApprovals() int {
 	}
 	a.approvalQueue = kept
 	return approved
+}
+
+// resolveApprovalDecision answers one approval through the Runtime decision
+// service so the resolution is persisted for the run ledger (and for every
+// other front end projecting it), then unblocks the asking agent. A failure to
+// persist must never leave the agent waiting: the direct response path is used
+// as a fallback and the caller surfaces the error.
+func (a *App) resolveApprovalDecision(pending pendingApproval, approved bool) error {
+	value := "false"
+	if approved {
+		value = "true"
+	}
+	if a.run == nil || pending.approvalID == "" {
+		a.handlePendingApprovalResponse(pending, approved)
+		return nil
+	}
+	if err := a.run.resolveDecision(pending.approvalID, agentruntime.DecisionApproval, value); err != nil {
+		// The decision stayed pending: unblock the agent through the direct path
+		// so the run cannot stall on a ledger write.
+		a.handlePendingApprovalResponse(pending, approved)
+		return err
+	}
+	return nil
 }
 
 func (a *App) hasPendingApproval(p pendingApproval) bool {

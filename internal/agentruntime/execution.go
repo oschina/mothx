@@ -598,6 +598,9 @@ func (r *ExecutionRuntime) ShutdownContext(ctx context.Context, message string) 
 		r.mu.Lock()
 		if !r.activeLocked(runID) {
 			r.mu.Unlock()
+			// Release the lifecycle lock before returning: another goroutine
+			// terminalized this run while the caller was taking the snapshot above.
+			r.transitionMu.Unlock()
 			return nil
 		}
 		if r.running != nil {

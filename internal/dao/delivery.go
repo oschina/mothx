@@ -40,11 +40,14 @@ type DeliveryOperationRecord struct {
 	AttemptCount      int     `bun:"attempt_count"`
 	NextAttemptAt     *int64  `bun:"next_attempt_at,nullzero"`
 	FailureCode       string  `bun:"failure_code"`
-	LeaseOwner        string  `bun:"lease_owner"`
-	LeaseEpoch        int64   `bun:"lease_epoch"`
-	LeaseExpiresAt    *int64  `bun:"lease_expires_at,nullzero"`
-	CreatedAt         string  `bun:"created_at"`
-	UpdatedAt         string  `bun:"updated_at"`
+	// RetryWindowStartedAt restarts the transient retry budget after an explicit
+	// retry. NULL means the budget started at CreatedAt.
+	RetryWindowStartedAt *string `bun:"retry_window_started_at,nullzero"`
+	LeaseOwner           string  `bun:"lease_owner"`
+	LeaseEpoch           int64   `bun:"lease_epoch"`
+	LeaseExpiresAt       *int64  `bun:"lease_expires_at,nullzero"`
+	CreatedAt            string  `bun:"created_at"`
+	UpdatedAt            string  `bun:"updated_at"`
 }
 
 type DeliveryDAO struct{ db *bun.DB }
@@ -164,6 +167,95 @@ func (d *DeliveryDAO) UpdateProgress(ctx context.Context, executor bun.IDB, oper
 		Set("provider_asset_id = ?", assetID).Set("provider_message_id = ?", messageID).Set("provider_state = ?", state).
 		Set("failure_code = ?", failure).Set("updated_at = ?", updatedAt).
 		Where("id = ? AND lease_owner = ? AND lease_epoch = ?", operationID, owner, epoch).Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// ReopenTransientFailure returns an exhausted operation to retry_wait and
+// restarts its retry window. It is the reconnect/operator recovery path for
+// operations that were abandoned after their budget ran out.
+func (d *DeliveryDAO) ReopenTransientFailure(ctx context.Context, executor bun.IDB, operationID, windowStartedAt, updatedAt string) (int64, error) {
+	result, err := executor.NewUpdate().Model((*DeliveryOperationRecord)(nil)).
+		Set("status = ?", "retry_wait").
+		Set("failure_code = ''").
+		Set("next_attempt_at = NULL").
+		Set("retry_window_started_at = ?", windowStartedAt).
+		Set("updated_at = ?", updatedAt).
+		Where("id = ? AND status = ?", operationID, "failed").Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// FailedTransientIDsByPlatform lists one platform's operations that exhausted
+// their retry budget on a transport-level failure, in delivery order.
+func (d *DeliveryDAO) FailedTransientIDsByPlatform(ctx context.Context, executor bun.IDB, platform string) ([]string, error) {
+	var ids []string
+	err := executor.NewSelect().TableExpr("delivery_operations AS o").
+		Column("o.id").
+		Join("JOIN delivery_intents AS i ON i.id = o.intent_id").
+		Where("i.platform = ?", platform).
+		Where("o.status = ?", "failed").
+		Where("o.failure_code IN (?)", bun.In([]string{"delivery_retries_exhausted", "transport_error"})).
+		OrderExpr("o.sequence ASC, o.created_at ASC").
+		Scan(ctx, &ids)
+	return ids, err
+}
+
+// DeliveryFailureRecord is the operator-facing projection of a delivery
+// operation that needs attention (failed or uncertain).
+type DeliveryFailureRecord struct {
+	OperationID   string `bun:"operation_id"`
+	IntentID      string `bun:"intent_id"`
+	SessionID     string `bun:"session_id"`
+	RunID         string `bun:"run_id"`
+	Platform      string `bun:"platform"`
+	TargetID      string `bun:"target_id"`
+	OperationKind string `bun:"operation_kind"`
+	Status        string `bun:"status"`
+	FailureCode   string `bun:"failure_code"`
+	AttemptCount  int    `bun:"attempt_count"`
+	UpdatedAt     string `bun:"updated_at"`
+}
+
+// deliveryFailureLimitMax caps one failure projection so a long-broken platform
+// cannot flood the caller.
+const deliveryFailureLimitMax = 200
+
+// ListFailureRows lists delivery operations that need operator attention, most
+// recently updated first. An empty sessionID lists every session in the
+// database.
+func (d *DeliveryDAO) ListFailureRows(ctx context.Context, executor bun.IDB, sessionID string, limit int) ([]DeliveryFailureRecord, error) {
+	if limit <= 0 || limit > deliveryFailureLimitMax {
+		limit = deliveryFailureLimitMax
+	}
+	query := executor.NewSelect().TableExpr("delivery_operations AS o").
+		ColumnExpr("o.id AS operation_id, o.intent_id, i.session_id, i.run_id, i.platform, i.target_id, o.operation_kind, o.status, o.failure_code, o.attempt_count, o.updated_at").
+		Join("JOIN delivery_intents AS i ON i.id = o.intent_id").
+		Where("o.status IN (?)", bun.In([]string{"failed", "uncertain"}))
+	if sessionID != "" {
+		query = query.Where("i.session_id = ?", sessionID)
+	}
+	var rows []DeliveryFailureRecord
+	err := query.OrderExpr("o.updated_at DESC").Limit(limit).Scan(ctx, &rows)
+	return rows, err
+}
+
+// ReopenDependentFailures returns operations that were terminalized only
+// because this intent's dependency failed. They can run again once the
+// dependency succeeds; the claim path still refuses them while any prerequisite
+// is unfinished, so an early reopen converges instead of sending out of order.
+func (d *DeliveryDAO) ReopenDependentFailures(ctx context.Context, executor bun.IDB, intentID, windowStartedAt, updatedAt string) (int64, error) {
+	result, err := executor.NewUpdate().Model((*DeliveryOperationRecord)(nil)).
+		Set("status = ?", "retry_wait").
+		Set("failure_code = ''").
+		Set("next_attempt_at = NULL").
+		Set("retry_window_started_at = ?", windowStartedAt).
+		Set("updated_at = ?", updatedAt).
+		Where("intent_id = ? AND status = ? AND failure_code = ?", intentID, "failed", "dependency_failed").Exec(ctx)
 	if err != nil {
 		return 0, err
 	}

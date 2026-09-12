@@ -179,12 +179,31 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 		return tea.Batch(a.listenAgentEvents(), a.tickSpinner())
 
 	case agent.EventQuestionRequest:
+		if event.AgentID != "" {
+			// A member's question is addressed to the lead, not the human: the
+			// Runtime queues it in the session mailbox and the lead answers it with
+			// subagent_answer. Registering it as a human decision here would misroute
+			// the answer to the main agent and leave the member blocked.
+			member := event.MemberDisplayName
+			if member == "" {
+				member = string(event.AgentID)
+			}
+			a.addMessage(statusStyle.Render(a.translator.Text(i18n.MsgMemberQuestionToLead, member, event.QuestionText)))
+			a.scheduleRender()
+			return a.listenAgentEvents()
+		}
 		a.commitActiveStream()
 		if a.run != nil {
 			if err := a.run.registerDecision(event.QuestionID, agentruntime.DecisionQuestion); err != nil {
 				a.addCommandError(fmt.Sprintf("duplicate question request: %v", err))
 				return a.listenAgentEvents()
 			}
+			_ = a.run.decisions.Bind(event.QuestionID, func(value string) error {
+				if a.agent != nil {
+					a.agent.HandleQuestionResponse(event.QuestionID, value)
+				}
+				return nil
+			})
 			_ = a.run.waitForQuestion()
 		}
 		// Queue the question request

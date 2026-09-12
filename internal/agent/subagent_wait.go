@@ -100,11 +100,14 @@ func resolveSubAgentWaitTimeoutMS(params map[string]any) int {
 
 // subAgentWaitPending is one summary entry of the wait result. It never
 // carries the completion payload; content delivery belongs to the mailbox
-// drain at the iteration boundary.
+// drain at the iteration boundary. A pending member question carries its
+// question ID so the lead can answer it with subagent_answer even when it only
+// inspects this projection.
 type subAgentWaitPending struct {
 	Member      string `json:"member"`
 	Status      string `json:"status"`
 	DisplayName string `json:"display_name,omitempty"`
+	QuestionID  string `json:"question_id,omitempty"`
 }
 
 func newSubAgentWaitResult(message string, timedOut bool, pending []MemberCompletion) tools.ToolResult {
@@ -118,6 +121,7 @@ func newSubAgentWaitResult(message string, timedOut bool, pending []MemberComple
 			Member:      c.MemberID,
 			Status:      c.Status,
 			DisplayName: c.DisplayName,
+			QuestionID:  c.QuestionID,
 		})
 	}
 	data, err := json.Marshal(payload)

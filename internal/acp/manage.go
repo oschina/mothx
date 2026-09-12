@@ -107,6 +107,10 @@ func (s *server) handleManageRequest(req rpcRequest) {
 		s.handleManageMemoryGet(req)
 	case "mothx/manage/memory/put":
 		s.handleManageMemoryPut(req)
+	case "mothx/manage/deliveries/list":
+		s.handleManageDeliveriesList(req)
+	case "mothx/manage/deliveries/retry":
+		s.handleManageDeliveriesRetry(req)
 	case "mothx/manage/skillhub/get":
 		s.handleManageSkillHubGet(req)
 	case "mothx/manage/skillhub/patch":
@@ -1328,10 +1332,10 @@ func (s *server) handleManageMCPList(req rpcRequest) {
 		return
 	}
 	s.writeResponse(req.ID, map[string]any{
-		"scope":   target.Scope,
+		"scope":     target.Scope,
 		"sessionId": target.SessionID,
-		"path":    target.Path,
-		"servers": manageMCPViews(cfg),
+		"path":      target.Path,
+		"servers":   manageMCPViews(cfg),
 	}, nil)
 }
 
@@ -1524,10 +1528,10 @@ func (s *server) handleManageMCPSet(req rpcRequest) {
 		saved = cfg
 	}
 	s.writeResponse(req.ID, map[string]any{
-		"scope":   target.Scope,
+		"scope":     target.Scope,
 		"sessionId": target.SessionID,
-		"path":    target.Path,
-		"servers": manageMCPViews(saved),
+		"path":      target.Path,
+		"servers":   manageMCPViews(saved),
 	}, nil)
 }
 
@@ -2097,6 +2101,99 @@ func manageMemoryUpdatedAt(path string) string {
 		return ""
 	}
 	return info.ModTime().UTC().Format(time.RFC3339Nano)
+}
+
+// manageDeliveriesSessionDir resolves the session database directory for the
+// deliveries projection. The negotiated server settings win; a direct fixture
+// without settings falls back to the same global settings source as the other
+// manage handlers.
+func (s *server) manageDeliveriesSessionDir() (string, error) {
+	if s != nil {
+		s.mu.Lock()
+		settings := s.settings
+		s.mu.Unlock()
+		if settings != nil && strings.TrimSpace(settings.GetSessionDir()) != "" {
+			return settings.GetSessionDir(), nil
+		}
+	}
+	settings, err := s.manageSettings()
+	if err != nil {
+		return "", err
+	}
+	return settings.GetSessionDir(), nil
+}
+
+// deliveryFailureRetryable reports whether the operation's failure is
+// transport-level and therefore reopenable by the operator.
+func deliveryFailureRetryable(failureCode string) bool {
+	switch failureCode {
+	case "delivery_retries_exhausted", "transport_error":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *server) handleManageDeliveriesList(req rpcRequest) {
+	var in struct {
+		SessionID string `json:"sessionId"`
+		Limit     int    `json:"limit"`
+	}
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &in); err != nil {
+			s.writeResponse(req.ID, nil, acpStructuredRPCError(-32602, "invalid_params", "params must be an object", nil))
+			return
+		}
+	}
+	sessionDir, err := s.manageDeliveriesSessionDir()
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "manage_unavailable", err.Error(), nil))
+		return
+	}
+	failures, err := session.ListDeliveryFailures(context.Background(), sessionDir, in.SessionID, in.Limit)
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "deliveries_unavailable", err.Error(), nil))
+		return
+	}
+	items := make([]map[string]any, 0, len(failures))
+	for _, failure := range failures {
+		items = append(items, map[string]any{
+			"operationId":   failure.OperationID,
+			"intentId":      failure.IntentID,
+			"sessionId":     failure.SessionID,
+			"runId":         failure.RunID,
+			"platform":      failure.Platform,
+			"targetId":      failure.TargetID,
+			"operationKind": failure.OperationKind,
+			"status":        failure.Status,
+			"failureCode":   failure.FailureCode,
+			"attemptCount":  failure.AttemptCount,
+			"updatedAt":     failure.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			"retryable":     deliveryFailureRetryable(failure.FailureCode),
+		})
+	}
+	s.writeResponse(req.ID, map[string]any{"deliveries": items, "count": len(items)}, nil)
+}
+
+func (s *server) handleManageDeliveriesRetry(req rpcRequest) {
+	var in struct {
+		OperationID string `json:"operationId"`
+	}
+	if err := json.Unmarshal(req.Params, &in); err != nil || strings.TrimSpace(in.OperationID) == "" {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32602, "invalid_params", "operationId is required", nil))
+		return
+	}
+	sessionDir, err := s.manageDeliveriesSessionDir()
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "manage_unavailable", err.Error(), nil))
+		return
+	}
+	reopened, err := session.ReopenFailedDeliveryOperation(context.Background(), sessionDir, in.OperationID, time.Now().UTC())
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "delivery_retry_failed", err.Error(), nil))
+		return
+	}
+	s.writeResponse(req.ID, map[string]any{"operationId": in.OperationID, "retried": reopened}, nil)
 }
 
 func (s *server) handleManageMemoryGet(req rpcRequest) {

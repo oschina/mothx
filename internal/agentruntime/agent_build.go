@@ -211,6 +211,11 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 		BudgetPressureThreshold: opts.BudgetPressure, BeforeToolCall: beforeToolCall, BeforeToolExecute: beforeToolExecute,
 		AfterToolCall:       opts.AfterToolCall,
 		GetSteeringMessages: composeSteering(mailbox, opts.GetSteeringMessages),
+		// A team lead must not end its run (and cancel the members it is still
+		// waiting for) just because a turn produced no tool calls: the follow-up
+		// hook waits for members and keeps adapter steering responsive while it
+		// waits.
+		GetFollowUpMessages: agent.ComposeFollowUps(mailbox, opts.GetSteeringMessages),
 		ForcedMode:          policy.ForcedMode(),
 	}, registry), nil
 }

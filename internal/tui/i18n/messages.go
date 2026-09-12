@@ -61,6 +61,7 @@ const (
 	MsgCompactionFailed                   MessageID = "agent.compaction_failed"
 	MsgAborted                            MessageID = "agent.aborted"
 	MsgHostedItemTitle                    MessageID = "agent.hosted_item"
+	MsgMemberQuestionToLead               MessageID = "agent.member_question_to_lead"
 	MsgNoConversationDetails              MessageID = "conversation.no_details"
 	MsgApprovalTitle                      MessageID = "approval.title"
 	MsgApprovalRequestTitle               MessageID = "approval.request_title"
@@ -634,6 +635,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCompactionFailed:                   "Compaction failed: ",
 		MsgAborted:                            "⏹ Aborted",
 		MsgHostedItemTitle:                    "Hosted item",
+		MsgMemberQuestionToLead:               "ℹ️ Member %s asked the lead (answered by the main agent): %s",
 		MsgNoConversationDetails:              "No conversation details yet.",
 		MsgApprovalTitle:                      "Approval Required: %s",
 		MsgApprovalRequestTitle:               "Approval required: %s",
@@ -1050,6 +1052,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCompactionFailed:                   "上下文压缩失败：",
 		MsgAborted:                            "⏹ 已中止",
 		MsgHostedItemTitle:                    "托管项目",
+		MsgMemberQuestionToLead:               "ℹ️ 成员 %s 向主 agent 提问（由主 agent 回答）：%s",
 		MsgNoConversationDetails:              "暂无会话详情。",
 		MsgApprovalTitle:                      "需要审批：%s",
 		MsgApprovalRequestTitle:               "需要审批：%s",

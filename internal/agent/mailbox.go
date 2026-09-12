@@ -20,6 +20,17 @@ const (
 	MemberStatusIncomplete = "incomplete"
 )
 
+// Member notification kinds. A mailbox item is either a terminal completion or
+// a blocking question the member asked the lead instead of the human.
+const (
+	MemberItemCompletion = "completion"
+	MemberItemQuestion   = "question"
+)
+
+// MemberStatusQuestion is the status projected for MemberItemQuestion entries
+// in subagent_wait summaries.
+const MemberStatusQuestion = "question"
+
 // Rune budgets for the steering-injected completion payload. Error payloads
 // use a smaller budget to reserve room for the appended next-step hint.
 const (
@@ -28,14 +39,19 @@ const (
 	memberTruncationSuffix  = "…[truncated]"
 )
 
-// MemberCompletion is one terminal member notification queued in a
-// MemberMailbox. Payload carries the final response (done) or the error text
-// (error/canceled/incomplete).
+// MemberCompletion is one member notification queued in a MemberMailbox.
+// For completions, Payload carries the final response (done) or the error text
+// (error/canceled/incomplete). For MemberItemQuestion entries, Payload carries
+// the question text and QuestionID/Options identify the pending request the
+// lead must answer with subagent_answer.
 type MemberCompletion struct {
+	Kind        string // "" (completion) | MemberItemCompletion | MemberItemQuestion
 	MemberID    string
 	DisplayName string
-	Status      string // "done" | "error" | "canceled" | "incomplete"
-	Payload     string // final result or error explanation
+	Status      string // "done" | "error" | "canceled" | "incomplete" | "question"
+	Payload     string // final result, error explanation, or question text
+	QuestionID  string
+	Options     []string
 }
 
 // MemberMailbox is the session-level in-memory queue of member completions.
@@ -49,11 +65,39 @@ type MemberMailbox struct {
 	mu       sync.Mutex
 	queue    []MemberCompletion
 	activity chan struct{} // capacity 1, non-blocking wakeup hint
+	// runningChildren reports whether any managed child is still running. It is
+	// installed by AgentManager when the member context is bound and lets the
+	// lead's would-stop hook wait for members without knowing the manager.
+	runningChildren func() bool
 }
 
 // NewMemberMailbox creates an empty mailbox.
 func NewMemberMailbox() *MemberMailbox {
 	return &MemberMailbox{activity: make(chan struct{}, 1)}
+}
+
+// SetRunningPredicate installs the "any member still running" probe used by the
+// lead's follow-up hook. Nil clears a previous binding.
+func (m *MemberMailbox) SetRunningPredicate(running func() bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.runningChildren = running
+	m.mu.Unlock()
+}
+
+// RunningChildren reports whether members are still running. It always reports
+// false when no predicate is installed, so a mailbox that is only used for
+// notifications never blocks a run.
+func (m *MemberMailbox) RunningChildren() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	running := m.runningChildren
+	m.mu.Unlock()
+	return running != nil && running()
 }
 
 // Enqueue appends a completion to the queue and non-blockingly signals
@@ -102,7 +146,7 @@ func (m *MemberMailbox) DrainSteering() []provider.Message {
 	}
 	messages := make([]provider.Message, 0, len(pending))
 	for _, c := range pending {
-		messages = append(messages, provider.NewSystemInjectedUserMessage(formatMemberCompletion(c)))
+		messages = append(messages, provider.NewSystemInjectedUserMessage(formatMemberItem(c)))
 	}
 	return messages
 }
@@ -142,7 +186,38 @@ func (m *MemberMailbox) WaitForActivity(ctx context.Context, timeout time.Durati
 	}
 }
 
-// formatMemberCompletion renders one completion as the machine-readable
+// formatMemberItem renders one mailbox item as the machine-readable steering
+// envelope. Questions and completions use distinct markers so the lead never
+// mistakes a member question for a finished task.
+func formatMemberItem(c MemberCompletion) string {
+	if c.Kind == MemberItemQuestion {
+		return formatMemberQuestion(c)
+	}
+	return formatMemberCompletion(c)
+}
+
+// formatMemberQuestion renders a member question the lead must answer. It never
+// impersonates user intent; the member is blocked until subagent_answer runs.
+func formatMemberQuestion(c MemberCompletion) string {
+	var b strings.Builder
+	b.WriteString("[MEMBER_QUESTION] 系统注入的成员提问上下文（非用户输入）。成员正在等待你的回答。\n")
+	if c.DisplayName != "" {
+		fmt.Fprintf(&b, "member: %s（%s）\n", c.MemberID, c.DisplayName)
+	} else {
+		fmt.Fprintf(&b, "member: %s\n", c.MemberID)
+	}
+	fmt.Fprintf(&b, "question_id: %s\n", c.QuestionID)
+	b.WriteString("question:\n")
+	b.WriteString(truncateMemberPayload(c.Payload, memberPayloadRunes))
+	b.WriteString("\n")
+	if len(c.Options) > 0 {
+		fmt.Fprintf(&b, "options: %s\n", strings.Join(c.Options, " | "))
+	}
+	fmt.Fprintf(&b, "下一步：用 subagent_answer(handle:%q, question_id:%q, answer:\"…\") 回答；成员会继续执行。", c.MemberID, c.QuestionID)
+	return b.String()
+}
+
+// formatMemberCompletion renders one terminal completion as the machine-readable
 // steering envelope. The [MEMBER_COMPLETION] marker keeps the injection
 // identifiable as system-provided member state context; it never impersonates
 // user intent.

@@ -78,6 +78,11 @@ type channelRuntime struct {
 	nativeDirectoryPicker func(context.Context, string) (string, error)
 	deliveryCancel        context.CancelFunc
 	deliveryDone          chan struct{}
+	// deliveryReopened tracks operations already given a second retry window by
+	// this process (reconnect recovery), so a permanently undeliverable target
+	// cannot loop across every reconnect.
+	deliveryReopenedMu sync.Mutex
+	deliveryReopened   map[string]struct{}
 }
 
 type channelStatus struct {
