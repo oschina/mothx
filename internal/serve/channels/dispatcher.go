@@ -758,18 +758,21 @@ func (d *Dispatcher) ensureAgentManager() *agent.AgentManager {
 	return d.agentMgr
 }
 
-// sessionHasSubAgentTools reports whether the session's tool selection actually
-// registered any canonical sub-agent tool.
-func sessionHasSubAgentTools(reg *tools.Registry) bool {
+// selectedSubAgentTools returns the canonical sub-agent tools that this
+// session's tool selection actually registered. Re-registering the whole
+// canonical set must not resurrect a tool the user switched off, so the caller
+// re-applies this selection afterwards.
+func selectedSubAgentTools(reg *tools.Registry) map[string]bool {
+	selected := make(map[string]bool)
 	if reg == nil {
-		return false
+		return selected
 	}
 	for _, name := range agent.SubAgentToolNames() {
 		if _, ok := reg.Get(name); ok {
-			return true
+			selected[name] = true
 		}
 	}
-	return false
+	return selected
 }
 
 // newSessionAgentManager creates the session-scoped manager that owns this
@@ -1919,17 +1922,28 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 			}
 		}
 	}
-	if sessionAgentMgr != nil && (sessionRuntime.TeamExpertActive() || sessionHasSubAgentTools(reg)) {
+	if sessionAgentMgr != nil {
 		// The session-scoped manager owns this session's member mailbox, so member
 		// questions and completions reach this session's lead (and subagent_wait
 		// observes the same mailbox). Re-register after channel-specific removals so
 		// the sub-agent tools never stay attached to the dispatcher-wide manager,
 		// which is shared across sessions and has no session mailbox.
 		//
-		// Only tools the session actually selected are re-pointed: a team binding is a
-		// Runtime policy capability (not an adapter-local toggle), while an ordinary
-		// multi-agent selection must still be able to keep them switched off.
-		agent.RegisterSubAgentTools(reg, sessionAgentMgr)
+		// A team binding is a Runtime policy capability (not an adapter-local
+		// toggle), so its full toolset is authoritative. An ordinary multi-agent
+		// selection is re-pointed one by one instead: RegisterSubAgentTools replaces
+		// the whole canonical set, and resurrecting a tool the user switched off
+		// would override an explicit per-tool choice.
+		if sessionRuntime.TeamExpertActive() {
+			agent.RegisterSubAgentTools(reg, sessionAgentMgr)
+		} else if selected := selectedSubAgentTools(reg); len(selected) > 0 {
+			agent.RegisterSubAgentTools(reg, sessionAgentMgr)
+			for _, name := range agent.SubAgentToolNames() {
+				if !selected[name] {
+					reg.Remove(name)
+				}
+			}
+		}
 	}
 	sess := &ChannelSession{
 		Execution:  &agentruntime.ExecutionRuntime{},
