@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -48,7 +47,8 @@ func newServeInitConfigCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "Created serve config: %s\n", path)
+			fmt.Fprintf(cmd.ErrOrStderr(), "Created serve config: %s\n", path)
+			fmt.Fprintln(cmd.ErrOrStderr(), serve.PlaceholderAuthTokenWarning)
 			return nil
 		},
 	}

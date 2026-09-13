@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/startvibecoding/mothx/internal/config"
 	channels "github.com/startvibecoding/mothx/internal/serve/channels"
@@ -169,6 +170,36 @@ func InitConfig(force bool) (string, error) {
 	return InitConfigForProject(false, force)
 }
 
+// PlaceholderAuthToken is the API token written by `mothx serve init-config`.
+// It is a well-known value, so leaving it in place is equivalent to publishing
+// the API key: the server warns on startup until it is replaced.
+const PlaceholderAuthToken = "sk-change-me-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+// PlaceholderAuthTokenWarning is printed wherever a template token is created or
+// is still in use.
+const PlaceholderAuthTokenWarning = "WARNING: serve.json ships the placeholder API token (" + PlaceholderAuthToken + "),\n" +
+	"         which is public. Replace api.auth.tokens before enabling auth or exposing this server."
+
+// IsPlaceholderAuthToken reports whether token is the generated template value.
+func IsPlaceholderAuthToken(token string) bool {
+	return strings.TrimSpace(token) == PlaceholderAuthToken
+}
+
+// UsesPlaceholderAuthToken reports whether the resolved config enables auth and
+// still ships the generated template token, which means the API is reachable
+// with a publicly known key.
+func UsesPlaceholderAuthToken(cfg *Config) bool {
+	if cfg == nil || !cfg.API.Auth.Enabled {
+		return false
+	}
+	for _, token := range cfg.API.Auth.Tokens {
+		if IsPlaceholderAuthToken(token) {
+			return true
+		}
+	}
+	return false
+}
+
 func InitConfigForProject(project bool, force bool) (string, error) {
 	path := ConfigPath()
 	if project {
@@ -180,7 +211,7 @@ func InitConfigForProject(project bool, force bool) (string, error) {
 		}
 	}
 	cfg := DefaultConfig()
-	cfg.API.Auth.Tokens = []string{"sk-change-me-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+	cfg.API.Auth.Tokens = []string{PlaceholderAuthToken}
 	home, _ := os.UserHomeDir()
 	if home == "" {
 		home = "/home/user"

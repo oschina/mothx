@@ -478,6 +478,24 @@ func TestInitConfig_WritesFlatTemplate(t *testing.T) {
 	if !strings.Contains(text, `"auth": {`) {
 		t.Fatalf("generated config missing auth block:\n%s", text)
 	}
+	// The template token is what the startup/init warnings point at; keeping the
+	// same literal in the generated file is what makes that check work.
+	if !strings.Contains(text, PlaceholderAuthToken) {
+		t.Fatalf("generated config missing the placeholder auth token:\n%s", text)
+	}
+	generatedCfg, err := LoadConfigFrom(path)
+	if err != nil {
+		t.Fatalf("load generated config: %v", err)
+	}
+	if len(generatedCfg.API.Auth.Tokens) != 1 || !IsPlaceholderAuthToken(generatedCfg.API.Auth.Tokens[0]) {
+		t.Fatalf("generated config auth tokens = %v, want the placeholder token", generatedCfg.API.Auth.Tokens)
+	}
+	// The template ships with auth disabled; the warning matters as soon as an
+	// operator turns auth on without replacing the token.
+	generatedCfg.API.Auth.Enabled = true
+	if !UsesPlaceholderAuthToken(generatedCfg) {
+		t.Fatal("enabling auth on the generated template must be detected as still using the placeholder token")
+	}
 	if !strings.Contains(text, `"defaultWorkDir":`) || strings.Contains(text, `"workDir":`) {
 		t.Fatalf("generated config should use defaultWorkDir instead of legacy workDir:\n%s", text)
 	}
@@ -2176,5 +2194,45 @@ func TestBuildCronStoreHonorsCronFeature(t *testing.T) {
 	enabled := buildCronStore(&channels.Config{Cron: channels.CronConfig{Enabled: true}}, settings)
 	if enabled == nil {
 		t.Fatal("cron store should be created when cron is enabled")
+	}
+}
+
+// TestPlaceholderAuthTokenDetection guards the warning contract for the token
+// written by `mothx serve init-config`: it must be recognized as long as the
+// operator has not replaced it, and the generated template must keep using the
+// same constant so the check cannot drift.
+func TestPlaceholderAuthTokenDetection(t *testing.T) {
+	if !IsPlaceholderAuthToken(PlaceholderAuthToken) {
+		t.Fatal("the generated template token must be recognized as a placeholder")
+	}
+	if !IsPlaceholderAuthToken("  " + PlaceholderAuthToken + "\n") {
+		t.Fatal("surrounding whitespace must not hide a placeholder token")
+	}
+	if IsPlaceholderAuthToken("sk-private-token") || IsPlaceholderAuthToken("") {
+		t.Fatal("a real or empty token must not be reported as the placeholder")
+	}
+
+	templateCfg := DefaultConfig()
+	templateCfg.API.Auth.Enabled = true
+	templateCfg.API.Auth.Tokens = []string{PlaceholderAuthToken}
+	if !UsesPlaceholderAuthToken(templateCfg) {
+		t.Fatal("a config that still ships the template token must trigger the warning")
+	}
+
+	replaced := DefaultConfig()
+	replaced.API.Auth.Enabled = true
+	replaced.API.Auth.Tokens = []string{"sk-private-token"}
+	if UsesPlaceholderAuthToken(replaced) {
+		t.Fatal("a replaced token must not trigger the warning")
+	}
+
+	disabled := DefaultConfig()
+	disabled.API.Auth.Enabled = false
+	disabled.API.Auth.Tokens = []string{PlaceholderAuthToken}
+	if UsesPlaceholderAuthToken(disabled) {
+		t.Fatal("auth-disabled configs must not warn about a token they do not use")
+	}
+	if UsesPlaceholderAuthToken(nil) {
+		t.Fatal("nil config must not trigger the warning")
 	}
 }

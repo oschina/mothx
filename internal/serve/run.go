@@ -207,6 +207,11 @@ func Run(opts RunOptions, version string) error {
 		fmt.Fprintf(os.Stderr, "  Lobster mode: enabled (yolo, no sandbox, sub-agents on)\n")
 	}
 	fmt.Fprintf(os.Stderr, "  Config: %s\n", path)
+	// A generated template token is publicly known, so an exposed server would be
+	// reachable by anyone; warn until the operator replaces it.
+	if UsesPlaceholderAuthToken(cfg) {
+		fmt.Fprintln(os.Stderr, PlaceholderAuthTokenWarning)
+	}
 
 	return openaiapi.Run(openaiapi.RunOptions{
 		Config:        &cfg.API,

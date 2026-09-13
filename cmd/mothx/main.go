@@ -147,6 +147,7 @@ func runCLICommand(args []string, flags *cliFlags, runFn func([]string, runOptio
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "Created serve config: %s\n", path)
+		fmt.Fprintln(os.Stderr, serve.PlaceholderAuthTokenWarning)
 		return nil
 	}
 	return runFn(args, flags.runOptions())
