@@ -4413,29 +4413,7 @@ func (s *server) loadPersistedDecisionRecords(sessionID string) ([]agentruntime.
 	if s == nil || s.settings == nil || sessionID == "" {
 		return nil, nil
 	}
-	events, err := session.ListSessionRunEvents(s.settings.GetSessionDir(), sessionID)
-	if err != nil {
-		return nil, err
-	}
-	records := make([]agentruntime.DecisionRecord, 0)
-	for _, ev := range events {
-		if !strings.HasPrefix(ev.EventType, "decision_") {
-			continue
-		}
-		var envelope struct {
-			Decision agentruntime.DecisionRecord `json:"decision"`
-		}
-		if json.Unmarshal(ev.Data, &envelope) == nil && envelope.Decision.ID != "" {
-			if envelope.Decision.SessionID == "" {
-				envelope.Decision.SessionID = sessionID
-			}
-			if envelope.Decision.RunID == "" {
-				envelope.Decision.RunID = ev.RunID
-			}
-			records = append(records, envelope.Decision)
-		}
-	}
-	return records, nil
+	return agentruntime.LoadDecisionRecords(s.settings.GetSessionDir(), sessionID)
 }
 
 func (s *server) replayPendingDecisionRequests(sessionID string) error {
@@ -4607,18 +4585,6 @@ func (s *server) persistDecisionRecordWithDeadline(sessionID, runID, id string, 
 		return nil
 	}
 	request := agentruntime.DecisionRequest{ID: id, SessionID: sessionID, RunID: runID, Kind: kind}
-	resolution := agentruntime.DecisionResolution{ID: id, Kind: kind, Status: status, Value: value}
-	record, err := agentruntime.NewDecisionResolutionRecord(request, resolution, payload)
-	if status == "pending" {
-		record, err = agentruntime.NewDecisionRequestRecordWithDeadline(request, payload, expiresAt)
-	}
-	if err != nil {
-		return err
-	}
-	data, err := json.Marshal(map[string]any{"decision": record, "payload": payload})
-	if err != nil {
-		return err
-	}
 	source := string(agentruntime.SourceACP)
 	s.mu.Lock()
 	rt := s.sessions[sessionID]
@@ -4628,14 +4594,16 @@ func (s *server) persistDecisionRecordWithDeadline(sessionID, runID, id string, 
 		if sessionMode == "" {
 			sessionMode = s.mode
 		}
-		if resolution, _, resolveErr := rt.runtime.ResolvePolicy(sessionMode, "", s.mode); resolveErr == nil && resolution.Source != agentruntime.SourceUnknown {
-			source = string(resolution.Source)
+		if policy, _, resolveErr := rt.runtime.ResolvePolicy(sessionMode, "", s.mode); resolveErr == nil && policy.Source != agentruntime.SourceUnknown {
+			source = string(policy.Source)
 		}
 	}
-	_, err = (agentruntime.SessionRunEventSink{SessionDir: s.settings.GetSessionDir()}).Record(agentruntime.RunEvent{
-		SessionID: sessionID, RunID: runID, EventType: "decision_" + status,
-		Source: source, Status: status, Timestamp: time.Now(), Data: data,
-	})
+	_, err := agentruntime.RecordDecisionEvent(
+		agentruntime.SessionRunEventSink{SessionDir: s.settings.GetSessionDir()},
+		agentruntime.DecisionTransition{
+			Request: request, Status: status, Value: value, Payload: payload, ExpiresAt: expiresAt,
+			Source: source,
+		})
 	return err
 }
 

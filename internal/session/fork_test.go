@@ -116,6 +116,27 @@ func TestForkRejectsOrphanedPendingDecision(t *testing.T) {
 	}
 }
 
+func TestForkAllowsOrphanedCancelledDecision(t *testing.T) {
+	sessionDir := t.TempDir()
+	mgr := New(t.TempDir(), sessionDir)
+	if err := mgr.InitWithID("cancelled-decision"); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := json.Marshal(map[string]any{"decision": map[string]any{"id": "approval-1", "status": "pending"}})
+	if _, err := SaveSessionRunEvent(sessionDir, SessionRunEvent{SessionID: "cancelled-decision", RunID: "old-run", EventType: "decision_pending", Status: "pending", Data: pending}); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, _ := json.Marshal(map[string]any{"decision": map[string]any{"id": "approval-1", "status": "cancelled"}})
+	if _, err := SaveSessionRunEvent(sessionDir, SessionRunEvent{SessionID: "cancelled-decision", RunID: "old-run", EventType: "decision_cancelled", Status: "cancelled", Data: cancelled}); err != nil {
+		t.Fatal(err)
+	}
+	// The cancelled decision is no longer pending, so it must not block the fork
+	// the way an orphaned pending decision does.
+	if _, err := ForkSession(context.Background(), sessionDir, ForkOptions{SourceSessionID: "cancelled-decision", RequestID: "cancelled-key"}); errors.Is(err, ErrForkSessionActive) {
+		t.Fatalf("cancelled decision still blocked the fork: %v", err)
+	}
+}
+
 func TestForkLegacyCompletedRunBoundary(t *testing.T) {
 	sessionDir := t.TempDir()
 	mgr := New(t.TempDir(), sessionDir)

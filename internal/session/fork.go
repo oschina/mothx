@@ -416,7 +416,7 @@ func pendingDecisionsTx(tx *dao.Tx, sessionID string) (bool, error) {
 	pending := make(map[string]struct{})
 	for _, record := range records {
 		eventType, data := record.EventType, record.Data
-		if eventType != "decision_pending" && eventType != "approval_requested" && eventType != "question_requested" && eventType != "approval_resolved" && eventType != "question_resolved" && eventType != "decision_resolved" {
+		if !IsDecisionEventType(eventType) {
 			continue
 		}
 		var envelope struct {

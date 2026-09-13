@@ -1,7 +1,6 @@
 package channels
 
 import (
-	"encoding/json"
 	"log"
 	"time"
 
@@ -12,24 +11,14 @@ func (d *Dispatcher) persistChannelDecision(sess *ChannelSession, id string, kin
 	if d == nil || sess == nil || id == "" || sess.ID == "" || sess.runID == "" {
 		return nil
 	}
-	request := agentruntime.DecisionRequest{ID: id, SessionID: sess.ID, RunID: sess.runID, Kind: kind}
-	resolution := agentruntime.DecisionResolution{ID: id, Kind: kind, Status: status, Value: value}
-	record, err := agentruntime.NewDecisionResolutionRecord(request, resolution, payload)
-	if err != nil {
-		return err
-	}
-	data, err := json.Marshal(map[string]any{"decision": record, "payload": payload})
-	if err != nil {
-		return err
-	}
-	if _, err := (agentruntime.SessionRunEventSink{SessionDir: d.sessionDir}).Record(agentruntime.RunEvent{
-		SessionID: sess.ID, RunID: sess.runID, EventType: "decision_" + status,
-		Source: channelRunSource(sess), Status: status, Mode: sess.Mode,
-		Timestamp: time.Now(), Data: data,
-	}); err != nil {
-		return err
-	}
-	return nil
+	_, err := agentruntime.RecordDecisionEvent(
+		agentruntime.SessionRunEventSink{SessionDir: d.sessionDir},
+		agentruntime.DecisionTransition{
+			Request: agentruntime.DecisionRequest{ID: id, SessionID: sess.ID, RunID: sess.runID, Kind: kind},
+			Status:  status, Value: value, Payload: payload,
+			Source: channelRunSource(sess), Mode: sess.Mode,
+		})
+	return err
 }
 
 func (d *Dispatcher) persistChannelDecisionRequest(sess *ChannelSession, id string, kind agentruntime.DecisionKind, payload map[string]any) {
@@ -40,20 +29,13 @@ func (d *Dispatcher) persistChannelDecisionRequestWithDeadline(sess *ChannelSess
 	if d == nil || sess == nil || id == "" || sess.ID == "" || sess.runID == "" {
 		return
 	}
-	request := agentruntime.DecisionRequest{ID: id, SessionID: sess.ID, RunID: sess.runID, Kind: kind}
-	record, err := agentruntime.NewDecisionRequestRecordWithDeadline(request, payload, expiresAt)
-	if err != nil {
-		return
-	}
-	data, err := json.Marshal(map[string]any{"decision": record, "payload": payload})
-	if err != nil {
-		return
-	}
-	if _, err := (agentruntime.SessionRunEventSink{SessionDir: d.sessionDir}).Record(agentruntime.RunEvent{
-		SessionID: sess.ID, RunID: sess.runID, EventType: "decision_requested",
-		Source: channelRunSource(sess), Status: "pending", Mode: sess.Mode,
-		Timestamp: time.Now(), Data: data,
-	}); err != nil {
+	if _, err := agentruntime.RecordDecisionEvent(
+		agentruntime.SessionRunEventSink{SessionDir: d.sessionDir},
+		agentruntime.DecisionTransition{
+			Request: agentruntime.DecisionRequest{ID: id, SessionID: sess.ID, RunID: sess.runID, Kind: kind},
+			Status:  agentruntime.DecisionStatusPending, Payload: payload, ExpiresAt: expiresAt,
+			Source: channelRunSource(sess), Mode: sess.Mode,
+		}); err != nil {
 		log.Printf("[channels] save decision request %s: %v", id, err)
 	}
 }

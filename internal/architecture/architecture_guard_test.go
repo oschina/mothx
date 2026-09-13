@@ -120,6 +120,28 @@ func productionArchitectureViolations(root string) ([]string, error) {
 				return true
 			})
 		}
+		// The durable decision ledger has exactly one schema: the
+		// decision_<status> event name and the {"decision": record} envelope. The
+		// name is owned by internal/session (the run-event schema owner) and the
+		// envelope by internal/agentruntime. Every other production file must go
+		// through the agentruntime helpers (BuildDecisionEvent, DecodeDecisionEvent,
+		// LoadDecisionRecords) instead of re-deriving them, so a future move to a
+		// dedicated store stays local to that package.
+		relSlash := filepath.ToSlash(rel)
+		ast.Inspect(fileAST, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.BasicLit:
+				if n.Kind == token.STRING && n.Value == `"decision_"` && !strings.HasPrefix(relSlash, "internal/session/") {
+					violations = append(violations, fmt.Sprintf("%s: decision event names belong to internal/session; use agentruntime.BuildDecisionEvent", rel))
+				}
+			case *ast.KeyValueExpr:
+				key, ok := n.Key.(*ast.BasicLit)
+				if ok && key.Kind == token.STRING && key.Value == `"decision"` && !strings.HasPrefix(relSlash, "internal/agentruntime/") {
+					violations = append(violations, fmt.Sprintf("%s: the decision envelope belongs to internal/agentruntime; use agentruntime.DecisionEventFields", rel))
+				}
+			}
+			return true
+		})
 		if skipConstructionChecks {
 			return nil
 		}

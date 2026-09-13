@@ -1257,31 +1257,26 @@ func (s *Server) resolveOrphanedDecisions(run session.SessionRun) error {
 	if s == nil || s.settings == nil || run.ID == "" || run.SessionID == "" {
 		return nil
 	}
-	events, err := session.ListSessionRunEvents(s.settings.GetSessionDir(), run.SessionID)
+	records, err := agentruntime.LoadRunDecisionRecords(s.settings.GetSessionDir(), run.SessionID, run.ID)
 	if err != nil {
 		return err
 	}
-	records := make([]agentruntime.DecisionRecord, 0)
 	approvals := make(map[string]SessionApprovalRequest)
 	questions := make(map[string]SessionQuestionRequest)
-	for _, event := range events {
-		if event.RunID != run.ID {
-			continue
-		}
-		var envelope struct {
-			Decision agentruntime.DecisionRecord `json:"decision"`
-			Approval SessionApprovalRequest      `json:"approval"`
-			Question SessionQuestionRequest      `json:"question"`
-		}
-		if json.Unmarshal(event.Data, &envelope) != nil || envelope.Decision.ID == "" {
-			continue
-		}
-		records = append(records, envelope.Decision)
-		if envelope.Approval.ApprovalID != "" {
-			approvals[envelope.Decision.ID] = envelope.Approval
-		}
-		if envelope.Question.QuestionID != "" {
-			questions[envelope.Decision.ID] = envelope.Question
+	for _, record := range records {
+		switch record.Kind {
+		case agentruntime.DecisionApproval:
+			var request SessionApprovalRequest
+			if len(record.Payload) == 0 || json.Unmarshal(record.Payload, &request) != nil || request.ApprovalID == "" {
+				continue
+			}
+			approvals[record.ID] = request
+		case agentruntime.DecisionQuestion:
+			var request SessionQuestionRequest
+			if len(record.Payload) == 0 || json.Unmarshal(record.Payload, &request) != nil || request.QuestionID == "" {
+				continue
+			}
+			questions[record.ID] = request
 		}
 	}
 	for id, record := range agentruntime.ReplayDecisions(records) {
@@ -1298,7 +1293,10 @@ func (s *Server) resolveOrphanedDecisions(run session.SessionRun) error {
 			if err != nil {
 				return err
 			}
-			data, err := json.Marshal(map[string]any{"decision": record, "approval": request, "resolution": resolution})
+			fields := agentruntime.DecisionEventEnvelope(record)
+			fields["approval"] = request
+			fields["resolution"] = resolution
+			data, err := json.Marshal(fields)
 			if err != nil {
 				return err
 			}
@@ -1334,7 +1332,10 @@ func (s *Server) recordSessionQuestionResolutionForRun(run session.SessionRun, r
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(map[string]any{"decision": record, "question": request, "resolution": resolution})
+	fields := agentruntime.DecisionEventEnvelope(record)
+	fields["question"] = request
+	fields["resolution"] = resolution
+	data, err := json.Marshal(fields)
 	if err != nil {
 		return err
 	}
@@ -1355,27 +1356,20 @@ func (s *Server) recoveredPendingQuestions(sessionID, runID string) []SessionQue
 	if s == nil || s.settings == nil || sessionID == "" || runID == "" {
 		return nil
 	}
-	events, err := session.ListSessionRunEvents(s.settings.GetSessionDir(), sessionID)
+	records, err := agentruntime.LoadRunDecisionRecords(s.settings.GetSessionDir(), sessionID, runID)
 	if err != nil {
 		return nil
 	}
-	records := make([]agentruntime.DecisionRecord, 0)
 	questions := make(map[string]SessionQuestionRequest)
-	for _, event := range events {
-		if event.RunID != runID {
+	for _, record := range records {
+		if record.Kind != agentruntime.DecisionQuestion || len(record.Payload) == 0 {
 			continue
 		}
-		var envelope struct {
-			Decision agentruntime.DecisionRecord `json:"decision"`
-			Question SessionQuestionRequest      `json:"question"`
-		}
-		if json.Unmarshal(event.Data, &envelope) != nil || envelope.Decision.ID == "" {
+		var request SessionQuestionRequest
+		if json.Unmarshal(record.Payload, &request) != nil || request.QuestionID == "" {
 			continue
 		}
-		records = append(records, envelope.Decision)
-		if envelope.Decision.Kind == agentruntime.DecisionQuestion && envelope.Question.QuestionID != "" {
-			questions[envelope.Decision.ID] = envelope.Question
-		}
+		questions[record.ID] = request
 	}
 	pending := agentruntime.ReplayDecisions(records)
 	result := make([]SessionQuestionRequest, 0, len(pending))

@@ -24,7 +24,7 @@ func TestChannelDecisionRecordPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 || events[0].EventType != "decision_requested" || events[1].EventType != "decision_cancelled" {
+	if len(events) != 2 || events[0].EventType != "decision_pending" || events[1].EventType != "decision_cancelled" {
 		t.Fatalf("events = %#v", events)
 	}
 	var data struct {

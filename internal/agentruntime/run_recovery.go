@@ -336,21 +336,9 @@ func recoverOrphanedRun(ctx context.Context, sessionDir string, run session.Sess
 }
 
 func recoveryDecisionResolutionEvents(ctx context.Context, sessionDir string, run session.SessionRun, reasonCode, reason string) ([]session.SessionRunEvent, error) {
-	events, err := session.ListSessionRunEventsContext(ctx, sessionDir, run.SessionID)
+	records, err := LoadRunDecisionRecordsContext(ctx, sessionDir, run.SessionID, run.ID)
 	if err != nil {
 		return nil, err
-	}
-	records := make([]DecisionRecord, 0)
-	for _, event := range events {
-		if event.RunID != run.ID {
-			continue
-		}
-		var envelope struct {
-			Decision DecisionRecord `json:"decision"`
-		}
-		if json.Unmarshal(event.Data, &envelope) == nil && envelope.Decision.ID != "" {
-			records = append(records, envelope.Decision)
-		}
 	}
 	pending := ReplayDecisions(records)
 	ids := make([]string, 0, len(pending))
@@ -376,7 +364,7 @@ func recoveryDecisionResolutionEvents(ctx context.Context, sessionDir string, ru
 		if err != nil {
 			return nil, err
 		}
-		encoded, err := json.Marshal(map[string]any{"decision": record})
+		encoded, err := json.Marshal(DecisionEventEnvelope(record))
 		if err != nil {
 			return nil, err
 		}

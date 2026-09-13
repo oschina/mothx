@@ -48,23 +48,14 @@ func (r *tuiRun) persistDecision(id string, kind agentruntime.DecisionKind, stat
 	if r == nil || r.sessionDir == "" || r.sessionID == "" || r.id == "" {
 		return nil
 	}
-	request := agentruntime.DecisionRequest{ID: id, RunID: r.id, SessionID: r.sessionID, Kind: kind}
-	resolution := agentruntime.DecisionResolution{ID: id, Kind: kind, Status: status, Value: value}
-	record, err := agentruntime.NewDecisionResolutionRecord(request, resolution, payload)
-	if status == "pending" {
-		record, err = agentruntime.NewDecisionRequestRecord(request, payload)
-	}
-	if err != nil {
-		return err
-	}
-	data, err := json.Marshal(map[string]any{"decision": record, "payload": payload})
-	if err != nil {
-		return err
-	}
-	_, err = r.execution.RecordEvent(agentruntime.RunEvent{
-		SessionID: r.sessionID, RunID: r.id, EventType: "decision_" + status,
-		Source: "tui", Status: status, Timestamp: time.Now(), Data: data,
+	event, err := agentruntime.BuildDecisionEvent(agentruntime.DecisionTransition{
+		Request: agentruntime.DecisionRequest{ID: id, RunID: r.id, SessionID: r.sessionID, Kind: kind},
+		Status:  status, Value: value, Payload: payload, Source: "tui",
 	})
+	if err != nil {
+		return err
+	}
+	_, err = r.execution.RecordEvent(event)
 	return err
 }
 func (r *tuiRun) resolveDecision(id string, kind agentruntime.DecisionKind, value string) error {
@@ -222,21 +213,9 @@ func recoverTUIOrphanedDecisions(sessionDir, sessionID string) error {
 	if !strings.EqualFold(strings.TrimSpace(run.Source), "tui") {
 		return nil
 	}
-	events, err := session.ListSessionRunEvents(sessionDir, sessionID)
+	records, err := agentruntime.LoadRunDecisionRecords(sessionDir, sessionID, run.ID)
 	if err != nil {
 		return err
-	}
-	records := make([]agentruntime.DecisionRecord, 0)
-	for _, event := range events {
-		if event.RunID != run.ID || !strings.HasPrefix(event.EventType, "decision_") {
-			continue
-		}
-		var envelope struct {
-			Decision agentruntime.DecisionRecord `json:"decision"`
-		}
-		if json.Unmarshal(event.Data, &envelope) == nil && envelope.Decision.ID != "" {
-			records = append(records, envelope.Decision)
-		}
 	}
 	now := time.Now()
 	for _, record := range agentruntime.ExpiredDecisions(records, now) {
@@ -259,20 +238,15 @@ func recoverTUIOrphanedDecisions(sessionDir, sessionID string) error {
 }
 
 func persistRecoveredTUIDecision(sessionDir string, run *session.SessionRun, pending agentruntime.DecisionRecord, status string) error {
-	request := agentruntime.DecisionRequest{ID: pending.ID, SessionID: run.SessionID, RunID: run.ID, Kind: pending.Kind}
-	resolution := agentruntime.DecisionResolution{ID: pending.ID, Kind: pending.Kind, Status: status}
-	record, err := agentruntime.NewDecisionResolutionRecord(request, resolution, map[string]any{"reason": "TUI execution stack was not recoverable"})
-	if err != nil {
-		return err
-	}
-	data, err := json.Marshal(map[string]any{"decision": record, "payload": map[string]any{"reason": "TUI execution stack was not recoverable"}})
-	if err != nil {
-		return err
-	}
-	_, err = (agentruntime.SessionRunEventSink{SessionDir: sessionDir}).Record(agentruntime.RunEvent{
-		SessionID: run.SessionID, RunID: run.ID, EventType: "decision_" + status,
-		Source: "tui", Status: status, Model: run.Model, Mode: run.Mode, Timestamp: time.Now(), Data: data,
+	event, err := agentruntime.BuildDecisionEvent(agentruntime.DecisionTransition{
+		Request: agentruntime.DecisionRequest{ID: pending.ID, SessionID: run.SessionID, RunID: run.ID, Kind: pending.Kind},
+		Status:  status, Payload: map[string]any{"reason": "TUI execution stack was not recoverable"},
+		Source: "tui", Model: run.Model, Mode: run.Mode,
 	})
+	if err != nil {
+		return err
+	}
+	_, err = (agentruntime.SessionRunEventSink{SessionDir: sessionDir}).Record(event)
 	return err
 }
 
