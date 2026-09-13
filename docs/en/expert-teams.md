@@ -58,6 +58,12 @@ bundle and the session policy, nested member spawning is unavailable, and
 high-risk command protection remains in force. A single-persona expert only
 changes the lead identity; it does not force team tools.
 
+A bound team always exposes the full canonical sub-agent tool set
+(`subagent_spawn`, `subagent_status`, `subagent_send`, `subagent_wait`,
+`subagent_answer`, `subagent_destroy`). The team capability is authoritative:
+per-tool toggles that disable individual sub-agent tools apply only to non-team
+multi-agent sessions and do not remove tools from a team session.
+
 Member lifecycle cards are projections of canonical child events. A member
 completion updates its own status and is delivered to an active lead at an
 agent-loop boundary. It never starts a new lead run by itself.
@@ -71,8 +77,11 @@ only sees the question projected on the lead's stream. A blocking
 inside the tool call that would have to answer it.
 
 The mailbox path is available in every session that can spawn members, not only
-in team sessions; only a team-bound session also holds its run open for
-still-running members at the wrap-up turn.
+in team sessions. A bound team, and any interactive source (TUI, Web UI, ACP),
+also holds its run open for still-running members at the wrap-up turn, so a
+member's completion or question can be handled within the same run; headless and
+asynchronous sources (CLI, cron, messaging channels) deliver member
+notifications at the next iteration or the next run instead.
 
 ## ESM interaction
 

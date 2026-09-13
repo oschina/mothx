@@ -18,6 +18,10 @@ import (
 // reports a running member and already holds one member completion, so a build
 // that wrongly owns the session mailbox both blocks and steals the notification.
 func mailboxBuildFixture(t *testing.T) (*SessionRuntime, *provider.MockProvider) {
+	return mailboxBuildFixtureWithSource(t, SourceTUI)
+}
+
+func mailboxBuildFixtureWithSource(t *testing.T, source RuntimeSource) (*SessionRuntime, *provider.MockProvider) {
 	t.Helper()
 	workDir := t.TempDir()
 	manager := session.New(workDir, t.TempDir())
@@ -26,7 +30,7 @@ func mailboxBuildFixture(t *testing.T) (*SessionRuntime, *provider.MockProvider)
 	}
 	registry := tools.NewRegistry(workDir, sandbox.NewNoneSandbox())
 	runtime, err := AttachSessionResources(AttachedResources{
-		Source: SourceTUI, WorkDir: workDir, Manager: manager, Registry: registry,
+		Source: source, WorkDir: workDir, Manager: manager, Registry: registry,
 	})
 	if err != nil {
 		t.Fatalf("attach session resources: %v", err)
@@ -119,13 +123,14 @@ func TestAuxiliaryBuildsDoNotInheritTheLeadMemberWait(t *testing.T) {
 	}
 }
 
-// TestNonTeamSessionDeliversMemberNotificationsWithoutWaiting guards N8: a
-// session without a bound expert team still installs the session mailbox, so a
-// member's blocking question reaches the lead (and subagent_answer can resolve
-// it instead of the member blocking until its own timeout), while the lead's run
-// must still be allowed to end without waiting for members.
-func TestNonTeamSessionDeliversMemberNotificationsWithoutWaiting(t *testing.T) {
-	runtime, mock := mailboxBuildFixture(t)
+// TestHeadlessNonTeamSessionDeliversMemberNotificationsWithoutWaiting guards
+// N8 plus the L9 source grading: a session without a bound expert team still
+// installs the session mailbox, so a member's blocking question reaches the
+// lead (and subagent_answer can resolve it instead of the member blocking until
+// its own timeout). A headless source (CLI/cron/channels) must still end its run
+// without waiting for members, because nobody can answer during the run.
+func TestHeadlessNonTeamSessionDeliversMemberNotificationsWithoutWaiting(t *testing.T) {
+	runtime, mock := mailboxBuildFixtureWithSource(t, SourceCLI)
 	manager, err := NewAgentManager(AgentManagerOptions{
 		Runtime: runtime, Provider: mock, Model: mock.Models()[0],
 		Settings: config.DefaultSettings(), MultiAgentEnabled: true,
@@ -155,6 +160,50 @@ func TestNonTeamSessionDeliversMemberNotificationsWithoutWaiting(t *testing.T) {
 	}
 	if manager.Mailbox.HasPending() {
 		t.Fatal("lead did not drain the member notification")
+	}
+}
+
+// TestInteractiveNonTeamSessionWaitsForMembers is the L9 counterpart: on an
+// interactive source a non-team lead holds its run open for its still-running
+// members, so a member's question or completion can be answered in this run
+// instead of waiting for the next lead run.
+func TestInteractiveNonTeamSessionWaitsForMembers(t *testing.T) {
+	runtime, mock := mailboxBuildFixtureWithSource(t, SourceTUI)
+	manager, err := NewAgentManager(AgentManagerOptions{
+		Runtime: runtime, Provider: mock, Model: mock.Models()[0],
+		Settings: config.DefaultSettings(), MultiAgentEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("new agent manager: %v", err)
+	}
+	// No real children: report the simulated running member so the wait is active.
+	runtime.Mailbox.SetRunningPredicate(func() bool { return true })
+
+	lead, err := runtime.BuildAgent(mailboxBuildOptions("interactive-lead", mock))
+	if err != nil {
+		t.Fatalf("build session lead: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan struct{})
+	go func() {
+		for range lead.Run(ctx, "continue") {
+		}
+		close(finished)
+	}()
+	select {
+	case <-finished:
+		t.Fatal("interactive non-team lead ended its run while its members were still running")
+	case <-time.After(time.Second):
+	}
+	cancel()
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled interactive lead did not finish")
+	}
+	if manager.Mailbox == nil {
+		t.Fatal("session mailbox was not installed")
 	}
 }
 

@@ -44,11 +44,13 @@ subagent_wait(timeout_ms: 30000)
 
 成员仍是普通子 Agent：工具和模式限制来自主角包与会话策略；成员不能嵌套派发成员；高风险命令保护仍然生效。单人主角只改变 lead 身份，不会强制启用团队工具。
 
+绑定团队后始终暴露完整的规范 sub-agent 工具集（`subagent_spawn`、`subagent_status`、`subagent_send`、`subagent_wait`、`subagent_answer`、`subagent_destroy`）。团队能力是权威的：逐工具关闭只对非团队的多 Agent 会话生效，不会从团队会话中移除工具。
+
 成员生命周期卡片来自 canonical child event 的投影。成员完成只更新自己的状态，并在活跃 lead 的 agent-loop 边界投递；它不会自行启动新的 lead run。
 
 成员需要决策时向 lead 提问，而不是向用户提问：问题会进入会话邮箱（以 `[MEMBER_QUESTION]` steering 消息，或 `subagent_wait` 中 `status: question` 的待处理条目投递），由 lead 用 `subagent_answer(handle: "<成员>", question_id: "…", answer: "…")` 回答；用户只看到该提问在 lead 事件流上的投影。阻塞式 `delegate_subagent` 子 Agent 不会提问，因为它的调用方正停在工具调用里，无人能作答。
 
-该邮箱通路在所有能派生成员的会话中都可用，不限于团队会话；只有绑定团队的会话才会在收尾轮为仍在运行的成员保持 run 打开。
+该邮箱通路在所有能派生成员的会话中都可用，不限于团队会话。绑定团队，以及任何交互式来源（TUI、Web UI、ACP），都会在收尾轮为仍在运行的成员保持 run 打开，以便在同一次 run 内处理成员的完成或提问；无头与异步来源（CLI、cron、消息渠道）则在下一个迭代或下一次 run 投递成员通知。
 
 ## 与 ESM 的关系
 

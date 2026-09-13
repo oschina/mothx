@@ -76,6 +76,22 @@ func (p Policy) HasForcedMode() bool {
 	return p.Source == SourceWeChat || p.Source == SourceFeishu
 }
 
+// WaitsForMembers reports whether a source keeps a conversational lead's run
+// open for its still-running members (see agent.ComposeFollowUps). Only sources
+// with an attentive human in the loop qualify: a member's completion or question
+// can be answered within the same run. On headless or asynchronous sources
+// (CLI, cron, messaging channels) member notifications are delivered at the
+// next iteration or the next run instead, so a single run never blocks for
+// minutes unattended. A bound expert team always waits regardless of source.
+func (s RuntimeSource) WaitsForMembers() bool {
+	switch s {
+	case SourceTUI, SourceWebUI, SourceACP:
+		return true
+	default:
+		return false
+	}
+}
+
 // ForcedMode returns the source-mandated mode, if any.
 func (p Policy) ForcedMode() string {
 	if p.HasForcedMode() {

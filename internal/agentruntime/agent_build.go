@@ -133,6 +133,7 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 		}
 	}
 	r.mu.RLock()
+	runtimeSource := r.Source
 	sandboxMgr := r.SandboxMgr
 	if opts.SandboxMgr != nil {
 		sandboxMgr = opts.SandboxMgr
@@ -151,14 +152,15 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 	// manager, and auxiliary roles built over the session manager opt out, so
 	// neither blocks on the session's members nor consumes member notifications
 	// that belong to the lead. Every session drains member notifications; only a
-	// bound expert team holds its run open for members.
+	// bound expert team or an interactive source holds its run open for members
+	// (a headless/automated run must not wait unattended).
 	teamBound := expertBinding != nil && expertBinding.Team
 	steeringMessages := opts.GetSteeringMessages
 	var followUpMessages func(context.Context) []provider.Message
 	if manager != nil && !opts.AuxiliaryRole {
 		steeringMessages = composeSteering(mailbox, opts.GetSteeringMessages)
-		if teamBound {
-			// A team lead must not end its run (and cancel the members it is still
+		if teamBound || runtimeSource.WaitsForMembers() {
+			// A lead must not end its run (and cancel the members it is still
 			// waiting for) just because a turn produced no tool calls: the follow-up
 			// hook waits for members and keeps adapter steering responsive while it
 			// waits.
