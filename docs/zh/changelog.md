@@ -8,6 +8,12 @@
   - `mothx serve init-config` 生成的模板 token 是公开值，一旦启用 auth 而未替换，等同于公开 API key —— 此前对此没有任何提示。该 token 现在是具名常量（`serve.PlaceholderAuthToken`）并配有显式判定（`IsPlaceholderAuthToken`/`UsesPlaceholderAuthToken`）：创建模板时（`mothx serve init-config` 与 CLI 的 `--init-serve` 路径）打印替换警告，`mothx serve` 启动时若 `api.auth.enabled` 为真且 token 仍未替换，会再次打印同一条警告。
   - 启动检查只在 auth 启用时生效，默认模板（auth 关闭、仅监听本机）保持安静，已替换的 token 永不误报。`serve init-config` 改为写入命令自身的 stderr，警告随命令输出一起可见。
 
+- **成员在交互式界面上会等待 lead**
+  - 能派生成员、但未绑定专家团的会话，在交互式来源（TUI、Web UI、ACP）上会在收尾轮为仍在运行的成员保持 run 打开，让成员在同一次 run 内完成或提问，而不必等到 lead 的下一次 run。无头与异步来源（CLI、cron、微信/飞书）仍正常结束回合，在下一个迭代或下一次 run 投递成员通知；绑定专家团的会话始终等待。
+
+- **绑定团队始终保留完整 sub-agent 工具集**
+  - 绑定专家团后始终暴露完整的规范 sub-agent 工具集（`subagent_spawn`、`subagent_status`、`subagent_send`、`subagent_wait`、`subagent_answer`、`subagent_destroy`）。逐工具关闭只对非团队的多 Agent 会话生效；团队能力是权威的，不会因关闭单个工具而从团队会话移除工具。
+
 ### 🐛 问题修复
 
 - **MCP：图片类工具结果不再退化为占位符，模型能看到真实图像**
@@ -23,6 +29,9 @@
   - 当调用方的 context 不带 deadline 时，`while (true) {}` 这类 workflow 源码会让评估一直跑下去、把进程挂死。源码评估（只构建节点图，worker agent 之后原生执行）现在同时受两道边界约束：调用方 context 与墙钟预算，谁先触发谁中断 VM。
   - 预算为：workflow 运行 30 秒，交互式创作检查 `workflow_lint` 5 秒（必须快速失败）；超时映射为 sentinel `ErrJSEvaluationTimeout`（lint 结果是稳定可读的错误），调用方取消仍按原契约返回 context 错误。`Runner.EvalTimeout` 允许调用方收紧预算，零值保持上述默认常量。
 
+- **已取消/已过期的决策不再阻塞分叉**
+  - 若会话唯一的决策其实已被取消或超时，此前仍被当作存在待处理决策，导致分叉被以 `source session is active` 拒绝。现在所有决策账本读者共享同一套词汇表，取消/超时决策（以及旧的渠道请求事件名）都能正确清除，分叉得以继续。决策事件名与 `{"decision": …}` 信封各自有了单一属主，因此无论哪个界面写入，跨入口的决策恢复都读取同一批记录。
+
 ### ✅ 测试
 
 - 数据库：`internal/db` 固化 begin 重试策略 —— 只有 SQLITE_BUSY/SQLITE_LOCKED 会重试，其他驱动错误与到期 context 原样上抛，驱动码经错误自身的 `Code()` 分类，`RunInTx` 保持提交/回滚语义。
@@ -30,6 +39,10 @@
 - Serve：生成的模板与判定使用同一常量，带首尾空白的占位符仍被识别而真实/空 token 不会误报，`serve init-config` 的输出必须包含警告。
 - Agent 循环：十个真实 `bash echo` 调用经由同一个并行批次执行（同步屏障只在十个 worker 同时存活时放行），并以顺序启动用例固化启动语义 —— 按模型声明顺序上报启动、进行中的调用不被更早的审批等待阻塞、更早调用失败时释放排队调用、后台工具调用复用同一套顺序句柄。
 - Runtime：跨进程接管用例改为在有限预算内重试「过期 + 接管」这一对操作，并给 helper 启动留出容忍负载的窗口，因此慢机器上的失败会停在有明确诊断的 setup 阶段，而不是误判被测不变量。
+- 决策账本：覆盖共享事件名、信封与读取器的往返与重放，遗留渠道事件名仍可解码，且已取消决策不再阻塞分叉。
+- 成员等待：交互式（TUI）非团队 lead 会为运行中的成员保持 run 打开，无头（CLI）则正常结束。
+- 架构：新增守卫拒绝适配器测试中新增使用 legacy session run/lease API 或低层 `agent.New`，其余夹具由带原因的 allowlist 冻结。
+- systeminit：固化共享 `/systeminit` 提示词 —— 交互式才有的 question 指引、去空白的附加指令置于 finalNote 之前、空白输入忽略、确定性。
 ## v1.2.100
 
 ### ✨ 新功能
