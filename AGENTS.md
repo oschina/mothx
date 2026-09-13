@@ -39,6 +39,7 @@ Guidance for AI coding agents working in this repository. Read this file before 
 - `docs/en/` and `docs/zh/` — bilingual documentation; `docs/en/changelog.md` and `docs/zh/changelog.md` accumulate release notes for all versions, while `docs/changelog_online_en.md` and `docs/changelog_online_zh.md` hold only the current version's changes.
 - `scripts/`, `npm/`, `pypi/`, `packaging/` — build and distribution tooling.
 - `bin/`, `dist/`, `ui/dist/`, `ui/node_modules/`, `desktop/node_modules/`, and generated package artifacts are build output; do not hand-edit them.
+- `internal/platform/busybox_assets/` and `internal/context/tokenizerdata/` — vendored third-party assets embedded into the binary (`busybox{32,64}u.exe` from [`rmyorston/busybox-w32`](https://github.com/rmyorston/busybox-w32); the DeepSeek V3 tokenizer JSON/conf from DeepSeek's official download). Each directory has a `README.md` describing its source, use, and update procedure; refresh both files of a pair together and rerun the owning package's tests (`./internal/platform`, `./internal/context`). Do not hand-edit the binary or JSON.
 
 ## Architecture notes
 
