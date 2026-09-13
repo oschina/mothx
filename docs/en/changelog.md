@@ -76,8 +76,8 @@
 - **Channels: A Disabled Sub-Agent Tool Stays Disabled**
   - Re-pointing the sub-agent tools at the session-scoped manager (which owns the session mailbox) no longer resurrects tools the user switched off: an ordinary multi-agent selection keeps its per-tool choice, while a team binding stays authoritative and always exposes the full team toolset.
 
-- **Parallel Tool Calls Start in the Declared Order**
-  - A parallel tool-call batch now begins its calls in the order the model emitted them: a later call can no longer start ahead of an earlier one because of argument parsing, an approval wait, or a durable execution claim. Calls still overlap and may finish in any order; results, transcript order, and provider continuation messages keep their existing guaranteed order.
+- **Parallel Tool Calls Report Their Starts in the Declared Order**
+  - A parallel tool-call batch now reports each call's start in the order the model emitted them, so argument parsing and worker scheduling can no longer make a later call appear to start first. The ordering is start-only and never blocks execution: calls still run concurrently, each waits for its own approvals and durable execution records, and completions may finish in any order. Results, transcript order, and provider continuation messages keep their existing guaranteed order, and Responses background runs use the same ordered handle.
 
 ### ✅ Tests
 

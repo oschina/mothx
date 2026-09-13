@@ -528,7 +528,7 @@ Google 原生 provider 可以直接配置：
 
 ### toolExecution
 
-该设置只控制本地执行。`sequential` 只会限制响应到达后的 MothX 本地 worker，不会要求模型一次只生成一个 tool call；provider 仍可能在一次响应中返回多个 tool call。`parallel` 批次按模型声明的顺序开始调用（后面的调用绝不会早于前面的调用开始，即便前面的调用仍在等待审批），随后并发执行，因此只有完成顺序不受限制。TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 都使用同一配置。它不控制 OpenAI Responses `web_search` 等 provider 托管工具内部的并发；托管工具仍由 provider 自己的编排和配额规则负责。
+该设置只控制本地执行。`sequential` 只会限制响应到达后的 MothX 本地 worker，不会要求模型一次只生成一个 tool call；provider 仍可能在一次响应中返回多个 tool call。`parallel` 批次按模型声明的顺序上报每个调用的启动，该顺序不阻塞执行：调用之间仍然并发运行，各自独立等待审批与持久化执行记录，只有完成顺序不受限制。TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 都使用同一配置。它不控制 OpenAI Responses `web_search` 等 provider 托管工具内部的并发；托管工具仍由 provider 自己的编排和配额规则负责。
 
 | 字段 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
