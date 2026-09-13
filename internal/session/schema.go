@@ -1,9 +1,12 @@
 package session
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
+
+	database "github.com/startvibecoding/mothx/internal/db"
 )
 
 const currentSchemaTemplate = `
@@ -506,6 +509,16 @@ var requiredSchema = map[string][]string{
 	"sub_entries":                      {"seq", "session_id", "id", "type", "parent_id", "timestamp", "data"},
 }
 
+// busyRetryDatabase applies the shared SQLITE_BUSY begin retry (see
+// internal/db.BeginSQLTx) to the schema migration transaction boundary: every
+// process opening one session directory migrates the same database, and the
+// single writer lock can outlast a busy_timeout while another process commits.
+type busyRetryDatabase struct{ db *sql.DB }
+
+func (b busyRetryDatabase) Begin() (*sql.Tx, error) {
+	return database.BeginSQLTx(context.Background(), b.db, nil)
+}
+
 // EnsureCurrentSchema creates the current schema only for an empty database.
 // Existing databases are validated but never migrated or otherwise modified.
 func EnsureCurrentSchema(db *sql.DB) error {
@@ -515,7 +528,9 @@ func EnsureCurrentSchema(db *sql.DB) error {
 		return fmt.Errorf("inspect database schema: %w", err)
 	}
 	if tableCount == 0 {
-		tx, err := db.Begin()
+		// Initialization races other processes opening the same session
+		// directory; a busy begin must not turn schema setup into a hard failure.
+		tx, err := database.BeginSQLTx(context.Background(), db, nil)
 		if err != nil {
 			return fmt.Errorf("begin schema initialization: %w", err)
 		}
@@ -535,7 +550,7 @@ func EnsureCurrentSchema(db *sql.DB) error {
 		}
 	}
 
-	if err := applySchemaMigrations(db); err != nil {
+	if err := applySchemaMigrations(busyRetryDatabase{db: db}); err != nil {
 		return fmt.Errorf("apply schema migrations: %w", err)
 	}
 

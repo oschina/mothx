@@ -119,7 +119,7 @@ func Write(ctx context.Context, path string, migrate Migrator, fn func(context.C
 	if err != nil {
 		return err
 	}
-	return connection.RunInTx(ctx, nil, fn)
+	return RunInTx(ctx, connection, nil, fn)
 }
 
 // CloseAll checkpoints and closes all process-owned connections.

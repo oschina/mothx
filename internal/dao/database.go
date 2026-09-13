@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/uptrace/bun"
+
+	database "github.com/startvibecoding/mothx/internal/db"
 )
 
 // Database is the DAO-facing handle to a managed Bun connection. Managed
@@ -72,8 +74,13 @@ func (d *Database) Close() error {
 // Begin and BeginTx create Bun transactions from the managed connection. The
 // pointer form keeps existing helper signatures stable while ownership stays
 // with the managed database.
+//
+// Both retry a SQLITE_BUSY/SQLITE_LOCKED begin within the shared budget
+// (internal/db): the DSN begins transactions with BEGIN IMMEDIATE, so a busy
+// writer can outlast the connection's busy_timeout without the database being
+// broken.
 func (d *Database) Begin() (*Tx, error) {
-	tx, err := d.db.Begin()
+	tx, err := database.BeginTx(context.Background(), d.db, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +88,7 @@ func (d *Database) Begin() (*Tx, error) {
 }
 
 func (d *Database) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
-	tx, err := d.db.BeginTx(ctx, opts)
+	tx, err := database.BeginTx(ctx, d.db, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +96,8 @@ func (d *Database) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error
 }
 
 // RunInTx executes a callback against a Bun transaction on the managed
-// connection. This is the canonical transaction boundary for session code.
+// connection. This is the canonical transaction boundary for session code, and
+// it retries a transient busy begin like Begin/BeginTx do.
 func (d *Database) RunInTx(ctx context.Context, opts *sql.TxOptions, fn func(context.Context, Tx) error) error {
-	return d.db.RunInTx(ctx, opts, fn)
+	return database.RunInTx(ctx, d.db, opts, fn)
 }
