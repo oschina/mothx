@@ -30,12 +30,15 @@ func TestACPReplayPendingDecisionProjection(t *testing.T) {
 	if err := rt.decisions.Register(request); err != nil {
 		t.Fatal(err)
 	}
-	record, err := agentruntime.NewDecisionRequestRecordWithDeadline(request, questionRequest{SessionID: rt.id, Question: "continue?", Options: []string{"yes"}}, time.Now().Add(time.Minute))
+	event, err := agentruntime.BuildDecisionEvent(agentruntime.DecisionTransition{
+		Request: request, Status: agentruntime.DecisionStatusPending,
+		Payload:   questionRequest{SessionID: rt.id, Question: "continue?", Options: []string{"yes"}},
+		ExpiresAt: time.Now().Add(time.Minute), Source: "acp",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, _ := json.Marshal(map[string]any{"decision": record})
-	if _, err := session.SaveSessionRunEvent(settings.GetSessionDir(), session.SessionRunEvent{SessionID: rt.id, RunID: "run-1", EventType: "decision_pending", Source: "acp", Status: "pending", Data: data}); err != nil {
+	if _, err := (agentruntime.SessionRunEventSink{SessionDir: settings.GetSessionDir()}).Record(event); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.replayPendingDecisionRequests(rt.id); err != nil {
@@ -71,16 +74,17 @@ func TestACPReplayPendingStandardElicitationProjection(t *testing.T) {
 	if err := rt.decisions.Register(request); err != nil {
 		t.Fatal(err)
 	}
-	record, err := agentruntime.NewDecisionRequestRecordWithDeadline(request, questionRequest{
-		SessionID: rt.id, Question: "continue?", Options: []string{"yes"}, Protocol: acpElicitationFormProtocol,
-	}, time.Now().Add(time.Minute))
+	event, err := agentruntime.BuildDecisionEvent(agentruntime.DecisionTransition{
+		Request: request, Status: agentruntime.DecisionStatusPending,
+		Payload: questionRequest{
+			SessionID: rt.id, Question: "continue?", Options: []string{"yes"}, Protocol: acpElicitationFormProtocol,
+		},
+		ExpiresAt: time.Now().Add(time.Minute), Source: "acp",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, _ := json.Marshal(map[string]any{"decision": record})
-	if _, err := session.SaveSessionRunEvent(settings.GetSessionDir(), session.SessionRunEvent{
-		SessionID: rt.id, RunID: "run-1", EventType: "decision_pending", Source: "acp", Status: "pending", Data: data,
-	}); err != nil {
+	if _, err := (agentruntime.SessionRunEventSink{SessionDir: settings.GetSessionDir()}).Record(event); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.replayPendingDecisionRequests(rt.id); err != nil {
@@ -111,11 +115,17 @@ func TestACPReplayPendingDecisionProjectionSkipsResolved(t *testing.T) {
 	s.sessions[rt.id] = rt
 	request := agentruntime.DecisionRequest{ID: "approval-1", SessionID: rt.id, RunID: "run-1", Kind: agentruntime.DecisionApproval}
 	_ = rt.decisions.Register(request)
-	pending, _ := agentruntime.NewDecisionRequestRecord(request, requestPermissionRequest{SessionID: rt.id})
-	resolved, _ := agentruntime.NewDecisionResolutionRecord(request, agentruntime.DecisionResolution{ID: request.ID, Kind: request.Kind, Status: "resolved"}, nil)
-	for _, record := range []agentruntime.DecisionRecord{pending, resolved} {
-		data, _ := json.Marshal(map[string]any{"decision": record})
-		_, _ = session.SaveSessionRunEvent(settings.GetSessionDir(), session.SessionRunEvent{SessionID: rt.id, RunID: "run-1", EventType: "decision_" + record.Status, Source: "acp", Status: record.Status, Data: data})
+	for _, transition := range []agentruntime.DecisionTransition{
+		{Request: request, Status: agentruntime.DecisionStatusPending, Payload: requestPermissionRequest{SessionID: rt.id}, Source: "acp"},
+		{Request: request, Status: agentruntime.DecisionStatusResolved, Source: "acp"},
+	} {
+		event, err := agentruntime.BuildDecisionEvent(transition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := (agentruntime.SessionRunEventSink{SessionDir: settings.GetSessionDir()}).Record(event); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := s.replayPendingDecisionRequests(rt.id); err != nil {
 		t.Fatal(err)

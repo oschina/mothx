@@ -210,7 +210,7 @@ func TestEscAbortFinalizesDurableRunBeforeNextInput(t *testing.T) {
 	if _, active := run.execution.Active(); active {
 		t.Fatal("execution remains active after Esc")
 	}
-	activeRun, err := session.GetActiveSessionRun(sessionDir, sessionID)
+	activeRun, err := agentruntime.GetActiveDurableRun(t.Context(), sessionDir, sessionID)
 	if err != nil {
 		t.Fatalf("load active run after Esc: %v", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/startvibecoding/mothx/internal/acp"
+	"github.com/startvibecoding/mothx/internal/agentruntime"
 	"github.com/startvibecoding/mothx/internal/config"
 	"github.com/startvibecoding/mothx/internal/provider"
 	"github.com/startvibecoding/mothx/internal/session"
@@ -228,7 +229,7 @@ func TestRunPrintPersistsCanonicalDurableRun(t *testing.T) {
 	if runs[0].Source != "cli" || runs[0].Status != "completed" || runs[0].IntentID == "" {
 		t.Fatalf("durable CLI run = %#v, want completed cli run with intent", runs[0])
 	}
-	active, err := session.GetActiveSessionRun(sessionDir, mgr.GetHeader().ID)
+	active, err := agentruntime.GetActiveDurableRun(t.Context(), sessionDir, mgr.GetHeader().ID)
 	if err != nil {
 		t.Fatalf("get active run: %v", err)
 	}

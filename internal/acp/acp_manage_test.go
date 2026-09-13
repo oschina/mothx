@@ -1349,7 +1349,7 @@ func TestKnowledgeBaseScheduleUsesSharedCronAndDurableIndexRun(t *testing.T) {
 	if snapshot.RunID == "" {
 		t.Fatalf("scheduled snapshot lacks durable Run: %#v", snapshot)
 	}
-	run, err := session.GetSessionRun(sessionDir, snapshot.RunID)
+	run, err := agentruntime.GetDurableRun(t.Context(), sessionDir, snapshot.RunID)
 	if err != nil || run == nil {
 		t.Fatalf("load scheduled index Run: %#v, %v", run, err)
 	}

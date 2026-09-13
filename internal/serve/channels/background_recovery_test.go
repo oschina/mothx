@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/startvibecoding/mothx/internal/agentruntime"
 	"github.com/startvibecoding/mothx/internal/provider"
 	"github.com/startvibecoding/mothx/internal/session"
 )
@@ -20,13 +21,13 @@ func TestReconcileCompletedBackgroundRunAfterRestart(t *testing.T) {
 		t.Fatalf("append assistant message: %v", err)
 	}
 	now := time.Now()
-	if _, err := session.SaveSessionRunEvent(sessionDir, session.SessionRunEvent{
+	if _, err := (agentruntime.SessionRunEventSink{SessionDir: sessionDir}).Record(agentruntime.RunEvent{
 		SessionID: sess.GetHeader().ID, RunID: "run-channel-restart", EventType: "tool_progress", Source: "channel:wechat", Status: "completed", Timestamp: now,
 		Data: []byte(`{"tool":"read","status":"completed","summary":"file read"}`),
 	}); err != nil {
 		t.Fatalf("save tool progress event: %v", err)
 	}
-	if _, err := session.SaveSessionRunEvent(sessionDir, session.SessionRunEvent{
+	if _, err := (agentruntime.SessionRunEventSink{SessionDir: sessionDir}).Record(agentruntime.RunEvent{
 		SessionID: sess.GetHeader().ID, RunID: "run-channel-restart", EventType: "finished", Source: "channel:wechat", Status: "completed", Timestamp: now.Add(time.Millisecond),
 		Data: []byte(`{"channelDeliveryPending":true,"assistantEntryId":"` + entryID + `"}`),
 	}); err != nil {

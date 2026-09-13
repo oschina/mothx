@@ -47,7 +47,7 @@ func TestRecoverTUIOrphanedDecisionsTerminalizesPending(t *testing.T) {
 	if latest != "cancelled" {
 		t.Fatalf("latest decision status = %q", latest)
 	}
-	storedRun, err := session.GetSessionRun(sessionDir, run.ID)
+	storedRun, err := agentruntime.GetDurableRun(t.Context(), sessionDir, run.ID)
 	if err != nil || storedRun == nil || storedRun.Status != "failed" {
 		t.Fatalf("stored run = %#v, err=%v", storedRun, err)
 	}
