@@ -12,6 +12,10 @@ This file contains the changes for the **current version only**. The full histor
 
 ### 🐛 Bug Fixes
 
+- **MCP: Image Tool Results Reach the Model Instead of a Placeholder**
+  - An MCP tool that returned image content reached the model as the literal string `[image content: image/png]`. The base64 payload was already present in the MCP response, but the client decoded every content block into text only, and the tool returned a text-only result, so a screenshot-style MCP server could report coordinates while the model never saw the picture. `resources/read` binary resources were worse: the `blob` field had no matching struct field, so the payload was dropped during decode and not even the placeholder appeared.
+  - `tools/call` and `resources/read` now project image blocks into `tools.ToolResult.Contents` as real provider image content, reusing the same provider-aware preprocessing as the `read` and `browser` screenshot tools, and decode `blob`/`uri` resource fields. Results without images keep the historical text-only shape, so existing text MCP tools are unchanged. Malformed, oversized, or excess images (capped at 4 per result, matching the ACP projection limit) degrade to a text note instead of failing the call. The image capability gate in Agent Core still decides whether a non-vision model receives images at all.
+
 - **SQLite: Transient Busy Transaction Begins Are Retried**
   - Several processes opening one session directory race onto the single writer lock. The DSN begins non-read-only transactions with `BEGIN IMMEDIATE`, so a begin can outlast the connection's `busy_timeout` while other processes keep committing under `synchronous(FULL)`, and a healthy database failed with `database is locked (5)`.
   - The retry policy now lives in `internal/db` next to the DSN ownership: `BeginTx` (Bun), `BeginSQLTx` (raw `*sql.DB`), and `RunInTx` retry only `SQLITE_BUSY`/`SQLITE_LOCKED` inside a bounded budget (90 s) with exponential backoff (200 ms up to a 2 s cap); non-transient errors are returned unchanged and a caller's context deadline still wins.

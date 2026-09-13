@@ -3,11 +3,14 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/startvibecoding/mothx/internal/imageproc"
 )
 
 func TestUniqueToolName(t *testing.T) {
@@ -198,6 +201,220 @@ func TestResourceToolURIOverride(t *testing.T) {
 	}
 	if uri != "file://b" {
 		t.Fatalf("expected override uri, got %q", uri)
+	}
+}
+
+// mcpTestPNGBase64 is a 1x1 PNG. It is intentionally tiny so projection tests
+// stay deterministic and never depend on an external MCP server or a display.
+const mcpTestPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl8P6sAAAAASUVORK5CYII="
+
+// mcpTestPNG is the decoded form of mcpTestPNGBase64, for callers that need
+// the raw image bytes.
+var mcpTestPNG = func() []byte {
+	raw, err := base64.StdEncoding.DecodeString(mcpTestPNGBase64)
+	if err != nil {
+		panic("invalid embedded PNG fixture: " + err.Error())
+	}
+	return raw
+}()
+
+func TestClassifyMCPBlock(t *testing.T) {
+	cases := []struct {
+		name     string
+		block    mcpContentBlock
+		wantKind string
+		wantMime string
+	}{
+		{"text block", mcpContentBlock{Type: "text", Text: "hi"}, "text", ""},
+		{"json block", mcpContentBlock{Type: "json", JSON: json.RawMessage(`{}`)}, "json", ""},
+		{"audio block", mcpContentBlock{Type: "audio", MimeType: "audio/wav"}, "audio", "audio/wav"},
+		{"typed image uses data", mcpContentBlock{Type: "image", Data: "AAA", MimeType: "image/png"}, "image", "image/png"},
+		{"resource blob image", mcpContentBlock{Blob: "AAA", MimeType: "image/png"}, "image", "image/png"},
+		{"resource blob non-image", mcpContentBlock{Blob: "AAA", MimeType: "application/pdf"}, "blob", "application/pdf"},
+		{"resource text has no type", mcpContentBlock{Text: "hello", MimeType: "text/plain"}, "text", "text/plain"},
+		{"untyped data is an image", mcpContentBlock{Data: "AAA", MimeType: "image/png"}, "image", "image/png"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kind, _, mimeType := classifyMCPBlock(tc.block)
+			if kind != tc.wantKind {
+				t.Fatalf("kind = %q, want %q", kind, tc.wantKind)
+			}
+			if mimeType != tc.wantMime {
+				t.Fatalf("mimeType = %q, want %q", mimeType, tc.wantMime)
+			}
+		})
+	}
+}
+
+func TestMCPResourceReadResultDecodesBlob(t *testing.T) {
+	// resources/read sends BlobResourceContents, which uses "blob" rather than
+	// the tools/call "data" field. Before the fix this payload was silently
+	// dropped during decode.
+	var out mcpResourceReadResult
+	raw := `{"contents":[{"uri":"shot://1","mimeType":"image/png","blob":"` + mcpTestPNGBase64 + `"}]}`
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Contents) != 1 {
+		t.Fatalf("decoded %d content blocks, want 1", len(out.Contents))
+	}
+	if out.Contents[0].Blob != mcpTestPNGBase64 {
+		t.Fatal("blob payload was not decoded from the resource content block")
+	}
+	if out.Contents[0].URI != "shot://1" {
+		t.Fatalf("uri = %q, want shot://1", out.Contents[0].URI)
+	}
+}
+
+func TestProjectMCPContentProjectsImage(t *testing.T) {
+	client := &Client{name: "srv"}
+	text, contents := client.projectMCPContent([]mcpContentBlock{
+		{Type: "text", Text: `{"image_width":1464}`},
+		{Type: "image", Data: mcpTestPNGBase64, MimeType: "image/png"},
+	})
+
+	if !strings.Contains(text, "image_width") {
+		t.Fatalf("text summary lost the server payload: %q", text)
+	}
+	if !strings.Contains(text, "1x1") {
+		t.Fatalf("text summary is missing image dimensions: %q", text)
+	}
+	if len(contents) != 2 {
+		t.Fatalf("contents = %d blocks, want text + image", len(contents))
+	}
+	if contents[0].Type != "text" {
+		t.Fatalf("first block type = %q, want text", contents[0].Type)
+	}
+	image := contents[1]
+	if image.Type != "image" || image.Image == nil {
+		t.Fatalf("second block = %#v, want an image block", image)
+	}
+	if image.Image.MimeType != "image/png" {
+		t.Fatalf("image mime = %q, want image/png", image.Image.MimeType)
+	}
+	if image.Image.Width != 1 || image.Image.Height != 1 {
+		t.Fatalf("image dimensions = %dx%d, want 1x1", image.Image.Width, image.Image.Height)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(image.Image.Data)
+	if err != nil {
+		t.Fatalf("projected payload is not valid base64: %v", err)
+	}
+	if base64.StdEncoding.EncodeToString(decoded) != mcpTestPNGBase64 {
+		t.Fatal("projected image payload does not round-trip to the source bytes")
+	}
+}
+
+func TestProjectMCPContentKeepsTextOnlyShape(t *testing.T) {
+	client := &Client{name: "srv"}
+	text, contents := client.projectMCPContent([]mcpContentBlock{
+		{Type: "text", Text: "hello"},
+		{Type: "json", JSON: json.RawMessage(`{"k":"v"}`)},
+	})
+	if text != "hello\n{\"k\":\"v\"}" {
+		t.Fatalf("text = %q, want the historical text rendering", text)
+	}
+	if contents != nil {
+		t.Fatalf("contents = %#v, want nil so existing MCP text tools are unchanged", contents)
+	}
+}
+
+func TestProjectMCPContentKeepsAudioPlaceholder(t *testing.T) {
+	client := &Client{name: "srv"}
+	text, contents := client.projectMCPContent([]mcpContentBlock{
+		{Type: "audio", MimeType: "audio/wav"},
+	})
+	if text != "[audio content: audio/wav]" {
+		t.Fatalf("text = %q, want the audio placeholder", text)
+	}
+	if contents != nil {
+		t.Fatalf("audio must not produce content blocks, got %#v", contents)
+	}
+}
+
+func TestProjectMCPContentDegradesInvalidPayloads(t *testing.T) {
+	client := &Client{name: "srv"}
+	text, contents := client.projectMCPContent([]mcpContentBlock{
+		{Type: "image", MimeType: "image/png"},
+		{Type: "image", Data: "not-base64!!", MimeType: "image/png"},
+		{Type: "image", Data: base64.StdEncoding.EncodeToString([]byte("not an image")), MimeType: "image/png"},
+	})
+	if contents != nil {
+		t.Fatalf("contents = %#v, want nil when every image fails to project", contents)
+	}
+	for _, want := range []string{"empty payload", "invalid base64 payload", "omitted"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("degradation note %q missing from %q", want, text)
+		}
+	}
+}
+
+func TestProjectMCPContentCapsImageCount(t *testing.T) {
+	client := &Client{name: "srv"}
+	blocks := make([]mcpContentBlock, 0, mcpMaxProjectedImages+2)
+	for i := 0; i < mcpMaxProjectedImages+2; i++ {
+		blocks = append(blocks, mcpContentBlock{Type: "image", Data: mcpTestPNGBase64, MimeType: "image/png"})
+	}
+	_, contents := client.projectMCPContent(blocks)
+
+	images := 0
+	for _, block := range contents {
+		if block.Type == "image" {
+			images++
+		}
+	}
+	if images != mcpMaxProjectedImages {
+		t.Fatalf("projected %d images, want %d", images, mcpMaxProjectedImages)
+	}
+	text, _ := client.projectMCPContent(blocks)
+	if !strings.Contains(text, "at most 4 images per tool result") {
+		t.Fatalf("missing excess-image note in %q", text)
+	}
+}
+
+func TestProjectMCPContentProjectsResourceBlob(t *testing.T) {
+	client := &Client{name: "srv"}
+	text, contents := client.projectMCPContent([]mcpContentBlock{
+		{MimeType: "text/plain", Text: "plain resource body"},
+		{URI: "shot://1", MimeType: "image/png", Blob: mcpTestPNGBase64},
+	})
+	if !strings.Contains(text, "plain resource body") {
+		t.Fatalf("text resource body missing from %q", text)
+	}
+	if strings.Contains(text, `"type":""`) {
+		t.Fatalf("text resource was JSON-wrapped instead of rendered as text: %q", text)
+	}
+	if len(contents) != 2 || contents[1].Type != "image" {
+		t.Fatalf("resource blob did not project an image block: %#v", contents)
+	}
+}
+
+func TestClientImagePolicyUsesLateBinding(t *testing.T) {
+	// The shared Runtime connects MCP servers before the Agent exists, and the
+	// registry receives its provider/model image hint only at Agent build time.
+	// The policy must therefore be resolved per call, not captured at connect.
+	client := &Client{name: "srv"}
+	var seen imageproc.Mode
+	client.imagePolicy = func(mode imageproc.Mode) imageproc.Policy {
+		seen = mode
+		return imageproc.Policy{Mode: mode, MaxLongEdge: 1, MaxOutputBytes: 1 << 20}
+	}
+	client.projectMCPContent([]mcpContentBlock{
+		{Type: "image", Data: mcpTestPNGBase64, MimeType: "image/png"},
+	})
+	if seen != imageproc.ModeAuto {
+		t.Fatalf("policy resolved with mode %q, want %q", seen, imageproc.ModeAuto)
+	}
+}
+
+func TestClientImagePolicyFallsBackToDefaults(t *testing.T) {
+	client := &Client{name: "srv"}
+	if got := client.imagePolicyFor(imageproc.ModeAuto); got.Mode != imageproc.ModeAuto {
+		t.Fatalf("fallback policy mode = %q, want %q", got.Mode, imageproc.ModeAuto)
+	}
+	var nilClient *Client
+	if got := nilClient.imagePolicyFor(imageproc.ModeAuto); got.Mode != imageproc.ModeAuto {
+		t.Fatal("nil client must fall back to the default policy instead of panicking")
 	}
 }
 

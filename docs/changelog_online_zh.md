@@ -12,6 +12,10 @@
 
 ### 🐛 问题修复
 
+- **MCP：图片类工具结果不再退化为占位符，模型能看到真实图像**
+  - 返回图片内容的 MCP 工具，到达模型时只剩字面量 `[image content: image/png]`。base64 载荷其实已经在 MCP 响应里，但客户端把所有内容块一律解码成文本，工具也只返回文本结果，于是截图类 MCP server 能报告坐标、模型却看不到画面。`resources/read` 的二进制资源更彻底：`blob` 字段没有对应的结构体字段，反序列化时整个载荷被丢弃，连占位符都不会出现。
+  - 现在 `tools/call` 与 `resources/read` 会把 image 块投影为 `tools.ToolResult.Contents` 中真实的 provider 图片内容，复用与 `read`、`browser` 截图工具完全相同的 provider 感知预处理，并补上 `blob`/`uri` 资源字段的解码。无图片的结果保持历史文本形态，现有文本类 MCP 工具行为不变；解码失败、超限或超量（单次上限 4 张，与 ACP 投影上限一致）的图片降级为文本说明而非让调用失败。非视觉模型是否接收图片仍由 Agent Core 的图片能力闸门决定。
+
 - **SQLite：瞬时 busy 的事务开启会重试**
   - 多个进程打开同一个会话目录时会争抢唯一的写锁。DSN 对所有非只读事务使用 `BEGIN IMMEDIATE`，因此当其他进程在 `synchronous(FULL)` 下持续提交时，某次 begin 的等待可能超过连接的 `busy_timeout`，让健康的数据库直接报 `database is locked (5)`。
   - 重试策略现在与 DSN 归属一起放在 `internal/db`：`BeginTx`（Bun）、`BeginSQLTx`（原生 `*sql.DB`）与 `RunInTx` 只对 `SQLITE_BUSY`/`SQLITE_LOCKED` 在有限预算（90 秒）内退避重试（200ms 起、上限 2s）；非瞬时错误原样返回，调用方的 context deadline 优先。

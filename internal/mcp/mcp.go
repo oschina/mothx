@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,8 @@ import (
 	"time"
 
 	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/startvibecoding/mothx/internal/imageproc"
+	"github.com/startvibecoding/mothx/internal/provider"
 	"github.com/startvibecoding/mothx/internal/tools"
 )
 
@@ -32,6 +35,12 @@ const (
 	mcpMaxListPages      = 100
 	mcpInboundQueueSize  = 128
 	mcpMaxResponseBytes  = 16 << 20
+
+	// mcpMaxProjectedImages caps how many images a single MCP tool result may
+	// carry into the conversation. It matches the ACP tool-call projection cap
+	// (internal/acp acpToolImageMaxCount) so the Desktop renderer never receives
+	// more image blocks than it can project.
+	mcpMaxProjectedImages = 4
 )
 
 type ServerConfig = config.MCPServer
@@ -58,6 +67,24 @@ type Client struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	inbound    chan RPCRequest
+
+	// imagePolicy resolves the provider/model aware image preprocessing policy
+	// for this connection. It is evaluated on every tool call rather than
+	// snapshotted at connect time: the shared Runtime connects MCP servers while
+	// building the session, but the registry only receives its provider/model
+	// image hint later, when the Agent is built
+	// (internal/agent configureRegistryImageHint). Resolving eagerly would pin
+	// every connection to the generic policy and lose the provider limits.
+	imagePolicy func(imageproc.Mode) imageproc.Policy
+}
+
+// imagePolicyFor resolves the image policy for one tool call, falling back to
+// the generic defaults when no registry was attached to this connection.
+func (c *Client) imagePolicyFor(mode imageproc.Mode) imageproc.Policy {
+	if c != nil && c.imagePolicy != nil {
+		return c.imagePolicy(mode)
+	}
+	return imageproc.DefaultPolicy(mode)
 }
 
 func (c *Client) currentSessionID() string {
@@ -218,6 +245,8 @@ type mcpContentBlock struct {
 	Type     string          `json:"type"`
 	Text     string          `json:"text,omitempty"`
 	Data     string          `json:"data,omitempty"`
+	Blob     string          `json:"blob,omitempty"`
+	URI      string          `json:"uri,omitempty"`
 	MimeType string          `json:"mimeType,omitempty"`
 	JSON     json.RawMessage `json:"json,omitempty"`
 }
@@ -240,6 +269,13 @@ func ConnectServers(ctx context.Context, configs []ServerConfig, registry *tools
 		if err != nil {
 			CloseClients(clients)
 			return nil, err
+		}
+		// Bind the image policy lazily through the registry method value. The
+		// registry receives its provider/model image hint when the Agent is
+		// built, which happens after MCP connection, so the policy must be
+		// resolved per tool call rather than captured here.
+		if registry != nil {
+			client.imagePolicy = registry.ImagePolicy
 		}
 		clients = append(clients, client)
 		toolInfos, err := client.listTools(ctx)
@@ -1208,11 +1244,19 @@ func (t *mcpTool) Parameters() json.RawMessage {
 
 func (t *mcpTool) Execute(ctx context.Context, params map[string]any) (tools.ToolResult, error) {
 	result, err := t.client.callTool(ctx, t.info.Name, params)
-	text := mcpContentToText(result.Content)
+	text, contents := t.client.projectMCPContent(result.Content)
 	if text == "" && err != nil {
 		text = err.Error()
 	}
-	return tools.NewTextToolResult(text), err
+	if err != nil {
+		// The agent loop replaces the result contents with the error text, so
+		// projecting images here would only waste decoding work.
+		return tools.NewTextToolResult(text), err
+	}
+	if len(contents) == 0 {
+		return tools.NewTextToolResult(text), nil
+	}
+	return tools.ToolResult{Text: text, Contents: contents}, nil
 }
 
 func newMCPResourceTool(client *Client, info mcpResourceInfo, existing map[string]struct{}) tools.Tool {
@@ -1248,11 +1292,17 @@ func (t *mcpResourceTool) Execute(ctx context.Context, params map[string]any) (t
 		uri = v
 	}
 	out, err := t.client.readResource(ctx, uri)
-	text := mcpContentToText(out.Contents)
+	text, contents := t.client.projectMCPContent(out.Contents)
 	if text == "" && err != nil {
 		text = err.Error()
 	}
-	return tools.NewTextToolResult(text), err
+	if err != nil {
+		return tools.NewTextToolResult(text), err
+	}
+	if len(contents) == 0 {
+		return tools.NewTextToolResult(text), nil
+	}
+	return tools.ToolResult{Text: text, Contents: contents}, nil
 }
 
 func newMCPPromptTool(client *Client, info mcpPromptInfo, existing map[string]struct{}) tools.Tool {
@@ -1341,6 +1391,144 @@ func mcpContentToText(blocks []mcpContentBlock) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// classifyMCPBlock normalizes the two MCP content spellings. tools/call
+// results carry an explicit type, while resources/read contents omit "type"
+// entirely and distinguish text from binary through "text" versus "blob"
+// (MCP BlobResourceContents).
+func classifyMCPBlock(block mcpContentBlock) (kind, payload, mimeType string) {
+	switch block.Type {
+	case "text", "json", "audio":
+		return block.Type, "", block.MimeType
+	case "image":
+		return "image", block.Data, block.MimeType
+	case "":
+		switch {
+		case block.Blob != "":
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(block.MimeType)), "image/") {
+				return "image", block.Blob, block.MimeType
+			}
+			return "blob", "", block.MimeType
+		case block.Data != "":
+			return "image", block.Data, block.MimeType
+		default:
+			return "text", "", block.MimeType
+		}
+	default:
+		return block.Type, "", block.MimeType
+	}
+}
+
+// projectMCPContent converts MCP content blocks into a human-readable text
+// summary plus rich content blocks for the model. Text and json blocks keep
+// their existing text rendering. Image blocks become real provider image
+// content so a vision model sees the pixels instead of a placeholder.
+//
+// A tool result without images keeps the historical text-only shape (nil
+// contents), so existing MCP text tools are byte-for-byte unchanged.
+func (c *Client) projectMCPContent(blocks []mcpContentBlock) (string, []provider.ContentBlock) {
+	var parts []string
+	var images []provider.ContentBlock
+
+	for _, block := range blocks {
+		kind, payload, mimeType := classifyMCPBlock(block)
+		switch kind {
+		case "text":
+			if block.Text != "" {
+				parts = append(parts, block.Text)
+			}
+		case "json":
+			if len(block.JSON) > 0 {
+				parts = append(parts, string(block.JSON))
+			}
+		case "image":
+			image, note := c.projectMCPImage(payload, mimeType, len(images))
+			if image != nil {
+				images = append(images, provider.ContentBlock{Type: "image", Image: image})
+			}
+			if note != "" {
+				parts = append(parts, note)
+			}
+		case "audio":
+			// No provider converter or provider.ContentBlock variant carries
+			// audio, so keep the historical placeholder instead of dropping it.
+			parts = append(parts, fmt.Sprintf("[%s content: %s]", block.Type, mimeType))
+		case "blob":
+			parts = append(parts, fmt.Sprintf("[binary content: %s]", mimeType))
+		default:
+			data, err := json.Marshal(block)
+			if err == nil && len(data) > 0 {
+				parts = append(parts, string(data))
+			}
+		}
+	}
+
+	text := strings.Join(parts, "\n")
+	if len(images) == 0 {
+		return text, nil
+	}
+	contents := make([]provider.ContentBlock, 0, len(images)+1)
+	if text != "" {
+		contents = append(contents, provider.ContentBlock{Type: "text", Text: text})
+	}
+	return text, append(contents, images...)
+}
+
+// projectMCPImage decodes one image payload and applies the same
+// provider-aware preprocessing the read and browser screenshot tools use. It
+// returns the usable image plus the text note to emit. A malformed, oversized
+// or excess image degrades to a note instead of failing the tool call: one bad
+// payload must not invalidate an otherwise successful MCP call.
+func (c *Client) projectMCPImage(payload, mimeType string, already int) (*provider.ImageContent, string) {
+	label := strings.TrimSpace(mimeType)
+	if label == "" {
+		label = "unknown"
+	}
+	if strings.TrimSpace(payload) == "" {
+		return nil, fmt.Sprintf("[Image %s omitted: empty payload]", label)
+	}
+	if already >= mcpMaxProjectedImages {
+		return nil, fmt.Sprintf("[Image %s omitted: at most %d images per tool result]", label, mcpMaxProjectedImages)
+	}
+	raw, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return nil, fmt.Sprintf("[Image %s omitted: invalid base64 payload]", label)
+	}
+	result, err := imageproc.PrepareBytes(raw, c.imagePolicyFor(imageproc.ModeAuto))
+	if err != nil {
+		return nil, fmt.Sprintf("[Image %s omitted: %v]", label, err)
+	}
+	image := &provider.ImageContent{
+		Data:           base64.StdEncoding.EncodeToString(result.Data),
+		MimeType:       result.MimeType,
+		Width:          result.Meta.Width,
+		Height:         result.Meta.Height,
+		Bytes:          result.Meta.Bytes,
+		OriginalWidth:  result.Meta.OriginalWidth,
+		OriginalHeight: result.Meta.OriginalHeight,
+		OriginalBytes:  result.Meta.OriginalBytes,
+		Detail:         result.Meta.Detail,
+		Scale:          result.Meta.Scale,
+		Cropped:        result.Meta.Cropped,
+		CropX:          result.Meta.CropX,
+		CropY:          result.Meta.CropY,
+		CropWidth:      result.Meta.CropWidth,
+		CropHeight:     result.Meta.CropHeight,
+	}
+	return image, fmt.Sprintf("[Image: %s %dx%d, %s]", result.MimeType, result.Meta.Width, result.Meta.Height, mcpFormatBytes(result.Meta.Bytes))
+}
+
+func mcpFormatBytes(n int) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	kb := float64(n) / unit
+	if kb < unit {
+		return fmt.Sprintf("%.1fKB", kb)
+	}
+	return fmt.Sprintf("%.1fMB", kb/unit)
 }
 
 func uniqueToolName(base string, existing map[string]struct{}) string {
