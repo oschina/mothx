@@ -1207,17 +1207,25 @@ func (a *Agent) buildBackgroundChatParams(localTurnID string, newMessage *provid
 // returned event stream is owned by the caller, which may publish approval and
 // progress events while waiting for the result.
 func (a *Agent) ExecuteBackgroundToolCall(ctx context.Context, tc provider.ToolCallBlock, localTurnID string) <-chan Event {
-	return a.executeBackgroundToolCall(ctx, tc, localTurnID, false)
+	return a.executeBackgroundToolCall(ctx, tc, localTurnID, false, nil)
 }
 
 // ExecuteBackgroundToolCallRecovering reopens only known read-only tool
 // records left in an interrupted state. Side-effecting records stay guarded by
 // the normal idempotency path and are never retried automatically.
 func (a *Agent) ExecuteBackgroundToolCallRecovering(ctx context.Context, tc provider.ToolCallBlock, localTurnID string) <-chan Event {
-	return a.executeBackgroundToolCall(ctx, tc, localTurnID, true)
+	return a.executeBackgroundToolCall(ctx, tc, localTurnID, true, nil)
 }
 
-func (a *Agent) executeBackgroundToolCall(ctx context.Context, tc provider.ToolCallBlock, localTurnID string, allowReadOnlyRecovery bool) <-chan Event {
+// ExecuteBackgroundToolCallOrdered runs one call of a background batch that
+// reports its starts in the declared provider order. allowReadOnlyRecovery keeps
+// the normal and recovering entry points available to batch callers, and launch
+// carries the batch position (nil executes unordered, as before).
+func (a *Agent) ExecuteBackgroundToolCallOrdered(ctx context.Context, tc provider.ToolCallBlock, localTurnID string, allowReadOnlyRecovery bool, launch *ToolLaunchHandle) <-chan Event {
+	return a.executeBackgroundToolCall(ctx, tc, localTurnID, allowReadOnlyRecovery, launch)
+}
+
+func (a *Agent) executeBackgroundToolCall(ctx context.Context, tc provider.ToolCallBlock, localTurnID string, allowReadOnlyRecovery bool, launch *ToolLaunchHandle) <-chan Event {
 	ch := make(chan Event, 100)
 	sink := newEventSink(ch)
 	go func() {
@@ -1225,7 +1233,7 @@ func (a *Agent) executeBackgroundToolCall(ctx context.Context, tc provider.ToolC
 			sink.seal()
 			close(ch)
 		}()
-		_ = a.executeSingleToolCallWithRecovery(contextWithEventSink(ctx, sink), tc, localTurnID, ch, allowReadOnlyRecovery)
+		_ = a.executeSingleToolCallWithRecovery(contextWithEventSink(ctx, sink), tc, localTurnID, ch, allowReadOnlyRecovery, launch)
 	}()
 	return ch
 }
@@ -2268,7 +2276,7 @@ func (a *Agent) executeToolCallsSequential(ctx context.Context, toolCalls []prov
 	var results []provider.Message
 
 	for _, tc := range toolCalls {
-		result := a.executeSingleToolCall(ctx, tc, localTurnID, ch)
+		result := a.executeSingleToolCall(ctx, tc, localTurnID, ch, nil)
 		results = append(results, result)
 
 		// Check for early termination
@@ -2280,19 +2288,32 @@ func (a *Agent) executeToolCallsSequential(ctx context.Context, toolCalls []prov
 	return results
 }
 
-// executeToolCallsParallel executes tool calls concurrently.
+// executeToolCallsParallel executes tool calls concurrently. Calls report their
+// starts in the declared provider order (see ToolLaunchOrder); nothing is held
+// across a tool body, an approval, or a durable claim, so the calls still
+// overlap and may finish in any order. Results stay aligned with the declared
+// order.
 func (a *Agent) executeToolCallsParallel(ctx context.Context, toolCalls []provider.ToolCallBlock, localTurnID string, ch chan<- Event) []provider.Message {
-	return BoundedParallel(a.MaxToolConcurrency(), toolCalls, func(toolCall provider.ToolCallBlock) provider.Message {
-		return a.executeSingleToolCall(ctx, toolCall, localTurnID, ch)
+	order := NewToolLaunchOrder(len(toolCalls))
+	indexes := make([]int, len(toolCalls))
+	for i := range indexes {
+		indexes[i] = i
+	}
+	return BoundedParallel(a.MaxToolConcurrency(), indexes, func(index int) provider.Message {
+		return a.executeSingleToolCall(ctx, toolCalls[index], localTurnID, ch, order.Handle(index))
 	})
 }
 
 // executeSingleToolCall executes a single tool call.
-func (a *Agent) executeSingleToolCall(ctx context.Context, tc provider.ToolCallBlock, localTurnID string, ch chan<- Event) provider.Message {
-	return a.executeSingleToolCallWithRecovery(ctx, tc, localTurnID, ch, false)
+func (a *Agent) executeSingleToolCall(ctx context.Context, tc provider.ToolCallBlock, localTurnID string, ch chan<- Event, launch *ToolLaunchHandle) provider.Message {
+	return a.executeSingleToolCallWithRecovery(ctx, tc, localTurnID, ch, false, launch)
 }
 
-func (a *Agent) executeSingleToolCallWithRecovery(ctx context.Context, tc provider.ToolCallBlock, localTurnID string, ch chan<- Event, allowReadOnlyRecovery bool) provider.Message {
+func (a *Agent) executeSingleToolCallWithRecovery(ctx context.Context, tc provider.ToolCallBlock, localTurnID string, ch chan<- Event, allowReadOnlyRecovery bool, launch *ToolLaunchHandle) provider.Message {
+	// Every path out of the call must release the calls queued behind it in the
+	// batch, otherwise a call that fails before reporting its start would park
+	// the rest of the batch.
+	defer launch.Release()
 	toolResult := func(content string, contents []provider.ContentBlock, isError bool) provider.Message {
 		message := provider.NewToolResultMessageWithContents(tc.ID, tc.Name, content, contents, isError)
 		message.ToolKind = tc.Kind
@@ -2321,12 +2342,18 @@ func (a *Agent) executeSingleToolCallWithRecovery(ctx context.Context, tc provid
 		params = map[string]any{}
 	}
 
+	// A parallel batch starts in the declared provider order: a later call may
+	// not report its start before every earlier call of the same batch did. The
+	// handoff happens here, before any approval or durable claim, so ordering
+	// never blocks another call's execution.
+	launch.waitStart()
 	a.sendEvent(ch, Event{
 		Type:       EventToolExecutionStart,
 		ToolCallID: tc.ID,
 		ToolName:   tc.Name,
 		ToolArgs:   params,
 	})
+	launch.markStarted()
 
 	// OS mode intentionally exposes and permits only the bash tool. Keep this
 	// guard in execution as well as in ModeTools so an unsolicited provider call

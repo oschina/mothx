@@ -587,7 +587,7 @@ func TestBeforeToolExecuteRunsAfterApprovalAndBeforeTool(t *testing.T) {
 		},
 	}, registry)
 	ch := make(chan Event, 8)
-	result := a.executeSingleToolCall(context.Background(), provider.ToolCallBlock{ID: "call-1", Name: "bash", Arguments: json.RawMessage(`{"command":"printf ok"}`)}, "turn-1", ch)
+	result := a.executeSingleToolCall(context.Background(), provider.ToolCallBlock{ID: "call-1", Name: "bash", Arguments: json.RawMessage(`{"command":"printf ok"}`)}, "turn-1", ch, nil)
 	if result.IsError {
 		t.Fatalf("tool result error = %q", result.Content)
 	}
@@ -1951,7 +1951,7 @@ func TestExecuteToolCallRejectsUnsupportedImageResult(t *testing.T) {
 	mockProvider := provider.NewMockProvider("mock", []*provider.Model{{ID: "text-model", Input: []string{"text"}}}, nil)
 	a := New(Config{Provider: mockProvider, Model: mockProvider.Models()[0], Mode: "yolo"}, registry)
 	events := make(chan Event, 8)
-	result := a.executeSingleToolCall(context.Background(), provider.ToolCallBlock{ID: "call-image", Name: "image_tool", Arguments: []byte(`{}`)}, "", events)
+	result := a.executeSingleToolCall(context.Background(), provider.ToolCallBlock{ID: "call-image", Name: "image_tool", Arguments: []byte(`{}`)}, "", events, nil)
 	if !result.IsError || len(result.Contents) != 0 || result.Content != unsupportedImageToolResultMessage {
 		t.Fatalf("tool result = %#v, want explicit image capability error", result)
 	}

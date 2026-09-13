@@ -570,7 +570,7 @@ MothX 会通过 npm registry 检测是否有新版本，并在有可用更新时
 - **OpenAI Responses**：支持原生 response item 回放、reasoning、结构化输出、hosted tools、prompt cache，以及可选的 `responses.background` 持久后台运行。后台任务可查询、取消、重连、放弃，并在 Serve 重启后恢复。
 - **Web UI 管理**：提供会话搜索与分页、运行状态与取消、审批中心、工具结果、技能启用、MCP 配置、Provider/Serve 设置和 `/stats` 统计页面。
 - **MCP**：支持 stdio、streamable HTTP 和 legacy SSE
-- **并行工具执行**：单个 agent 回合内的多个本地函数/自定义工具调用通过有界并行工作池执行。`toolExecution` 设置控制 `mode`（`parallel`/`sequential`）和 `maxConcurrency`（默认 `10`）。TUI、WebUI、Serve、channels、ACP 及子 Agent 统一使用。
+- **并行工具执行**：单个 agent 回合内的多个本地函数/自定义工具调用通过有界并行工作池执行。调用按模型声明的顺序开始（后面的调用绝不会早于前面的调用开始，即便前面的调用仍在等待审批），随后并发重叠执行，因此只有完成顺序不受限制。`toolExecution` 设置控制 `mode`（`parallel`/`sequential`）和 `maxConcurrency`（默认 `10`）。TUI、WebUI、Serve、channels、ACP 及子 Agent 统一使用。
 ；可编辑全局与项目级 `mcp.json`，并在新 Serve 会话中加载。
 - **消息通道**：支持微信、飞书和 Webhook；后台运行会持久化事件，断线或重启后可补投结果。WebSocket `/ws/runs`、`/ws/logs` 是 Web UI 事件流，不是独立消息通道。
 - **项目状态文件**：当前项目级状态统一位于 `.mothx/`，包括 `settings.json`、`serve.json`、`allow.json`、`memory.md` 和技能目录。旧 `.vibe` 路径不再自动迁移。

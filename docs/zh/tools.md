@@ -31,7 +31,7 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | `mode` | string | `"parallel"` | `"parallel"` 使用有界本地 worker 并行执行；`"sequential"` 在本地逐个执行已返回的调用（不影响 provider 侧并行出参） |
 | `maxConcurrency` | int | `10` | 每轮 agent 允许的最大并发工具调用数（设为 `1` 则为串行） |
 
-工具完成事件可能乱序输出，但 provider 的后续消息会按原始调用顺序还原。该设置由 TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 统一使用。`sequential` 只改变响应到达后的本地执行顺序；provider 仍可能在一条响应中返回多个 tool call。它不控制 provider 托管工具（如 OpenAI Responses `web_search`）内部的并发；这些调用仍由 provider 自身的编排负责。
+调用会按模型给出的顺序开始：即使前一个调用仍在解析参数、等待审批或写入执行记录，后面的调用也不会抢跑。调用之间仍然重叠，因此工具完成事件可能乱序输出，但 provider 的后续消息会按原始调用顺序还原。该设置由 TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 统一使用。`sequential` 只改变响应到达后的本地执行顺序；provider 仍可能在一条响应中返回多个 tool call。它不控制 provider 托管工具（如 OpenAI Responses `web_search`）内部的并发；这些调用仍由 provider 自身的编排负责。
 
 
 ---

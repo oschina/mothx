@@ -391,7 +391,8 @@ func (s *Server) executeResponsesBackgroundToolsWithProgress(ctx context.Context
 	// Responses may return multiple function calls in one output. Execute them
 	// concurrently so independent calls do not serialize remote latency, but
 	// collect and persist outputs by original call order for deterministic
-	// continuation input and transcript replay.
+	// continuation input and transcript replay. The shared ToolLaunchOrder handle
+	// keeps each call's reported start in that same declared order.
 	type toolOutcome struct {
 		output      *provider.Message
 		interrupted bool
@@ -405,13 +406,14 @@ func (s *Server) executeResponsesBackgroundToolsWithProgress(ctx context.Context
 		defer progressMu.Unlock()
 		progress(text)
 	}
-	outcomes := agent.BoundedParallel(backgroundAgent.MaxToolConcurrency(), calls, func(call provider.ToolCallBlock) toolOutcome {
-		var stream <-chan agent.Event
-		if recoverReadOnly {
-			stream = backgroundAgent.ExecuteBackgroundToolCallRecovering(ctx, call, localTurnID)
-		} else {
-			stream = backgroundAgent.ExecuteBackgroundToolCall(ctx, call, localTurnID)
-		}
+	launchOrder := agent.NewToolLaunchOrder(len(calls))
+	indexes := make([]int, len(calls))
+	for i := range indexes {
+		indexes[i] = i
+	}
+	outcomes := agent.BoundedParallel(backgroundAgent.MaxToolConcurrency(), indexes, func(index int) toolOutcome {
+		call := calls[index]
+		stream := backgroundAgent.ExecuteBackgroundToolCallOrdered(ctx, call, localTurnID, recoverReadOnly, launchOrder.Handle(index))
 		var output *provider.Message
 		interrupted := false
 		for ev := range stream {

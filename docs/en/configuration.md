@@ -528,7 +528,7 @@ The `compat` object is optional and should only be set when a model needs protoc
 
 ### toolExecution
 
-This is a local execution setting only. `sequential` limits MothX's local workers after a response arrives; it does not ask the model to emit one tool call at a time, so providers may still return multiple tool calls in a single response. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. It does not control concurrency inside provider-hosted tools such as OpenAI Responses `web_search`; those calls remain under the provider's own orchestration and quota rules.
+This is a local execution setting only. `sequential` limits MothX's local workers after a response arrives; it does not ask the model to emit one tool call at a time, so providers may still return multiple tool calls in a single response. A `parallel` batch begins its calls in the model's declared order (a later call never starts before an earlier one has begun, even while that earlier call waits for approval) and then runs them concurrently, so only the completion order is unrestricted. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. It does not control concurrency inside provider-hosted tools such as OpenAI Responses `web_search`; those calls remain under the provider's own orchestration and quota rules.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
