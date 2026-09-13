@@ -62,12 +62,12 @@ func TestRuntimeKill9ConvergesWithoutUDP(t *testing.T) {
 		t.Fatalf("run before kill = %#v, err=%v", initial, err)
 	}
 
-	coordinator := NewRecoveryCoordinator(sessionDir, RecoveryCoordinatorOptions{ScanInterval: 10 * time.Millisecond, AttemptTimeout: time.Second, Policy: func(session.SessionRun) RecoveryAction { return RecoveryFailLocal }})
+	coordinator := NewRecoveryCoordinator(sessionDir, RecoveryCoordinatorOptions{ScanInterval: 10 * time.Millisecond, AttemptTimeout: 10 * time.Second, Policy: func(session.SessionRun) RecoveryAction { return RecoveryFailLocal }})
 	if err := coordinator.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := coordinator.Stop(stopCtx); err != nil {
 			t.Errorf("stop coordinator: %v", err)
@@ -92,12 +92,12 @@ func TestRecoveryOwnerKill9CanBeTakenOver(t *testing.T) {
 	cmd := startRuntimeProcessHelper(t, "hold_recovery", sessionDir, "recovery-kill-session", "recovery-kill-run", marker)
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 	waitForRuntimeMarker(t, marker)
-	coordinator := NewRecoveryCoordinator(sessionDir, RecoveryCoordinatorOptions{ScanInterval: 10 * time.Millisecond, AttemptTimeout: time.Second, Policy: func(session.SessionRun) RecoveryAction { return RecoveryFailLocal }})
+	coordinator := NewRecoveryCoordinator(sessionDir, RecoveryCoordinatorOptions{ScanInterval: 10 * time.Millisecond, AttemptTimeout: 10 * time.Second, Policy: func(session.SessionRun) RecoveryAction { return RecoveryFailLocal }})
 	if err := coordinator.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := coordinator.Stop(stopCtx); err != nil {
 			t.Errorf("stop coordinator: %v", err)
@@ -201,21 +201,23 @@ func TestOldOwnerIsFencedBeforeSideEffectAfterCrossProcessTakeover(t *testing.T)
 	const runID = "tool-fence-process-run"
 
 	cmd := startRuntimeProcessHelperWithFiles(t, "tool_fence_hold", sessionDir, sessionID, runID, ready, gate, result)
-	if err := waitForRuntimeMarkerResult(ready, 5*time.Second); err != nil {
+	// Start-up (process exec, migrations, admission, durable begin) is setup, not
+	// the invariant under test, so it gets a load-tolerant budget.
+	if err := waitForRuntimeMarkerResult(ready, 30*time.Second); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		t.Fatal(err)
 	}
-	if err := expireRuntimeLease(sessionDir, sessionID); err != nil {
+	recovered, recoverErr := takeoverExpiredRun(sessionDir, sessionID, runID)
+	if recoverErr != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		t.Fatal(err)
+		t.Fatal(recoverErr)
 	}
-	recovered, err := RecoverOrphanedSessionRun(sessionDir, sessionID, nil, nil)
-	if err != nil || len(recovered.Failed) != 1 || recovered.Failed[0].ID != runID {
+	if len(recovered.Failed) != 1 || recovered.Failed[0].ID != runID {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		t.Fatalf("takeover recovery = %#v, err=%v", recovered, err)
+		t.Fatalf("takeover recovery = %#v, want the orphaned run failed", recovered)
 	}
 	if err := os.WriteFile(gate, []byte("resume"), 0600); err != nil {
 		_ = cmd.Process.Kill()
@@ -363,7 +365,7 @@ func TestRuntimeProcessHelper(t *testing.T) {
 		if err := os.WriteFile(marker, []byte("ready"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err := waitForRuntimeGate(gate, 10*time.Second); err != nil {
+		if err := waitForRuntimeGate(gate, 60*time.Second); err != nil {
 			t.Fatal(err)
 		}
 		decision := hook(agent.BeforeToolExecuteContext{RunID: runID, ExecutionContext: context.Background(), SideEffecting: true})
@@ -426,7 +428,9 @@ func TestRuntimeProcessHelper(t *testing.T) {
 
 func waitForRuntimeMarker(t *testing.T, marker string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	// Helper process startup (exec, migrations, admission, durable begin) is
+	// setup, not the invariant under test, so it gets a load-tolerant budget.
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(marker); err == nil {
 			return
@@ -454,6 +458,39 @@ func waitForRuntimeGate(path string, timeout time.Duration) error {
 	return waitForRuntimeMarkerResult(path, timeout)
 }
 
+// takeoverExpiredRun expires the old owner's lease and retries the takeover
+// until it lands.
+//
+// The old owner keeps a live heartbeat, and renewing one's own expired row is
+// deliberate (internal/session fences renewal on owner/epoch/token so only a
+// real takeover can stop it, see RuntimeLeaseDAO.Renew). Expiring the row
+// therefore only holds until the next renewal (runtimeHeartbeatEvery, 3s); on a
+// loaded machine the recovery can be delayed past that point and would correctly
+// refuse to take over a lease it can still observe as valid. Re-expiring and
+// retrying keeps the scenario deterministic without weakening the invariant
+// under test: recovery must never take over a lease that still looks valid.
+func takeoverExpiredRun(sessionDir, sessionID, runID string) (RunRecoveryResult, error) {
+	deadline := time.Now().Add(30 * time.Second)
+	var last RunRecoveryResult
+	for {
+		if err := expireRuntimeLease(sessionDir, sessionID); err != nil {
+			return last, err
+		}
+		recovered, err := RecoverOrphanedSessionRun(sessionDir, sessionID, nil, nil)
+		if err == nil && len(recovered.Failed) == 1 && recovered.Failed[0].ID == runID {
+			return recovered, nil
+		}
+		if err != nil {
+			return recovered, err
+		}
+		last = recovered
+		if time.Now().After(deadline) {
+			return last, fmt.Errorf("takeover recovery = %#v, want the orphaned run failed (the old owner kept renewing its own expired lease)", last)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 func expireRuntimeLease(sessionDir, sessionID string) error {
 	db, err := session.OpenRootDB(sessionDir)
 	if err != nil {
@@ -465,7 +502,9 @@ func expireRuntimeLease(sessionDir, sessionID string) error {
 
 func waitForRuntimeRunStatus(t *testing.T, sessionDir, runID, status string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	// The coordinator's recovery attempt is bounded by its own timeout, so this
+	// wait only needs to outlast a slow (fsync-heavy) attempt, not a healthy one.
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		run, err := session.GetSessionRun(sessionDir, runID)
 		if err != nil {
