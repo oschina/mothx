@@ -6,9 +6,10 @@ import { useEffect, useState } from 'react';
 import { Field, FieldGrid, ManageCard, ManageHeader, ManageWorkspace, ToggleField, UnsupportedRow } from '@/components/manage-primitives';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { canRetryDelivery, isDeliveryFailureTransient, loadDeliveries, retryDelivery, DELIVERY_FEATURE, type DeliveryFailureView } from '@/core/deliveries';
 import { t } from '@/core/i18n';
 import { loadChannels, saveChannels, type ChannelsConfigPatch, type ChannelsConfigView } from '@/core/manage-api';
-import { hasFeature } from '@/core/state';
+import { hasFeature, state } from '@/core/state';
 import { toast } from '@/core/ui-host';
 import { useAppState } from '@/hooks/useAppState';
 
@@ -33,6 +34,12 @@ export function ChannelsPanel() {
   const [feishuClearAppId, setFeishuClearAppId] = useState(false);
   const [feishuClearAppSecret, setFeishuClearAppSecret] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
+  // 投递失败是 Runtime 的持久化事实:面板只投影当前会话的失败列表,并在
+  // Runtime 允许时请求重开一次。
+  const deliveriesSupported = hasFeature(DELIVERY_FEATURE);
+  const [deliveries, setDeliveries] = useState<DeliveryFailureView[] | null>(null);
+  const [deliveriesUnavailable, setDeliveriesUnavailable] = useState(false);
+  const [retrying, setRetrying] = useState<string | null>(null);
 
   const hydrate = (loaded: ChannelsConfigView) => {
     setView(loaded);
@@ -67,8 +74,40 @@ export function ChannelsPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, supported]);
 
+  useEffect(() => {
+    if (!ready || !deliveriesSupported) return;
+    let cancelled = false;
+    void loadDeliveries(state.activeSessionId || undefined).then((loaded) => {
+      if (cancelled) return;
+      setDeliveries(loaded || []);
+      setDeliveriesUnavailable(loaded === undefined);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, deliveriesSupported]);
+
   if (!supported) return <UnsupportedRow text={t('manage.unsupported')} />;
   if (!view) return <UnsupportedRow text="…" />;
+  const refreshDeliveries = async () => {
+    const loaded = await loadDeliveries(state.activeSessionId || undefined);
+    setDeliveries(loaded || []);
+    setDeliveriesUnavailable(loaded === undefined);
+  };
+
+  const retry = async (failure: DeliveryFailureView) => {
+    setRetrying(failure.operationId);
+    try {
+      const reopened = await retryDelivery(failure.operationId);
+      toast(reopened ? t('settings.channelsDeliveriesRetried') : t('settings.channelsDeliveriesNotRetried'));
+      await refreshDeliveries();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRetrying(null);
+    }
+  };
 
   const save = async (which: string, patch: ChannelsConfigPatch) => {
     setSaving(which);
@@ -174,6 +213,52 @@ export function ChannelsPanel() {
           {saving === 'feishu' ? t('settings.channelsSaving') : t('settings.channelsSave')}
         </Button>
       </ManageCard>
+
+      {deliveriesSupported ? (
+        <ManageCard title={t('settings.channelsDeliveries')} desc={t('settings.channelsDeliveriesDesc')}>
+          {deliveries === null ? (
+            <div className="text-[11.5px] text-muted-foreground">{t('settings.channelsDeliveriesLoading')}</div>
+          ) : deliveriesUnavailable ? (
+            <div className="text-[11.5px] text-muted-foreground">{t('settings.channelsDeliveriesUnavailable')}</div>
+          ) : deliveries.length === 0 ? (
+            <div className="text-[11.5px] text-muted-foreground">{t('settings.channelsDeliveriesEmpty')}</div>
+          ) : (
+            <ul className="space-y-2">
+              {deliveries.map((failure) => (
+                <li
+                  key={failure.operationId}
+                  className="flex items-start justify-between gap-3 rounded-lg border border-border/60 p-2.5"
+                >
+                  <div className="min-w-0 text-[11.5px] leading-5">
+                    <div className="truncate text-strong">
+                      {[failure.platform, failure.operationKind, failure.status].filter(Boolean).join(' · ')}
+                      {isDeliveryFailureTransient(failure) ? null : (
+                        <span className="ml-2 text-muted-foreground">{t('settings.channelsDeliveriesPermanent')}</span>
+                      )}
+                    </div>
+                    <div className="truncate text-muted-foreground">
+                      {failure.failureCode || '-'} · {t('settings.channelsDeliveriesAttempts')}: {failure.attemptCount ?? 0}
+                      {failure.updatedAt ? ` · ${failure.updatedAt}` : ''}
+                    </div>
+                    <div className="truncate text-muted-foreground">{failure.operationId}</div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={retrying !== null || !canRetryDelivery(failure)}
+                    onClick={() => void retry(failure)}
+                  >
+                    {retrying === failure.operationId ? t('settings.channelsDeliveriesRetrying') : t('settings.channelsDeliveriesRetry')}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <Button className="mt-3" variant="outline" disabled={retrying !== null} onClick={() => void refreshDeliveries()}>
+            {t('settings.channelsDeliveriesRefresh')}
+          </Button>
+        </ManageCard>
+      ) : null}
     </ManageWorkspace>
   );
 }

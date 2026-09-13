@@ -610,6 +610,8 @@ func registerRoutes(mux *http.ServeMux, srv *Server, opts RunOptions) {
 		mux.HandleFunc("/api/runs/", srv.HandleRunAPI)
 		mux.HandleFunc("/api/responses/runs/", srv.HandleResponsesRunAPI)
 		mux.HandleFunc("/api/attachments/", srv.HandleAttachmentAPI)
+		mux.HandleFunc("/api/deliveries/failures", srv.HandleDeliveryFailuresAPI)
+		mux.HandleFunc("/api/deliveries/retry", srv.HandleDeliveryRetryAPI)
 		mux.HandleFunc("/v1/models", srv.handleModels)
 		mux.HandleFunc("/api/models/catalog", srv.handleModelCatalog)
 	}

@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { channels, sessions, sessionBindings, serveConfig, refreshAll, setError, setNotice, clearBanners } from '../../lib/stores.js';
   import { del, postJSON, putJSON, patchJSON, request } from '../../lib/api.js';
+  import { canRetryDelivery, deliveryFailureLabel, isDeliveryFailureTransient, listDeliveryFailures, retryDelivery } from '../../lib/deliveries.js';
   import { t } from '../../lib/preferences.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
@@ -16,6 +17,11 @@
   let form = defaultForm();
   let lastRaw = '';
   let parseError = '';
+  // Runtime-owned delivery failures: null while loading, [] when nothing needs
+  // attention. Only a failed transport-level operation is offered a retry.
+  let deliveries = null;
+  let deliveriesError = '';
+  let deliveryRetrying = '';
   let saving = false;
   let feishuOpen = false;
   let feishuDraft = defaultForm().feishu;
@@ -147,6 +153,7 @@
 
   onMount(() => {
     loadChannelBindings();
+    loadDeliveries();
     // Channel sessions are created when a Feishu/WeChat message first arrives,
     // and that path does not emit a binding_changed management event. Poll the
     // small binding endpoint while this settings view is open so a new identity
@@ -155,6 +162,32 @@
       refreshChannelBindings().catch(() => {});
     }, 3000);
   });
+
+  async function loadDeliveries() {
+    deliveriesError = '';
+    try {
+      // Bound channel sessions own their deliveries; while nothing is selected the
+      // endpoint reports every session, which is the honest fallback.
+      deliveries = await listDeliveryFailures(selectedBinding.wechat || selectedBinding.feishu || '');
+    } catch (err) {
+      deliveries = [];
+      deliveriesError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function retryDeliveryOperation(operationId) {
+    clearBanners();
+    deliveryRetrying = operationId;
+    try {
+      const reopened = await retryDelivery(operationId);
+      setNotice($t(reopened ? 'settings.channels.deliveriesRetried' : 'settings.channels.deliveriesNotRetried'));
+      await loadDeliveries();
+    } catch (err) {
+      setError(err);
+    } finally {
+      deliveryRetrying = '';
+    }
+  }
 
   async function saveChannelTools(platform) {
     const sessionID = resolveSelectedBinding(platform);
@@ -652,6 +685,55 @@
       </div>
     </CardContent>
   </Card>
+
+  <Card class="channel-config-card">
+    <div class="channel-card-head">
+      <div>
+        <h3>{$t('settings.channels.deliveriesTitle')}</h3>
+        <span class="hint">{$t('settings.channels.deliveriesHint')}</span>
+      </div>
+      <Button type="button" variant="outline" size="sm" onclick={loadDeliveries}>
+        <RefreshCw size={14} aria-hidden="true" />
+        <span>{$t('settings.channels.deliveriesRefresh')}</span>
+      </Button>
+    </div>
+    <CardContent class="channel-card-body">
+      {#if deliveriesError}
+        <p class="settings-parse-error">{deliveriesError}</p>
+      {:else if deliveries === null}
+        <p class="hint">{$t('settings.channels.deliveriesLoading')}</p>
+      {:else if deliveries.length === 0}
+        <p class="hint">{$t('settings.channels.deliveriesEmpty')}</p>
+      {:else}
+        <ul class="delivery-failure-list">
+          {#each deliveries as failure (failure.operationId)}
+            <li class="delivery-failure-row">
+              <div class="delivery-failure-meta">
+                <div>
+                  {deliveryFailureLabel(failure)}
+                  {#if !isDeliveryFailureTransient(failure)}
+                    <span class="hint">{failure.failureCode || $t('settings.channels.deliveriesPermanent')}</span>
+                  {/if}
+                </div>
+                <div class="hint">{$t('settings.channels.deliveriesAttempts')}: {failure.attemptCount ?? 0}{failure.updatedAt ? ` · ${failure.updatedAt}` : ''}</div>
+                <div class="hint">{failure.operationId}</div>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={deliveryRetrying !== '' || !canRetryDelivery(failure)}
+                onclick={() => retryDeliveryOperation(failure.operationId)}
+              >
+                {deliveryRetrying === failure.operationId ? $t('settings.channels.deliveriesRetrying') : $t('settings.channels.deliveriesRetry')}
+              </Button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <p class="hint">{$t('settings.channels.deliveriesScope')}</p>
+    </CardContent>
+  </Card>
 </div>
 
 {#if feishuOpen}
@@ -764,4 +846,16 @@
     min-height: 32px;
   }
   .channel-select-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+  .delivery-failure-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .delivery-failure-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+  }
+  .delivery-failure-meta { min-width: 0; font-size: 13px; display: flex; flex-direction: column; gap: 2px; }
+  .delivery-failure-meta > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
