@@ -64,6 +64,14 @@ func TestRecoverOrphanedRunsParallelizesAndPreservesScanOrder(t *testing.T) {
 		}
 	}
 	var active, maxActive atomic.Int32
+	// Rendezvous: the first worker stays inside the callback until a second one
+	// arrives, so the overlap assertion is deterministic instead of depending on
+	// how the scheduler and the single-connection SQLite interleave. The barrier
+	// normally closes within milliseconds; the generous 30s budget only bounds the
+	// serialized case, where the first worker times out and the assertion below
+	// fails with a clear message (later workers find the barrier open).
+	var arrived atomic.Int32
+	release := make(chan struct{})
 	result, err := RecoverOrphanedRuns(sessionDir, nil, func(session.SessionRun) error {
 		current := active.Add(1)
 		for {
@@ -72,7 +80,13 @@ func TestRecoverOrphanedRunsParallelizesAndPreservesScanOrder(t *testing.T) {
 				break
 			}
 		}
-		time.Sleep(40 * time.Millisecond)
+		if arrived.Add(1) == 2 {
+			close(release)
+		}
+		select {
+		case <-release:
+		case <-time.After(30 * time.Second):
+		}
 		active.Add(-1)
 		return nil
 	})
@@ -80,7 +94,7 @@ func TestRecoverOrphanedRunsParallelizesAndPreservesScanOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	if maxActive.Load() < 2 {
-		t.Fatalf("maximum recovery concurrency = %d, want parallel workers", maxActive.Load())
+		t.Fatalf("maximum recovery concurrency = %d, want parallel workers (callbacks never overlapped)", maxActive.Load())
 	}
 	if len(result.Failed) != 10 {
 		t.Fatalf("failed recovery count = %d, want 10", len(result.Failed))

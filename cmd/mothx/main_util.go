@@ -260,6 +260,13 @@ func runPrint(args []string, p provider.Provider, providerName string, model *pr
 		flushTextBuffer(&textBuffer, mdWidth)
 	}
 
+	// Print mode consumes the canonical event stream until it closes. Note the
+	// boundary of this consumer: it returns as soon as runCtx is done, while the
+	// Agent loop keeps sending its terminal events (EventRunFinished/EventDone/
+	// EventError/agentEndEvent) unconditionally. A cancelled print run may
+	// therefore leave the loop parked on one of those sends; the process exits
+	// right after this command and reclaims it, which is why the CLI needs no
+	// drain goroutine (unlike the TUI, which keeps consuming a retired stream).
 	err = agent.ConsumeEvents(runCtx, eventCh, agent.EventHandlerFunc(func(_ context.Context, event agent.Event) error {
 		switch event.Type {
 		case agent.EventToolApprovalRequest:
