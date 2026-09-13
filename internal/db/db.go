@@ -235,6 +235,11 @@ func dsnForOS(path string, windows bool, foreignKeys bool) string {
 		q.Add("_pragma", "foreign_keys(1)")
 	}
 	q.Add("_pragma", "synchronous(FULL)")
+	// _txlock=immediate makes every non-read-only transaction take the writer
+	// lock up front, which avoids a deferred read-to-write upgrade failing with
+	// SQLITE_BUSY. It also means a begin waits for the writer, so transient
+	// contention is retried at the transaction boundaries (see busy.go) instead of
+	// failing once busy_timeout elapses.
 	q.Set("_txlock", "immediate")
 	q.Set("_dqs", "false")
 	u.RawQuery = q.Encode()
