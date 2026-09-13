@@ -86,3 +86,30 @@ func TestGojaUndefinedAndNullExportAsNil(t *testing.T) {
 	}
 	_ = vm
 }
+
+// TestEvalJSWorkflowTimesOutRunawaySource guards the VM-level evaluation
+// budget: a runaway DSL script must be interrupted even when its caller passed
+// a context without a deadline.
+func TestEvalJSWorkflowTimesOutRunawaySource(t *testing.T) {
+	started := time.Now()
+	_, err := evalJSWorkflowWithin(context.Background(), `while (true) {}`, 50*time.Millisecond)
+	if !errors.Is(err, ErrJSEvaluationTimeout) {
+		t.Fatalf("error = %v, want ErrJSEvaluationTimeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("evaluation ran for %s despite the 50ms budget", elapsed)
+	}
+}
+
+// TestEvalJSWorkflowWithinKeepsCompletionBehavior guards that the added budget
+// does not change a successful evaluation.
+func TestEvalJSWorkflowWithinKeepsCompletionBehavior(t *testing.T) {
+	source := `workflow("ok", {phases:[phase("scan", agent("worker", {prompt:"look"})), phase("verify", agent("checker", {prompt: result("scan.worker")}))]});`
+	wf, err := evalJSWorkflowWithin(context.Background(), source, time.Second)
+	if err != nil {
+		t.Fatalf("evaluation failed: %v", err)
+	}
+	if wf == nil || wf.name != "ok" || len(wf.children) != 2 {
+		t.Fatalf("workflow = %#v, want two nodes", wf)
+	}
+}

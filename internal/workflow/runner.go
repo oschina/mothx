@@ -17,6 +17,9 @@ type Runner struct {
 	Concurrency int
 	Now         func() time.Time
 	Progress    func(ProgressEvent)
+	// EvalTimeout caps source evaluation inside the JavaScript VM. Zero uses
+	// jsEvalTimeout; the lint tool sets the tighter lintEvalTimeout.
+	EvalTimeout time.Duration
 }
 
 // Run evaluates a workflow source string.
@@ -38,7 +41,7 @@ func (r *Runner) Run(ctx context.Context, source string) (*RunState, error) {
 	if rt.concurrency <= 0 {
 		rt.concurrency = 5
 	}
-	wf, err := evalJSWorkflow(runCtx, source)
+	wf, err := evalJSWorkflowWithin(runCtx, source, r.evalTimeout())
 	if err == nil {
 		rt.mu.Lock()
 		rt.state.Name = wf.name
@@ -63,6 +66,13 @@ func (r *Runner) Run(ctx context.Context, source string) (*RunState, error) {
 	rt.finish(StatusDone, "")
 	_ = rt.save(context.WithoutCancel(ctx))
 	return rt.snapshot(), nil
+}
+
+func (r *Runner) evalTimeout() time.Duration {
+	if r != nil && r.EvalTimeout > 0 {
+		return r.EvalTimeout
+	}
+	return jsEvalTimeout
 }
 
 func (r *Runner) now() time.Time {

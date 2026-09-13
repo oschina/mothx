@@ -7,9 +7,27 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/dop251/goja"
 )
+
+// Workflow source evaluation runs inside a JavaScript VM. It only builds the
+// node graph (worker agents run natively afterwards), so it must always be
+// bounded: a runaway DSL script such as `while (true) {}` is a plausible
+// authoring mistake, and the caller's context may carry no deadline at all.
+const (
+	// jsEvalTimeout caps one workflow-run evaluation.
+	jsEvalTimeout = 30 * time.Second
+	// lintEvalTimeout is the tighter cap for workflow_lint, which is an
+	// interactive authoring check and must fail fast.
+	lintEvalTimeout = 5 * time.Second
+)
+
+// ErrJSEvaluationTimeout reports a workflow source that outran the VM
+// evaluation budget instead of completing or being cancelled by its caller.
+var ErrJSEvaluationTimeout = errors.New("workflow source evaluation timed out")
 
 type jsWorkflow struct {
 	name        string
@@ -40,12 +58,31 @@ func jsBuiltin(vm *goja.Runtime, kind string) func(goja.FunctionCall) goja.Value
 }
 
 func evalJSWorkflow(ctx context.Context, source string) (*jsWorkflow, error) {
+	return evalJSWorkflowWithin(ctx, source, jsEvalTimeout)
+}
+
+// evalJSWorkflowWithin evaluates source with both defensive bounds the VM needs:
+// the caller's context and a wall-clock budget. The first one to fire interrupts
+// the script at its next safe point, so a runaway DSL cannot pin the process
+// even when its caller passed a context without deadline.
+func evalJSWorkflowWithin(ctx context.Context, source string, timeout time.Duration) (*jsWorkflow, error) {
 	vm := goja.New()
+	var timedOut atomic.Bool
+	var timer *time.Timer
+	var timeoutCh <-chan time.Time
+	if timeout > 0 {
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
+		timeoutCh = timer.C
+	}
 	interruptDone := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
 			vm.Interrupt(ctx.Err())
+		case <-timeoutCh:
+			timedOut.Store(true)
+			vm.Interrupt(ErrJSEvaluationTimeout)
 		case <-interruptDone:
 		}
 	}()
@@ -135,6 +172,13 @@ func evalJSWorkflow(ctx context.Context, source string) (*jsWorkflow, error) {
 		return vm.ToValue(workflow.name)
 	})
 	if _, err := vm.RunString(source); err != nil {
+		// The timeout flag is unambiguous, so it wins over a caller context that
+		// happens to expire at the same moment. A plain interrupt (the caller's
+		// context) is reported as the context error, matching the pre-existing
+		// contract for cancelled evaluations.
+		if timedOut.Load() {
+			return nil, ErrJSEvaluationTimeout
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}

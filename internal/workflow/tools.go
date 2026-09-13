@@ -108,8 +108,15 @@ func (h *lintHost) RunAgent(ctx context.Context, task AgentTask) (AgentResult, e
 }
 
 func lintWorkflowSource(ctx context.Context, source string) lintResult {
+	return lintWorkflowSourceWithin(ctx, source, lintEvalTimeout)
+}
+
+// lintWorkflowSourceWithin runs the same lint of source with an explicit VM
+// evaluation budget, so the fast-fail behavior stays testable without waiting
+// for the production lint timeout.
+func lintWorkflowSourceWithin(ctx context.Context, source string, evalTimeout time.Duration) lintResult {
 	host := &lintHost{}
-	runner := &Runner{Host: host, Active: NewActiveRegistry(), Concurrency: 100}
+	runner := &Runner{Host: host, Active: NewActiveRegistry(), Concurrency: 100, EvalTimeout: evalTimeout}
 	state, err := runner.Run(ctx, source)
 	res := lintResult{
 		Valid: err == nil,
