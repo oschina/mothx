@@ -40,6 +40,15 @@
   - Background veils and surface blur fade adaptively with image opacity; with an app-wide background, the titlebar gains a readable contrast surface and text shadows so window controls stay legible.
   - Appearance settings move into a standalone Appearance category.
 
+- **Expert Team Member Questions Reach the Lead**
+  - A member that needs a decision asks the lead instead of the human: the question is queued in the session mailbox, delivered as a `[MEMBER_QUESTION]` steering message (or as a `subagent_wait` entry with status `question`), and answered with `subagent_answer(handle: "<member>", question_id: "…", answer: "…")`. The user only sees the question projected on the lead's stream.
+  - The mailbox path works in every session that can spawn members — multi-agent, delegate, and workflow modes — not only in team-bound sessions, and `subagent_wait` now reports pending member activity there too. Only a team-bound session holds its run open for still-running members; other sessions end the turn normally and see the notification at their next iteration or next run.
+  - Answering a question that is no longer pending (already answered, expired, or belonging to another member) reports an error instead of a silent success. A blocking `delegate_subagent` child cannot ask questions, because its caller is parked inside the tool call that would have to answer it.
+
+- **Retry Failed Message Deliveries from Desktop and WebUI**
+  - Desktop's Channels settings list the failed durable deliveries of the active session — platform, operation kind, status, failure code, attempt count, and last update — with a per-row retry; WebUI exposes the same Runtime-owned facts through `GET /api/deliveries/failures` and `POST /api/deliveries/retry` in its channel settings.
+  - Both entries project the Runtime's own verdict: only a failed transport-level operation is offered a retry, while in-flight, delivered, and permanently failed operations are refused instead of being reopened into another doomed attempt (the refusal they report is the same rule the persistence fence enforces).
+
 ### 🐛 Bug Fixes
 
 - **Browser: Built-in Skill No Longer Writes into Projects**
@@ -55,12 +64,33 @@
 - **TUI: `/defaultModel` Shares the `/model` Catalog Logic**
   - The `/defaultModel` picker now resolves each provider's model list through `providerfactory.ResolvedModels` — the same factory-resolved catalog (built-in presets merged with settings overrides) that backs `/model` and the WebUI picker — instead of re-parsing raw `settings.json` models. A provider whose settings entry declares only credentials or a partial model list no longer hides the remaining built-in models.
 
+- **Cancelled Runs Report Cancellation Instead of Success**
+  - A run cancelled while it waits for its members, or while its final turn is in flight, now ends as cancelled with the canonical `aborted` reason instead of being projected as a completed run; adapters that derive their state from the terminal event (ACP/Desktop) show the cancellation the user asked for.
+  - A turn whose answer was cut off by the output limit but recovered by escalation or a continuation is no longer marked incomplete: the truncation flag is scoped to its own turn instead of leaking into the next one.
+  - TUI: a retired event stream keeps being drained so an aborted run can always reach its terminal bookkeeping; an aborted cached Agent is discarded before the next submission; tool rows left running by an early run end are terminalized.
+
+- **Messaging Channels: Bounded Delivery Retry Windows**
+  - Durable delivery operations retry inside a configurable window (10 minutes by default) instead of being abandoned after a fixed attempt count. Transport-level failures are retried automatically, recovered by the serve reconnect path, or reopened by an operator through ACP `mothx/manage/deliveries/retry`.
+  - Permanent failures (platform 4xx, unsupported media, broken projection) stay failed: the failure projection reports a `retryable` flag, the retry entry refuses operations that are not failed or not reopenable instead of clobbering them back into `retry_wait`, and the persistence layer enforces the same fence. Operations that failed only because their dependency did recover with it.
+
+- **Channels: A Disabled Sub-Agent Tool Stays Disabled**
+  - Re-pointing the sub-agent tools at the session-scoped manager (which owns the session mailbox) no longer resurrects tools the user switched off: an ordinary multi-agent selection keeps its per-tool choice, while a team binding stays authoritative and always exposes the full team toolset.
+
+- **Parallel Tool Calls Start in the Declared Order**
+  - A parallel tool-call batch now begins its calls in the order the model emitted them: a later call can no longer start ahead of an earlier one because of argument parsing, an approval wait, or a durable execution claim. Calls still overlap and may finish in any order; results, transcript order, and provider continuation messages keep their existing guaranteed order.
+
 ### ✅ Tests
 
 - TUI: new coverage asserting that input during an active run queues without replacing the lease owner, and that the queued prompt starts only after the cancellation path finalizes the durable run and releases its lease.
 - TUI: `/defaultModel` coverage asserting the dialog's model list matches the factory-created provider list (the `/model` path) for both partial-override and credential-only settings entries.
 - Expert Teams: Runtime binding/fork, named-member events, TUI and Serve no-direct-run guards, ACP bind/fork process coverage, Desktop projection, and cross-entry ESM idle-gate coverage.
 - Channels: an all-selectable-tools contract test verifies that every available persisted tool selection is present in the resolved session registry.
+- Expert Teams: member question → lead → `subagent_answer` round trip, refusal of a question that is no longer pending, mailbox ownership (session lead vs. auxiliary roles, scheduled jobs, and a team-bound ESM worker), and non-team sessions delivering member notifications without holding the run open.
+- Agent loop: terminal-state coverage for a run cancelled during the member wait, and for a truncated turn recovered by a follow-up turn.
+- Channels: the session mailbox shared by the sub-agent tools and the lead, plus a partial tool selection that must not be resurrected by re-registration.
+- Delivery: reopen refusal for permanent failures, verified through both the operator entry and the persistence fence.
+- Delivery: the WebUI endpoints cover listing, a successful retry, and the permanent/in-flight/unknown refusals; the Desktop projection covers the same verdict and its bilingual strings.
+- Runtime: the orphan-recovery concurrency test now proves overlapping workers with a rendezvous instead of a timing window, so it no longer flakes under load.
 
 ## v1.2.99
 
