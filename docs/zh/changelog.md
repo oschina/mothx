@@ -14,6 +14,9 @@
 - **绑定团队始终保留完整 sub-agent 工具集**
   - 绑定专家团后始终暴露完整的规范 sub-agent 工具集（`subagent_spawn`、`subagent_status`、`subagent_send`、`subagent_wait`、`subagent_answer`、`subagent_destroy`）。逐工具关闭只对非团队的多 Agent 会话生效；团队能力是权威的，不会因关闭单个工具而从团队会话移除工具。
 
+- **Gitee/Moark 新增模型：`deepseek-v4.1-flash`**
+  - `gitee` 和 `moark` 两个提供商均新增 `deepseek-v4.1-flash`，支持 1M 上下文窗口与文本/图片输入；默认不发送 max_tokens。
+
 ### 🐛 问题修复
 
 - **MCP：图片类工具结果不再退化为占位符，模型能看到真实图像**
@@ -32,6 +35,19 @@
 - **已取消/已过期的决策不再阻塞分叉**
   - 若会话唯一的决策其实已被取消或超时，此前仍被当作存在待处理决策，导致分叉被以 `source session is active` 拒绝。现在所有决策账本读者共享同一套词汇表，取消/超时决策（以及旧的渠道请求事件名）都能正确清除，分叉得以继续。决策事件名与 `{"decision": …}` 信封各自有了单一属主，因此无论哪个界面写入，跨入口的决策恢复都读取同一批记录。
 
+- **流中途网络中断自动重试，不再直接终止回复**
+  - 供应商流在已输出正文/思考内容之后遭遇瞬时传输错误（`connection reset by peer`、意外 EOF、网关 5xx 等）时，此前整个 Run 直接以 `stream read error: ...` 失败：供应商级重试只覆盖尚未出现可见输出的流，Agent 级重试只覆盖空闲流超时。
+  - 现在 Agent 循环会对这类瞬时错误做有限续写重试（最多 2 次）：已输出的部分内容被持久化进历史，并注入引用精确后缀的续写指令，模型从中断点直接继续生成，不会重复用户已经看到的内容；尚无可见输出时则直接重跑整轮。已发出工具调用的回合、上下文溢出（有专门的压缩恢复路径）与空闲流超时（有专门的重试路径）保持原有行为，Responses 远端状态回合也继续沿用既有的 failover 路径。
+
+### 🔧 改进
+
+- **SQLite：会话库写压力三阶段优化**
+  - 连接持久化策略从 `synchronous(FULL)` 调整为 WAL 推荐的 `synchronous(NORMAL)`：提交不再在持有唯一写锁期间 fsync（fsync 集中到 checkpoint），多进程共享同一会话目录时的写锁占用从 fsync 级收缩到 page-cache 级，此前记录的「其他进程持续提交导致 begin 等待超过 busy_timeout 而报 database is locked」的场景基本消除。进程崩溃仍然零丢失；OS 崩溃/断电可能回退最近一次 checkpoint 之后的秒级提交（数据库不损坏，缺失的 run 终态由既有的租约过期 → orphan → 有界恢复路径收敛）。`MOTHX_SQLITE_SYNCHRONOUS=FULL` 可按进程一键恢复旧持久性，新旧版本进程混布共享同一库文件是安全的。
+  - 工具结果合批落盘：会话域新增 `AppendMessages`，agent 一轮迭代的多条工具结果以父子链单事务写入（每事务上限 64 条，超出自动分批），租约围栏与叶子乐观检查仍在写入同一事务内完成；工具密集轮次的写事务从 N+3 降到约 3。assistant 消息先于工具副作用落盘、批量失败即 `session_save` 失败的语义保持不变。
+  - 租约心跳合并：从每个活跃租约独立 goroutine 每 3 秒一次续期事务，改为每会话目录一个调度器把本进程在该库的全部租约放进单事务批量续期（每租约 owner/epoch/token CAS 围栏不变，被顶替或已释放的租约仍只影响自己）；稳态后台心跳写从 N 事务/3s 降为 1 事务/3s/进程。TTL、心跳间隔、重试预算与 30 秒有界恢复保证全部不变，最后一个租约释放后调度器自动退出。
+  - `internal/db` 新增进程级 busy 重试与事务 begin 等待指标（`BusyRetryStats`/`BeginWaitStats`），经 expvar 以 `mothx_sqlite` 发布，`--debug` 启动时可在 pprof 服务器的 `/debug/vars` 直接读取，跨进程写锁竞争从此可观测。
+  - 完整方案、多进程论证与压测矩阵见 `docs/proposal/sqlite-write-pressure-reduction-proposal.md`。
+
 ### ✅ 测试
 
 - 数据库：`internal/db` 固化 begin 重试策略 —— 只有 SQLITE_BUSY/SQLITE_LOCKED 会重试，其他驱动错误与到期 context 原样上抛，驱动码经错误自身的 `Code()` 分类，`RunInTx` 保持提交/回滚语义。
@@ -43,6 +59,8 @@
 - 成员等待：交互式（TUI）非团队 lead 会为运行中的成员保持 run 打开，无头（CLI）则正常结束。
 - 架构：新增守卫拒绝适配器测试中新增使用 legacy session run/lease API 或低层 `agent.New`，其余夹具由带原因的 allowlist 冻结。
 - systeminit：固化共享 `/systeminit` 提示词 —— 交互式才有的 question 指引、去空白的附加指令置于 finalNote 之前、空白输入忽略、确定性。
+- 流失败恢复：流中途 connection reset 经由续写重试恢复 —— 已输出部分被持久化并从精确后缀继续，无可见输出时整轮重跑，预算耗尽后上报原始错误 —— 而已经发出工具调用或错误不可重试的回合不会重试。
+- SQLite 写压力：`internal/db` 固化 synchronous 默认 NORMAL、`MOTHX_SQLITE_SYNCHRONOUS=FULL` 覆盖与 busy 重试计数（永久错误不计数）；会话域覆盖 `AppendMessages` 的父链与重放顺序、stale writer 整批拒绝且不落任何行、超过事务上限自动分批、子代理表隔离；租约心跳调度器覆盖单目录单调度器、同批续期、epoch 被顶替的租约单独 lost 而幸存租约照常续期、最后一个租约释放后调度器退出。另新增写压力压测形状 A/B/C（多进程写不同会话、FULL/NORMAL 混布、单进程多会话多租约）并报告 busy/begin 竞争指标，`MOTHX_WRITE_PRESSURE_SCALE` 可放大负载用于基线对比。
 ## v1.2.100
 
 ### ✨ 新功能

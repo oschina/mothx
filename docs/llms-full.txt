@@ -1478,24 +1478,150 @@ consistency and avoids logic divergence.
 Source: https://mothx.net/en/changelog.md
 
 # Changelog
+
+## v1.3.101
+
+### ✨ New Features
+
+- **Serve: Placeholder API Token Warnings**
+  - `mothx serve init-config` ships a well-known template token, which is equivalent to publishing the API key once auth is enabled — and nothing said so. The token is now a single named constant (`serve.PlaceholderAuthToken`) with explicit detection (`IsPlaceholderAuthToken`/`UsesPlaceholderAuthToken`), and a replacement warning is printed wherever the template is created (`mothx serve init-config` and the `--init-serve` CLI path) and again on `mothx serve` startup while `api.auth.enabled` is true and the token is still in place.
+  - The startup check only fires for an enabled auth block, so the default template (auth disabled, loopback only) stays quiet and a replaced token is never flagged. `serve init-config` now writes through the command's own stderr, so the warning travels with the command output.
+
+- **Members Wait for Their Lead on Interactive Surfaces**
+  - A session that can spawn members but is not bound to an expert team now keeps its run open for still-running members on interactive surfaces (TUI, Web UI, ACP), so a member's completion or question is handled within the same run instead of waiting for the next lead run. Headless and asynchronous sources (CLI, cron, WeChat/Feishu) still end the turn normally and deliver member notifications at their next iteration or next run; a bound expert team always waits.
+
+- **Bound Teams Keep the Full Sub-Agent Tool Set**
+  - A bound expert team always exposes the complete canonical sub-agent tool set (`subagent_spawn`, `subagent_status`, `subagent_send`, `subagent_wait`, `subagent_answer`, `subagent_destroy`). Per-tool toggles that disable individual sub-agent tools apply only to non-team multi-agent sessions; the team capability is authoritative and never drops tools.
+
+- **New Gitee/Moark Model: `deepseek-v4.1-flash`**
+  - Added `deepseek-v4.1-flash` to the `gitee` and `moark` providers with a 1M context window and text+image input; no default max_tokens is sent.
+
+### 🐛 Bug Fixes
+
+- **MCP: Image Tool Results Reach the Model Instead of a Placeholder**
+  - An MCP tool that returned image content reached the model as the literal string `[image content: image/png]`. The base64 payload was already present in the MCP response, but the client decoded every content block into text only, and the tool returned a text-only result, so a screenshot-style MCP server could report coordinates while the model never saw the picture. `resources/read` binary resources were worse: the `blob` field had no matching struct field, so the payload was dropped during decode and not even the placeholder appeared.
+  - `tools/call` and `resources/read` now project image blocks into `tools.ToolResult.Contents` as real provider image content, reusing the same provider-aware preprocessing as the `read` and `browser` screenshot tools, and decode `blob`/`uri` resource fields. Results without images keep the historical text-only shape, so existing text MCP tools are unchanged. Malformed, oversized, or excess images (capped at 4 per result, matching the ACP projection limit) degrade to a text note instead of failing the call. The image capability gate in Agent Core still decides whether a non-vision model receives images at all.
+
+- **SQLite: Transient Busy Transaction Begins Are Retried**
+  - Several processes opening one session directory race onto the single writer lock. The DSN begins non-read-only transactions with `BEGIN IMMEDIATE`, so a begin can outlast the connection's `busy_timeout` while other processes keep committing under `synchronous(FULL)`, and a healthy database failed with `database is locked (5)`.
+  - The retry policy now lives in `internal/db` next to the DSN ownership: `BeginTx` (Bun), `BeginSQLTx` (raw `*sql.DB`), and `RunInTx` retry only `SQLITE_BUSY`/`SQLITE_LOCKED` inside a bounded budget (90 s) with exponential backoff (200 ms up to a 2 s cap); non-transient errors are returned unchanged and a caller's context deadline still wins.
+  - DAO `Begin`/`BeginTx`/`RunInTx` (including the bindings helpers), `internal/db.Write`, and the session schema initialization/migration boundary all use it, so concurrent startup and ordinary writes no longer turn a transient writer conflict into a hard failure.
+
+- **Workflow: Runaway DSL Scripts Are Bounded by a Wall-Clock Budget**
+  - A workflow source such as `while (true) {}` could pin the process forever whenever its caller passed a context without a deadline. Source evaluation — which only builds the node graph, since worker agents run natively afterwards — now runs under two bounds: the caller's context and a wall-clock budget, whichever fires first interrupts the VM.
+  - The budgets are 30 s for a workflow run and 5 s for the interactive `workflow_lint` authoring check, which must fail fast; a timeout surfaces as the sentinel `ErrJSEvaluationTimeout` (the lint result carries a stable, readable error), while a caller cancellation keeps returning its context error. `Runner.EvalTimeout` lets callers tighten the budget, and the zero value keeps the documented defaults.
+
+- **Cancelled or Expired Decisions No Longer Block Forking**
+  - A session whose only decision had actually been cancelled or timed out was still treated as having a pending decision, so forking it was rejected as `source session is active`. Every decision-ledger reader now shares one vocabulary, so cancelled and timed-out decisions (and the legacy channel request name) clear correctly and the fork proceeds. The durable decision event name and its `{"decision": …}` envelope also gained a single owner each, so cross-entry decision recovery reads the same records regardless of which surface wrote them.
+
+- **Mid-Stream Network Failures Retry Automatically Instead of Ending the Reply**
+  - A provider stream that died with a transient transport error (`connection reset by peer`, unexpected EOF, gateway 5xx, ...) after text or thinking had already been streamed failed the whole run with `stream read error: ...`: provider-level retries only cover streams that break before any visible output, and the agent-level retry only covered idle-stream timeouts.
+  - The agent loop now performs a bounded continuation retry (up to 2 attempts) for such transient errors. Already-streamed partial output is persisted into history and a continuation instruction quoting the exact suffix is injected, so the model resumes from the interruption point instead of duplicating what the user already saw; with no visible output yet, the turn simply re-runs. Turns with an already-emitted tool call, context overflow (dedicated compaction recovery), and idle-stream timeouts (dedicated timeout retry) keep their existing behavior, and Responses remote-state turns keep their existing failover path.
+
+### ✅ Tests
+
+- Database: `internal/db` pins the begin-retry policy — only SQLITE_BUSY/SQLITE_LOCKED are retried, other driver errors and an expiring context are surfaced unchanged, driver codes are classified through the error's own `Code()` method, and `RunInTx` keeps commit/rollback semantics.
+- Workflow: a runaway script is interrupted by a 50 ms budget (previously that test hung), a successful evaluation behaves exactly as before, and the lint path reports an invalid result with the timeout message.
+- Serve: the generated template keeps the same constant the detection uses, a whitespace-padded placeholder is still recognized while a real or empty token is not, and the `serve init-config` output must contain the warning.
+- Agent loop: ten real `bash echo` calls run through one parallel batch (the rendezvous only closes once all ten workers are live), and ordered-start coverage pins the launch semantics — starts in the model's declared order, an in-flight call unaffected by an earlier approval wait, queued calls released when an earlier call fails, and the same ordered handle for background tool calls.
+- Runtime: the cross-process takeover test now retries the expire-then-takeover pair inside a bounded budget and gives helper startup a load-tolerant window, so a loaded machine fails setup with a clear diagnosis instead of failing the invariant under test.
+- Decision ledger: round-trip and replay coverage for the shared event name, envelope, and loaders; the legacy channel event name still decodes; and a cancelled decision no longer blocks a fork.
+- Member wait: an interactive (TUI) non-team lead holds its run open for a running member, while a headless (CLI) one ends normally.
+- Architecture: a guard rejects new use of the legacy session run/lease APIs or a low-level `agent.New` in adapter test files, with a documented allowlist for the remaining fixtures.
+- `systeminit`: the shared `/systeminit` prompt is pinned — interactive-only question guidance, trimmed extra instructions before the final note, blank extra input ignored, and determinism.
+- Stream-failure recovery: a mid-stream connection reset resumes through the continuation retry — partial output persists and continues from the exact suffix, no visible output re-runs the turn fresh, and exhausting the budget surfaces the original error — while a turn with an already-emitted tool call or a non-retryable error never retries.
 ## v1.2.100
 
 ### ✨ New Features
+
+- **Independent Artifact Publishing Switches**
+  - TUI/CLI, WebUI/API, Desktop/ACP, and messaging channels now have separate artifact publishing switches, all disabled by default. Each entry point enables the shared Runtime-owned `publish_artifact` path without changing the others.
+
+- **Expert Teams Across TUI, WebUI, and Desktop**
+  - Sessions can bind a reusable expert bundle with `--expert <id>` or TUI `/expert list|show|bind|unbind|switch` commands. A team bundle injects its lead identity and roster and automatically enables member dispatch; a single-persona bundle changes only the lead identity.
+  - Replacing an existing expert creates a fork instead of overwriting the source session. The WebUI expert panel and Desktop ACP **Expert** option use the same Runtime-owned binding and fork path.
+  - Member lifecycle projections now carry the member name, emoji, role, and expert identity for TUI, WebUI, and Desktop cards. Member completion is delivered at a lead boundary and never starts a new run by itself.
+  - ESM continues only from a genuinely idle, runnable objective. Pending input, decisions, or a member terminal event cannot bypass that gate.
+  - Added the built-in `expert-creater` Skill. Activate it with `/skill expert-creater` in TUI/WebUI or `/expert-creater` in Desktop/ACP, then let the current Agent create and install a validated project team under `.mothx/experts/`.
 
 - **WebUI: Slash Command Suggestions in the Chat Composer**
   - Typing `/` in the chat input now shows a suggestion dropdown covering every supported slash command (`/clear`, `/mode`, `/model`, `/defaultModel`, `/models`, `/sessions`, `/status`, `/compact`, `/delegate`, `/alloweditpath`, `/allowautoedit`, `/workflows`, `/skill`, `/skills`, `/rule`, `/esm`, `/help`), with a dedicated subcommand filter for `/esm` (objective/edit/pause/resume/clear/guide).
   - Navigate with ↑/↓, complete with Tab or Enter (Enter sends the prompt when the input already matches the selection), dismiss with Esc, or click an entry; accepting a suggestion places the cursor at the end of the inserted command. The composer keeps proper combobox/listbox ARIA state (`aria-expanded`, `aria-activedescendant`, `aria-selected`).
   - Suggestions are suppressed while a run is active, the API is disabled, or the input spans multiple lines.
 
+- **WebUI: Runtime-Owned Knowledge Base Management**
+  - The new **Knowledge** workspace lists, creates, edits, scans, queries, and deletes directory-backed knowledge bases through the same Runtime/session services used by ACP and Desktop. Directory selection falls back to the built-in browser when a native picker is unavailable; source files and index storage remain server-owned.
+
+- **Desktop: Streamlined Home Presets and Prompt-Filling Quick Actions**
+  - Home preset tabs are shortened to Work / Code / Create (办公 / 代码 / 创作) with tightened descriptions in both languages.
+  - Quick-action chips now fill the composer with a complete, ready-to-send prompt (including editable `[topic]`-style placeholders) instead of a bare label, so one click can start a real task.
+
+- **Desktop: Development Mode (`make desktop-dev` / `npm run dev`)**
+  - New dev runner: watches `renderer/src/`, `renderer/index.html`, and `renderer/styles.css`, rebuilds `dist/renderer` on change, and reloads Electron without cache so the ACP child process does not restart; `main/` and `preload/` are built once at startup and require a manual restart after edits.
+  - Dev mode (`MOTHX_DESKTOP_DEV=1`) opens DevTools automatically in a detached external window (never docked inside the app), binds the Chrome DevTools Protocol to `127.0.0.1:9223` only (change the local port with `MOTHX_DESKTOP_DEBUG_PORT`), and reloads the window when renderer assets change; it does not start `mothx serve` and adds no HTTP/API channel to the renderer.
+  - The dev instance runs on an isolated user data directory (`desktop/.dev-user-data/`, overridable with `MOTHX_DESKTOP_USER_DATA`) so it never competes with an installed Desktop for the single-instance lock or reuses its local display state.
+
+- **Desktop: Online Skill Marketplace (SkillHub Catalog)**
+  - New ACP feature key `manageSkillHubCatalog` and an additive `mothx/manage/skillhub/*` method family (markets/categories/official/search/detail/targets/installed/install/activate/uninstall) as a pure ACP projection of the shared SkillHub service; every request must bind to an active session, so Desktop cannot pick arbitrary install directories.
+  - The Desktop skills page gains a marketplace section: market/category filters, keyword search, official recommendations, and install/update/activate-into-session/uninstall into the session's project or global skills directory.
+  - ACP sessions now track multiple active skills (previously activating a new skill replaced the previous one), so several skills can stay active in the same session.
+
+- **Desktop: App-Wide Background Image Options**
+  - Background images can now apply to the whole app or the home view only, with fit modes (cover / contain / stretch / tile) and anchor positions (center / left / right / top / bottom).
+  - Background veils and surface blur fade adaptively with image opacity; with an app-wide background, the titlebar gains a readable contrast surface and text shadows so window controls stay legible.
+  - Appearance settings move into a standalone Appearance category.
+
+- **Expert Team Member Questions Reach the Lead**
+  - A member that needs a decision asks the lead instead of the human: the question is queued in the session mailbox, delivered as a `[MEMBER_QUESTION]` steering message (or as a `subagent_wait` entry with status `question`), and answered with `subagent_answer(handle: "<member>", question_id: "…", answer: "…")`. The user only sees the question projected on the lead's stream.
+  - The mailbox path works in every session that can spawn members — multi-agent, delegate, and workflow modes — not only in team-bound sessions, and `subagent_wait` now reports pending member activity there too. Only a team-bound session holds its run open for still-running members; other sessions end the turn normally and see the notification at their next iteration or next run.
+  - Answering a question that is no longer pending (already answered, expired, or belonging to another member) reports an error instead of a silent success. A blocking `delegate_subagent` child cannot ask questions, because its caller is parked inside the tool call that would have to answer it.
+
+- **Retry Failed Message Deliveries from Desktop and WebUI**
+  - Desktop's Channels settings list the failed durable deliveries of the active session — platform, operation kind, status, failure code, attempt count, and last update — with a per-row retry; WebUI exposes the same Runtime-owned facts through `GET /api/deliveries/failures` and `POST /api/deliveries/retry` in its channel settings.
+  - Both entries project the Runtime's own verdict: only a failed transport-level operation is offered a retry, while in-flight, delivered, and permanently failed operations are refused instead of being reopened into another doomed attempt (the refusal they report is the same rule the persistence fence enforces).
+
 ### 🐛 Bug Fixes
+
+- **Browser: Built-in Skill No Longer Writes into Projects**
+  - Browser guidance now ships as the built-in `vibe-browser` Skill. Enabling Browser in TUI, WebUI, Desktop, ACP, or a channel no longer creates `.skills/vibe-browser/SKILL.md`; intentionally created project or global skills with that name still override the built-in guidance.
+
+- **Channels: Browser Selection Survives Runtime Rehydration**
+  - A channel session's persisted Browser selection now drives both initial registry construction and Runtime resource rehydration. Explicitly enabling Browser no longer has the tool removed after the session Runtime attaches.
 
 - **TUI: Prompts Submitted During an Active Run Are Queued Instead of Replacing It**
   - A session allows exactly one foreground execution at a time. Previously, submitting input while a run was active replaced the in-memory run handle, orphaning the active run's terminal cleanup and its runtime lease. Such submissions are now queued in the TUI, and the next queued prompt starts only after the preceding run reaches its canonical terminal state and releases its lease — across every terminal branch (success, failure, incomplete, and cancellation).
   - Queued prompts retain their Runtime-prepared attachments (`agentruntime.PreparedInput`) and re-enter through the same input contract, so attachments survive the delay unchanged.
 
+- **TUI: `/defaultModel` Shares the `/model` Catalog Logic**
+  - The `/defaultModel` picker now resolves each provider's model list through `providerfactory.ResolvedModels` — the same factory-resolved catalog (built-in presets merged with settings overrides) that backs `/model` and the WebUI picker — instead of re-parsing raw `settings.json` models. A provider whose settings entry declares only credentials or a partial model list no longer hides the remaining built-in models.
+
+- **Cancelled Runs Report Cancellation Instead of Success**
+  - A run cancelled while it waits for its members, or while its final turn is in flight, now ends as cancelled with the canonical `aborted` reason instead of being projected as a completed run; adapters that derive their state from the terminal event (ACP/Desktop) show the cancellation the user asked for.
+  - A turn whose answer was cut off by the output limit but recovered by escalation or a continuation is no longer marked incomplete: the truncation flag is scoped to its own turn instead of leaking into the next one.
+  - TUI: a retired event stream keeps being drained so an aborted run can always reach its terminal bookkeeping; an aborted cached Agent is discarded before the next submission; tool rows left running by an early run end are terminalized.
+
+- **Messaging Channels: Bounded Delivery Retry Windows**
+  - Durable delivery operations retry inside a configurable window (10 minutes by default) instead of being abandoned after a fixed attempt count. Transport-level failures are retried automatically, recovered by the serve reconnect path, or reopened by an operator through ACP `mothx/manage/deliveries/retry`.
+  - Permanent failures (platform 4xx, unsupported media, broken projection) stay failed: the failure projection reports a `retryable` flag, the retry entry refuses operations that are not failed or not reopenable instead of clobbering them back into `retry_wait`, and the persistence layer enforces the same fence. Operations that failed only because their dependency did recover with it.
+
+- **Channels: A Disabled Sub-Agent Tool Stays Disabled**
+  - Re-pointing the sub-agent tools at the session-scoped manager (which owns the session mailbox) no longer resurrects tools the user switched off: an ordinary multi-agent selection keeps its per-tool choice, while a team binding stays authoritative and always exposes the full team toolset.
+
+- **Parallel Tool Calls Report Their Starts in the Declared Order**
+  - A parallel tool-call batch now reports each call's start in the order the model emitted them, so argument parsing and worker scheduling can no longer make a later call appear to start first. The ordering is start-only and never blocks execution: calls still run concurrently, each waits for its own approvals and durable execution records, and completions may finish in any order. Results, transcript order, and provider continuation messages keep their existing guaranteed order, and Responses background runs use the same ordered handle.
+
 ### ✅ Tests
 
 - TUI: new coverage asserting that input during an active run queues without replacing the lease owner, and that the queued prompt starts only after the cancellation path finalizes the durable run and releases its lease.
+- TUI: `/defaultModel` coverage asserting the dialog's model list matches the factory-created provider list (the `/model` path) for both partial-override and credential-only settings entries.
+- Expert Teams: Runtime binding/fork, named-member events, TUI and Serve no-direct-run guards, ACP bind/fork process coverage, Desktop projection, and cross-entry ESM idle-gate coverage.
+- Channels: an all-selectable-tools contract test verifies that every available persisted tool selection is present in the resolved session registry.
+- Expert Teams: member question → lead → `subagent_answer` round trip, refusal of a question that is no longer pending, mailbox ownership (session lead vs. auxiliary roles, scheduled jobs, and a team-bound ESM worker), and non-team sessions delivering member notifications without holding the run open.
+- Agent loop: terminal-state coverage for a run cancelled during the member wait, and for a truncated turn recovered by a follow-up turn.
+- Channels: the session mailbox shared by the sub-agent tools and the lead, plus a partial tool selection that must not be resurrected by re-registration.
+- Delivery: reopen refusal for permanent failures, verified through both the operator entry and the persistence fence.
+- Delivery: the WebUI endpoints cover listing, a successful retry, and the permanent/in-flight/unknown refusals; the Desktop projection covers the same verdict and its bilingual strings.
+- Runtime: the orphan-recovery concurrency test now proves overlapping workers with a rendezvous instead of a timing window, so it no longer flakes under load.
 
 ## v1.2.99
 
@@ -5097,6 +5223,7 @@ mothx [flags] [message...]
 | `--multi-agent` | - | `false` | Enable multi-agent tools and commands |
 | `--delegate` | - | `false` | Enable delegation mode (blocking single sub-agent tool) |
 | `--workflows` | - | `false` | Enable JavaScript workflow tools and `/workflows` commands |
+| `--artifact` | - | `false` | Enable generated artifact publishing for this TUI/CLI process |
 
 ### Session Management
 
@@ -5157,6 +5284,7 @@ Supports VS Code, JetBrains IDEs, and any ACP-compatible editor.
 | `--multi-agent` | - | false | Enable multi-agent tools for ACP sessions |
 | `--delegate` | - | false | Enable delegation mode for ACP sessions |
 | `--workflows` | - | false | Enable JavaScript workflow tools for ACP sessions |
+| `--artifact` | - | false | Enable generated artifact publishing for this ACP/Desktop process |
 
 See the [ACP Protocol](acp.md) documentation for IDE integration details.
 
@@ -5204,6 +5332,7 @@ mothx serve [flags]
 | `--workflows` | - | false | Enable JavaScript workflow tools |
 | `--web-search` | - | false | Enable configured local web search for Serve sessions |
 | `--browser` | - | false | Enable browser automation for Serve sessions |
+| `--artifact` | - | false | Enable generated artifact publishing for WebUI/API sessions |
 | `--enable-a2a-master` | - | false | Enable A2A master mode for remote-agent dispatch |
 | `--lobster` | - | false | Enable yolo mode, disable sandbox, and enable sub-agents |
 | `--verbose` | - | false | Verbose output |
@@ -5378,6 +5507,20 @@ mothx acp --multi-agent
 ```
 
 When enabled, MothX registers the `subagent_*` tools and exposes multi-agent workflows such as delegated background investigation. Cron command entry points also depend on multi-agent mode.
+
+### Expert Teams
+
+```bash
+# Bind an expert or team while starting a session
+mothx --expert software-company
+```
+
+`--expert <bundle-id>` resolves a local expert bundle through the shared
+Runtime. A team bundle enables its declared member dispatch capability for
+that session; a single expert changes only the lead identity. In TUI, use
+`/expert list|show <id>|bind <id>|unbind|switch <id>`. Replacing a bound
+expert uses a session fork rather than rewriting the source session. See
+[Expert Teams](expert-teams.md) for the complete behavior.
 
 ### Delegate Mode
 
@@ -5652,6 +5795,8 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
     "fallback": "builtin"
   },
   "enablePlanTool": true,
+  "enableArtifact": false,
+  "enableACPArtifact": false,
   "maxContextTokens": 1000000,
   "contextFiles": {
     "enabled": true,
@@ -5708,6 +5853,8 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `toolExecution` | object | *(see below)* | Local function/custom tool execution mode and per-batch concurrency |
 | `statusLine` | object | *(see below)* | External status line command settings for TUI only |
 | `enablePlanTool` | bool | `true` | Register the built-in `plan` tool |
+| `enableArtifact` | bool | `false` | Allow TUI/CLI sessions to publish generated artifacts |
+| `enableACPArtifact` | bool | `false` | Allow Desktop/ACP sessions to publish generated artifacts |
 | `maxContextTokens` | int | `0` (auto) | Override maximum context token count |
 | `contextFiles` | object | *(see below)* | Context file loading settings |
 | `skillsDir` | string | `"~/.mothx/skills"` | Global skills directory path |
@@ -6080,7 +6227,7 @@ The `compat` object is optional and should only be set when a model needs protoc
 
 ### toolExecution
 
-This is a local execution setting only. `sequential` limits MothX's local workers after a response arrives; it does not ask the model to emit one tool call at a time, so providers may still return multiple tool calls in a single response. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. It does not control concurrency inside provider-hosted tools such as OpenAI Responses `web_search`; those calls remain under the provider's own orchestration and quota rules.
+This is a local execution setting only. `sequential` limits MothX's local workers after a response arrives; it does not ask the model to emit one tool call at a time, so providers may still return multiple tool calls in a single response. A `parallel` batch reports each call's start in the model's declared order, and that ordering never blocks execution: calls still run concurrently, each waits for its own approvals and durable execution record, and only the completion order is unrestricted. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. It does not control concurrency inside provider-hosted tools such as OpenAI Responses `web_search`; those calls remain under the provider's own orchestration and quota rules.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -6157,6 +6304,17 @@ Whether to register the built-in `plan` tool that allows the agent to create and
 ```
 
 Set to `false` to disable it (e.g., if you prefer the agent not to use structured plans).
+
+### enableArtifact / enableACPArtifact
+
+Artifact publishing is opt-in and independently configured for terminal and ACP/Desktop sessions. Enabling one does not enable the other.
+
+```json
+{
+  "enableArtifact": false,
+  "enableACPArtifact": false
+}
+```
 
 ### maxContextTokens
 
@@ -7398,6 +7556,145 @@ A:
 1. Use `--debug` flag
 2. Check if bwrap is installed: `bwrap --version`
 3. Check system logs
+
+---
+
+## Expert Teams
+
+Source: https://mothx.net/en/expert-teams.md
+
+# Expert Teams
+
+Expert Teams let a session use a reusable expert identity or a coordinated
+team. An expert bundle defines the lead persona, optional member personas,
+and their declared capabilities. The Runtime resolves the bundle once for the
+session; TUI, WebUI, Desktop/ACP, and channels only display that shared state.
+
+## Start with an expert
+
+Use `--expert` when starting MothX, or manage the binding from the TUI:
+
+```bash
+# Start a new session with the built-in software team
+mothx --expert software-company
+
+# Inspect the available expert bundles in an existing TUI session
+/expert list
+/expert show software-company
+
+# Bind or remove an expert identity
+/expert bind software-company
+/expert unbind
+```
+
+`/expert bind` can bind an unbound session and `/expert unbind` removes the
+identity from the current session. Neither operation rewrites previous
+conversation history.
+
+## Switch experts by forking
+
+Changing from one non-empty expert to another creates a new session branch:
+
+```text
+/expert switch frontend-developer
+```
+
+The source session keeps its original expert, history, and identity prompt.
+The fork receives the requested expert at the current conversation boundary.
+This prevents two expert identities from being mixed into one history.
+
+The WebUI expert panel and Desktop's **Expert** session option follow the
+same rule. Initial binding and unbinding update the current idle session;
+switching an existing expert creates and opens a fork.
+
+## Team behavior
+
+Team bundles automatically enable the session's multi-agent capability. You
+do not need to add `--multi-agent` just to use a team. The lead receives the
+team roster and may dispatch declared members by ID:
+
+```text
+subagent_spawn(member: "software-engineer", task: "Implement the focused fix and run its tests.")
+subagent_wait(timeout_ms: 30000)
+```
+
+Members are still normal sub-agents: their tool/mode limits come from the
+bundle and the session policy, nested member spawning is unavailable, and
+high-risk command protection remains in force. A single-persona expert only
+changes the lead identity; it does not force team tools.
+
+A bound team always exposes the full canonical sub-agent tool set
+(`subagent_spawn`, `subagent_status`, `subagent_send`, `subagent_wait`,
+`subagent_answer`, `subagent_destroy`). The team capability is authoritative:
+per-tool toggles that disable individual sub-agent tools apply only to non-team
+multi-agent sessions and do not remove tools from a team session.
+
+Member lifecycle cards are projections of canonical child events. A member
+completion updates its own status and is delivered to an active lead at an
+agent-loop boundary. It never starts a new lead run by itself.
+
+A member that needs a decision asks the lead instead of the human. The question
+is queued for the lead (delivered as a `[MEMBER_QUESTION]` steering message, or
+as a `subagent_wait` pending entry with status `question`) and is answered with
+`subagent_answer(handle: "<member>", question_id: "…", answer: "…")`; the user
+only sees the question projected on the lead's stream. A blocking
+`delegate_subagent` child cannot ask questions, because its caller is parked
+inside the tool call that would have to answer it.
+
+The mailbox path is available in every session that can spawn members, not only
+in team sessions. A bound team, and any interactive source (TUI, Web UI, ACP),
+also holds its run open for still-running members at the wrap-up turn, so a
+member's completion or question can be handled within the same run; headless and
+asynchronous sources (CLI, cron, messaging channels) deliver member
+notifications at the next iteration or the next run instead.
+
+## ESM interaction
+
+Expert Teams work with Enable Supervisor Mode (ESM) without creating a second
+task scheduler. Only a user creates, edits, resumes, or clears an ESM
+objective. When a session is truly idle and the objective is still runnable,
+the normal ESM continuation path may start the next lead run; member terminal
+events are not continuation triggers.
+
+For a team-bound ESM worker, the lead identity and roster are retained,
+including member scheduling: the worker continuation drains member
+notifications and waits for members before its run may end. ESM critic, audit,
+and recovery roles remain isolated: they do not receive member scheduling tools
+and never drain or wait on the session's members.
+
+## Add local bundles
+
+Expert bundles are discovered lazily from the built-in catalog, the user
+configuration directory's `experts/` folder, and the project folder:
+
+```text
+<config-dir>/experts/<bundle-name>/
+<project>/.mothx/experts/<bundle-name>/
+```
+
+Project bundles override global bundles with the same name, which override
+built-in bundles. A bundle contains `expert.json` and one or more persona
+files under `agents/`; invalid bundles are shown as unavailable and cannot be
+bound. See [the expert-team implementation proposal](../proposal/expert-team-mothx-proposal.md)
+for the bundle schema and architecture rationale.
+
+## Create and install a team with the built-in Skill
+
+MothX includes the `expert-creater` Skill. Once enabled, the current Agent
+creates and installs a validated project-level team at
+`.mothx/experts/<team-id>/`, including `expert.json` and its member personas.
+It never overwrites an existing team directory unless you explicitly ask to
+update that team.
+
+| Surface | Activation command |
+| --- | --- |
+| TUI and WebUI chat | `/skill expert-creater` |
+| Desktop and ACP | `/expert-creater`; ACP also accepts `/skill expert-creater` and `/skill:expert-creater` |
+
+After activation, describe the team's goal and the lead/member roles in your
+next message. Bind the resulting team with the existing picker or
+`/expert bind <team-id>`; switching an already-bound team still follows the
+normal fork rule.
 
 ---
 
@@ -8645,7 +8942,7 @@ The following capabilities are integrated into the current runtime; actual avail
 - **OpenAI Responses**: Supports native response item replay, reasoning, structured output, hosted tools, prompt cache, and optional durable background runs through `responses.background`. Background runs can be queried, canceled, reconnected, or abandoned and recover after Serve restarts.
 - **Web UI management**: Provides session search and pagination, run status and cancellation, an approval center, tool results, skill activation, MCP configuration, Provider/Serve settings, and a `/stats` dashboard.
 - **MCP**: Supports stdio, streamable HTTP, and legacy SSE.
-- **Parallel tool execution**: Local function and custom tool calls within one agent turn run through a bounded parallel worker pool. The `toolExecution` setting controls `mode` (`parallel`/`sequential`) and `maxConcurrency` (default `10`). Shared by TUI, WebUI, Serve, channels, ACP, and sub-agents.
+- **Parallel tool execution**: Local function and custom tool calls within one agent turn run through a bounded parallel worker pool. Call starts are reported in the model's declared order without blocking execution, so calls still overlap and only the completion order is unrestricted. The `toolExecution` setting controls `mode` (`parallel`/`sequential`) and `maxConcurrency` (default `10`). Shared by TUI, WebUI, Serve, channels, ACP, and sub-agents.
  Global and project `mcp.json` files can be edited and are loaded into new Serve sessions.
 - **Messaging channels**: Supports WeChat, Feishu, and Webhooks. Background runs persist events and can deliver results after reconnect or restart. WebSocket `/ws/runs` and `/ws/logs` are Web UI event streams, not standalone messaging channels.
 - **Project state files**: Current project state is under `.mothx/`, including `settings.json`, `serve.json`, `allow.json`, `memory.md`, and skill directories. Legacy `.vibe` paths are no longer migrated automatically.
@@ -8835,6 +9132,21 @@ mothx acp --multi-agent
 ```
 
 Multi-agent mode registers `subagent_*` tools for delegated work. Cron command entry points are available in TUI multi-agent workflows.
+
+### Expert Teams
+
+Bind a reusable single expert or a coordinated team to a session:
+
+```bash
+# Start with the built-in software team
+mothx --expert software-company
+```
+
+In TUI, use `/expert list`, `/expert show <id>`, `/expert bind <id>`,
+`/expert unbind`, and `/expert switch <id>`. Switching between two experts
+creates a session fork so the original identity and history remain intact.
+Team experts automatically enable the session's member-dispatch capability.
+See [Expert Teams](expert-teams.md) for lifecycle, ESM, and local-bundle details.
 
 ### Delegate Mode
 
@@ -11288,10 +11600,12 @@ The project config overlays the global config.
     "multiAgent": true,
     "workflows": true
   },
+  "artifact": false,
   "sandbox": {
     "enabled": false
   },
   "channels": {
+    "artifact": false,
     "wechat": { "enabled": false },
     "feishu": { "enabled": false },
     "webhooks": {
@@ -11315,6 +11629,8 @@ The project config overlays the global config.
   }
 }
 ```
+
+Artifact publishing is disabled by default. Top-level `artifact` controls WebUI/API sessions; `channels.artifact` independently controls WeChat and Feishu sessions.
 
 ### Configuration Hot-Reload
 
@@ -12275,7 +12591,7 @@ When an agent turn returns multiple local function or custom tool calls, MothX c
 | `mode` | string | `"parallel"` | `"parallel"` uses bounded local workers; `"sequential"` executes returned calls one at a time locally (provider-side parallel output is unaffected) |
 | `maxConcurrency` | int | `10` | Maximum concurrent tool calls per agent turn (set to `1` for serial execution) |
 
-Tool completion events may stream out of order, while provider continuation messages are restored in the original call order. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. `sequential` only changes local execution after a response arrives; a provider may still return multiple tool calls in one response. It does not control concurrency inside provider-hosted tools (e.g. OpenAI Responses `web_search`); those calls remain under the provider's own orchestration.
+Calls report their start in the order the model emitted them, so a later call's start is never visible before an earlier call's. This ordering never blocks execution: calls still run concurrently, each waits for its own approvals and durable execution record independently, and they may finish in any order — tool completion events may therefore stream out of order, while provider continuation messages are restored in the original call order. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. `sequential` only changes local execution after a response arrives; a provider may still return multiple tool calls in one response. It does not control concurrency inside provider-hosted tools (e.g. OpenAI Responses `web_search`); those calls remain under the provider's own orchestration.
 
 
 ---
@@ -12300,6 +12616,8 @@ Tool completion events may stream out of order, while provider continuation mess
 | [`subagent_spawn`](#subagent_---delegated-work) | Multi-Agent | Spawn isolated sub-agents | Sub-agent scoped limits | Multi-Agent Mode |
 | [`subagent_status`](#subagent_---delegated-work) | Multi-Agent | Query sub-agent status | Read-only | Multi-Agent Mode |
 | [`subagent_send`](#subagent_---delegated-work) | Multi-Agent | Send commands to sub-agents | Send message | Multi-Agent Mode |
+| [`subagent_wait`](#subagent_---delegated-work) | Multi-Agent | Wait for member activity when the critical path is blocked | Bounded wait (2.5s-120s) | Multi-Agent Mode |
+| [`subagent_answer`](#subagent_---delegated-work) | Multi-Agent | Answer a member's blocking question so it can continue | Question scoped | Multi-Agent Mode |
 | [`subagent_destroy`](#subagent_---delegated-work) | Multi-Agent | Remove sub-agents & clean up | Destroy | Multi-Agent Mode |
 | [`delegate_subagent`](#delegate_subagent---blocking-single-sub-agent-delegation) | Delegate | Run one synchronous sub-agent task | Sub-agent scoped limits | Delegate Mode |
 | [`workflow_run`](#workflow_run---dynamic-javascript-workflows) | Workflow | Run a JavaScript workflow with worker agents | Worker-agent scoped limits | Workflow Mode |
@@ -12654,6 +12972,8 @@ Enables creating and managing cron-like scheduled tasks that execute in the back
 
 When MothX is launched in multi-agent mode (`--multi-agent`), the main agent can spin up completely separate sub-agents to parallelize work. Sub-agents run in their own session contexts, have separate memories, separate temporary files, and isolated logs.
 
+Member questions and completions are delivered to an active lead through the session mailbox (as steering messages) in every session that can spawn members; only a session bound to an expert **team** also holds its run open for still-running members at the wrap-up turn. Other sessions end the turn normally and see the notification at their next iteration or next run.
+
 #### `subagent_spawn`
 Launches a sub-agent to handle a focused prompt task asynchronously.
 
@@ -12676,6 +12996,24 @@ Appends additional guidance or questions to an active sub-agent.
 ```json
 { "handle": "subagent-job-1", "message": "Also fix imports in helper_test.go." }
 ```
+
+#### `subagent_wait`
+Blocks until a spawned member or sub-agent completion lands in the session mailbox, or the bounded timeout elapses. It returns only a pending summary (member id, status, and a `question_id` for members waiting on an answer); completion content is delivered automatically at the next iteration boundary.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `timeout_ms` | integer | - | Maximum wait in milliseconds, clamped to 2500-120000 (default 30000). |
+
+#### `subagent_answer`
+Answers a blocking question a running member asked the lead instead of the human. The question arrives as a `[MEMBER_QUESTION]` steering message or as a `subagent_wait` pending entry with status `question`; the member stays blocked until this tool resolves it.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `handle` | string | ✓ | Member handle that asked the question. |
+| `question_id` | string | ✓ | Question ID from the `[MEMBER_QUESTION]` message or the wait summary. |
+| `answer` | string | ✓ | Answer the member continues with. |
+
+A question that is no longer pending (already answered, expired, or belonging to another member) is reported as an error instead of a silent success.
 
 #### `subagent_destroy`
 Cleans up logs and releases the sub-agent container/process context.

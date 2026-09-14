@@ -1533,24 +1533,150 @@ A2A Master 模式通过 `--enable-a2a-master` 启用，加载 `a2a-list.json`
 Source: https://mothx.net/zh/changelog.md
 
 # 更新日志
+
+## v1.3.101
+
+### ✨ 新功能
+
+- **Serve：模板 API Token 的替换警告**
+  - `mothx serve init-config` 生成的模板 token 是公开值，一旦启用 auth 而未替换，等同于公开 API key —— 此前对此没有任何提示。该 token 现在是具名常量（`serve.PlaceholderAuthToken`）并配有显式判定（`IsPlaceholderAuthToken`/`UsesPlaceholderAuthToken`）：创建模板时（`mothx serve init-config` 与 CLI 的 `--init-serve` 路径）打印替换警告，`mothx serve` 启动时若 `api.auth.enabled` 为真且 token 仍未替换，会再次打印同一条警告。
+  - 启动检查只在 auth 启用时生效，默认模板（auth 关闭、仅监听本机）保持安静，已替换的 token 永不误报。`serve init-config` 改为写入命令自身的 stderr，警告随命令输出一起可见。
+
+- **成员在交互式界面上会等待 lead**
+  - 能派生成员、但未绑定专家团的会话，在交互式来源（TUI、Web UI、ACP）上会在收尾轮为仍在运行的成员保持 run 打开，让成员在同一次 run 内完成或提问，而不必等到 lead 的下一次 run。无头与异步来源（CLI、cron、微信/飞书）仍正常结束回合，在下一个迭代或下一次 run 投递成员通知；绑定专家团的会话始终等待。
+
+- **绑定团队始终保留完整 sub-agent 工具集**
+  - 绑定专家团后始终暴露完整的规范 sub-agent 工具集（`subagent_spawn`、`subagent_status`、`subagent_send`、`subagent_wait`、`subagent_answer`、`subagent_destroy`）。逐工具关闭只对非团队的多 Agent 会话生效；团队能力是权威的，不会因关闭单个工具而从团队会话移除工具。
+
+- **Gitee/Moark 新增模型：`deepseek-v4.1-flash`**
+  - `gitee` 和 `moark` 两个提供商均新增 `deepseek-v4.1-flash`，支持 1M 上下文窗口与文本/图片输入；默认不发送 max_tokens。
+
+### 🐛 问题修复
+
+- **MCP：图片类工具结果不再退化为占位符，模型能看到真实图像**
+  - 返回图片内容的 MCP 工具，到达模型时只剩字面量 `[image content: image/png]`。base64 载荷其实已经在 MCP 响应里，但客户端把所有内容块一律解码成文本，工具也只返回文本结果，于是截图类 MCP server 能报告坐标、模型却看不到画面。`resources/read` 的二进制资源更彻底：`blob` 字段没有对应的结构体字段，反序列化时整个载荷被丢弃，连占位符都不会出现。
+  - 现在 `tools/call` 与 `resources/read` 会把 image 块投影为 `tools.ToolResult.Contents` 中真实的 provider 图片内容，复用与 `read`、`browser` 截图工具完全相同的 provider 感知预处理，并补上 `blob`/`uri` 资源字段的解码。无图片的结果保持历史文本形态，现有文本类 MCP 工具行为不变；解码失败、超限或超量（单次上限 4 张，与 ACP 投影上限一致）的图片降级为文本说明而非让调用失败。非视觉模型是否接收图片仍由 Agent Core 的图片能力闸门决定。
+
+- **SQLite：瞬时 busy 的事务开启会重试**
+  - 多个进程打开同一个会话目录时会争抢唯一的写锁。DSN 对所有非只读事务使用 `BEGIN IMMEDIATE`，因此当其他进程在 `synchronous(FULL)` 下持续提交时，某次 begin 的等待可能超过连接的 `busy_timeout`，让健康的数据库直接报 `database is locked (5)`。
+  - 重试策略现在与 DSN 归属一起放在 `internal/db`：`BeginTx`（Bun）、`BeginSQLTx`（原生 `*sql.DB`）与 `RunInTx` 只对 `SQLITE_BUSY`/`SQLITE_LOCKED` 在有限预算（90 秒）内退避重试（200ms 起、上限 2s）；非瞬时错误原样返回，调用方的 context deadline 优先。
+  - DAO 的 `Begin`/`BeginTx`/`RunInTx`（含 bindings 助手）、`internal/db.Write` 以及 session 的建表与迁移边界全部改走该策略，并发启动与普通写入不再把瞬时写锁冲突变成硬失败。
+
+- **Workflow：失控 DSL 脚本受墙钟预算约束**
+  - 当调用方的 context 不带 deadline 时，`while (true) {}` 这类 workflow 源码会让评估一直跑下去、把进程挂死。源码评估（只构建节点图，worker agent 之后原生执行）现在同时受两道边界约束：调用方 context 与墙钟预算，谁先触发谁中断 VM。
+  - 预算为：workflow 运行 30 秒，交互式创作检查 `workflow_lint` 5 秒（必须快速失败）；超时映射为 sentinel `ErrJSEvaluationTimeout`（lint 结果是稳定可读的错误），调用方取消仍按原契约返回 context 错误。`Runner.EvalTimeout` 允许调用方收紧预算，零值保持上述默认常量。
+
+- **已取消/已过期的决策不再阻塞分叉**
+  - 若会话唯一的决策其实已被取消或超时，此前仍被当作存在待处理决策，导致分叉被以 `source session is active` 拒绝。现在所有决策账本读者共享同一套词汇表，取消/超时决策（以及旧的渠道请求事件名）都能正确清除，分叉得以继续。决策事件名与 `{"decision": …}` 信封各自有了单一属主，因此无论哪个界面写入，跨入口的决策恢复都读取同一批记录。
+
+- **流中途网络中断自动重试，不再直接终止回复**
+  - 供应商流在已输出正文/思考内容之后遭遇瞬时传输错误（`connection reset by peer`、意外 EOF、网关 5xx 等）时，此前整个 Run 直接以 `stream read error: ...` 失败：供应商级重试只覆盖尚未出现可见输出的流，Agent 级重试只覆盖空闲流超时。
+  - 现在 Agent 循环会对这类瞬时错误做有限续写重试（最多 2 次）：已输出的部分内容被持久化进历史，并注入引用精确后缀的续写指令，模型从中断点直接继续生成，不会重复用户已经看到的内容；尚无可见输出时则直接重跑整轮。已发出工具调用的回合、上下文溢出（有专门的压缩恢复路径）与空闲流超时（有专门的重试路径）保持原有行为，Responses 远端状态回合也继续沿用既有的 failover 路径。
+
+### ✅ 测试
+
+- 数据库：`internal/db` 固化 begin 重试策略 —— 只有 SQLITE_BUSY/SQLITE_LOCKED 会重试，其他驱动错误与到期 context 原样上抛，驱动码经错误自身的 `Code()` 分类，`RunInTx` 保持提交/回滚语义。
+- Workflow：失控脚本在 50ms 预算下被中断（修复前该用例会挂死），正常源码评估行为不变，lint 路径返回 invalid 与超时文案。
+- Serve：生成的模板与判定使用同一常量，带首尾空白的占位符仍被识别而真实/空 token 不会误报，`serve init-config` 的输出必须包含警告。
+- Agent 循环：十个真实 `bash echo` 调用经由同一个并行批次执行（同步屏障只在十个 worker 同时存活时放行），并以顺序启动用例固化启动语义 —— 按模型声明顺序上报启动、进行中的调用不被更早的审批等待阻塞、更早调用失败时释放排队调用、后台工具调用复用同一套顺序句柄。
+- Runtime：跨进程接管用例改为在有限预算内重试「过期 + 接管」这一对操作，并给 helper 启动留出容忍负载的窗口，因此慢机器上的失败会停在有明确诊断的 setup 阶段，而不是误判被测不变量。
+- 决策账本：覆盖共享事件名、信封与读取器的往返与重放，遗留渠道事件名仍可解码，且已取消决策不再阻塞分叉。
+- 成员等待：交互式（TUI）非团队 lead 会为运行中的成员保持 run 打开，无头（CLI）则正常结束。
+- 架构：新增守卫拒绝适配器测试中新增使用 legacy session run/lease API 或低层 `agent.New`，其余夹具由带原因的 allowlist 冻结。
+- systeminit：固化共享 `/systeminit` 提示词 —— 交互式才有的 question 指引、去空白的附加指令置于 finalNote 之前、空白输入忽略、确定性。
+- 流失败恢复：流中途 connection reset 经由续写重试恢复 —— 已输出部分被持久化并从精确后缀继续，无可见输出时整轮重跑，预算耗尽后上报原始错误 —— 而已经发出工具调用或错误不可重试的回合不会重试。
 ## v1.2.100
 
 ### ✨ 新功能
+
+- **独立的制品发布开关**
+  - TUI/CLI、WebUI/API、Desktop/ACP 与消息渠道现在分别拥有制品发布开关，且全部默认关闭。每个入口只启用共享 Runtime 托管的 `publish_artifact` 路径，不会联动其他入口。
+
+- **TUI、WebUI 与 Desktop 全端主角团**
+  - 会话可通过 `--expert <id>` 或 TUI `/expert list|show|bind|unbind|switch` 命令绑定可复用主角包。团队包会注入 lead 身份与名册并自动启用成员调度；单人包只改变 lead 身份。
+  - 替换已绑定主角会创建分叉，而不会覆盖源会话。WebUI 主角面板和 Desktop ACP 的 **Expert** 选项复用同一条 Runtime 绑定与分叉路径。
+  - 成员生命周期投影现在携带成员名称、emoji、角色和主角身份，供 TUI、WebUI 与 Desktop 卡片展示。成员完成会在 lead 的边界投递，绝不会自行启动新 run。
+  - ESM 仅在目标可运行且会话真正空闲时续跑；待处理输入、决策或成员终态事件都不能绕过该 gate。
+  - 新增内置 `expert-creater` Skill：通过 TUI/WebUI 的 `/skill expert-creater` 或 Desktop/ACP 的 `/expert-creater` 启用后，当前 Agent 会在项目 `.mothx/experts/` 中创建并安装经校验的主角团。
 
 - **WebUI：聊天输入框斜杠命令建议**
   - 在聊天输入中键入 `/` 即弹出建议下拉框，覆盖全部支持的斜杠命令（`/clear`、`/mode`、`/model`、`/defaultModel`、`/models`、`/sessions`、`/status`、`/compact`、`/delegate`、`/alloweditpath`、`/allowautoedit`、`/workflows`、`/skill`、`/skills`、`/rule`、`/esm`、`/help`），并对 `/esm` 提供专门的子命令过滤（objective/edit/pause/resume/clear/guide）。
   - 使用 ↑/↓ 导航，Tab 或 Enter 补全（当输入与选中项完全一致时 Enter 直接发送），Esc 关闭，或点击选中；选中后光标定位到插入命令的末尾。输入框保持完整的 combobox/listbox 无障碍状态（`aria-expanded`、`aria-activedescendant`、`aria-selected`）。
   - 运行进行中、API 被禁用或输入包含换行时不显示建议。
 
+- **WebUI：Runtime 托管的知识库管理**
+  - 新增 **知识库** 工作区：通过与 ACP 和 Desktop 相同的 Runtime/session 服务完成目录知识库的列表、新建、编辑、扫描、查询和删除。原生目录选择器不可用时回退到内置目录浏览器；源文件与索引存储始终由服务端持有。
+
+- **Desktop：精简首页预设，快捷操作一键填入提示词**
+  - 首页预设标签精简为「办公 / 代码 / 创作」，中英文预设描述同步收紧。
+  - 快捷操作改为将完整、可直接发送的提示词（含可替换的 `[主题]` 占位符）填入输入框，一键即可开始真实任务，而不再是空泛的标签文案。
+
+- **Desktop：开发模式（`make desktop-dev` / `npm run dev`）**
+  - 新增开发运行器：监听 `renderer/src/`、`renderer/index.html` 与 `renderer/styles.css`，变更后自动重建 `dist/renderer` 并无缓存刷新 Electron，ACP 子进程无需重启；`main/` 与 `preload/` 仅在启动时构建一次，修改后需手动重启。
+  - 开发模式（`MOTHX_DESKTOP_DEV=1`）自动打开 DevTools（以独立外部窗口打开，不嵌入主窗口），Chrome DevTools Protocol 仅监听 `127.0.0.1:9223`（可用 `MOTHX_DESKTOP_DEBUG_PORT` 更换本地端口），renderer 产物变化时自动重载窗口；不启动 `mothx serve`，也不向 renderer 增加任何 HTTP/API 通道。
+  - 开发实例使用独立的 `desktop/.dev-user-data/` 用户数据目录（可用 `MOTHX_DESKTOP_USER_DATA` 覆盖），不会与已安装的 Desktop 争夺单实例锁，也不会复用其本地展示状态。
+
+- **Desktop：在线技能市场（SkillHub Catalog）**
+  - 新增 ACP 特性键 `manageSkillHubCatalog` 与增量式 `mothx/manage/skillhub/*` 方法族（markets/categories/official/search/detail/targets/installed/install/activate/uninstall），为共享 SkillHub 服务的纯 ACP 投影；请求必须绑定活跃会话，Desktop 无法任意选择安装目录。
+  - Desktop 技能页新增「在线市场」区块：市场/分类筛选、关键词搜索、官方推荐，以及安装/更新/启用到当前会话/卸载，可装入当前会话的项目或全局技能目录。
+  - ACP 会话现在跟踪多个已激活技能（此前启用新技能会顶替上一个），同一会话可同时启用多个技能。
+
+- **Desktop：应用背景图片扩展选项**
+  - 背景图可应用于整个应用或仅首页，支持适配方式（填满裁切 / 完整显示 / 拉伸铺满 / 循环平铺）与对齐位置（中 / 左 / 右 / 上 / 下）。
+  - 背景遮罩与表面毛玻璃随图片透明度自适应减弱；全局背景下的标题栏使用可读性更强的对比表面与文字阴影，保证窗口控制按钮清晰可辨。
+  - 外观设置独立为单独的「外观」设置分类。
+
+- **主角团成员提问直达 lead**
+  - 成员需要决策时向 lead 提问，而不是向用户提问：问题进入会话邮箱，以 `[MEMBER_QUESTION]` steering 消息（或 `subagent_wait` 中 `status: question` 的待处理条目）投递，并由 lead 用 `subagent_answer(handle: "<成员>", question_id: "…", answer: "…")` 回答；用户只在 lead 事件流上看到该提问的投影。
+  - 该邮箱通路在所有能派生成员的会话中生效 —— 多 Agent、delegate 与 workflow 模式 —— 不限于绑定主角团的会话；`subagent_wait` 在这些会话中同样能报告待处理的成员活动。只有绑定主角团的会话会在收尾轮为仍在运行的成员保持 run 打开；其他会话正常结束本轮，并在下一个迭代或下一次 run 时看到通知。
+  - 回答一个已不在待处理的提问（已回答、已过期或属于其他成员）会返回错误而不是静默成功。阻塞式 `delegate_subagent` 子 Agent 不会提问，因为它的调用方正停在工具调用里，无人能作答。
+
+- **在 Desktop 与 WebUI 重试失败的消息投递**
+  - Desktop 的通道设置列出当前会话失败的持久化投递（平台、操作类型、状态、失败码、尝试次数与最后更新时间），并提供逐条重试；WebUI 在通道设置中通过 `GET /api/deliveries/failures` 与 `POST /api/deliveries/retry` 暴露同一份 Runtime 事实。
+  - 两个入口都投影 Runtime 自己的判定：只有 failed 且传输级的操作才提供重试，进行中、已投递与永久失败的操作会被拒绝，而不会被打回重试队列（拒绝原因与持久化 fence 一致）。
+
 ### 🐛 问题修复
+
+- **Browser：内置 Skill 不再写入项目目录**
+  - Browser 指引现随内置 `vibe-browser` Skill 提供。在 TUI、WebUI、Desktop、ACP 或频道中启用 Browser 不再创建 `.skills/vibe-browser/SKILL.md`；用户主动创建的同名项目或全局 Skill 仍可覆盖内置指引。
+
+- **频道：Browser 选择在 Runtime 重装配后保持有效**
+  - 频道会话持久化的 Browser 选择现在同时驱动初始 Registry 构建和 Runtime 资源重装配。显式启用 Browser 后，Session Runtime 附着时不再将该工具移除。
 
 - **TUI：运行期间提交的提示词排队执行，不再顶替当前运行**
   - 同一会话同一时刻只允许一个前台执行。此前在运行进行中提交输入会直接替换内存中的运行句柄，导致活跃运行的终态清理与运行时租约被孤立。现在此类提交会在 TUI 中排队，仅当前一个运行到达规范终态并释放租约后，才启动下一个排队提示词 —— 覆盖所有终态分支（成功、失败、未完成与取消）。
   - 排队的提示词保留 Runtime 预制的附件（`agentruntime.PreparedInput`），并通过同一输入契约重新提交，附件在延迟期间保持不变。
 
+- **TUI：`/defaultModel` 与 `/model` 共用同一模型目录逻辑**
+  - `/defaultModel` 选择器现在通过 `providerfactory.ResolvedModels` 解析每个 Provider 的模型列表 —— 与 `/model` 和 WebUI 选择器背后同一套工厂解析目录（内置预设与 settings 覆盖合并）—— 不再直接解析原始 `settings.json` 的 models。settings 条目仅配置凭据或部分模型的 Provider 不再丢失其余内置模型。
+
+- **被取消的运行不再被记为成功**
+  - 在等待成员期间、或最后一轮进行中被取消的运行，现在以 `aborted` 原因记为 cancelled，而不再被投影为正常完成；从终态事件推导状态的入口（ACP/Desktop）会显示用户请求的取消结果。
+  - 因输出上限被截断、但已通过升级或续写恢复的那一轮，不再被判为 incomplete：截断标志现在只作用于自己那一轮，不会泄漏到下一轮。
+  - TUI：已退役的事件流会继续被排空，让被取消的运行总能完成终态记账；被取消的缓存 Agent 会在下次提交前丢弃；因运行提前结束而残留的运行中工具行会被终态化。
+
+- **消息频道：有界投递重试窗口**
+  - 持久化投递操作改为在可配置窗口（默认 10 分钟）内重试，而不是在固定尝试次数后放弃。传输级失败会自动重试、由 serve 重连恢复路径重新打开，或由运维通过 ACP `mothx/manage/deliveries/retry` 重开。
+  - 永久性失败（平台 4xx、不支持的媒体类型、投影损坏）保持 failed：失败投影返回 `retryable` 标记，重试入口会拒绝非 failed 或不可重开的操作而不是把它们打回 `retry_wait`，持久化层执行同样的 fence。仅因依赖失败而终止的操作会随依赖一同恢复。
+
+- **频道：被显式关闭的 sub-agent 工具不再被重新打开**
+  - 把 sub-agent 工具重新指向会话级 manager（它拥有会话邮箱）时，不再复活用户关闭的工具：普通多 Agent 选择保留逐工具开关，绑定主角团的会话仍以完整工具集为权威。
+
+- **并行工具调用按声明顺序上报启动**
+  - 并行工具批次现在按模型给出的顺序上报每个调用的启动，参数解析与 worker 调度不再让后面的调用看起来先启动。该顺序只约束启动、不阻塞执行：调用之间仍然并发运行，各自独立等待审批与持久化执行记录，完成顺序不受限制；结果、transcript 顺序与 provider 续写消息维持原有的顺序保证。Responses 后台运行也使用同一套顺序句柄。
+
 ### ✅ 测试
 
 - TUI：新增测试断言运行期间提交的输入仅排队而不替换租约持有者，且排队提示词只有在取消流程完成持久化运行终态并释放租约之后才会启动。
+- TUI：`/defaultModel` 新增覆盖，断言对话框模型列表与工厂创建的 Provider 列表（`/model` 路径）一致，覆盖部分模型覆盖与仅凭据两类 settings 条目。
+- 主角团：覆盖 Runtime 绑定/分叉、命名成员事件、TUI 与 Serve 的“成员终态不直接开 run”守卫、ACP bind/fork 进程路径、Desktop 投影与跨入口 ESM 空闲 gate。
+- 频道：全“可选工具”契约测试验证每个可用的持久化工具选择都会出现在解析后的会话 Registry 中。
+- 主角团：成员提问 → lead → `subagent_answer` 闭环、已失效提问的拒绝、邮箱归属（会话 lead vs 辅助角色、定时任务、团队绑定的 ESM worker），以及非团队会话在不为成员等待的前提下投递成员通知。
+- Agent 循环：成员等待期间取消、以及被后续轮次恢复的截断轮的终态覆盖。
+- 频道：sub-agent 工具与 lead 共享同一会话邮箱；部分工具选择不会被重新注册复活。
+- 投递：永久失败的重开拒绝，覆盖运维入口与持久化 fence 两层。
+- 投递：WebUI 端点覆盖列表、重试成功以及永久失败/进行中/未知操作的拒绝；Desktop 投影覆盖同一判定与双语文案。
+- Runtime：孤儿恢复并发用例改用同步屏障证明 worker 重叠，不再依赖时间窗口，因此不会在高负载下抖动。
 
 ## v1.2.99
 
@@ -5156,6 +5282,7 @@ mothx [flags] [message...]
 | `--multi-agent` | - | `false` | 启用多 Agent 工具和命令 |
 | `--delegate` | - | `false` | 启用 Delegate 模式（阻塞式单子 Agent 工具） |
 | `--workflows` | - | `false` | 启用 JavaScript workflow 工具和 `/workflows` 命令 |
+| `--artifact` | - | `false` | 为当前 TUI/CLI 进程启用生成制品发布 |
 
 ### 会话管理
 
@@ -5216,6 +5343,7 @@ mothx acp [flags]
 | `--multi-agent` | - | false | 为 ACP 会话启用多 Agent 工具 |
 | `--delegate` | - | false | 为 ACP 会话启用 Delegate 模式 |
 | `--workflows` | - | false | 为 ACP 会话启用 JavaScript workflow 工具 |
+| `--artifact` | - | false | 为当前 ACP/Desktop 进程启用生成制品发布 |
 
 详见 [ACP 协议](acp.md) 文档了解 IDE 集成细节。
 
@@ -5263,6 +5391,7 @@ mothx serve [flags]
 | `--workflows` | - | false | 启用 JavaScript workflow 工具 |
 | `--web-search` | - | false | 为 Serve 会话启用配置的本地 Web 搜索 |
 | `--browser` | - | false | 为 Serve 会话启用浏览器自动化 |
+| `--artifact` | - | false | 为 WebUI/API 会话启用生成制品发布 |
 | `--enable-a2a-master` | - | false | 启用 A2A Master，调度远程 Agent |
 | `--lobster` | - | false | 启用 yolo、关闭沙箱并启用子 Agent |
 | `--verbose` | - | false | 详细输出 |
@@ -5420,6 +5549,15 @@ mothx acp --multi-agent
 ```
 
 启用后，MothX 会注册 `subagent_*` 工具，并支持后台委托调查等多 Agent 工作流。Cron 命令入口也依赖多 Agent 模式。
+
+### 主角团
+
+```bash
+# 启动会话时绑定主角或团队
+mothx --expert software-company
+```
+
+`--expert <bundle-id>` 会通过共享 Runtime 解析本地主角包。团队型主角会为该会话启用声明的成员调度能力；单人主角只改变 lead 身份。TUI 中使用 `/expert list|show <id>|bind <id>|unbind|switch <id>`。替换已绑定主角会创建会话分叉，而不会改写源会话。完整行为见[主角团](expert-teams.md)。
 
 ### Delegate 模式
 
@@ -5740,6 +5878,8 @@ MothX 使用两个配置文件:
     "fallback": "builtin"
   },
   "enablePlanTool": true,
+  "enableArtifact": false,
+  "enableACPArtifact": false,
   "maxContextTokens": 1000000,
   "contextFiles": {
     "enabled": true,
@@ -5796,6 +5936,8 @@ MothX 使用两个配置文件:
 | `toolExecution` | object | *(见下文)* | 本地 function/custom tool 执行模式与每批并发上限 |
 | `statusLine` | object | *(见下文)* | 仅 TUI 生效的外部状态行命令设置 |
 | `enablePlanTool` | bool | `true` | 是否注册内置 `plan` 工具 |
+| `enableArtifact` | bool | `false` | 是否允许 TUI/CLI 会话发布生成制品 |
+| `enableACPArtifact` | bool | `false` | 是否允许 Desktop/ACP 会话发布生成制品 |
 | `maxContextTokens` | int | `0` (自动) | 覆盖最大上下文 token 数 |
 | `contextFiles` | object | *(见下文)* | 上下文文件加载设置 |
 | `skillsDir` | string | `"~/.mothx/skills"` | 全局技能目录路径 |
@@ -6168,7 +6310,7 @@ Google 原生 provider 可以直接配置：
 
 ### toolExecution
 
-该设置只控制本地执行。`sequential` 只会限制响应到达后的 MothX 本地 worker，不会要求模型一次只生成一个 tool call；provider 仍可能在一次响应中返回多个 tool call。TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 都使用同一配置。它不控制 OpenAI Responses `web_search` 等 provider 托管工具内部的并发；托管工具仍由 provider 自己的编排和配额规则负责。
+该设置只控制本地执行。`sequential` 只会限制响应到达后的 MothX 本地 worker，不会要求模型一次只生成一个 tool call；provider 仍可能在一次响应中返回多个 tool call。`parallel` 批次按模型声明的顺序上报每个调用的启动，该顺序不阻塞执行：调用之间仍然并发运行，各自独立等待审批与持久化执行记录，只有完成顺序不受限制。TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 都使用同一配置。它不控制 OpenAI Responses `web_search` 等 provider 托管工具内部的并发；托管工具仍由 provider 自己的编排和配额规则负责。
 
 | 字段 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
@@ -6245,6 +6387,17 @@ WebUI 在“设置 > Tools”中提供这两个字段，TUI 在 `/settings` > Be
 ```
 
 设为 `false` 可禁用（例如不希望 agent 使用结构化计划）。
+
+### enableArtifact / enableACPArtifact
+
+制品发布默认关闭，并分别为终端与 ACP/Desktop 会话配置；启用其中一个不会启用另一个。
+
+```json
+{
+  "enableArtifact": false,
+  "enableACPArtifact": false
+}
+```
 
 ### maxContextTokens
 
@@ -7479,6 +7632,94 @@ A:
 1. 使用 `--debug` 参数
 2. 检查 bwrap 是否安装: `bwrap --version`
 3. 查看系统日志
+
+---
+
+## 主角团
+
+Source: https://mothx.net/zh/expert-teams.md
+
+# 主角团
+
+主角团让一个会话使用可复用的主角身份或协作团队。主角包定义 lead 人设、可选成员人设及其声明的能力。Runtime 会为会话统一解析一次；TUI、WebUI、Desktop/ACP 与渠道入口只投影这一份共享状态。
+
+## 用主角启动
+
+可以在启动时使用 `--expert`，也可以在 TUI 中管理绑定：
+
+```bash
+# 使用内置的软件公司团队启动新会话
+mothx --expert software-company
+
+# 在已有 TUI 会话中查看可用主角包
+/expert list
+/expert show software-company
+
+# 绑定或移除主角身份
+/expert bind software-company
+/expert unbind
+```
+
+`/expert bind` 可为尚未绑定主角的会话建立绑定；`/expert unbind` 会移除当前会话的身份。两者都不会改写既有对话历史。
+
+## 通过分叉切换主角
+
+从一个非空主角切换到另一个主角时，会创建新的会话分支：
+
+```text
+/expert switch frontend-developer
+```
+
+源会话保留原来的主角、历史和身份提示词；新分支在当前对话边界绑定请求的主角。这样不会把两个主角身份混进同一段历史。
+
+WebUI 主角面板和 Desktop 的 **Expert** 会话选项遵循相同规则：首次绑定和解绑更新当前空闲会话；替换已绑定主角会创建并打开分叉会话。
+
+## 团队行为
+
+团队型主角包会自动启用会话的多 Agent 能力，无需只为使用团队再额外添加 `--multi-agent`。lead 会获得团队名册，并可以按成员 ID 派发：
+
+```text
+subagent_spawn(member: "software-engineer", task: "实现这个聚焦修复，并运行相关测试。")
+subagent_wait(timeout_ms: 30000)
+```
+
+成员仍是普通子 Agent：工具和模式限制来自主角包与会话策略；成员不能嵌套派发成员；高风险命令保护仍然生效。单人主角只改变 lead 身份，不会强制启用团队工具。
+
+绑定团队后始终暴露完整的规范 sub-agent 工具集（`subagent_spawn`、`subagent_status`、`subagent_send`、`subagent_wait`、`subagent_answer`、`subagent_destroy`）。团队能力是权威的：逐工具关闭只对非团队的多 Agent 会话生效，不会从团队会话中移除工具。
+
+成员生命周期卡片来自 canonical child event 的投影。成员完成只更新自己的状态，并在活跃 lead 的 agent-loop 边界投递；它不会自行启动新的 lead run。
+
+成员需要决策时向 lead 提问，而不是向用户提问：问题会进入会话邮箱（以 `[MEMBER_QUESTION]` steering 消息，或 `subagent_wait` 中 `status: question` 的待处理条目投递），由 lead 用 `subagent_answer(handle: "<成员>", question_id: "…", answer: "…")` 回答；用户只看到该提问在 lead 事件流上的投影。阻塞式 `delegate_subagent` 子 Agent 不会提问，因为它的调用方正停在工具调用里，无人能作答。
+
+该邮箱通路在所有能派生成员的会话中都可用，不限于团队会话。绑定团队，以及任何交互式来源（TUI、Web UI、ACP），都会在收尾轮为仍在运行的成员保持 run 打开，以便在同一次 run 内处理成员的完成或提问；无头与异步来源（CLI、cron、消息渠道）则在下一个迭代或下一次 run 投递成员通知。
+
+## 与 ESM 的关系
+
+主角团与 Enable Supervisor Mode（ESM）组合使用时不会创建第二套任务调度器。只有用户能创建、编辑、恢复或清除 ESM 目标。只有会话确实空闲且目标仍可自动运行时，既有 ESM continuation 才会启动下一次 lead run；成员终态事件不是续跑触发器。
+
+团队绑定的 ESM worker 会保留 lead 身份与名册，也保留成员调度：该 worker continuation 会消费成员通知，并在收尾前等待成员。ESM 的 critic、audit 和 recovery 角色仍保持隔离：既不获得成员调度工具，也不会消费或等待会话成员。
+
+## 添加本地主角包
+
+主角包会从内置目录、用户配置目录的 `experts/` 文件夹以及项目目录延迟发现：
+
+```text
+<config-dir>/experts/<bundle-name>/
+<project>/.mothx/experts/<bundle-name>/
+```
+
+同名时，项目包覆盖全局包，全局包覆盖内置包。一个主角包包含 `expert.json` 与 `agents/` 下的一个或多个 persona 文件；无效包会显示为不可用，且不能被绑定。包格式和架构设计请参阅[主角团实施方案](../proposal/expert-team-mothx-proposal.md)。
+
+## 用内置 Skill 创建并安装主角团
+
+MothX 内置了 `expert-creater` Skill。启用后，由当前会话的 Agent 根据你的描述创建并安装一个项目级主角团到 `.mothx/experts/<team-id>/`，其中包含校验过的 `expert.json` 与成员人设文件。它不会覆盖已有同名目录；需要更新已有团队时，请明确说明。
+
+| 入口 | 启用指令 |
+| --- | --- |
+| TUI、WebUI 聊天 | `/skill expert-creater` |
+| Desktop、ACP | `/expert-creater`；ACP 也接受 `/skill expert-creater` 或 `/skill:expert-creater` |
+
+启用后，在下一条消息说明团队的用途、领队和成员职责，例如“创建一个移动端发布主角团，包含领队、Android 工程师和测试审查员”。创建完成后用主角团选择器或 `/expert bind <team-id>` 绑定；若当前会话已经绑定其他主角团，则沿用既有分叉切换规则。
 
 ---
 
@@ -8725,7 +8966,7 @@ MothX 会通过 npm registry 检测是否有新版本，并在有可用更新时
 - **OpenAI Responses**：支持原生 response item 回放、reasoning、结构化输出、hosted tools、prompt cache，以及可选的 `responses.background` 持久后台运行。后台任务可查询、取消、重连、放弃，并在 Serve 重启后恢复。
 - **Web UI 管理**：提供会话搜索与分页、运行状态与取消、审批中心、工具结果、技能启用、MCP 配置、Provider/Serve 设置和 `/stats` 统计页面。
 - **MCP**：支持 stdio、streamable HTTP 和 legacy SSE
-- **并行工具执行**：单个 agent 回合内的多个本地函数/自定义工具调用通过有界并行工作池执行。`toolExecution` 设置控制 `mode`（`parallel`/`sequential`）和 `maxConcurrency`（默认 `10`）。TUI、WebUI、Serve、channels、ACP 及子 Agent 统一使用。
+- **并行工具执行**：单个 agent 回合内的多个本地函数/自定义工具调用通过有界并行工作池执行。调用的启动按模型声明的顺序上报，且不阻塞执行，因此调用之间仍然并发重叠，只有完成顺序不受限制。`toolExecution` 设置控制 `mode`（`parallel`/`sequential`）和 `maxConcurrency`（默认 `10`）。TUI、WebUI、Serve、channels、ACP 及子 Agent 统一使用。
 ；可编辑全局与项目级 `mcp.json`，并在新 Serve 会话中加载。
 - **消息通道**：支持微信、飞书和 Webhook；后台运行会持久化事件，断线或重启后可补投结果。WebSocket `/ws/runs`、`/ws/logs` 是 Web UI 事件流，不是独立消息通道。
 - **项目状态文件**：当前项目级状态统一位于 `.mothx/`，包括 `settings.json`、`serve.json`、`allow.json`、`memory.md` 和技能目录。旧 `.vibe` 路径不再自动迁移。
@@ -8913,6 +9154,17 @@ mothx acp --multi-agent
 ```
 
 多 Agent 模式会注册 `subagent_*` 工具，用于委托边界清晰的任务。TUI 多 Agent 工作流中也提供 cron 命令入口。
+
+### 主角团
+
+可将可复用的单主角或协作团队绑定到会话：
+
+```bash
+# 使用内置的软件公司团队启动
+mothx --expert software-company
+```
+
+TUI 中可使用 `/expert list`、`/expert show <id>`、`/expert bind <id>`、`/expert unbind` 与 `/expert switch <id>`。在两个主角之间切换会创建会话分叉，原会话的身份与历史保持不变。团队型主角会自动启用成员调度能力。生命周期、ESM 和本地主角包说明见[主角团](expert-teams.md)。
 
 ### Delegate 模式
 
@@ -11386,10 +11638,12 @@ mothx serve init-config project  # 生成 .mothx/serve.json
     "multiAgent": true,
     "workflows": true
   },
+  "artifact": false,
   "sandbox": {
     "enabled": false
   },
   "channels": {
+    "artifact": false,
     "wechat": { "enabled": false },
     "feishu": { "enabled": false },
     "webhooks": {
@@ -11413,6 +11667,8 @@ mothx serve init-config project  # 生成 .mothx/serve.json
   }
 }
 ```
+
+制品发布默认关闭。顶层 `artifact` 控制 WebUI/API 会话，`channels.artifact` 独立控制微信与飞书会话。
 
 ### 配置热重载
 
@@ -12349,7 +12605,7 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | `mode` | string | `"parallel"` | `"parallel"` 使用有界本地 worker 并行执行；`"sequential"` 在本地逐个执行已返回的调用（不影响 provider 侧并行出参） |
 | `maxConcurrency` | int | `10` | 每轮 agent 允许的最大并发工具调用数（设为 `1` 则为串行） |
 
-工具完成事件可能乱序输出，但 provider 的后续消息会按原始调用顺序还原。该设置由 TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 统一使用。`sequential` 只改变响应到达后的本地执行顺序；provider 仍可能在一条响应中返回多个 tool call。它不控制 provider 托管工具（如 OpenAI Responses `web_search`）内部的并发；这些调用仍由 provider 自身的编排负责。
+调用按模型给出的顺序上报启动，后面的调用的启动绝不会早于前面的调用可见。该顺序只约束启动上报，不阻塞执行：调用之间仍然并发运行，各自独立等待审批与写入执行记录，完成顺序不受限制；因此工具完成事件可能乱序输出，但 provider 的后续消息会按原始调用顺序还原。该设置由 TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 统一使用。`sequential` 只改变响应到达后的本地执行顺序；provider 仍可能在一条响应中返回多个 tool call。它不控制 provider 托管工具（如 OpenAI Responses `web_search`）内部的并发；这些调用仍由 provider 自身的编排负责。
 
 
 ---
@@ -12374,6 +12630,8 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | [`subagent_spawn`](#subagent_---子-agent-委托) | 多 Agent | 派生出完全隔离的子 Agent | 子 Agent 级权限限制 | 仅多 Agent 模式 |
 | [`subagent_status`](#subagent_---子-agent-委托) | 多 Agent | 查询子 Agent 执行状态与结果 | 只读 | 仅多 Agent 模式 |
 | [`subagent_send`](#subagent_---子-agent-委托) | 多 Agent | 向子 Agent 发送后续追问或指令 | 发送消息 | 仅多 Agent 模式 |
+| [`subagent_wait`](#subagent_---子-agent-委托) | 多 Agent | 关键路径被阻塞时等待成员活动 | 有界等待（2.5s-120s） | 仅多 Agent 模式 |
+| [`subagent_answer`](#subagent_---子-agent-委托) | 多 Agent | 回答成员的阻塞提问，让其继续执行 | 提问作用域 | 仅多 Agent 模式 |
 | [`subagent_destroy`](#subagent_---子-agent-委托) | 多 Agent | 销毁子 Agent 释放其上下文资源 | 销毁释放 | 仅多 Agent 模式 |
 | [`delegate_subagent`](#delegate_subagent---阻塞式单子-agent-委托) | 委托模式 | 同步执行一个子 Agent 任务 | 子 Agent 级权限限制 | 仅 Delegate 模式 |
 | [`workflow_run`](#workflow_run---动态-javascript-workflow) | Workflow | 执行 JavaScript workflow 并编排 worker agent | 子 Agent 级权限限制 | 仅 Workflow 模式 |
@@ -12728,6 +12986,8 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 
 当 MothX 启用多 Agent 运行模式（使用 `--multi-agent` 参数启动）时，主 Agent 可以动态派生出完全隔离的子 Agent 来并行承担不同的开发或审查工作。子 Agent 拥有完全独立的消息上下行、临时环境、独立日志和 Session。
 
+在所有能派生成员的会话中，成员的提问与完成通知都会通过会话邮箱（以 steering 消息）投递给活跃的 lead；只有绑定了主角团（team）的会话才会在收尾轮为仍在运行的成员保持 run 打开，其他会话正常结束本轮，并在下一个迭代或下一次 run 时看到该通知。
+
 #### `subagent_spawn`
 异步派生一个全新的子 Agent，并接收一个独立的作业 ID：
 
@@ -12750,6 +13010,24 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 ```json
 { "handle": "subagent-job-1", "message": "同时请把 helper_test.go 里的包引入路径修复一下。" }
 ```
+
+#### `subagent_wait`
+阻塞等待，直到有成员/子 Agent 的完成通知进入会话邮箱，或到达有界超时。只返回待处理摘要（成员 ID、状态，以及等待回答的成员的 `question_id`）；完成内容会在下一个迭代边界自动投递。
+
+| 参数名 | 类型 | 必填 | 描述 |
+|--------|------|------|------|
+| `timeout_ms` | integer | - | 最长等待毫秒数，限制在 2500-120000（默认 30000）。 |
+
+#### `subagent_answer`
+回答运行中成员向 lead（而不是向用户）提出的阻塞提问。提问以 `[MEMBER_QUESTION]` steering 消息或 `subagent_wait` 中 `status: question` 的待处理条目送达；在回答之前该成员一直阻塞。
+
+| 参数名 | 类型 | 必填 | 描述 |
+|--------|------|------|------|
+| `handle` | string | ✓ | 提问成员的处理句柄。 |
+| `question_id` | string | ✓ | 来自 `[MEMBER_QUESTION]` 消息或等待摘要的提问 ID。 |
+| `answer` | string | ✓ | 成员继续执行所需的回答。 |
+
+若提问已不在待处理状态（已回答、已过期或属于其他成员），工具会返回错误而不是静默成功。
 
 #### `subagent_destroy`
 销毁该子 Agent 的运行时上下文并彻底回收一切临时资源。

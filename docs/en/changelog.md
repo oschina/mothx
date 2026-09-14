@@ -14,6 +14,9 @@
 - **Bound Teams Keep the Full Sub-Agent Tool Set**
   - A bound expert team always exposes the complete canonical sub-agent tool set (`subagent_spawn`, `subagent_status`, `subagent_send`, `subagent_wait`, `subagent_answer`, `subagent_destroy`). Per-tool toggles that disable individual sub-agent tools apply only to non-team multi-agent sessions; the team capability is authoritative and never drops tools.
 
+- **New Gitee/Moark Model: `deepseek-v4.1-flash`**
+  - Added `deepseek-v4.1-flash` to the `gitee` and `moark` providers with a 1M context window and text+image input; no default max_tokens is sent.
+
 ### 🐛 Bug Fixes
 
 - **MCP: Image Tool Results Reach the Model Instead of a Placeholder**
@@ -32,6 +35,19 @@
 - **Cancelled or Expired Decisions No Longer Block Forking**
   - A session whose only decision had actually been cancelled or timed out was still treated as having a pending decision, so forking it was rejected as `source session is active`. Every decision-ledger reader now shares one vocabulary, so cancelled and timed-out decisions (and the legacy channel request name) clear correctly and the fork proceeds. The durable decision event name and its `{"decision": …}` envelope also gained a single owner each, so cross-entry decision recovery reads the same records regardless of which surface wrote them.
 
+- **Mid-Stream Network Failures Retry Automatically Instead of Ending the Reply**
+  - A provider stream that died with a transient transport error (`connection reset by peer`, unexpected EOF, gateway 5xx, ...) after text or thinking had already been streamed failed the whole run with `stream read error: ...`: provider-level retries only cover streams that break before any visible output, and the agent-level retry only covered idle-stream timeouts.
+  - The agent loop now performs a bounded continuation retry (up to 2 attempts) for such transient errors. Already-streamed partial output is persisted into history and a continuation instruction quoting the exact suffix is injected, so the model resumes from the interruption point instead of duplicating what the user already saw; with no visible output yet, the turn simply re-runs. Turns with an already-emitted tool call, context overflow (dedicated compaction recovery), and idle-stream timeouts (dedicated timeout retry) keep their existing behavior, and Responses remote-state turns keep their existing failover path.
+
+### 🔧 Improvements
+
+- **SQLite: Three-Phase Write-Pressure Reduction for the Session Database**
+  - The connection durability policy moves from `synchronous(FULL)` to the WAL-recommended `synchronous(NORMAL)`: a commit no longer fsyncs while holding the single writer lock (the fsync moves to checkpoint time), so writer-lock occupancy across processes sharing one session directory shrinks from fsync scale to page-cache scale, largely eliminating the recorded "another process keeps committing until begin exceeds busy_timeout and reports database is locked" scenario. Process crashes still lose nothing; an OS crash or power loss can roll back the seconds of commits since the last checkpoint (the database stays consistent, and a missing run terminal state converges through the existing lease-expiry → orphan → bounded-recovery path). `MOTHX_SQLITE_SYNCHRONOUS=FULL` restores the legacy durability per process, and mixed old/new processes sharing one database file is safe.
+  - Tool results now persist in batches: the session domain gained `AppendMessages`, writing one agent iteration's tool results as a parent-chained single transaction (capped at 64 entries per transaction, chunked above that) with the lease fence and the leaf-conflict check still inside the write transaction; tool-heavy rounds drop from N+3 write transactions to about 3. The assistant message still persists before tool side effects, and a failed batch still fails the run with `session_save`.
+  - Lease heartbeats are coalesced: instead of one goroutine committing a renewal transaction per active lease every 3 seconds, a single scheduler per session directory renews all of this process's leases for that database in one transaction (the per-lease owner/epoch/token CAS fence is unchanged, so a displaced or released lease still only loses itself); steady-state heartbeat writes drop from N transactions/3s to 1 transaction/3s/process. TTL, heartbeat interval, retry budget, and the 30-second bounded-recovery guarantee are untouched, and the scheduler retires after the last lease is released.
+  - `internal/db` gained process-wide busy-retry and transaction-begin wait metrics (`BusyRetryStats`/`BeginWaitStats`), published through expvar as `mothx_sqlite` and readable on the `--debug` pprof server's `/debug/vars`, making cross-process writer contention observable.
+  - Full plan, multi-process reasoning, and load-test matrix: `docs/proposal/sqlite-write-pressure-reduction-proposal.md`.
+
 ### ✅ Tests
 
 - Database: `internal/db` pins the begin-retry policy — only SQLITE_BUSY/SQLITE_LOCKED are retried, other driver errors and an expiring context are surfaced unchanged, driver codes are classified through the error's own `Code()` method, and `RunInTx` keeps commit/rollback semantics.
@@ -43,6 +59,8 @@
 - Member wait: an interactive (TUI) non-team lead holds its run open for a running member, while a headless (CLI) one ends normally.
 - Architecture: a guard rejects new use of the legacy session run/lease APIs or a low-level `agent.New` in adapter test files, with a documented allowlist for the remaining fixtures.
 - `systeminit`: the shared `/systeminit` prompt is pinned — interactive-only question guidance, trimmed extra instructions before the final note, blank extra input ignored, and determinism.
+- Stream-failure recovery: a mid-stream connection reset resumes through the continuation retry — partial output persists and continues from the exact suffix, no visible output re-runs the turn fresh, and exhausting the budget surfaces the original error — while a turn with an already-emitted tool call or a non-retryable error never retries.
+- SQLite write pressure: `internal/db` pins the synchronous default (NORMAL), the `MOTHX_SQLITE_SYNCHRONOUS=FULL` override, and busy-retry counting that never charges permanent errors; session tests cover the `AppendMessages` parent chain and replay order, whole-batch stale-writer rejection persisting no rows, chunking above the transaction cap, and sub-agent table isolation; the heartbeat scheduler test covers one scheduler per directory, batched renewal, a displaced lease losing only itself while the survivor renews, and retirement after the last release. Plus write-pressure load shapes A/B/C (multi-process distinct-session writers, mixed FULL/NORMAL deployment, single-process many sessions with leases) reporting busy/begin contention metrics, scalable through `MOTHX_WRITE_PRESSURE_SCALE` for baseline runs.
 ## v1.2.100
 
 ### ✨ New Features
