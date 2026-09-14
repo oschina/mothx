@@ -215,6 +215,33 @@ func DSNForOS(path string, windows bool) string {
 	return dsnForOS(path, windows, false)
 }
 
+// synchronousMode returns the SQLite synchronous pragma value for new
+// connections.
+//
+// WAL + NORMAL is the default: a commit no longer fsyncs while holding the
+// single writer lock (the fsync moves to checkpoint time), so the
+// cross-process writer queue shrinks from fsync-scale to page-cache-scale.
+// Durability semantics: a process crash loses nothing (committed frames
+// survive in the WAL); an OS crash or power loss can roll back commits made
+// since the last checkpoint without corrupting the database. That window is
+// already covered by the session recovery model (missing run terminal state
+// converges through lease expiry, orphaned projection, and bounded
+// terminalization; see
+// docs/proposal/cross-process-session-execution-ownership-proposal.md and
+// docs/proposal/sqlite-write-pressure-reduction-proposal.md).
+//
+// MOTHX_SQLITE_SYNCHRONOUS=FULL restores the legacy per-commit fsync for
+// deployments that require it. The variable is read per connection open, so
+// processes running different builds or settings (for example a desktop
+// vendored runtime next to a newer CLI) safely share one database file; each
+// connection's setting only affects its own commit durability.
+func synchronousMode() string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("MOTHX_SQLITE_SYNCHRONOUS")), "FULL") {
+		return "FULL"
+	}
+	return "NORMAL"
+}
+
 func dsnForOS(path string, windows bool, foreignKeys bool) string {
 	uriPath := filepath.ToSlash(path)
 	if windows && !strings.HasPrefix(uriPath, "/") {
@@ -234,7 +261,7 @@ func dsnForOS(path string, windows bool, foreignKeys bool) string {
 	if foreignKeys {
 		q.Add("_pragma", "foreign_keys(1)")
 	}
-	q.Add("_pragma", "synchronous(FULL)")
+	q.Add("_pragma", "synchronous("+synchronousMode()+")")
 	// _txlock=immediate makes every non-read-only transaction take the writer
 	// lock up front, which avoids a deferred read-to-write upgrade failing with
 	// SQLITE_BUSY. It also means a begin waits for the writer, so transient

@@ -112,3 +112,59 @@ func TestOpenForeignKeysOptionIsPerDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestSynchronousModeDefaultsToNormalWithFullEscapeHatch locks the write
+// pressure policy: new connections use WAL + synchronous(NORMAL) so a commit
+// no longer fsyncs while holding the single writer lock, and the
+// MOTHX_SQLITE_SYNCHRONOUS=FULL escape hatch restores the legacy per-commit
+// durability. The variable is read per connection open, so processes running
+// different builds or settings can share one database file.
+func TestSynchronousModeDefaultsToNormalWithFullEscapeHatch(t *testing.T) {
+	if mode := synchronousMode(); mode != "NORMAL" {
+		t.Fatalf("synchronousMode() = %q, want NORMAL", mode)
+	}
+	// url.Values.Encode escapes the pragma parentheses.
+	if dsn := DSNForOS(filepath.Join("sessions", "sessions.db"), false); !strings.Contains(dsn, "synchronous%28NORMAL%29") {
+		t.Fatalf("default DSN = %q, want synchronous(NORMAL)", dsn)
+	}
+
+	// A table-creating migration keeps this on the same footing as the other
+	// Open tests: on a database with no tables at all, the driver reports the
+	// first wal_checkpoint right after open as locked regardless of the
+	// synchronous mode (pre-existing quirk, unrelated to this policy).
+	migrate := func(sqlDB *sql.DB) error {
+		_, err := sqlDB.Exec(`CREATE TABLE IF NOT EXISTS sync_probe (id TEXT PRIMARY KEY)`)
+		return err
+	}
+	normalDB, err := Open(filepath.Join(t.TempDir(), "normal.db"), migrate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var normal int
+	if err := normalDB.QueryRow("PRAGMA synchronous").Scan(&normal); err != nil {
+		t.Fatal(err)
+	}
+	if normal != 1 {
+		t.Fatalf("default connection PRAGMA synchronous = %d, want 1 (NORMAL)", normal)
+	}
+
+	t.Setenv("MOTHX_SQLITE_SYNCHRONOUS", "FULL")
+	if mode := synchronousMode(); mode != "FULL" {
+		t.Fatalf("synchronousMode() with env override = %q, want FULL", mode)
+	}
+	fullDB, err := Open(filepath.Join(t.TempDir(), "full.db"), migrate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var full int
+	if err := fullDB.QueryRow("PRAGMA synchronous").Scan(&full); err != nil {
+		t.Fatal(err)
+	}
+	if full != 2 {
+		t.Fatalf("env override connection PRAGMA synchronous = %d, want 2 (FULL)", full)
+	}
+
+	if err := CloseAll(); err != nil {
+		t.Fatal(err)
+	}
+}

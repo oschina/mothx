@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -54,6 +55,56 @@ func isSQLiteBusy(err error) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// busyRetryCounters accumulates transient SQLITE_BUSY/SQLITE_LOCKED begin
+// retries process-wide so cross-process writer contention stays observable:
+// a healthy workload keeps hits near zero even with several processes sharing
+// one session directory, while sustained growth points at a writer queue
+// worth investigating (see
+// docs/proposal/sqlite-write-pressure-reduction-proposal.md).
+var busyRetryCounters = struct {
+	hits       atomic.Uint64
+	waitNanods atomic.Uint64
+}{}
+
+// beginWaitCounters tracks every transaction begin attempt (successful or
+// retried): how often the process begins write/read transactions, how much
+// wall time the begin calls take in total, and the single slowest begin. A
+// growing max/total under multi-process load is the direct signal of writer
+// queueing on the shared session database.
+var beginWaitCounters = struct {
+	count   atomic.Uint64
+	totalNs atomic.Uint64
+	maxNs   atomic.Uint64
+}{}
+
+// BusyRetryStats returns the cumulative begin-retry hit count and the total
+// backoff time slept between attempts since process start. The wait total
+// counts the scheduled backoff delays only; time blocked inside a begin call
+// (busy_timeout) belongs to the driver and is reported by BeginWaitStats.
+func BusyRetryStats() (hits uint64, totalWait time.Duration) {
+	return busyRetryCounters.hits.Load(), time.Duration(busyRetryCounters.waitNanods.Load())
+}
+
+// BeginWaitStats returns the cumulative transaction begin attempt count, the
+// total wall time spent inside begin calls, and the slowest single begin
+// since process start.
+func BeginWaitStats() (count uint64, total, max time.Duration) {
+	return beginWaitCounters.count.Load(),
+		time.Duration(beginWaitCounters.totalNs.Load()),
+		time.Duration(beginWaitCounters.maxNs.Load())
+}
+
+func recordBeginWait(elapsed time.Duration) {
+	beginWaitCounters.count.Add(1)
+	beginWaitCounters.totalNs.Add(uint64(elapsed))
+	for {
+		previous := beginWaitCounters.maxNs.Load()
+		if uint64(elapsed) <= previous || beginWaitCounters.maxNs.CompareAndSwap(previous, uint64(elapsed)) {
+			return
+		}
 	}
 }
 
@@ -117,7 +168,9 @@ func retryBusy[T any](ctx context.Context, budget time.Duration, begin func() (T
 	delay := busyRetryDelay
 	var lastErr error
 	for {
+		attemptStart := time.Now()
 		value, err := begin()
+		recordBeginWait(time.Since(attemptStart))
 		if err == nil {
 			return value, nil
 		}
@@ -125,6 +178,7 @@ func retryBusy[T any](ctx context.Context, budget time.Duration, begin func() (T
 			return zero, err
 		}
 		lastErr = err
+		busyRetryCounters.hits.Add(1)
 		if !time.Now().Add(delay).Before(deadline) {
 			return zero, lastErr
 		}
@@ -133,6 +187,7 @@ func retryBusy[T any](ctx context.Context, budget time.Duration, begin func() (T
 			return zero, ctx.Err()
 		case <-time.After(delay):
 		}
+		busyRetryCounters.waitNanods.Add(uint64(delay))
 		if delay < busyRetryMaxDelay {
 			delay *= 2
 			if delay > busyRetryMaxDelay {

@@ -1232,6 +1232,7 @@ settings.json.bak_20260715-143000
 | `VIBECODING_THINKING` | `defaultThinkingLevel` | `export VIBECODING_THINKING=high` |
 | `VIBECODING_DEBUG` | 启用 provider 级请求/响应调试输出 | `export VIBECODING_DEBUG=1` |
 | `VIBECODING_PPROF_ADDR` | 设置 `--debug` 启动的 pprof 监听地址 | `export VIBECODING_PPROF_ADDR=127.0.0.1:6061` |
+| `MOTHX_SQLITE_SYNCHRONOUS` | 会话库 SQLite 持久性级别：默认 `NORMAL`（WAL 推荐组合，提交不逐次 fsync）；设为 `FULL` 恢复每次提交 fsync | `export MOTHX_SQLITE_SYNCHRONOUS=FULL` |
 | `VIBECODING_NO_UPDATE_CHECK` | 禁用版本更新检测 | `export VIBECODING_NO_UPDATE_CHECK=1` |
 | `VIBECODING_NPM_REGISTRY` | 覆盖 npm registry 地址 | `export VIBECODING_NPM_REGISTRY=https://registry.npmjs.org` |
 

@@ -80,7 +80,32 @@ func (d *RuntimeLeaseDAO) ActiveRunIDs(ctx context.Context, executor bun.IDB, se
 // here would permanently kill a live owner after any stall longer than the TTL
 // even though no other process ever took the lease.
 func (d *RuntimeLeaseDAO) Renew(ctx context.Context, record *RuntimeLeaseRecord, ttl int64) (int64, error) {
-	result, err := d.db.NewUpdate().Model((*RuntimeLeaseRecord)(nil)).
+	return renewLeaseExec(ctx, d.db, record, ttl)
+}
+
+// RenewBatch extends several leases through one executor, intended for a
+// single transaction so one process renews all of its leases for a database
+// with one commit instead of one write transaction per lease. Each renewal
+// runs the exact same fenced UPDATE as Renew (owner/epoch/token CAS against
+// the active row), so a displaced owner can never renew, batched or not. The
+// result maps each record's SessionID to its RowsAffected count: 1 means the
+// lease is still owned, 0 means the row was released or displaced and the
+// caller must treat that lease as lost. All records must belong to the same
+// database.
+func (d *RuntimeLeaseDAO) RenewBatch(ctx context.Context, executor bun.IDB, records []RuntimeLeaseRecord, ttl int64) (map[string]int64, error) {
+	results := make(map[string]int64, len(records))
+	for i := range records {
+		affected, err := renewLeaseExec(ctx, executor, &records[i], ttl)
+		if err != nil {
+			return nil, err
+		}
+		results[records[i].SessionID] = affected
+	}
+	return results, nil
+}
+
+func renewLeaseExec(ctx context.Context, executor bun.IDB, record *RuntimeLeaseRecord, ttl int64) (int64, error) {
+	result, err := executor.NewUpdate().Model((*RuntimeLeaseRecord)(nil)).
 		Set("heartbeat_at = CAST(strftime('%s','now') AS INTEGER)").
 		Set("expires_at = CAST(strftime('%s','now') AS INTEGER) + ?", ttl).
 		Set("updated_at = CAST(strftime('%s','now') AS INTEGER)").

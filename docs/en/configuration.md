@@ -1234,6 +1234,7 @@ These environment variables override settings at runtime:
 | `VIBECODING_THINKING` | `defaultThinkingLevel` | `export VIBECODING_THINKING=high` |
 | `VIBECODING_DEBUG` | Enable provider-level request/response debug output | `export VIBECODING_DEBUG=1` |
 | `VIBECODING_PPROF_ADDR` | pprof listen address when `--debug` is set | `export VIBECODING_PPROF_ADDR=127.0.0.1:6061` |
+| `MOTHX_SQLITE_SYNCHRONOUS` | Session-database SQLite durability: defaults to `NORMAL` (the WAL-recommended pairing, no per-commit fsync); set to `FULL` to restore per-commit fsync | `export MOTHX_SQLITE_SYNCHRONOUS=FULL` |
 | `VIBECODING_NO_UPDATE_CHECK` | Disable update check | `export VIBECODING_NO_UPDATE_CHECK=1` |
 | `VIBECODING_NPM_REGISTRY` | Override npm registry for update checks | `export VIBECODING_NPM_REGISTRY=https://registry.npmjs.org` |
 

@@ -58,6 +58,15 @@ Entries keep stable IDs and parent IDs so the conversation can be replayed as a 
 | `branch_summary` | Branch switch summary |
 | `label` | User-defined label |
 
+### Durability and Write Performance
+
+`sessions.db` runs in WAL mode with the durability level defaulting to the SQLite-recommended `synchronous(NORMAL)`: commits no longer fsync individually (syncing is concentrated at WAL checkpoints), which markedly lowers writer-lock contention and write latency when several processes (Serve, TUI, ACP, CLI) share one session directory. The semantics are:
+
+- A process crash (kill -9, panic) loses nothing.
+- An OS crash or power loss does not corrupt the database, but commits made since the last checkpoint (typically seconds of writes) may roll back; a missing run terminal state converges through the lease-expiry → orphan-recovery path, so a session never stays stuck as "running" forever.
+
+Deployments sensitive to power loss (unstable power, some network drives) can restore the legacy per-commit fsync behavior with the `MOTHX_SQLITE_SYNCHRONOUS=FULL` environment variable; it takes effect per process, and mixed old/new processes sharing one database file is safe. With `--debug`, the `mothx_sqlite` metrics on the `/debug/vars` endpoint (busy-retry hits and backoff total, transaction begin count/total wait/slowest single wait) make cross-process writer contention observable. Full design and load-test matrix: `docs/proposal/sqlite-write-pressure-reduction-proposal.md`.
+
 ## Session Operations
 
 ### Create New Session

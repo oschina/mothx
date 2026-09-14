@@ -1,12 +1,38 @@
 package debugpprof
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	// Register the mothx_sqlite contention metrics in the process expvar map
+	// so the /debug/vars contract can be asserted end to end.
+	_ "github.com/startvibecoding/mothx/internal/db"
 )
+
+// TestMuxServesExpvarsWithSQLiteStats pins the observability endpoint: the
+// debug server's /debug/vars renders the process expvar map including the
+// SQLite contention metrics internal/db publishes under "mothx_sqlite".
+func TestMuxServesExpvarsWithSQLiteStats(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/debug/vars", nil)
+	rec := httptest.NewRecorder()
+
+	newMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var vars map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &vars); err != nil {
+		t.Fatalf("decode /debug/vars body: %v", err)
+	}
+	if _, ok := vars["mothx_sqlite"]; !ok {
+		t.Fatalf("/debug/vars is missing mothx_sqlite (keys: %d)", len(vars))
+	}
+}
 
 func TestListenAddrDefaultsToLocalhost(t *testing.T) {
 	t.Setenv(AddrEnv, "")

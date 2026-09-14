@@ -157,3 +157,41 @@ func TestRunInTxCommitsAndRollsBack(t *testing.T) {
 		t.Fatalf("values = %v, want only the committed row", values)
 	}
 }
+
+// TestBusyRetryStatsCountTransientRetries pins the observability contract:
+// every transient begin retry increments the process-wide counter and the
+// slept backoff is accumulated, while permanent errors leave the stats
+// untouched. Values are cumulative, so the test measures deltas.
+func TestBusyRetryStatsCountTransientRetries(t *testing.T) {
+	hitsBefore, waitBefore := BusyRetryStats()
+
+	attempts := 0
+	if _, err := retryBusy(context.Background(), time.Second, func() (string, error) {
+		attempts++
+		if attempts < 3 {
+			return "", fakeBusy
+		}
+		return "ok", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	hitsAfter, waitAfter := BusyRetryStats()
+	if hitsAfter-hitsBefore != 2 {
+		t.Fatalf("busy retry hits delta = %d, want 2", hitsAfter-hitsBefore)
+	}
+	if waitAfter <= waitBefore {
+		t.Fatalf("busy retry wait delta = %v, want a positive backoff total", waitAfter-waitBefore)
+	}
+
+	permanent := errors.New("constraint failed")
+	if _, err := retryBusy(context.Background(), time.Second, func() (string, error) {
+		return "", permanent
+	}); !errors.Is(err, permanent) {
+		t.Fatalf("err = %v, want the original permanent error", err)
+	}
+	hitsFinal, _ := BusyRetryStats()
+	if hitsFinal != hitsAfter {
+		t.Fatalf("a permanent error must not count as a busy retry: hits %d -> %d", hitsAfter, hitsFinal)
+	}
+}

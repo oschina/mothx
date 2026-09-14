@@ -1768,15 +1768,18 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 		}
 		baseIndex := len(a.messages) - len(toolResults)
 		a.mu.Unlock()
-		for i, result := range toolResults {
-			if a.config.Session != nil {
-				msgID, err := a.config.Session.AppendMessage(result)
-				if err != nil {
-					a.emitRunFinished(ch, TaskFailed, "session_save", err, usage, nil)
-					ch <- Event{Type: EventError, Error: fmt.Errorf("save tool result to session: %w", err)}
-					ch <- a.agentEndEvent()
-					return
-				}
+		// Persist the whole batch in bounded transactions instead of one write
+		// transaction per tool result; failure semantics match the previous
+		// per-message loop (a failed save fails the run with session_save).
+		if a.config.Session != nil && len(toolResults) > 0 {
+			msgIDs, err := a.config.Session.AppendMessages(toolResults)
+			if err != nil {
+				a.emitRunFinished(ch, TaskFailed, "session_save", err, usage, nil)
+				ch <- Event{Type: EventError, Error: fmt.Errorf("save tool result to session: %w", err)}
+				ch <- a.agentEndEvent()
+				return
+			}
+			for i, msgID := range msgIDs {
 				a.setMessageID(baseIndex+i, msgID)
 			}
 		}

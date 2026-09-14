@@ -307,3 +307,102 @@ func TestAcquireMutationsReleasesEarlierSessionsOnConflict(t *testing.T) {
 	}
 	guard.Release()
 }
+
+// leaseHeartbeatAt reads the persisted heartbeat timestamp of one lease row.
+func leaseHeartbeatAt(t *testing.T, sessionDir, sessionID string) int64 {
+	t.Helper()
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var heartbeat int64
+	if err := db.Bun().QueryRow("SELECT heartbeat_at FROM session_runtime_leases WHERE session_id = ?", sessionID).Scan(&heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	return heartbeat
+}
+
+// TestLeaseHeartbeatSchedulerBatchRenewDisplaceAndRetire pins the coalesced
+// heartbeat contract in one timeline: a single per-directory scheduler renews
+// every lease of that directory (both rows advance within one tick), a lease
+// displaced by an epoch bump is the only one marked lost, the surviving lease
+// keeps being renewed, and the scheduler retires once the last lease is
+// released.
+func TestLeaseHeartbeatSchedulerBatchRenewDisplaceAndRetire(t *testing.T) {
+	sessionDir := t.TempDir()
+	first := New(filepath.Join(t.TempDir(), "work-a"), sessionDir)
+	if err := first.InitWithID("hb-batch-1"); err != nil {
+		t.Fatal(err)
+	}
+	second := New(filepath.Join(t.TempDir(), "work-b"), sessionDir)
+	if err := second.InitWithID("hb-batch-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	guardA, err := AcquireExecutionAdmission(sessionDir, "hb-batch-1")
+	if err != nil {
+		t.Fatalf("acquire lease A: %v", err)
+	}
+	defer guardA.Release()
+	guardB, err := AcquireExecutionAdmission(sessionDir, "hb-batch-2")
+	if err != nil {
+		t.Fatalf("acquire lease B: %v", err)
+	}
+	defer guardB.Release()
+
+	dirKey := leaseDirKey(sessionDir)
+	leaseHeartbeatSchedulers.Lock()
+	_, scheduled := leaseHeartbeatSchedulers.schedulers[dirKey]
+	leaseHeartbeatSchedulers.Unlock()
+	if !scheduled {
+		t.Fatal("no heartbeat scheduler was started for the directory")
+	}
+
+	// Simulate a competing process taking over lease B: bumping the epoch is
+	// the only takeover path, and the fenced renewal must stop matching B
+	// while A stays renewable.
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Bun().Exec("UPDATE session_runtime_leases SET epoch = epoch + 1 WHERE session_id = ?", "hb-batch-2"); err != nil {
+		t.Fatalf("displace lease B: %v", err)
+	}
+
+	beforeA := leaseHeartbeatAt(t, sessionDir, "hb-batch-1")
+	deadline := time.Now().Add(2*runtimeHeartbeatEvery + 2*time.Second)
+	renewed := false
+	for time.Now().Before(deadline) && !renewed {
+		select {
+		case <-guardB.Lost():
+		default:
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		// Lease B was marked lost; the same coalesced tick must have renewed A.
+		if leaseHeartbeatAt(t, sessionDir, "hb-batch-1") <= beforeA {
+			t.Fatal("surviving lease A was not renewed by the batch that detected B's displacement")
+		}
+		renewed = true
+	}
+	if !renewed {
+		t.Fatal("displaced lease B was not marked lost within two heartbeat intervals")
+	}
+
+	guardA.Release()
+	guardB.Release()
+	retired := false
+	deadline = time.Now().Add(2*runtimeHeartbeatEvery + 2*time.Second)
+	for time.Now().Before(deadline) && !retired {
+		leaseHeartbeatSchedulers.Lock()
+		_, exists := leaseHeartbeatSchedulers.schedulers[dirKey]
+		leaseHeartbeatSchedulers.Unlock()
+		retired = !exists
+		if !retired {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if !retired {
+		t.Fatal("heartbeat scheduler was not retired after the last lease was released")
+	}
+}

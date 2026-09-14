@@ -58,6 +58,15 @@ MothX 的会话设计在不同运行模式下有所区别：
 | `branch_summary` | 分支切换摘要 |
 | `label` | 用户自定义标签 |
 
+### 持久性与写入性能
+
+`sessions.db` 运行在 WAL 模式，持久性级别默认为 SQLite 推荐的 `synchronous(NORMAL)`：提交不再逐次 fsync（同步集中在 WAL checkpoint），多个进程（Serve、TUI、ACP、CLI）共享同一会话目录时的写锁竞争与写入延迟显著降低。其语义是：
+
+- 进程崩溃（kill -9、panic）不丢失任何数据；
+- 操作系统崩溃或断电时，数据库不会损坏，但最近一次 checkpoint 之后（通常为秒级）的提交可能回退；缺失的 run 终态由租约过期 → 孤儿恢复路径收敛，会话不会永久停留在“运行中”。
+
+对断电敏感的部署（不稳定电源、部分网络盘等）可用环境变量 `MOTHX_SQLITE_SYNCHRONOUS=FULL` 恢复旧的每提交 fsync 行为；该变量按进程生效，新旧进程混布共享同一库文件是安全的。以 `--debug` 启动时，`/debug/vars` 端点的 `mothx_sqlite` 指标（busy 重试次数与退避总时长、事务 begin 次数/等待总时长/单次最大等待）可用于观测跨进程写锁竞争。完整设计与压测矩阵见 `docs/proposal/sqlite-write-pressure-reduction-proposal.md`。
+
 ## 会话操作
 
 ### 创建新会话

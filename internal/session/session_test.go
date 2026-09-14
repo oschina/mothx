@@ -852,6 +852,208 @@ func TestAppendEntriesMaintainParentChain(t *testing.T) {
 	}
 }
 
+func TestAppendMessagesPersistsBatchInOrder(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "sessions")
+
+	m := New("/tmp/test", sessionDir)
+	if err := m.Init(); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+
+	seedID, err := m.AppendMessage(provider.NewUserMessage("seed"))
+	if err != nil {
+		t.Fatalf("append seed: %v", err)
+	}
+
+	ids, err := m.AppendMessages([]provider.Message{
+		provider.NewUserMessage("tool result one"),
+		provider.NewAssistantMessage([]provider.ContentBlock{{Type: "text", Text: "interim"}}),
+		provider.NewUserMessage("tool result two"),
+	})
+	if err != nil {
+		t.Fatalf("append batch: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("ids = %d, want 3", len(ids))
+	}
+	for i, id := range ids {
+		if id == "" {
+			t.Fatalf("id %d is empty", i)
+		}
+	}
+	if len(m.entries) != 4 {
+		t.Fatalf("in-memory entries = %d, want 4", len(m.entries))
+	}
+	// The batch chains parent-to-child in order; its head parents the
+	// pre-existing leaf.
+	wantParents := []string{seedID, ids[0], ids[1]}
+	for i := 0; i < 3; i++ {
+		entry, ok := m.entries[1+i].(MessageEntry)
+		if !ok {
+			t.Fatalf("entry %d type = %T, want MessageEntry", 1+i, m.entries[1+i])
+		}
+		if entry.ID != ids[i] {
+			t.Fatalf("entry %d id = %q, want %q", 1+i, entry.ID, ids[i])
+		}
+		if entry.ParentID == nil || *entry.ParentID != wantParents[i] {
+			t.Fatalf("entry %d parent = %#v, want %q", 1+i, entry.ParentID, wantParents[i])
+		}
+	}
+	if leaf := m.GetLeafID(); leaf == nil || *leaf != ids[2] {
+		t.Fatalf("leaf = %#v, want %q", leaf, ids[2])
+	}
+
+	// A reopen replays the persisted rows in the same order.
+	reopened, err := Open(m.GetFile())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	messages := reopened.GetMessages()
+	if len(messages) != 4 {
+		t.Fatalf("replayed messages = %d, want 4", len(messages))
+	}
+	if messages[0].Content != "seed" || messages[1].Content != "tool result one" || messages[3].Content != "tool result two" {
+		t.Fatalf("replayed contents = [%q, %q, ..., %q]", messages[0].Content, messages[1].Content, messages[3].Content)
+	}
+	if messages[2].Role != "assistant" {
+		t.Fatalf("replayed message 2 role = %q, want assistant", messages[2].Role)
+	}
+}
+
+func TestAppendMessagesEmptyBatchIsNoOp(t *testing.T) {
+	sessionDir := t.TempDir()
+	m := New("/tmp/batch-empty", sessionDir)
+	if err := m.InitWithID("batch-empty-session"); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+	ids, err := m.AppendMessages(nil)
+	if err != nil || ids != nil {
+		t.Fatalf("AppendMessages(nil) = (%v, %v), want (nil, nil)", ids, err)
+	}
+	if len(m.entries) != 0 {
+		t.Fatalf("entries = %d, want 0", len(m.entries))
+	}
+}
+
+func TestAppendMessagesRejectsStaleSessionWriter(t *testing.T) {
+	sessionDir := t.TempDir()
+	first := New("/tmp/batch-stale", sessionDir)
+	if err := first.InitWithID("batch-stale-session"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(first.GetFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.AppendMessage(provider.NewUserMessage("first writer")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.AppendMessages([]provider.Message{
+		provider.NewUserMessage("stale one"),
+		provider.NewUserMessage("stale two"),
+	}); !errors.Is(err, ErrSessionModified) {
+		t.Fatalf("stale batch error = %v, want ErrSessionModified", err)
+	}
+	if len(second.entries) != 0 {
+		t.Fatalf("stale manager kept %d in-memory entries, want 0", len(second.entries))
+	}
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.Bun().QueryRow("SELECT COUNT(*) FROM entries WHERE session_id = ?", "batch-stale-session").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 { // header plus the first writer's message
+		t.Fatalf("entries = %d, want 2: a rejected batch must not persist any row", count)
+	}
+}
+
+func TestAppendMessagesChunksLargeBatches(t *testing.T) {
+	sessionDir := t.TempDir()
+	m := New("/tmp/batch-cap", sessionDir)
+	if err := m.InitWithID("batch-cap-session"); err != nil {
+		t.Fatal(err)
+	}
+	total := maxEntriesPerTransaction*2 + 5
+	msgs := make([]provider.Message, total)
+	for i := range msgs {
+		msgs[i] = provider.NewUserMessage(fmt.Sprintf("result %d", i))
+	}
+	ids, err := m.AppendMessages(msgs)
+	if err != nil {
+		t.Fatalf("append oversized batch: %v", err)
+	}
+	if len(ids) != total {
+		t.Fatalf("ids = %d, want %d", len(ids), total)
+	}
+	if len(m.entries) != total {
+		t.Fatalf("entries = %d, want %d", len(m.entries), total)
+	}
+	// The parent chain must stay unbroken across chunk transaction
+	// boundaries.
+	for i := 1; i < total; i++ {
+		entry, ok := m.entries[i].(MessageEntry)
+		if !ok {
+			t.Fatalf("entry %d type = %T, want MessageEntry", i, m.entries[i])
+		}
+		previous, ok := m.entries[i-1].(MessageEntry)
+		if !ok {
+			t.Fatalf("entry %d type = %T, want MessageEntry", i-1, m.entries[i-1])
+		}
+		if entry.ParentID == nil || *entry.ParentID != previous.ID {
+			t.Fatalf("entry %d parent = %#v, want %q", i, entry.ParentID, previous.ID)
+		}
+	}
+	if leaf := m.GetLeafID(); leaf == nil || *leaf != ids[total-1] {
+		t.Fatalf("leaf = %#v, want %q", leaf, ids[total-1])
+	}
+	reopened, err := Open(m.GetFile())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if messages := reopened.GetMessages(); len(messages) != total {
+		t.Fatalf("replayed messages = %d, want %d", len(messages), total)
+	}
+}
+
+func TestAppendMessagesSubAgentTable(t *testing.T) {
+	sessionDir := t.TempDir()
+	child := NewSubAgent("/tmp/batch-sub", sessionDir)
+	if err := child.InitWithID("batch-sub-session"); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := child.AppendMessages([]provider.Message{
+		provider.NewUserMessage("sub one"),
+		provider.NewUserMessage("sub two"),
+	})
+	if err != nil {
+		t.Fatalf("append sub-agent batch: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("ids = %d, want 2", len(ids))
+	}
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.Bun().QueryRow("SELECT COUNT(*) FROM sub_entries WHERE session_id = ?", "batch-sub-session").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 { // header plus the two batched messages
+		t.Fatalf("sub_entries = %d, want 3", count)
+	}
+	if err := db.Bun().QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("entries = %d, want 0: sub-agent batches must not touch the main tables", count)
+	}
+}
+
 func TestGenerateID(t *testing.T) {
 	id1 := GenerateID()
 	id2 := GenerateID()
@@ -1694,7 +1896,7 @@ func TestConfiguredConnectionAndCloseLifecycle(t *testing.T) {
 	if err := db.Bun().QueryRow("PRAGMA synchronous").Scan(&synchronous); err != nil {
 		t.Fatal(err)
 	}
-	if busyTimeout != 10000 || journalMode != "wal" || synchronous != 2 {
+	if busyTimeout != 10000 || journalMode != "wal" || synchronous != 1 {
 		t.Fatalf("busy_timeout=%d journal_mode=%q synchronous=%d", busyTimeout, journalMode, synchronous)
 	}
 	if err := CloseDatabases(); err != nil {

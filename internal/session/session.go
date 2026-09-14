@@ -722,6 +722,63 @@ func (m *Manager) AppendMessage(msg provider.Message) (string, error) {
 	return id, nil
 }
 
+// AppendMessages persists an ordered batch of conversation messages, folding
+// one agent iteration's worth of tool results into a bounded number of write
+// transactions (see maxEntriesPerTransaction) instead of one transaction per
+// message. Entries are chained parent-to-child in order; the lease fence and
+// the leaf-conflict check run once per transaction and provide the same
+// guarantees AppendMessage provides per entry. On failure no entry of the
+// failing transaction is persisted while messages committed by earlier chunk
+// transactions stay durable — the same contract as a sequence of
+// AppendMessage calls failing halfway through.
+func (m *Manager) AppendMessages(msgs []provider.Message) ([]string, error) {
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.ensureInitializedLocked(); err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0, len(msgs))
+	for start := 0; start < len(msgs); start += maxEntriesPerTransaction {
+		end := min(start+maxEntriesPerTransaction, len(msgs))
+		chunk := msgs[start:end]
+		batch := make([]MessageEntry, len(chunk))
+		now := time.Now()
+		parent := m.leafID
+		for i, msg := range chunk {
+			id := GenerateID()
+			ids = append(ids, id)
+			batch[i] = MessageEntry{
+				EntryBase: EntryBase{
+					Type:      EntryMessage,
+					ID:        id,
+					ParentID:  parent,
+					Timestamp: now,
+				},
+				Message: msg,
+			}
+			// Each entry parents the previous one; copy the ID so a later
+			// append reallocating ids cannot alias the pointer.
+			entryID := id
+			parent = &entryID
+		}
+		if err := m.writeEntries(batch); err != nil {
+			return nil, err
+		}
+		for i := range batch {
+			m.entries = append(m.entries, batch[i])
+		}
+		lastID := ids[len(ids)-1]
+		m.leafID = &lastID
+	}
+	return ids, nil
+}
+
 // AppendModelChange records a model change.
 func (m *Manager) AppendModelChange(providerName, modelID string) (string, error) {
 	m.mu.Lock()
@@ -2213,39 +2270,55 @@ func (m *Manager) RecordUsageFromProviderUsage(provider, protocol, model string,
 	return m.RecordUsage(provider, protocol, model, usage.TotalInputTokens(), usage.Output, usage.TotalInputTokens()+usage.Output, durationMs)
 }
 
-func (m *Manager) writeEntry(entry interface{}) error {
-	// Verify handle file or its database is writable to honor file permission settings
-	dbPath := resolveDBPath(m.file)
+// maxEntriesPerTransaction caps how many session entries one AppendMessages
+// batch persists in a single write transaction. It keeps the single-writer
+// lock hold time bounded for very large parallel-tool rounds while still
+// folding the common case (one iteration's tool results) into one commit.
+const maxEntriesPerTransaction = 64
+
+// resolveEntryWriteTarget verifies the session handle/database is writable to
+// honor file permission settings and resolves the session ID for entry
+// writes. It is the shared prologue of the single-entry and batched write
+// paths.
+func (m *Manager) resolveEntryWriteTarget() (dbPath, sessionID string, err error) {
+	dbPath = resolveDBPath(m.file)
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
-		return fmt.Errorf("create db dir: %w", err)
+		return "", "", fmt.Errorf("create db dir: %w", err)
 	}
-	if _, err := os.Stat(dbPath); err == nil {
-		f, err := os.OpenFile(dbPath, os.O_WRONLY, 0600)
-		if err != nil {
-			return fmt.Errorf("open session file: %w", err)
+	if _, statErr := os.Stat(dbPath); statErr == nil {
+		f, openErr := os.OpenFile(dbPath, os.O_WRONLY, 0600)
+		if openErr != nil {
+			return "", "", fmt.Errorf("open session file: %w", openErr)
 		}
 		f.Close()
+	}
+	if m.header != nil {
+		sessionID = m.header.ID
+	} else {
+		idBytes, readErr := os.ReadFile(m.file)
+		if readErr == nil {
+			sessionID = strings.TrimSpace(string(idBytes))
+		} else if os.IsNotExist(readErr) {
+			sessionID = sessionFileID(m.file)
+		}
+	}
+	if sessionID == "" {
+		return "", "", fmt.Errorf("no session ID found for writeEntry")
+	}
+	return dbPath, sessionID, nil
+}
+
+func (m *Manager) writeEntry(entry interface{}) error {
+	// Verify handle file or its database is writable to honor file permission settings
+	dbPath, sessionID, err := m.resolveEntryWriteTarget()
+	if err != nil {
+		return err
 	}
 
 	id, typeStr, parentID, ts := getEntryMetadata(entry)
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal entry: %w", err)
-	}
-
-	var sessionID string
-	if m.header != nil {
-		sessionID = m.header.ID
-	} else {
-		idBytes, err := os.ReadFile(m.file)
-		if err == nil {
-			sessionID = strings.TrimSpace(string(idBytes))
-		} else if os.IsNotExist(err) {
-			sessionID = sessionFileID(m.file)
-		}
-	}
-	if sessionID == "" {
-		return fmt.Errorf("no session ID found for writeEntry")
 	}
 
 	return m.withDB(func(db *dao.Database) error {
@@ -2294,6 +2367,65 @@ func (m *Manager) writeEntry(entry interface{}) error {
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit session entry: %w", err)
+		}
+		return nil
+	})
+}
+
+// writeEntries persists a chain of message entries in a single transaction:
+// one lease validation, one leaf check against the first entry's parent, and
+// one insert per entry. The caller builds the parent chain in memory (entry i
+// parents entry i-1), so under the write lock held since BEGIN IMMEDIATE the
+// single head-of-transaction leaf check covers the whole batch exactly like
+// the per-entry check in writeEntry covers a single append.
+func (m *Manager) writeEntries(batch []MessageEntry) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	dbPath, sessionID, err := m.resolveEntryWriteTarget()
+	if err != nil {
+		return err
+	}
+	rows := make([][]byte, len(batch))
+	for i := range batch {
+		data, err := json.Marshal(batch[i])
+		if err != nil {
+			return fmt.Errorf("marshal entry: %w", err)
+		}
+		rows[i] = data
+	}
+	return m.withDB(func(db *dao.Database) error {
+		sessionDAO := dao.NewSessionDAO(db.Bun())
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin writing session entries: %w", err)
+		}
+		defer tx.Rollback()
+		if err := validateRuntimeLeaseTx(tx, filepath.Dir(dbPath), sessionID); err != nil {
+			return err
+		}
+		currentLeaf, err := sessionDAO.CurrentLeaf(context.Background(), tx, m.entriesTable(), sessionID, string(EntrySession))
+		if err != nil {
+			return fmt.Errorf("read current session leaf: %w", err)
+		}
+		expectedLeaf := ""
+		if batch[0].ParentID != nil {
+			expectedLeaf = *batch[0].ParentID
+		}
+		if currentLeaf != expectedLeaf {
+			return fmt.Errorf("%w: expected leaf %q, current leaf %q; reopen the session before writing", ErrSessionModified, expectedLeaf, currentLeaf)
+		}
+		for i := range batch {
+			var parentIDVal interface{}
+			if batch[i].ParentID != nil {
+				parentIDVal = *batch[i].ParentID
+			}
+			if err := sessionDAO.InsertEntry(context.Background(), tx, m.entriesTable(), sessionID, batch[i].ID, string(EntryMessage), parentIDVal, batch[i].Timestamp.Format(time.RFC3339Nano), string(rows[i])); err != nil {
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit session entries: %w", err)
 		}
 		return nil
 	})
