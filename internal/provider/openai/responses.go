@@ -287,7 +287,7 @@ func (p *Provider) chatResponses(ctx context.Context, params provider.ChatParams
 				bodyBytes, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				provider.DebugJSON("OpenAI Responses response JSON", bodyBytes)
-				if attempt < maxRetries && provider.IsRetryable(nil, resp.StatusCode) {
+				if attempt < maxRetries && provider.IsRetryable(fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes)), resp.StatusCode) {
 					if !sendRetryEventAndWait(ctx, ch, attempt, maxRetries, baseDelayMs, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))) {
 						return
 					}

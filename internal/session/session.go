@@ -928,6 +928,57 @@ func (m *Manager) AppendCompaction(summary, firstKeptEntryID string, tokensBefor
 	return id, nil
 }
 
+// AppendContentOverride records an append-only replacement of a persisted
+// message entry's content. Replay substitutes msg for the target entry while
+// the original entry stays in the log for audit. It is the durable half of the
+// provider content-rejection recovery: when a provider permanently refuses an
+// image, the Runtime strips it in memory and records the override so every
+// later replay (this process or a reload) never re-sends the refused content.
+func (m *Manager) AppendContentOverride(targetEntryID string, msg provider.Message, reason, code string) (string, error) {
+	if strings.TrimSpace(targetEntryID) == "" {
+		return "", fmt.Errorf("content override target entry ID is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.ensureInitializedLocked(); err != nil {
+		return "", err
+	}
+
+	found := false
+	for _, entry := range m.entries {
+		if message, ok := entry.(MessageEntry); ok && message.ID == targetEntryID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("content override target %s is not a message entry", targetEntryID)
+	}
+
+	id := GenerateID()
+	entry := ContentOverrideEntry{
+		EntryBase: EntryBase{
+			Type:      EntryContentOverride,
+			ID:        id,
+			ParentID:  m.leafID,
+			Timestamp: time.Now(),
+		},
+		TargetEntryID: targetEntryID,
+		Message:       cloneMessage(msg),
+		Reason:        reason,
+		Code:          code,
+	}
+
+	if err := m.writeEntry(entry); err != nil {
+		return "", err
+	}
+
+	m.entries = append(m.entries, entry)
+	m.leafID = &id
+	return id, nil
+}
+
 func latestCompactionLocked(entries []interface{}) (CompactionEntry, bool) {
 	for i := len(entries) - 1; i >= 0; i-- {
 		if entry, ok := entries[i].(CompactionEntry); ok {
@@ -1153,17 +1204,38 @@ func (m *Manager) EndConversationTurn(turnID, status, stopReason string) error {
 }
 
 func buildReplayState(entries []interface{}) replayState {
+	overrides := messageContentOverrides(entries)
 	state := replayState{}
 	for _, entry := range entries {
 		switch e := entry.(type) {
 		case MessageEntry:
-			state.messages = append(state.messages, cloneMessage(e.Message))
+			msg := e.Message
+			if replacement, ok := overrides[e.ID]; ok {
+				msg = replacement
+			}
+			state.messages = append(state.messages, cloneMessage(msg))
 			state.entryIDs = append(state.entryIDs, e.ID)
 		case CompactionEntry:
 			applyCompactionEntry(&state, e)
 		}
 	}
 	return state
+}
+
+// messageContentOverrides collects the newest content override for each target
+// message entry. The overrides are resolved before any message is appended
+// because an override entry is appended after its target, so a single forward
+// pass cannot see it in time. Later overrides for the same target win.
+func messageContentOverrides(entries []interface{}) map[string]provider.Message {
+	overrides := make(map[string]provider.Message)
+	for _, entry := range entries {
+		e, ok := entry.(ContentOverrideEntry)
+		if !ok || e.TargetEntryID == "" {
+			continue
+		}
+		overrides[e.TargetEntryID] = e.Message
+	}
+	return overrides
 }
 
 type sequencedReplayState struct {
@@ -1380,6 +1452,10 @@ func getEntryMetadata(entry interface{}) (id string, typeStr string, parentID *s
 		return e.ID, string(e.Type), e.ParentID, e.Timestamp
 	case CompactionEntry:
 		return e.ID, string(e.Type), e.ParentID, e.Timestamp
+	case *ContentOverrideEntry:
+		return e.ID, string(e.Type), e.ParentID, e.Timestamp
+	case ContentOverrideEntry:
+		return e.ID, string(e.Type), e.ParentID, e.Timestamp
 	case *SessionInfoEntry:
 		return e.ID, string(e.Type), e.ParentID, e.Timestamp
 	case SessionInfoEntry:
@@ -1520,6 +1596,15 @@ func (m *Manager) load() error {
 
 			case EntryCompaction:
 				var e CompactionEntry
+				if err := json.Unmarshal(line, &e); err != nil {
+					corruptRows++
+					continue
+				}
+				m.entries = append(m.entries, e)
+				m.leafID = &e.ID
+
+			case EntryContentOverride:
+				var e ContentOverrideEntry
 				if err := json.Unmarshal(line, &e); err != nil {
 					corruptRows++
 					continue
@@ -1938,6 +2023,21 @@ func ListSessionMessagesWithSeq(sessionDir, sessionID string) ([]SequencedMessag
 	if err != nil {
 		return nil, err
 	}
+	// Content overrides are appended after their target message, so resolve
+	// them up front; a single forward pass cannot see the override in time.
+	overrides := make(map[string]provider.Message)
+	for _, record := range records {
+		if EntryType(record.Type) != EntryContentOverride {
+			continue
+		}
+		var e ContentOverrideEntry
+		if err := json.Unmarshal([]byte(record.Data), &e); err != nil {
+			continue
+		}
+		if e.TargetEntryID != "" {
+			overrides[e.TargetEntryID] = e.Message
+		}
+	}
 	state := sequencedReplayState{}
 	for _, record := range records {
 		seq, typeStr, data := record.Seq, record.Type, record.Data
@@ -1947,10 +2047,14 @@ func ListSessionMessagesWithSeq(sessionDir, sessionID string) ([]SequencedMessag
 			if err := json.Unmarshal([]byte(data), &e); err != nil {
 				continue
 			}
+			msg := e.Message
+			if replacement, ok := overrides[e.ID]; ok {
+				msg = replacement
+			}
 			state.messages = append(state.messages, SequencedMessage{
 				Seq:     seq,
 				EntryID: e.ID,
-				Message: cloneMessage(e.Message),
+				Message: cloneMessage(msg),
 			})
 			state.entryIDs = append(state.entryIDs, e.ID)
 		case EntryCompaction:

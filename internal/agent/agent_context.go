@@ -836,6 +836,164 @@ func (a *Agent) tryRecoverContextOverflow(ctx context.Context, ch chan<- Event, 
 	return true
 }
 
+// maxContentRejectionStages bounds the content-rejection recovery. Stage 1
+// strips images introduced since the last real user turn (the current turn's
+// user message and tool results); stage 2 strips every remaining image in the
+// conversation. Two stages guarantee recovery without an unbounded re-send loop.
+const maxContentRejectionStages = 2
+
+// contentRejectionPlaceholder is the model-visible replacement for an image the
+// provider permanently refused. It names what happened and why so the model
+// does not hallucinate about an image whose pixels are no longer available.
+func contentRejectionPlaceholder(images int, detail string) string {
+	reason := "the provider's content filter rejected it"
+	if strings.TrimSpace(detail) != "" {
+		reason = fmt.Sprintf("the provider's content filter rejected it (%s)", strings.TrimSpace(detail))
+	}
+	return fmt.Sprintf("[image unavailable] %d image(s) could not be sent to the model: %s. The image data has been removed from the conversation so it can continue, and you can no longer see it. If the task depends on this image, tell the user the image was blocked by the provider's content inspection and ask them to describe the content or provide a different image.", images, reason)
+}
+
+// stripImagesFromMessage removes every image content block from a message and
+// records a single model-visible placeholder explaining the removal. It returns
+// the rewritten message and the number of images removed.
+func stripImagesFromMessage(msg provider.Message, detail string) (provider.Message, int) {
+	if !containsImageContent(msg.Contents) {
+		return msg, 0
+	}
+	kept := make([]provider.ContentBlock, 0, len(msg.Contents))
+	removed := 0
+	for _, block := range msg.Contents {
+		if block.Type == "image" || block.Image != nil {
+			removed++
+			continue
+		}
+		kept = append(kept, block)
+	}
+	if removed == 0 {
+		return msg, 0
+	}
+	if len(kept) == 0 {
+		msg.Contents = nil
+	} else {
+		msg.Contents = kept
+	}
+	placeholder := contentRejectionPlaceholder(removed, detail)
+	if strings.TrimSpace(msg.Content) == "" {
+		msg.Content = placeholder
+	} else {
+		msg.Content = msg.Content + "\n\n" + placeholder
+	}
+	return msg, removed
+}
+
+// lastUserTurnIndex returns the index of the newest real (non system-injected)
+// user message, or 0 when the conversation has none.
+func lastUserTurnIndex(messages []provider.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && !messages[i].SystemInjected {
+			return i
+		}
+	}
+	return 0
+}
+
+// contentOverride is one stripped message and the persisted entry it replaces.
+type contentOverride struct {
+	entryID string
+	message provider.Message
+}
+
+// stripRefusedImages removes image blocks from the in-memory conversation (and
+// mirrors the change into the request context). When stripAll is false it only
+// touches messages from the newest real user turn onward; otherwise it strips
+// every image in the conversation. It returns the number of images removed and
+// the durable overrides to persist.
+func (a *Agent) stripRefusedImages(detail string, stripAll bool) (int, []contentOverride) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	start := 0
+	if !stripAll {
+		start = lastUserTurnIndex(a.messages)
+	}
+	var overrides []contentOverride
+	removed := 0
+	for i := start; i < len(a.messages); i++ {
+		stripped, count := stripImagesFromMessage(a.messages[i], detail)
+		if count == 0 {
+			continue
+		}
+		a.messages[i] = stripped
+		removed += count
+		if i < len(a.messageIDs) && a.messageIDs[i] != "" {
+			overrides = append(overrides, contentOverride{entryID: a.messageIDs[i], message: stripped})
+		}
+	}
+	if removed > 0 && a.context != nil {
+		if len(a.context.Messages) == len(a.messages) {
+			copy(a.context.Messages, a.messages)
+		} else {
+			a.context.Messages = append([]provider.Message(nil), a.messages...)
+		}
+	}
+	return removed, overrides
+}
+
+// tryRecoverContentRejection recovers a turn whose provider permanently refused
+// content (typically an image flagged by content inspection). It strips the
+// refused images from the affected messages, records a durable override so
+// replay never re-sends them, and tells the model — through the placeholder —
+// that the image is unavailable and why. It returns true when the caller should
+// retry the turn.
+//
+// Recovery is two-staged: stage 1 strips images introduced since the newest user
+// turn (the common case), stage 2 strips every remaining image so the session
+// always recovers. When visible output was already streamed (hasVisibleOutput),
+// the session is still healed but the turn is not re-run, so no output is
+// duplicated; the caller fails the turn instead.
+func (a *Agent) tryRecoverContentRejection(ch chan<- Event, stage *int, hasVisibleOutput bool, cause error) bool {
+	if stage == nil || cause == nil || !provider.IsContentRejectionError(cause) {
+		return false
+	}
+	detail := provider.RetryErrorDetail(cause)
+
+	for *stage < maxContentRejectionStages {
+		*stage++
+		stripAll := *stage >= maxContentRejectionStages || hasVisibleOutput
+
+		removed, overrides := a.stripRefusedImages(detail, stripAll)
+		if removed == 0 {
+			// This scope held no images; widen the scope (or give up on the
+			// final stage) instead of re-sending an identical request.
+			continue
+		}
+
+		for _, o := range overrides {
+			if a.config.Session == nil {
+				break
+			}
+			if _, err := a.config.Session.AppendContentOverride(o.entryID, o.message, detail, ""); err != nil {
+				a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Warning: failed to persist image removal for entry %s: %v", o.entryID, err)})
+			}
+		}
+
+		scope := "this turn"
+		if stripAll {
+			scope = "the whole conversation"
+		}
+		if hasVisibleOutput {
+			// The turn already streamed visible output; re-running it would
+			// duplicate content. The session is healed, so fail this turn.
+			a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("The provider rejected %d image(s) during content inspection and removed them from %s; the current turn cannot be safely retried because it already produced output.", removed, scope)})
+			return false
+		}
+		a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("The provider rejected %d image(s) during content inspection; removed them from %s and retrying without them.", removed, scope)})
+		a.sendEvent(ch, Event{Type: EventRetry, RetryAttempt: *stage, RetryMaxAttempts: maxContentRejectionStages, RetryReason: "content_rejected"})
+		return true
+	}
+	return false
+}
+
 func (a *Agent) tryRetryStreamTimeout(ctx context.Context, ch chan<- Event, retried *int, maxRetries int, textContent, thinkContent string, cause error) bool {
 	if cause == nil || *retried >= maxRetries {
 		return false

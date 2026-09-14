@@ -162,6 +162,11 @@ func ClassifyError(err error, opts ErrorClassificationOptions) ErrorInfo {
 	case provider.IsContextOverflowError(err):
 		info.Phase = PhaseContext
 		return applyErrorDefaults(info, "context_overflow", "context_error", FailureProvider, retryModeForSafety(info), false, "run.error.contextOverflow")
+	case provider.IsContentRejectionError(err):
+		// A permanent content-policy refusal. The Runtime strips the offending
+		// content before reaching this classification; when it still surfaces, the
+		// user must change the content (or accept that it cannot be sent).
+		return applyErrorDefaults(info, "content_rejected", "content_error", FailurePolicy, RetryUser, false, "run.error.contentRejected")
 	case provider.IsRetryable(err, opts.HTTPStatus):
 		code, key := retryableErrorCode(err, opts.HTTPStatus)
 		return applyErrorDefaults(info, code, "provider_error", FailureTransient, retryModeForSafety(info), true, key)

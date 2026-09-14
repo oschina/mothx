@@ -650,6 +650,14 @@ func remapForkData(sourceType, raw string, entryIDs, turnIDs map[string]string) 
 		entry.LastSummarizedEntry = remapEntryID(entry.LastSummarizedEntry)
 		encoded, err := json.Marshal(entry)
 		return string(encoded), err
+	case EntryContentOverride:
+		var entry ContentOverrideEntry
+		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+			return "", err
+		}
+		entry.TargetEntryID = remapEntryID(entry.TargetEntryID)
+		encoded, err := json.Marshal(entry)
+		return string(encoded), err
 	case EntryBranchSummary:
 		var entry BranchSummaryEntry
 		if err := json.Unmarshal([]byte(raw), &entry); err != nil {

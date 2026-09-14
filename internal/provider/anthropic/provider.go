@@ -389,7 +389,7 @@ func (p *Provider) Chat(ctx context.Context, params provider.ChatParams) <-chan 
 				b, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				provider.DebugJSON("Anthropic response JSON", b)
-				if attempt < maxRetries && provider.IsRetryable(nil, resp.StatusCode) {
+				if attempt < maxRetries && provider.IsRetryable(fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b)), resp.StatusCode) {
 					if !sendRetryEventAndWait(ctx, ch, attempt, maxRetries, baseDelayMs, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))) {
 						return
 					}

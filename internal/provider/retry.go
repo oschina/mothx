@@ -32,6 +32,13 @@ type RetryConfig struct {
 // compatibility failures, so every HTTP 4xx/5xx response is retryable here.
 // The provider retry budget still bounds the number of attempts.
 func IsRetryable(err error, statusCode int) bool {
+	// Permanent provider refusals (content inspection/moderation) are never
+	// transient: the identical request fails again, so they must not consume
+	// the retry budget even though they arrive as a 4xx.
+	if IsContentRejectionError(err) {
+		return false
+	}
+
 	// Check HTTP status codes
 	if statusCode >= http.StatusBadRequest && statusCode < 600 {
 		return true

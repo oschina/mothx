@@ -1353,6 +1353,12 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 	streamFailureRetries := 0
 	const maxStreamFailureRetries = 2
 
+	// Content-rejection recovery: a provider may permanently refuse content
+	// (for example an image flagged by content inspection). That is not
+	// retryable, but the session must not die: strip the refused images, record
+	// a durable override so replay never re-sends them, and retry without them.
+	contentRejectionStage := 0
+
 	// Empty-response detection: a provider may return an effectively empty
 	// turn (no text/thinking/toolCall + stub usage) on transient errors (e.g.
 	// some OpenAI-compatible gateways return usage {1,1,2} with HTTP 200). Such
@@ -1570,6 +1576,9 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 				}
 			}
 			if provider.IsContextOverflowError(streamErr) && a.tryRecoverContextOverflow(runCtx, ch, &contextOverflowRetried, streamErr) {
+				continue
+			}
+			if a.tryRecoverContentRejection(ch, &contentRejectionStage, textContent != "" || thinkContent != "" || len(toolCalls) > 0, streamErr) {
 				continue
 			}
 			if a.tryRetryStreamTimeout(runCtx, ch, &streamTimeoutRetries, maxStreamTimeoutRetries, textContent, thinkContent, streamErr) {

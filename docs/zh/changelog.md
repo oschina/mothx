@@ -19,6 +19,10 @@
 
 ### 🐛 问题修复
 
+- **被内容审核拒绝的图片不再让整个会话失效**
+  - 供应商的内容策略拒绝——例如 DashScope/千问的 `InternalError.Algo.DataInspectionFailed: Input image data may contain inappropriate content`——以 HTTP 400 返回，但此前所有 4xx 都被当作可重试。同一张被拒的图片会在 provider 的退避重试与 Agent 的流失败重试中被反复发送（数分钟的 "Retrying…"），而拒绝是永久性的，最终 run 仍然失败；更糟的是，出问题的图片留在持久化历史里，之后的每一轮都会重发它，于是什么都无法继续，只有新建会话才能恢复——连 `/clear` 都不行，因为它会重新加载同一份历史。
+  - `provider.IsContentRejectionError` 现在单独识别这一窄类文案（data inspection、content policy/moderation/filter、"inappropriate content"），并让 `IsRetryable` 对它返回 false，失败因此立即浮现而不再消耗重试预算。Agent Core 随后就地自愈：先剥离本轮新增的图片，若仍被拒再剥离整个对话中的图片，把每张替换为模型可见的说明（告知该图片被供应商内容过滤拦截、像素已不可用），并追加一条可重放的 `content_override` 会话记录，使重放（同进程或重新加载后）都不会再次发送该图片。run 会在不含该图片的情况下重试，会话得以继续；若该回合已经流出可见输出，则只做自愈不再重跑，避免输出重复。
+
 - **Serve：Windows 上保存配置不再报 "Access is denied"**
   - 在 Windows（包括把数据放在 exFAT 移动磁盘上的便携部署）上，通过 Web UI 启用微信/飞书通道或保存任何 `serve.json` 变更都会失败，提示 `sync config directory: Access is denied`。原子配置写入在重命名后会对父目录执行 fsync——这是 POSIX 的持久化惯例——但在 Windows 上，`FlushFileBuffers` 作用于只读目录句柄时，在任何文件系统（包括 exFAT）上都必然返回 `ERROR_ACCESS_DENIED`。由于失败发生在配置文件已经替换到位之后，接口返回了错误，但新配置从未应用到运行时。
   - 现在在 Windows 上跳过重命名后的目录刷新（与 etcd/bolt 的做法一致）；配置文件本身仍在重命名前 fsync，持久性不受影响，Unix 平台行为不变。

@@ -584,7 +584,7 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 					attempt--
 					continue
 				}
-				if attempt < maxRetries && provider.IsRetryable(nil, resp.StatusCode) {
+				if attempt < maxRetries && provider.IsRetryable(fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes)), resp.StatusCode) {
 					if !sendRetryEventAndWait(ctx, ch, attempt, maxRetries, baseDelayMs, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))) {
 						return
 					}

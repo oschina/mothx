@@ -335,7 +335,7 @@ func (m *ResponsesRunManager) doJSON(ctx context.Context, method, path string, b
 			return nil, fmt.Errorf("read background response: %w", readErr)
 		}
 		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			if attempt < maxRetries && provider.IsRetryable(nil, resp.StatusCode) {
+			if attempt < maxRetries && provider.IsRetryable(fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody))), resp.StatusCode) {
 				if err := waitForBackgroundRetry(ctx, attempt, baseDelayMs); err != nil {
 					return nil, err
 				}

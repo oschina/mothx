@@ -315,7 +315,7 @@ func (p *Provider) Chat(ctx context.Context, params provider.ChatParams) <-chan 
 				bodyBytes, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				provider.DebugJSON("Google response JSON", bodyBytes)
-				if attempt < maxRetries && provider.IsRetryable(nil, resp.StatusCode) {
+				if attempt < maxRetries && provider.IsRetryable(fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes)), resp.StatusCode) {
 					err := fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
 					if !sendRetryEventAndWait(ctx, ch, attempt, maxRetries, baseDelayMs, err) {
 						return

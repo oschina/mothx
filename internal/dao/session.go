@@ -304,7 +304,7 @@ func (d *SessionDAO) ListCapabilityEvents(ctx context.Context, sessionID string)
 }
 func (d *SessionDAO) Messages(ctx context.Context, sessionID string) ([]EntryRecord, error) {
 	var rows []EntryRecord
-	err := d.db.NewSelect().Table("entries").Column("seq", "type", "data").Where("session_id = ? AND type IN (?, ?)", sessionID, "message", "compaction").OrderExpr("seq ASC").Scan(ctx, &rows)
+	err := d.db.NewSelect().Table("entries").Column("seq", "type", "data").Where("session_id = ? AND type IN (?, ?, ?)", sessionID, "message", "compaction", "content_override").OrderExpr("seq ASC").Scan(ctx, &rows)
 	return rows, err
 }
 func (d *SessionDAO) SimpleEntries(ctx context.Context, sessionID string) ([]EntryRecord, error) {
