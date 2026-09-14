@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -857,6 +858,59 @@ func TestManageMCPListReturnsCompleteLocalConfig(t *testing.T) {
 	headers, _ := keeper["headers"].([]any)
 	if len(headers) != 1 || headers[0].(map[string]any)["name"] != "Authorization" || headers[0].(map[string]any)["value"] != "Bearer hdr-secret" {
 		t.Fatalf("headers = %#v", headers)
+	}
+}
+
+func TestManageKnowledgeBaseMCPApplyQuickAddsCanonicalServer(t *testing.T) {
+	configDir := t.TempDir()
+	settings := writeManageSettings(t, configDir, nil)
+	writeManageMCPFile(t, configDir)
+	base, err := session.CreateKnowledgeBase(t.Context(), settings.GetSessionDir(), session.KnowledgeBaseSpec{
+		Name: "Product notes", RootDir: t.TempDir(), PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := &syncedBuffer{}
+	srv := newManageFixtureServer(output, configDir)
+	srv.settings = settings
+
+	result := manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/knowledge-bases/mcp/apply", map[string]any{"id": base.ID}))
+	if result["name"] != knowledgeBaseMCPServerName(base.ID) || result["enabled"] != true {
+		t.Fatalf("quick add result = %#v", result)
+	}
+	saved, err := config.LoadMCPConfig(config.GlobalMCPPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var knowledge *config.MCPServer
+	for index := range saved.MCPServers {
+		if saved.MCPServers[index].Name == knowledgeBaseMCPServerName(base.ID) {
+			knowledge = &saved.MCPServers[index]
+		}
+	}
+	if knowledge == nil || knowledge.Type != "stdio" || knowledge.Command == "" || !reflect.DeepEqual(knowledge.Args, []string{"knowledge-mcp", "serve", "--knowledge-base", base.ID}) || knowledge.Enabled == nil || !*knowledge.Enabled {
+		t.Fatalf("knowledge MCP config = %#v", knowledge)
+	}
+	if len(saved.MCPServers) != 3 || saved.MCPServers[0].Name != "keeper" {
+		t.Fatalf("quick add must preserve existing MCP servers: %#v", saved.MCPServers)
+	}
+
+	result = manageFixtureResult(t, callManageFixture(t, srv, output, 2, "mothx/manage/knowledge-bases/mcp/apply", map[string]any{"id": base.ID, "enabled": false}))
+	if result["enabled"] != false {
+		t.Fatalf("disable result = %#v", result)
+	}
+	saved, err = config.LoadMCPConfig(config.GlobalMCPPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range saved.MCPServers {
+		if saved.MCPServers[index].Name == knowledgeBaseMCPServerName(base.ID) && (saved.MCPServers[index].Enabled == nil || *saved.MCPServers[index].Enabled) {
+			t.Fatalf("knowledge MCP server was not disabled: %#v", saved.MCPServers[index])
+		}
+	}
+	if code, _ := manageFixtureError(t, callManageFixture(t, srv, output, 3, "mothx/manage/knowledge-bases/mcp/apply", map[string]any{"id": "missing"})); code != "knowledge_base_not_found" {
+		t.Fatalf("missing knowledge base error = %q", code)
 	}
 }
 

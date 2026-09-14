@@ -236,12 +236,18 @@ test('knowledge-base settings translations remain bilingual', () => {
   ]);
 });
 
-test('knowledge-base editor configures a deterministic stdio MCP server through ACP', () => {
-  assertAcpMethods(manageApi, ['mothx/manage/mcp/list', 'mothx/manage/mcp/set']);
+test('knowledge-base editor quick-adds a Runtime-owned MCP server through ACP', () => {
+  assertAcpMethods(manageApi, ['mothx/manage/mcp/list', 'mothx/manage/knowledge-bases/mcp/apply']);
   assert.match(knowledgePanel, /knowledgeBaseMcpName\(base\.id\)/, 'MCP server name must derive from the knowledge-base ID');
-  assert.match(manageApi, /knowledge-mcp.*serve.*--knowledge-base.*baseId/, 'MCP server args must target the knowledge-base ID');
-  assert.match(manageApi, /state\.appInfo\.runtimeBinary \|\| 'mothx'/, 'MCP command must use the bundled runtime binary with a mothx fallback');
-  assert.match(manageApi, /type: 'stdio'/, 'MCP server must be configured as type stdio');
+  assert.match(manageApi, /applyKnowledgeBaseMcp\(baseId: string, enabled: boolean\)[\s\S]*?mothx\/manage\/knowledge-bases\/mcp\/apply/, 'quick add must pass only the ID and enabled state to ACP');
+  assert.match(knowledgePanel, /applyKnowledgeBaseMcp\(base\.id, mcpWillEnable\)/, 'panel must invoke the one-click ACP action');
+  const quickAddFn = manageApi.slice(
+    manageApi.indexOf('export async function applyKnowledgeBaseMcp'),
+    manageApi.indexOf('// ---- skills ----'),
+  );
+  assert.doesNotMatch(quickAddFn, /setMcpServers/, 'quick add must not rewrite the complete MCP list in the renderer');
+  assert.doesNotMatch(quickAddFn, /knowledge-mcp.*serve/, 'quick add must not assemble MCP command arguments in the renderer');
+  assert.doesNotMatch(quickAddFn, /state\.appInfo\.runtimeBinary/, 'quick add must not choose a runtime binary in the renderer');
   assert.doesNotMatch(manageApi, /desktop\.storeSet\([^)]*knowledge[^)]*mcp/i, 'knowledge-base MCP configuration must not enter the Desktop store');
 });
 
@@ -472,7 +478,6 @@ test('MCP management functions are scope-aware and default to global', () => {
   assert.match(manageApi, /const params: Record<string, unknown> = \{ scope \};/, 'MCP list must include scope in params');
   assert.match(manageApi, /const params: Record<string, unknown> = \{ scope, servers \};/, 'MCP set must include scope and servers in params');
   assert.match(manageApi, /if \(sessionId\) params\.sessionId = sessionId;/, 'project MCP calls must include sessionId when provided');
-  assert.match(manageApi, /await setMcpServers\(\[\.\.\.others, server\], 'global'\)/, 'knowledge-base MCP upsert must remain global scoped');
 });
 
 test('ChatView exposes a capability-gated project MCP editor', () => {

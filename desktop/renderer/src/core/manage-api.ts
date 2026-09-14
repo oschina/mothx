@@ -548,34 +548,10 @@ export function knowledgeBaseMcpName(baseId: string): string {
   return `knowledge-${baseId}`;
 }
 
-export async function applyKnowledgeBaseMcp(baseId: string, enabled: boolean, currentServers: McpServerView[]): Promise<void> {
-  const name = knowledgeBaseMcpName(baseId);
-  const existing = currentServers.find((server) => server.name === name);
-  const command = state.appInfo.runtimeBinary || 'mothx';
-  const canonical: McpServerView = {
-    name,
-    type: 'stdio',
-    command,
-    args: ['knowledge-mcp', 'serve', '--knowledge-base', baseId],
-    enabled,
-  };
-  // Keep the update scoped to the deterministic knowledge-base entry while
-  // preserving any headers or environment values edited through the local MCP UI.
-  const writable = (server: McpServerView): McpServerView => ({
-    name: server.name, type: server.type, command: server.command, args: server.args,
-    url: server.url, messageUrl: server.messageUrl, enabled: server.enabled,
-    env: server.env, headers: server.headers,
-  });
-  const others = currentServers.filter((server) => server.name !== name).map(writable);
-  if (enabled) {
-    // Enable/configure: upsert the deterministic stdio server with the canonical command/args.
-    const server = existing ? { ...writable(existing), ...canonical } : canonical;
-    await setMcpServers([...others, server], 'global');
-  } else {
-    // Disable: retain every other entry and only flip the deterministic server's enabled flag.
-    const server = existing ? { ...writable(existing), enabled: false } : { ...canonical, enabled: false };
-    await setMcpServers([...others, server], 'global');
-  }
+// The shared ACP Runtime owns the canonical command, arguments, and global
+// MCP persistence. Desktop only requests the desired knowledge-base state.
+export async function applyKnowledgeBaseMcp(baseId: string, enabled: boolean): Promise<void> {
+  await invoke('mothx/manage/knowledge-bases/mcp/apply', { id: baseId, enabled });
 }
 
 // ---- skills ----

@@ -129,7 +129,7 @@ function KnowledgeBaseEditor({
     if (!base) return;
     setBusy('mcp');
     try {
-      await applyKnowledgeBaseMcp(base.id, mcpWillEnable, mcpServers);
+      await applyKnowledgeBaseMcp(base.id, mcpWillEnable);
       toast(t('settings.knowledgeMcpSaved'));
       onDone();
     } catch (error) {

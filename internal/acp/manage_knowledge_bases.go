@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -66,6 +67,11 @@ type manageKnowledgeBaseQueryRequest struct {
 	Limit int    `json:"limit,omitempty"`
 }
 
+type manageKnowledgeBaseMCPApplyRequest struct {
+	ID      string `json:"id"`
+	Enabled *bool  `json:"enabled,omitempty"`
+}
+
 type manageKnowledgeBaseView struct {
 	KnowledgeBase session.KnowledgeBase      `json:"knowledgeBase"`
 	Snapshot      *session.KnowledgeSnapshot `json:"snapshot"`
@@ -99,6 +105,84 @@ func (s *server) manageKnowledgeBaseService() (*agentruntime.KnowledgeBaseServic
 		return nil, fmt.Errorf("knowledge base runtime is unavailable")
 	}
 	return agentruntime.NewKnowledgeBaseServiceWithSettings(s.settings.GetSessionDir(), agentruntime.DefaultKnowledgeBaseIndexPolicy(), s.settings)
+}
+
+func knowledgeBaseMCPServerName(id string) string {
+	return "knowledge-" + strings.TrimSpace(id)
+}
+
+func knowledgeBaseMCPCommand() string {
+	command, err := os.Executable()
+	if err != nil || strings.TrimSpace(command) == "" {
+		return "mothx"
+	}
+	return command
+}
+
+// handleManageKnowledgeBaseMCPApply owns the standard Knowledge MCP server
+// projection. Desktop supplies only a knowledge-base ID and desired state;
+// the ACP runtime derives the bundled command and canonical arguments.
+func (s *server) handleManageKnowledgeBaseMCPApply(req rpcRequest) {
+	var in manageKnowledgeBaseMCPApplyRequest
+	if err := json.Unmarshal(req.Params, &in); err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32602, "knowledge_base_invalid_request", "invalid knowledge MCP request", nil))
+		return
+	}
+	in.ID = strings.TrimSpace(in.ID)
+	if in.ID == "" {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32602, "knowledge_base_invalid_request", "knowledge base id is required", nil))
+		return
+	}
+	if s == nil || s.settings == nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "knowledge_base_unavailable", "knowledge base runtime is unavailable", nil))
+		return
+	}
+	if _, err := session.GetKnowledgeBase(context.Background(), s.settings.GetSessionDir(), in.ID); err != nil {
+		code := "knowledge_base_unavailable"
+		if errors.Is(err, session.ErrKnowledgeBaseNotFound) {
+			code = "knowledge_base_not_found"
+		}
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, code, fmt.Sprintf("load knowledge base: %v", err), nil))
+		return
+	}
+	target, err := s.resolveManageMCPTarget("global", "")
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "mcp_unavailable", err.Error(), nil))
+		return
+	}
+	cfg, err := s.manageMCPConfigAtPath(target.Path)
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "mcp_unavailable", fmt.Sprintf("load MCP config: %v", err), nil))
+		return
+	}
+	enabled := true
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	entry := config.MCPServer{
+		Name:    knowledgeBaseMCPServerName(in.ID),
+		Type:    "stdio",
+		Command: knowledgeBaseMCPCommand(),
+		Args:    []string{"knowledge-mcp", "serve", "--knowledge-base", in.ID},
+		Enabled: &enabled,
+	}
+	updated := false
+	for index := range cfg.MCPServers {
+		if cfg.MCPServers[index].Name == entry.Name {
+			cfg.MCPServers[index] = entry
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		cfg.MCPServers = append(cfg.MCPServers, entry)
+	}
+	config.NormalizeMCPConfig(cfg)
+	if err := config.SaveMCPConfig(target.Path, cfg); err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "mcp_unavailable", fmt.Sprintf("save MCP config: %v", err), nil))
+		return
+	}
+	s.writeResponse(req.ID, map[string]any{"id": in.ID, "name": entry.Name, "enabled": enabled}, nil)
 }
 
 func knowledgeBaseCronJobID(id string) string {
