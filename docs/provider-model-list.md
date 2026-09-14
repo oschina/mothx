@@ -564,6 +564,7 @@
 | qwen3.8-27b | 1M | - | **是** | text,image,video |
 | deepseek-v4-flash | 1M | 384K | **是** | text |
 | deepseek-v4-flash-0731 | 1M | - | **是** | text |
+| deepseek-v4.1-flash | 1M | - | **是** | text,image |
 | deepseek-v4-pro | 1M | 384K | **是** | text |
 | deepseek-v4-pro-0813 | 1M | - | **是** | text |
 | kimi-k2.5 | 262K | 262K | **是** | text,image,video |
@@ -1084,7 +1085,7 @@
 | ModelScope | - | openai-chat | - | 45 |
 | 阿里云百炼 | `bailian`×3 | openai-chat | - | 6~14 |
 | 华为云 | `huawei`/`huawei-plan` | openai-chat | - | 8/5 |
-| Gitee/Moark | `gitee` | openai-chat | - | 27 |
+| Gitee/Moark | `gitee` | openai-chat | - | 28 |
 | 摩尔线程 | `mthreads-plan` | openai-chat | - | 1 |
 | 天翼云 | `ctyun-plan` | openai-chat | - | 3 |
 | 京东智联云 | `jd-plan` | openai-chat | - | 10 |

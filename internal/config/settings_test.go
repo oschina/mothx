@@ -232,6 +232,7 @@ func TestMoarkModelMaxTokens(t *testing.T) {
 		"gemma-4-26b-a4b-it":     32768,
 		"deepseek-v4-flash":      384000,
 		"deepseek-v4-flash-0731": 0,
+		"deepseek-v4.1-flash":    0,
 		"step-3.7-flash":         16384,
 		"qwen3.8-flash":          0,
 	}
@@ -356,6 +357,31 @@ func TestGiteeMoarkGLM53FlashDefaults(t *testing.T) {
 		}
 		if model.MaxTokens != 131072 {
 			t.Fatalf("%s glm-5.3-flash maxTokens = %d, want 131072", providerName, model.MaxTokens)
+		}
+	}
+}
+
+func TestGiteeMoarkDeepSeekV41FlashDefaults(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"gitee", "moark"} {
+		model := s.GetModelConfig(providerName, "deepseek-v4.1-flash")
+		if model == nil {
+			t.Fatalf("%s missing deepseek-v4.1-flash", providerName)
+		}
+		if !model.Reasoning || model.ContextWindow != 1000000 {
+			t.Fatalf("%s deepseek-v4.1-flash = %#v, want reasoning model with 1M context", providerName, model)
+		}
+		wantInput := []string{"text", "image"}
+		if len(model.Input) != len(wantInput) {
+			t.Fatalf("%s deepseek-v4.1-flash input = %#v, want %#v", providerName, model.Input, wantInput)
+		}
+		for i := range wantInput {
+			if model.Input[i] != wantInput[i] {
+				t.Fatalf("%s deepseek-v4.1-flash input = %#v, want %#v", providerName, model.Input, wantInput)
+			}
+		}
+		if model.MaxTokens != 0 || model.MaxTokensWasSet() {
+			t.Fatalf("%s deepseek-v4.1-flash maxTokens = %d, explicitly set = %v; want 0, false", providerName, model.MaxTokens, model.MaxTokensWasSet())
 		}
 	}
 }
@@ -500,6 +526,7 @@ func TestRoutedProviderModelMaxTokensAreExplicit(t *testing.T) {
 			"minimax-m3":             128000,
 			"deepseek-v4-flash":      384000,
 			"deepseek-v4-flash-0731": 0,
+			"deepseek-v4.1-flash":    0,
 			"qwen3.8-flash":          0,
 		},
 		"alibaba-standard": {
