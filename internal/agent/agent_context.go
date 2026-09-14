@@ -855,6 +855,69 @@ func (a *Agent) tryRetryStreamTimeout(ctx context.Context, ch chan<- Event, retr
 	return true
 }
 
+// tryContinueStreamFailure recovers a turn whose provider stream failed with a
+// transient transport error (connection reset, unexpected EOF, gateway 5xx,
+// ...) after provider-level retries were unavailable or exhausted. When
+// partial visible output was already streamed, the partial turn is persisted
+// and a continuation instruction is injected so the retry resumes where the
+// stream died instead of duplicating output; when nothing visible was streamed
+// yet, the turn is simply re-run. Emitted tool calls block recovery: they have
+// already been projected to adapters, and silently dropping them would desync
+// the visible transcript. Context-overflow errors (own recovery path) and
+// idle-stream stalls (stream-timeout retry path) are excluded.
+func (a *Agent) tryContinueStreamFailure(ctx context.Context, ch chan<- Event, retried *int, maxRetries int, textContent, thinkContent, thinkSignature string, toolCalls []provider.ToolCallBlock, cause error) bool {
+	if cause == nil || *retried >= maxRetries {
+		return false
+	}
+	if ctx.Err() != nil {
+		return false
+	}
+	if len(toolCalls) > 0 || provider.IsContextOverflowError(cause) {
+		return false
+	}
+	// Idle-stream stalls (a wrapped context.DeadlineExceeded) belong to the
+	// dedicated stream-timeout retry path in the caller; keep that budget and
+	// its final error contract unchanged here.
+	if errors.Is(cause, context.DeadlineExceeded) {
+		return false
+	}
+	if !provider.IsRetryable(cause, 0) {
+		return false
+	}
+	*retried++
+
+	// Persist the already-streamed partial turn so the retry continues it
+	// instead of repeating it. Thinking is replayed only when its signature
+	// completed; providers such as Anthropic reject unsigned thinking blocks.
+	var partialContents []provider.ContentBlock
+	if thinkContent != "" && thinkSignature != "" {
+		partialContents = append(partialContents, provider.ContentBlock{Type: "thinking", Thinking: thinkContent, Signature: thinkSignature})
+	}
+	if textContent != "" {
+		partialContents = append(partialContents, provider.ContentBlock{Type: "text", Text: textContent})
+	}
+	if len(partialContents) > 0 {
+		partial := provider.NewAssistantMessage(partialContents)
+		recovery := provider.NewSystemInjectedUserMessage(buildStreamRecoveryMessage(textContent))
+		a.mu.Lock()
+		a.messages = append(a.messages, partial, recovery)
+		a.messageIDs = append(a.messageIDs, "", "")
+		a.context.Messages = append(a.context.Messages, partial, recovery)
+		a.mu.Unlock()
+	}
+
+	a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: retryCompatibilityStatus(*retried, maxRetries, 0), RetryStatus: true, RetryAttempt: *retried, RetryMaxAttempts: maxRetries})
+	a.sendEvent(ch, Event{
+		Type:             EventRetry,
+		StatusMessage:    provider.RetryErrorDetail(cause),
+		RetryAttempt:     *retried,
+		RetryMaxAttempts: maxRetries,
+		RetryReason:      "stream_interrupted",
+		RetryContinue:    len(partialContents) > 0,
+	})
+	return true
+}
+
 func (a *Agent) setMessageID(index int, id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

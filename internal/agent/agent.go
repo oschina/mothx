@@ -1254,6 +1254,24 @@ func buildOutputRecoveryMessage(partial string) string {
 	return "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.\n\n" +
 		"The previous assistant response ended with this exact suffix. Do not repeat any line, table row, code line, or prose that already appears in it; output only text that comes after this suffix:\n\n<previous_response_suffix>\n" + tail + "\n</previous_response_suffix>"
 }
+
+// buildStreamRecoveryMessage instructs the model to resume an interrupted
+// response from the exact point where the stream died. Like the output-limit
+// recovery message, it quotes the already-streamed suffix so the continuation
+// does not repeat content the user has already seen.
+func buildStreamRecoveryMessage(partial string) string {
+	base := "The connection was interrupted while you were responding. Resume directly from the exact point where your previous response stopped — no apology, no recap of what you were doing. Pick up mid-thought or mid-word if that is where the cut happened."
+	runes := []rune(partial)
+	if len(runes) > outputRecoveryTailCharacters {
+		runes = runes[len(runes)-outputRecoveryTailCharacters:]
+	}
+	tail := string(runes)
+	if tail == "" {
+		return base
+	}
+	return base + "\n\nThe interrupted response ended with this exact suffix. Do not repeat any line, table row, code line, or prose that already appears in it; output only text that comes after this suffix:\n\n<previous_response_suffix>\n" + tail + "\n</previous_response_suffix>"
+}
+
 func isOutputTruncationReason(reason string) bool {
 	switch strings.ToLower(strings.TrimSpace(reason)) {
 	case "max_tokens", "max-tokens", "length", "max_output_tokens", "token_limit":
@@ -1325,6 +1343,15 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 	// tool has been executed yet and nothing has been persisted for this turn.
 	streamTimeoutRetries := 0
 	const maxStreamTimeoutRetries = 2
+
+	// Transient stream-failure continuation: when the provider stream fails
+	// mid-turn with a retryable transport error (connection reset, unexpected
+	// EOF, gateway 5xx, ...) and provider-level retries were unavailable or
+	// exhausted, persist the already-streamed partial turn and retry with a
+	// continuation instruction instead of failing the whole run. Retrying is
+	// safe here because no tool has been executed yet for this turn.
+	streamFailureRetries := 0
+	const maxStreamFailureRetries = 2
 
 	// Empty-response detection: a provider may return an effectively empty
 	// turn (no text/thinking/toolCall + stub usage) on transient errors (e.g.
@@ -1546,6 +1573,13 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 				continue
 			}
 			if a.tryRetryStreamTimeout(runCtx, ch, &streamTimeoutRetries, maxStreamTimeoutRetries, textContent, thinkContent, streamErr) {
+				continue
+			}
+			// Responses remote-state turns keep their existing failover path: the
+			// remote holds the conversation, so a locally persisted partial turn
+			// plus continuation injection would desync the lineage.
+			if !responseState.remoteStateActive &&
+				a.tryContinueStreamFailure(runCtx, ch, &streamFailureRetries, maxStreamFailureRetries, textContent, thinkContent, thinkSignature, toolCalls, streamErr) {
 				continue
 			}
 			if provider.IsStreamTimeoutError(streamErr) {

@@ -104,6 +104,60 @@ func (p *timeoutRecoveringProvider) GetModel(id string) *provider.Model {
 	return nil
 }
 
+// streamFailureRecoveringProvider emits a transient connection-reset stream
+// error for the first `resetTimes` calls, then a normal text response. Failed
+// calls optionally emit a partial text delta first (mimicking a mid-stream
+// reset after visible output) and optionally an already-completed tool call.
+// It records the params of the last Chat call so tests can assert the
+// continuation injection. Used to exercise the agent loop's transient
+// stream-failure continuation path.
+type streamFailureRecoveringProvider struct {
+	models       []*provider.Model
+	callCount    int
+	resetTimes   int
+	emitPartial  bool
+	emitToolCall bool
+	lastParams   provider.ChatParams
+}
+
+var errMockConnectionReset = errors.New("stream read error: read tcp 192.168.77.110:33168->180.76.199.86:443: read: connection reset by peer")
+
+func (p *streamFailureRecoveringProvider) Chat(ctx context.Context, params provider.ChatParams) <-chan provider.StreamEvent {
+	ch := make(chan provider.StreamEvent, 8)
+	p.callCount++
+	n := p.callCount
+	p.lastParams = params
+	go func() {
+		defer close(ch)
+		ch <- provider.StreamEvent{Type: provider.StreamStart}
+		if n <= p.resetTimes {
+			if p.emitPartial {
+				ch <- provider.StreamEvent{Type: provider.StreamTextDelta, TextDelta: "partial"}
+			}
+			if p.emitToolCall {
+				ch <- provider.StreamEvent{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{ID: "call_1", Name: "bash", Arguments: json.RawMessage(`{"command":"true"}`)}}
+			}
+			ch <- provider.StreamEvent{Type: provider.StreamError, Error: errMockConnectionReset, StopReason: "error"}
+			return
+		}
+		ch <- provider.StreamEvent{Type: provider.StreamTextDelta, TextDelta: " continued"}
+		ch <- provider.StreamEvent{Type: provider.StreamDone, StopReason: "stop"}
+	}()
+	return ch
+}
+
+func (p *streamFailureRecoveringProvider) Name() string              { return "stream-failure-recovering" }
+func (p *streamFailureRecoveringProvider) API() string               { return "openai-chat" }
+func (p *streamFailureRecoveringProvider) Models() []*provider.Model { return p.models }
+func (p *streamFailureRecoveringProvider) GetModel(id string) *provider.Model {
+	for _, m := range p.models {
+		if m.ID == id {
+			return m
+		}
+	}
+	return nil
+}
+
 func TestResponseArchiveSinkRecordsLineageConflict(t *testing.T) {
 	sessionDir := t.TempDir()
 	manager := session.New(t.TempDir(), sessionDir)
@@ -2834,6 +2888,246 @@ func TestStreamTimeoutRetriesThenRecovers(t *testing.T) {
 	}
 	if p.callCount != 3 {
 		t.Fatalf("callCount = %d, want 3 (2 timeout + 1 success)", p.callCount)
+	}
+}
+
+func TestStreamFailureContinuesAfterPartialOutput(t *testing.T) {
+	p := &streamFailureRecoveringProvider{
+		models:      []*provider.Model{{ID: "model1", Name: "Model 1"}},
+		resetTimes:  1, // first call resets mid-stream after a text delta
+		emitPartial: true,
+	}
+	cfg := AgentLoopConfig{
+		Config: Config{
+			Provider: p,
+			Model:    p.models[0],
+			Mode:     "agent",
+		},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     20,
+	}
+	a := NewWithLoopConfig(cfg, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	var done *Event
+	var retry *Event
+	var errEvent *Event
+	var text strings.Builder
+	for event := range a.Run(context.Background(), "test") {
+		switch event.Type {
+		case EventTextDelta:
+			text.WriteString(event.TextDelta)
+		case EventRetry:
+			ev := event
+			retry = &ev
+		case EventDone:
+			ev := event
+			done = &ev
+		case EventError:
+			ev := event
+			errEvent = &ev
+		}
+	}
+	if errEvent != nil {
+		t.Fatalf("unexpected EventError: %v", errEvent.Error)
+	}
+	if done == nil {
+		t.Fatal("expected EventDone after stream-failure continuation")
+	}
+	if p.callCount != 2 {
+		t.Fatalf("callCount = %d, want 2 (1 failure + 1 continuation)", p.callCount)
+	}
+	if retry == nil || !retry.RetryContinue || retry.RetryAttempt != 1 || retry.RetryMaxAttempts != 2 || retry.RetryReason != "stream_interrupted" {
+		t.Fatalf("unexpected retry event: %+v", retry)
+	}
+	if retry.StatusMessage != "connection reset" {
+		t.Fatalf("retry detail = %q, want sanitized connection reset diagnostic", retry.StatusMessage)
+	}
+	if got := text.String(); got != "partial continued" {
+		t.Fatalf("streamed text = %q, want %q", got, "partial continued")
+	}
+	// The retried request must carry the persisted partial turn plus the
+	// continuation instruction quoting the exact streamed suffix.
+	msgs := p.lastParams.Messages
+	if len(msgs) < 2 {
+		t.Fatalf("expected partial assistant + recovery messages, got %d", len(msgs))
+	}
+	recovery := msgs[len(msgs)-1]
+	if recovery.Role != "user" || !recovery.SystemInjected {
+		t.Fatalf("last message = %+v, want system-injected user recovery", recovery)
+	}
+	if !strings.Contains(recovery.Content, "<previous_response_suffix>\npartial\n</previous_response_suffix>") {
+		t.Fatalf("recovery message missing exact suffix: %q", recovery.Content)
+	}
+	partialMsg := msgs[len(msgs)-2]
+	if partialMsg.Role != "assistant" || len(partialMsg.Contents) != 1 || partialMsg.Contents[0].Text != "partial" {
+		t.Fatalf("partial assistant message = %+v", partialMsg)
+	}
+}
+
+func TestStreamFailureWithoutVisibleOutputRetriesFresh(t *testing.T) {
+	p := &streamFailureRecoveringProvider{
+		models:     []*provider.Model{{ID: "model1", Name: "Model 1"}},
+		resetTimes: 1, // first call resets before any visible output
+	}
+	cfg := AgentLoopConfig{
+		Config: Config{
+			Provider: p,
+			Model:    p.models[0],
+			Mode:     "agent",
+		},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     20,
+	}
+	a := NewWithLoopConfig(cfg, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	var done *Event
+	var retry *Event
+	for event := range a.Run(context.Background(), "test") {
+		switch event.Type {
+		case EventRetry:
+			ev := event
+			retry = &ev
+		case EventDone:
+			ev := event
+			done = &ev
+		}
+	}
+	if done == nil {
+		t.Fatal("expected EventDone after fresh stream-failure retry")
+	}
+	if p.callCount != 2 {
+		t.Fatalf("callCount = %d, want 2 (1 failure + 1 retry)", p.callCount)
+	}
+	if retry == nil || retry.RetryContinue {
+		t.Fatalf("retry event = %+v, want a non-continuation retry", retry)
+	}
+	// Nothing was persisted for the failed attempt: no partial assistant
+	// message and no continuation injection in the retried request.
+	for _, msg := range p.lastParams.Messages {
+		if msg.Role == "assistant" {
+			t.Fatalf("unexpected persisted assistant message: %+v", msg)
+		}
+		if strings.Contains(msg.Content, "previous_response_suffix") {
+			t.Fatalf("unexpected continuation injection: %q", msg.Content)
+		}
+	}
+}
+
+func TestStreamFailureRetriesThenErrors(t *testing.T) {
+	p := &streamFailureRecoveringProvider{
+		models:     []*provider.Model{{ID: "model1", Name: "Model 1"}},
+		resetTimes: 10, // always reset -> exhaust the continuation budget
+	}
+	cfg := AgentLoopConfig{
+		Config: Config{
+			Provider: p,
+			Model:    p.models[0],
+			Mode:     "agent",
+		},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     20,
+	}
+	a := NewWithLoopConfig(cfg, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	var errEvent *Event
+	retryCount := 0
+	for event := range a.Run(context.Background(), "test") {
+		switch event.Type {
+		case EventRetry:
+			retryCount++
+		case EventError:
+			ev := event
+			errEvent = &ev
+		case EventDone:
+			t.Fatal("unexpected EventDone while the stream keeps failing")
+		}
+	}
+	if errEvent == nil {
+		t.Fatal("expected EventError after exhausting stream-failure retries")
+	}
+	// 1 initial + 2 continuation retries = 3 provider calls before giving up.
+	if p.callCount != 3 {
+		t.Fatalf("callCount = %d, want 3 (1 initial + 2 retries)", p.callCount)
+	}
+	if retryCount != 2 {
+		t.Fatalf("retry event count = %d, want 2", retryCount)
+	}
+	if !errors.Is(errEvent.Error, errMockConnectionReset) {
+		t.Fatalf("final error = %v, want the original connection reset", errEvent.Error)
+	}
+}
+
+func TestStreamFailureWithEmittedToolCallDoesNotRetry(t *testing.T) {
+	p := &streamFailureRecoveringProvider{
+		models:       []*provider.Model{{ID: "model1", Name: "Model 1"}},
+		resetTimes:   10,
+		emitToolCall: true, // a completed tool call was already projected
+	}
+	cfg := AgentLoopConfig{
+		Config: Config{
+			Provider: p,
+			Model:    p.models[0],
+			Mode:     "agent",
+		},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     20,
+	}
+	a := NewWithLoopConfig(cfg, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	var errEvent *Event
+	for event := range a.Run(context.Background(), "test") {
+		switch event.Type {
+		case EventRetry:
+			t.Fatal("unexpected EventRetry after a stream failure with emitted tool calls")
+		case EventError:
+			ev := event
+			errEvent = &ev
+		}
+	}
+	if errEvent == nil {
+		t.Fatal("expected EventError when tool calls were emitted before the failure")
+	}
+	if p.callCount != 1 {
+		t.Fatalf("callCount = %d, want 1 (no retry with emitted tool calls)", p.callCount)
+	}
+}
+
+func TestStreamFailureNonRetryableErrorFailsImmediately(t *testing.T) {
+	responses := []provider.StreamEvent{
+		{Type: provider.StreamStart},
+		{Type: provider.StreamTextDelta, TextDelta: "partial"},
+		{Type: provider.StreamError, Error: errors.New("invalid authentication credentials"), StopReason: "error"},
+	}
+	mockProvider := provider.NewMockProvider("mock", []*provider.Model{
+		{ID: "model1", Name: "Model 1"},
+	}, responses)
+
+	cfg := AgentLoopConfig{
+		Config: Config{
+			Provider: mockProvider,
+			Model:    mockProvider.Models()[0],
+			Mode:     "agent",
+		},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     20,
+	}
+	a := NewWithLoopConfig(cfg, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	var errEvent *Event
+	for event := range a.Run(context.Background(), "test") {
+		switch event.Type {
+		case EventRetry:
+			t.Fatal("unexpected EventRetry for a non-retryable stream error")
+		case EventError:
+			ev := event
+			errEvent = &ev
+		}
+	}
+	if errEvent == nil {
+		t.Fatal("expected EventError for a non-retryable stream error")
+	}
+	if mockProvider.GetCallCount() != 1 {
+		t.Fatalf("callCount = %d, want 1", mockProvider.GetCallCount())
 	}
 }
 
