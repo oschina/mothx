@@ -5,6 +5,8 @@ import type { AcpClient, AcpClientSnapshot } from './acp-client';
 import { initialNewSessionDirectory } from './default-new-session-directory';
 import type { DiagnosticLogBuffer, DiagnosticLogEntry } from './diagnostic-logs';
 import { SelectedFileGrants } from './file-grants';
+import { readHomeImageDataURL } from './home-image';
+import type { ReadHomeImageResult } from './home-image';
 import type { DesktopStore, DesktopStoreData } from './store';
 
 export type RendererEvent =
@@ -130,8 +132,37 @@ export function registerIpc(deps: IpcDeps): void {
       filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif'] }],
     };
     const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
-    return result.canceled ? null : result.filePaths[0] || null;
+    const selected = result.canceled ? '' : result.filePaths[0] || '';
+    if (!selected) return null;
+    // Persist the explicit user selection before the renderer requests its
+    // display data. The renderer still mirrors this value into its UI state.
+    deps.store.set({ homeBackgroundImage: selected });
+    return selected;
   });
+
+  ipcMain.handle('desktop:home-background-data-url', (_event, path: unknown): ReadHomeImageResult =>
+    readHomeImageDataURL(path, deps.store.get().homeBackgroundImage),
+  );
+
+  ipcMain.handle('desktop:choose-home-logo', async (event, defaultPath?: string) => {
+    if (!event.sender || event.sender.isDestroyed()) return null;
+    const parent = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const options = {
+      defaultPath: typeof defaultPath === 'string' && defaultPath.trim() ? defaultPath : undefined,
+      properties: ['openFile'] as ('openFile')[],
+      title: 'Select home logo image',
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif'] }],
+    };
+    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+    const selected = result.canceled ? '' : result.filePaths[0] || '';
+    if (!selected) return null;
+    deps.store.set({ homeLogoImage: selected });
+    return selected;
+  });
+
+  ipcMain.handle('desktop:home-logo-data-url', (_event, path: unknown): ReadHomeImageResult =>
+    readHomeImageDataURL(path, deps.store.get().homeLogoImage),
+  );
 
   ipcMain.handle('desktop:choose-files', async (event) => {
     if (!event.sender || event.sender.isDestroyed()) return [];

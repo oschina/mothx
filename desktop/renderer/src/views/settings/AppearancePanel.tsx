@@ -7,6 +7,7 @@ import { RowItem, RowList } from '@/components/layout';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
+import { Switch } from '@/components/ui/switch';
 import { desktop } from '@/core/api';
 import { setLocale, t } from '@/core/i18n';
 import { emit } from '@/core/state';
@@ -57,6 +58,28 @@ export function AppearancePanel() {
     toast(t('settings.homeBackgroundSet', { w: basename(picked) }));
   };
 
+  const chooseLogo = async () => {
+    const picked = await desktop.chooseHomeLogo(store.homeLogoImage);
+    if (!picked) return;
+    appState.store.homeLogoImage = picked;
+    void desktop.storeSet({ homeLogoImage: picked });
+    emit();
+    toast(t('settings.homeLogoSet', { w: basename(picked) }));
+  };
+
+  const clearLogo = () => {
+    appState.store.homeLogoImage = '';
+    void desktop.storeSet({ homeLogoImage: '' });
+    emit();
+    toast(t('settings.homeLogoCleared'));
+  };
+
+  const setLogoVisible = (visible: boolean) => {
+    appState.store.homeLogoVisible = visible;
+    void desktop.storeSet({ homeLogoVisible: visible });
+    emit();
+  };
+
   return (
     <section>
       <RowList>
@@ -74,6 +97,39 @@ export function AppearancePanel() {
             ]}
             onChange={(value) => applyTheme(value === 'dark' ? 'dark' : 'light')}
           />
+        </RowItem>
+
+        <RowItem
+          icon={<ImageIcon />}
+          title={t('settings.homeLogo')}
+          desc={t('settings.homeLogoDesc')}
+        >
+          <Switch
+            checked={store.homeLogoVisible}
+            onCheckedChange={(checked) => setLogoVisible(checked)}
+            aria-label={t('settings.homeLogo')}
+          />
+        </RowItem>
+
+        <RowItem
+          icon={<ImageIcon />}
+          title={t('settings.homeLogoImage')}
+          desc={store.homeLogoImage || t('settings.homeLogoNone')}
+        >
+          <div className="flex shrink-0 gap-1.5">
+            <Button variant="outline" size="sm" onClick={() => void chooseLogo()}>
+              <ImageIcon />
+              {t('settings.homeLogoChoose')}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!store.homeLogoImage}
+              onClick={() => clearLogo()}
+            >
+              {t('settings.homeLogoClear')}
+            </Button>
+          </div>
         </RowItem>
 
         <RowItem icon={<Globe />} title={t('settings.language')} desc={t('settings.languageDesc')}>

@@ -90,6 +90,15 @@
   --radius-card: 12px;
 }
 
+/* Tailwind's structural background utilities otherwise override the
+   component-layer veil. Keep this in the utilities layer so the selected
+   app-wide image remains visible beneath panels. */
+@layer utilities {
+  .app-shell.has-app-background .app-surface-veil {
+    background: rgb(var(--home-image-overlay-rgb) / var(--app-surface-veil, 0.52));
+  }
+}
+
 [data-theme="dark"] {
   --background: #111312;
   --foreground: #f2f4f2;
@@ -432,7 +441,8 @@
       radial-gradient(640px circle at 88% 2%, var(--home-aurora-end), transparent 62%),
       var(--home-bg);
   }
-  .has-home-background .home-aurora {
+  .has-home-background .home-aurora,
+  .has-app-background .home-aurora {
     background:
       radial-gradient(760px circle at 16% -18%, var(--home-aurora-start), transparent 64%),
       radial-gradient(640px circle at 88% 2%, var(--home-aurora-end), transparent 62%),

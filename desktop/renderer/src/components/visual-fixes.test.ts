@@ -71,6 +71,11 @@ test('sidebar hierarchy labels and statuses are readable without breaking densit
 test('app background system keeps structural panels quiet and controls readable', () => {
   assert.match(styles, /\.app-shell\.has-app-background::before \{[\s\S]*?background-image: var\(--app-user-image\)/, 'app background must render through the injected image variable');
   assert.match(styles, /\.app-shell\.has-app-background::after \{[\s\S]*?--app-background-veil/, 'app background must keep the derived veil layer');
-  assert.match(styles, /\.has-home-background \.home-aurora \{/, 'Home-only mode must not leak the image outside Home');
+  assert.match(
+    styles,
+    /\.has-home-background \.home-aurora,\s*\.has-app-background \.home-aurora \{[\s\S]*?rgb\(var\(--home-image-overlay-rgb\) \/ var\(--app-background-veil, 0\.72\)\)/,
+    'Home and app-wide backgrounds must veil the aurora so the image stays visible',
+  );
   assert.match(styles, /--app-surface-veil/, 'surface opacity must be configurable instead of a fixed white veil');
+  assert.match(styles, /@layer utilities \{[\s\S]*?\.app-shell\.has-app-background \.app-surface-veil \{[\s\S]*?background: rgb\(var\(--home-image-overlay-rgb\) \/ var\(--app-surface-veil, 0\.52\)\)/, 'global background veil must override opaque structural background utilities');
 });

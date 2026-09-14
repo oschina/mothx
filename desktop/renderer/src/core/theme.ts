@@ -2,7 +2,9 @@
 // desktop-store.json;背景图通过 CSS 变量注入根壳层,不复制进会话或 ACP。
 
 import { desktop } from './api';
+import { t } from './i18n';
 import { emit, state } from './state';
+import { toast } from './ui-host';
 
 export function applyTheme(theme: 'light' | 'dark'): void {
   state.store.theme = theme;
@@ -23,29 +25,66 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
-export function homeImageURL(path: string): string {
-  const raw = path.trim();
-  if (!raw) return '';
-  const normalized = raw.replace(/\\/g, '/');
-  const absolute = normalized.startsWith('/')
-    ? `file://${normalized}`
-    : /^[A-Za-z]:\//.test(normalized)
-      ? `file:///${normalized}`
-      : '';
-  return absolute
-    ? encodeURI(absolute).replace(/#/g, '%23').replace(/\?/g, '%3F').replace(/"/g, '%22')
-    : '';
+function homeBackgroundErrorKey(reason: string): string {
+  switch (reason) {
+    case 'unsupported':
+      return 'settings.homeBackgroundUnsupported';
+    case 'oversized':
+      return 'settings.homeBackgroundOversized';
+    case 'unauthorized':
+      return 'settings.homeBackgroundUnauthorized';
+    default:
+      return 'settings.homeBackgroundMissing';
+  }
 }
+
+let backgroundImagePath = '';
+let backgroundImageSource = '';
+let backgroundImageErrorPath = '';
 
 // Home imagery is a Desktop-only visual preference. Keep the file path in the
 // local UI store rather than copying the image into session or ACP storage.
 export function applyHomeBackground(root: HTMLElement | null): void {
   if (!root) return;
-  const source = homeImageURL(state.store.homeBackgroundImage);
-  if (!source) {
+  const path = state.store.homeBackgroundImage.trim();
+  if (!path) {
+    backgroundImagePath = '';
+    backgroundImageSource = '';
     root.classList.remove('has-app-background');
     root.classList.remove('has-home-background');
     for (const property of ['--app-user-image', '--app-user-image-opacity', '--app-user-image-blur', '--app-user-image-size', '--app-user-image-repeat', '--app-user-image-position', '--app-background-veil', '--app-surface-veil', '--app-surface-blur']) root.style.removeProperty(property);
+    return;
+  }
+  if (backgroundImagePath !== path) {
+    backgroundImagePath = path;
+    backgroundImageSource = '';
+    backgroundImageErrorPath = '';
+    void desktop.homeBackgroundDataURL(path).then((result) => {
+      // The selection may have changed while the privileged request was in
+      // flight. Never apply stale image data to the current shell.
+      if (backgroundImagePath !== path || state.store.homeBackgroundImage.trim() !== path || !root.isConnected) return;
+      if (result.ok) {
+        backgroundImageSource = result.dataUrl;
+        backgroundImageErrorPath = '';
+      } else {
+        if (backgroundImageErrorPath !== path) {
+          backgroundImageErrorPath = path;
+          toast(t(homeBackgroundErrorKey(result.reason), { s: '20MB' }));
+        }
+        backgroundImageSource = '';
+      }
+      applyHomeBackground(root);
+    }).catch(() => {
+      if (backgroundImagePath === path && backgroundImageErrorPath !== path) {
+        backgroundImageErrorPath = path;
+        toast(t('settings.homeBackgroundMissing'));
+      }
+    });
+  }
+  const source = backgroundImageSource;
+  if (!source) {
+    root.classList.remove('has-app-background');
+    root.classList.remove('has-home-background');
     return;
   }
   const fit = state.store.homeBackgroundFit;

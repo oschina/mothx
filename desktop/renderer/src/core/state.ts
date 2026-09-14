@@ -187,7 +187,7 @@ export interface AppState {
 
 export const state: AppState = {
   connection: { state: 'idle', workspace: '' },
-  store: { theme: 'light', locale: 'zh', homeBackgroundImage: '', homeBackgroundOpacity: 32, homeBackgroundBlur: 0, homeBackgroundScope: 'app', homeBackgroundFit: 'cover', homeBackgroundPosition: 'center', lastWorkspace: '', recentWorkspaces: [], pinnedSessions: [], sessionStatus: {} },
+  store: { theme: 'light', locale: 'zh', homeBackgroundImage: '', homeBackgroundOpacity: 32, homeBackgroundBlur: 0, homeBackgroundScope: 'app', homeBackgroundFit: 'cover', homeBackgroundPosition: 'center', homeLogoVisible: true, homeLogoImage: '', lastWorkspace: '', recentWorkspaces: [], pinnedSessions: [], sessionStatus: {} },
   appInfo: { version: 'dev', platform: 'linux', arch: '', runtimeBinary: '' },
   view: 'home',
   preset: 'coding',

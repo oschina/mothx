@@ -47,7 +47,12 @@ export function App() {
       <TitleBar />
       <div className="app-layer flex min-h-0 flex-1">
         <Sidebar />
-        <main className={cn('relative min-w-0 flex-1 overflow-hidden bg-background', background.app && 'app-surface-veil')}>
+        <main
+          className={cn(
+            'relative min-w-0 flex-1 overflow-hidden',
+            background.app ? 'app-surface-veil' : 'bg-background'
+          )}
+        >
           {appState.view === 'home' ? <HomeView /> : null}
           {appState.view === 'chat' ? <ChatView /> : null}
           {appState.view === 'skills' ? <SkillsView /> : null}

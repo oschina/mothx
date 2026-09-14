@@ -41,7 +41,7 @@ test('desktop store persists UI state and clamps workspace history', () => {
   try {
     const store = new DesktopStore(dir);
     assert.equal(store.get().theme, 'light');
-    store.set({ theme: 'dark', locale: 'en', homeBackgroundImage: '/tmp/wallpaper.webp', homeBackgroundOpacity: 68, homeBackgroundBlur: 7, homeBackgroundScope: 'home', homeBackgroundFit: 'tile', homeBackgroundPosition: 'right', lastWorkspace: '/tmp/project-a' });
+    store.set({ theme: 'dark', locale: 'en', homeBackgroundImage: '/tmp/wallpaper.webp', homeBackgroundOpacity: 68, homeBackgroundBlur: 7, homeBackgroundScope: 'home', homeBackgroundFit: 'tile', homeBackgroundPosition: 'right', homeLogoVisible: false, homeLogoImage: '/tmp/logo.png', lastWorkspace: '/tmp/project-a' });
     store.set({ lastWorkspace: '/tmp/project-b' });
     store.set({ pinnedSessions: ['s1', 's1', 42 as never], sessionStatus: { s1: 'completed' } });
     const reloaded = new DesktopStore(dir);
@@ -54,6 +54,8 @@ test('desktop store persists UI state and clamps workspace history', () => {
     assert.equal(data.homeBackgroundScope, 'home');
     assert.equal(data.homeBackgroundFit, 'tile');
     assert.equal(data.homeBackgroundPosition, 'right');
+    assert.equal(data.homeLogoVisible, false);
+    assert.equal(data.homeLogoImage, '/tmp/logo.png');
     assert.equal(data.lastWorkspace, '/tmp/project-b');
     assert.deepEqual(data.recentWorkspaces, ['/tmp/project-b', '/tmp/project-a']);
     assert.deepEqual(data.pinnedSessions, ['s1', 's1']);

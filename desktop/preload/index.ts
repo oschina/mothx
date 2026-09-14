@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+import type { ReadHomeImageResult } from '../main/home-image';
+
 // The renderer only sees this bridge. All ACP traffic flows through the main
 // process client; reverse requests (permission/question) arrive as events and
 // are answered with acp.respond.
@@ -29,6 +31,9 @@ export interface MothxDesktopBridge {
     chooseDirectory: (defaultPath?: string) => Promise<string | null>;
     defaultNewSessionDirectory: () => Promise<string>;
     chooseHomeBackground: (defaultPath?: string) => Promise<string | null>;
+    homeBackgroundDataURL: (path: string) => Promise<ReadHomeImageResult>;
+    chooseHomeLogo: (defaultPath?: string) => Promise<string | null>;
+    homeLogoDataURL: (path: string) => Promise<ReadHomeImageResult>;
     chooseFiles: () => Promise<{ path: string; grant: string }[]>;
     readFileBase64: (grant: string) => Promise<{ ok: true; data: string; size: number } | { ok: false; error: string }>;
     storeGet: () => Promise<unknown>;
@@ -62,6 +67,9 @@ const bridge: MothxDesktopBridge = {
     chooseDirectory: (defaultPath = '') => ipcRenderer.invoke('desktop:choose-directory', defaultPath),
     defaultNewSessionDirectory: () => ipcRenderer.invoke('desktop:default-new-session-directory'),
     chooseHomeBackground: (defaultPath = '') => ipcRenderer.invoke('desktop:choose-home-background', defaultPath),
+    homeBackgroundDataURL: (path) => ipcRenderer.invoke('desktop:home-background-data-url', path),
+    chooseHomeLogo: (defaultPath = '') => ipcRenderer.invoke('desktop:choose-home-logo', defaultPath),
+    homeLogoDataURL: (path) => ipcRenderer.invoke('desktop:home-logo-data-url', path),
     chooseFiles: () => ipcRenderer.invoke('desktop:choose-files'),
     readFileBase64: (grant) => ipcRenderer.invoke('desktop:read-file-base64', grant),
     storeGet: () => ipcRenderer.invoke('desktop:store-get'),

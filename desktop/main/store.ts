@@ -17,6 +17,8 @@ export interface DesktopStoreData {
   homeBackgroundScope: 'app' | 'home';
   homeBackgroundFit: 'cover' | 'contain' | 'stretch' | 'tile';
   homeBackgroundPosition: 'center' | 'left' | 'right' | 'top' | 'bottom';
+  homeLogoVisible: boolean;
+  homeLogoImage: string;
   lastWorkspace: string;
   recentWorkspaces: string[];
   pinnedSessions: string[];
@@ -32,6 +34,8 @@ const DEFAULTS: DesktopStoreData = {
   homeBackgroundScope: 'app',
   homeBackgroundFit: 'cover',
   homeBackgroundPosition: 'center',
+  homeLogoVisible: true,
+  homeLogoImage: '',
   lastWorkspace: '',
   recentWorkspaces: [],
   pinnedSessions: [],
@@ -80,6 +84,8 @@ export class DesktopStore {
         homeBackgroundScope: backgroundScope(parsed.homeBackgroundScope),
         homeBackgroundFit: backgroundFit(parsed.homeBackgroundFit),
         homeBackgroundPosition: backgroundPosition(parsed.homeBackgroundPosition),
+        homeLogoVisible: parsed.homeLogoVisible !== false,
+        homeLogoImage: typeof parsed.homeLogoImage === 'string' ? parsed.homeLogoImage.slice(0, 4096) : '',
         lastWorkspace: typeof parsed.lastWorkspace === 'string' ? parsed.lastWorkspace : '',
         recentWorkspaces: Array.isArray(parsed.recentWorkspaces)
           ? parsed.recentWorkspaces.filter((entry): entry is string => typeof entry === 'string' && entry !== '')
@@ -110,6 +116,8 @@ export class DesktopStore {
     if (patch.homeBackgroundScope !== undefined) this.data.homeBackgroundScope = backgroundScope(patch.homeBackgroundScope);
     if (patch.homeBackgroundFit !== undefined) this.data.homeBackgroundFit = backgroundFit(patch.homeBackgroundFit);
     if (patch.homeBackgroundPosition !== undefined) this.data.homeBackgroundPosition = backgroundPosition(patch.homeBackgroundPosition);
+    if (typeof patch.homeLogoVisible === 'boolean') this.data.homeLogoVisible = patch.homeLogoVisible;
+    if (typeof patch.homeLogoImage === 'string') this.data.homeLogoImage = patch.homeLogoImage.slice(0, 4096);
     if (typeof patch.lastWorkspace === 'string' && patch.lastWorkspace !== '') {
       this.data.lastWorkspace = patch.lastWorkspace;
       this.rememberWorkspace(patch.lastWorkspace);

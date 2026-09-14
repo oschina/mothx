@@ -1,5 +1,7 @@
 // window.mothx 桥接的类型化封装。renderer 只能通过这个模块访问主进程。
 
+import type { ReadHomeImageResult } from '../../../main/home-image';
+
 export interface AcpInvokeOk<T = unknown> {
   ok: true;
   result: T;
@@ -45,6 +47,8 @@ export interface StoreData {
   homeBackgroundScope: 'app' | 'home';
   homeBackgroundFit: 'cover' | 'contain' | 'stretch' | 'tile';
   homeBackgroundPosition: 'center' | 'left' | 'right' | 'top' | 'bottom';
+  homeLogoVisible: boolean;
+  homeLogoImage: string;
   lastWorkspace: string;
   recentWorkspaces: string[];
   pinnedSessions: string[];
@@ -83,6 +87,9 @@ interface MothxBridge {
     chooseDirectory: (defaultPath?: string) => Promise<string | null>;
     defaultNewSessionDirectory: () => Promise<string>;
     chooseHomeBackground: (defaultPath?: string) => Promise<string | null>;
+    homeBackgroundDataURL: (path: string) => Promise<ReadHomeImageResult>;
+    chooseHomeLogo: (defaultPath?: string) => Promise<string | null>;
+    homeLogoDataURL: (path: string) => Promise<ReadHomeImageResult>;
     chooseFiles: () => Promise<{ path: string; grant: string }[]>;
     readFileBase64: (grant: string) => Promise<{ ok: true; data: string; size: number } | { ok: false; error: string }>;
     storeGet: () => Promise<StoreData>;
@@ -131,6 +138,9 @@ export const desktop = {
   chooseDirectory: (defaultPath?: string) => bridge().desktop.chooseDirectory(defaultPath),
   defaultNewSessionDirectory: () => bridge().desktop.defaultNewSessionDirectory(),
   chooseHomeBackground: (defaultPath?: string) => bridge().desktop.chooseHomeBackground(defaultPath),
+  homeBackgroundDataURL: (path: string) => bridge().desktop.homeBackgroundDataURL(path),
+  chooseHomeLogo: (defaultPath?: string) => bridge().desktop.chooseHomeLogo(defaultPath),
+  homeLogoDataURL: (path: string) => bridge().desktop.homeLogoDataURL(path),
   chooseFiles: () => bridge().desktop.chooseFiles(),
   readFileBase64: (grant: string) => bridge().desktop.readFileBase64(grant),
   storeGet: () => bridge().desktop.storeGet(),

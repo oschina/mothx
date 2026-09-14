@@ -4,7 +4,7 @@
 import { AlertCircle, Sparkles } from 'lucide-react';
 
 import { Composer } from '@/components/Composer';
-import { MothxLogo } from '@/components/MothxLogo';
+import { HomeLogo } from '@/components/HomeLogo';
 import { Button } from '@/components/ui/button';
 import { acp } from '@/core/api';
 import { requestComposerReplace } from '@/core/bus';
@@ -12,6 +12,7 @@ import { getLocale, PRESETS, t } from '@/core/i18n';
 import { emit, state } from '@/core/state';
 import { useAppState } from '@/hooks/useAppState';
 import { useAppBackground } from '@/hooks/useAppBackground';
+import { useHomeLogo } from '@/hooks/useHomeLogo';
 import { switchView } from '@/core/views';
 import { cn } from '@/lib/utils';
 
@@ -39,6 +40,7 @@ function ConnBanner() {
 export function HomeView() {
   const appState = useAppState();
   const background = useAppBackground();
+  const logo = useHomeLogo();
   const preset = PRESETS[appState.preset] || PRESETS.coding;
   const isZh = getLocale() === 'zh';
   const items = isZh ? preset.quickZh : preset.quickEn;
@@ -61,9 +63,11 @@ export function HomeView() {
           <ConnBanner />
 
           <div className="mb-[26px] text-center">
-            <span className="mx-auto mb-3.5 block size-[58px] rounded-[14px] [filter:drop-shadow(0_8px_18px_var(--home-accent-shadow))]">
-              <MothxLogo />
-            </span>
+            {!logo.hidden && (
+              <span className="mx-auto mb-3.5 block size-[58px] rounded-[14px] [filter:drop-shadow(0_8px_18px_var(--home-accent-shadow))]">
+                <HomeLogo logo={logo} />
+              </span>
+            )}
             <h1 className="text-[26px] font-bold tracking-[-.35px] text-home-text">
               MothX
               <span className="font-medium text-[color-mix(in_srgb,var(--home-accent)_55%,var(--home-muted))]">
