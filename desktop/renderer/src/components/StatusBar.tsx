@@ -1,7 +1,7 @@
 import { Cpu, Folder, SlidersHorizontal } from 'lucide-react';
 
 import { t } from '@/core/i18n';
-import { currentModelLabel } from '@/core/state';
+import { currentModelLabel, hasFeature } from '@/core/state';
 import { useAppState } from '@/hooks/useAppState';
 import { useAppBackground } from '@/hooks/useAppBackground';
 import { basename, cn } from '@/lib/utils';
@@ -39,6 +39,14 @@ export function StatusBar() {
   const showUsage = usage && usage.used > 0;
   const percent = showUsage && usage.size > 0 ? Math.round((usage.used / usage.size) * 100) : 0;
   const cost = showUsage && usage.cost ? ` · $${usage.cost.toFixed(4)}` : '';
+  // 提示词缓存只显示 Runtime 已经算好的累计量,且必须等 ACP 广告对应能力;
+  // 这里不再拍另一个分母,以免与服务端/TUI 的命中率口径分叉。
+  const cache = showUsage && hasFeature('usageCacheProjection') ? usage.cache : null;
+  const cachePercent =
+    cache && cache.totalInputTokens > 0 ? Math.min(100, Math.round((cache.cacheRead / cache.totalInputTokens) * 100)) : 0;
+  const cacheTitle = cache
+    ? t('status.cacheTip', { read: cache.cacheRead, write: cache.cacheWrite, total: cache.totalInputTokens })
+    : undefined;
 
   return (
     <footer
@@ -56,11 +64,12 @@ export function StatusBar() {
       </div>
       <div className="flex min-w-0 items-center gap-3">
         {showUsage ? (
-          <span className="whitespace-nowrap">
+          <span className="whitespace-nowrap" title={cacheTitle}>
             ctx {usage.used}
             {usage.size ? `/${usage.size}` : ''}
             {percent ? ` (${percent}%)` : ''}
             {cost}
+            {cachePercent ? ` · ${t('status.cache', { p: cachePercent })}` : ''}
           </span>
         ) : null}
         <span className="flex items-center gap-1 whitespace-nowrap">

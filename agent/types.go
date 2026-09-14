@@ -187,6 +187,24 @@ type Usage struct {
 	Cost         CostBreakdown
 }
 
+// TotalInputTokens returns the full input footprint for the response, including
+// cache reads and cache writes when the provider reports them separately. Use
+// it as the prompt-cache hit-ratio denominator: providers differ in whether
+// cached input is folded into InputTokens or reported apart, and this keeps the
+// SDK, the CLI, and every front-end projection on one measurement basis.
+func (u *Usage) TotalInputTokens() int {
+	if u == nil {
+		return 0
+	}
+	if u.TotalTokens > 0 {
+		totalInput := u.TotalTokens - u.OutputTokens
+		if totalInput > 0 {
+			return totalInput
+		}
+	}
+	return u.InputTokens + u.CacheRead + u.CacheWrite
+}
+
 // Attachment is a provider-neutral citation, file, image, or artifact emitted
 // with a completed response.
 type Attachment struct {

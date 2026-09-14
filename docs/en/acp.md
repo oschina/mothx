@@ -117,7 +117,9 @@ The server sends `session/update` notifications with the following event types:
 | `user_message_chunk` | historical user message |
 | `tool_call` | tool being called |
 | `tool_call_update` | tool status update (pending/in_progress/completed/failed) |
-| `usage_update` | Current context usage, context window size, and cumulative cost |
+| `usage_update` | Current context usage, context window size, and cumulative cost; plus the additive cache projection below |
+
+`usage_update` keeps the standard ACP shape. When `initialize._meta["mothx.dev"].features` advertises `usageCacheProjection`, the notification additionally carries `_meta["mothx.dev"]` with the session-cumulative `cacheRead`, `cacheWrite`, and `totalInputTokens`; the cache hit ratio is `cacheRead / totalInputTokens`, the same denominator the Runtime uses for `Usage.TotalInputTokens`. Both the cumulative cost and these totals are rebuilt from the canonical persisted history on `session/load`, and the extension is omitted until the first usage event.
 
 `session/load` replays the full conversation history before returning.
 

@@ -187,6 +187,11 @@ func TestInitializeAdvertisesStandardSessionLifecycleCapabilities(t *testing.T) 
 	if !containsACPFeature(features, "sessionConfigProvider") {
 		t.Fatalf("features = %#v, want sessionConfigProvider", features)
 	}
+	// The cumulative prompt-cache projection on usage_update is discoverable
+	// only through this key; clients must not sniff the payload shape.
+	if !containsACPFeature(features, "usageCacheProjection") {
+		t.Fatalf("features = %#v, want usageCacheProjection", features)
+	}
 	rootMeta := result["_meta"].(map[string]any)
 	if rootMeta[mothxExtensionNamespace].(map[string]any)["doctor"] != true {
 		t.Fatalf("root MothX metadata = %#v, want doctor capability", rootMeta)
@@ -1271,25 +1276,140 @@ func TestUsageEventEmitsUsageUpdate(t *testing.T) {
 		},
 		w: &out,
 	}
+	// A turn that finishes before any usage event must keep the standard ACP
+	// payload: the additive cache extension is omitted, never zero-filled.
+	s.handleAgentEvent("session-1", agentpkg.Event{Type: agentpkg.EventDone})
+	if meta := mothxUsageMeta(t, lastUsageUpdate(t, &out)); meta != nil {
+		t.Fatalf("usage_update without usage carried _meta %#v", meta)
+	}
+
 	s.handleAgentEvent("session-1", agentpkg.Event{
 		Type: agentpkg.EventUsage,
 		Usage: &agentpkg.Usage{
 			InputTokens:  10,
 			OutputTokens: 5,
-			TotalTokens:  15,
+			CacheRead:    40,
+			CacheWrite:   8,
+			TotalTokens:  63,
 		},
 		ContextUsage: &agentpkg.ContextUsage{Tokens: 20, ContextWindow: 100},
 	})
 
-	message := jsonLines(t, &out)[0]
-	update := message["params"].(map[string]any)["update"].(map[string]any)
-	if update["sessionUpdate"] != "usage_update" || update["used"] != float64(20) || update["size"] != float64(100) {
+	update := lastUsageUpdate(t, &out)
+	if update["used"] != float64(20) || update["size"] != float64(100) {
 		t.Fatalf("usage update = %#v", update)
 	}
 	cost := update["cost"].(map[string]any)
 	if cost["currency"] != "USD" || cost["amount"] != 0.00002 {
 		t.Fatalf("usage cost = %#v", cost)
 	}
+	// The cache denominator is the full input footprint (TotalTokens-Output =
+	// 58), so Anthropic-style separated cache counts and OpenAI-style folded
+	// ones share one hit-ratio basis with the TUI.
+	if meta := mothxUsageMeta(t, update); meta["cacheRead"] != float64(40) || meta["cacheWrite"] != float64(8) || meta["totalInputTokens"] != float64(58) {
+		t.Fatalf("usage cache = %#v", update)
+	}
+
+	// The next model turn accumulates on the same session baseline.
+	s.handleAgentEvent("session-1", agentpkg.Event{
+		Type: agentpkg.EventUsage,
+		Usage: &agentpkg.Usage{
+			InputTokens:  4,
+			OutputTokens: 2,
+			CacheRead:    60,
+			TotalTokens:  66,
+		},
+		ContextUsage: &agentpkg.ContextUsage{Tokens: 24, ContextWindow: 100},
+	})
+	if meta := mothxUsageMeta(t, lastUsageUpdate(t, &out)); meta["cacheRead"] != float64(100) || meta["cacheWrite"] != float64(8) || meta["totalInputTokens"] != float64(122) {
+		t.Fatalf("accumulated usage cache = %#v, want 100/8/122", lastUsageUpdate(t, &out))
+	}
+}
+
+// TestPersistedSessionUsageSharesUsageUpdateBaseline covers session/load and
+// ACP restarts: cost and the prompt-cache projection are both rebuilt from the
+// canonical history in one pass, so a single usage_update never mixes a
+// whole-session cost with a since-this-connection cache baseline.
+func TestPersistedSessionUsageSharesUsageUpdateBaseline(t *testing.T) {
+	dir := t.TempDir()
+	mgr := session.New(dir, dir)
+	if err := mgr.InitWithID("seeded-session"); err != nil {
+		t.Fatalf("initialize session: %v", err)
+	}
+	history := []*provider.Usage{
+		// Exact binary totals keep this baseline assertion free of float noise.
+		{Input: 10, Output: 5, CacheRead: 40, CacheWrite: 8, TotalTokens: 63, Cost: provider.Cost{Total: 0.25}},
+		{Input: 4, Output: 2, CacheRead: 60, TotalTokens: 66, Cost: provider.Cost{Total: 0.5}},
+	}
+	for _, usage := range history {
+		if _, err := mgr.AppendMessage(provider.Message{Role: "assistant", Content: "done", Usage: usage}); err != nil {
+			t.Fatalf("append usage message: %v", err)
+		}
+	}
+
+	cost, usage := persistedSessionUsage(mgr, nil)
+	if got, want := usage.inputTotal, 122; got != want {
+		t.Fatalf("seeded input total = %d, want %d", got, want)
+	}
+	if usage.cacheRead != 100 || usage.cacheWrite != 8 {
+		t.Fatalf("seeded cache = %d/%d, want 100/8", usage.cacheRead, usage.cacheWrite)
+	}
+
+	var out bytes.Buffer
+	s := &server{
+		m:        &provider.Model{ContextWindow: 100},
+		sessions: map[string]*sessionRuntime{"session-1": {cost: cost, usageCache: usage}},
+		w:        &out,
+	}
+	s.handleAgentEvent("session-1", agentpkg.Event{
+		Type:         agentpkg.EventUsage,
+		Usage:        &agentpkg.Usage{InputTokens: 6, OutputTokens: 4, CacheRead: 0, TotalTokens: 10},
+		ContextUsage: &agentpkg.ContextUsage{Tokens: 30, ContextWindow: 100},
+	})
+	reloaded := lastUsageUpdate(t, &out)
+	meta := mothxUsageMeta(t, reloaded)
+	// 122 persisted input tokens plus the live turn's 6 (TotalTokens-Output),
+	// with the persisted cache reads carried forward.
+	if meta["totalInputTokens"] != float64(128) || meta["cacheRead"] != float64(100) || meta["cacheWrite"] != float64(8) {
+		t.Fatalf("reloaded usage projection = %#v, want the persisted baseline plus the live turn", reloaded)
+	}
+	if amount := reloaded["cost"].(map[string]any)["amount"]; amount != 0.75 {
+		t.Fatalf("reloaded cost = %v, want the seeded 0.25+0.5", amount)
+	}
+}
+
+// lastUsageUpdate decodes the most recent usage_update notification in out.
+func lastUsageUpdate(t *testing.T, out *bytes.Buffer) map[string]any {
+	t.Helper()
+	messages := jsonLines(t, out)
+	last := messages[len(messages)-1]
+	params, ok := last["params"].(map[string]any)
+	if !ok {
+		t.Fatalf("notification has no params: %#v", last)
+	}
+	update, ok := params["update"].(map[string]any)
+	if !ok {
+		t.Fatalf("params has no update: %#v", last)
+	}
+	if update["sessionUpdate"] != "usage_update" {
+		t.Fatalf("update type = %v, want usage_update", update["sessionUpdate"])
+	}
+	return update
+}
+
+// mothxUsageMeta returns the additive mothx.dev projection on a usage_update,
+// or nil when the server omitted the extension.
+func mothxUsageMeta(t *testing.T, update map[string]any) map[string]any {
+	t.Helper()
+	meta, ok := update["_meta"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	dev, ok := meta[mothxExtensionNamespace].(map[string]any)
+	if !ok {
+		t.Fatalf("_meta has no %q extension: %#v", mothxExtensionNamespace, update)
+	}
+	return dev
 }
 
 func newTestSession(t *testing.T, cwd, dir, id string, messages int) {

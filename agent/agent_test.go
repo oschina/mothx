@@ -193,6 +193,60 @@ func TestUsageCalculateCostDoesNotDoubleChargeIncludedCacheRead(t *testing.T) {
 	}
 }
 
+func TestUsageTotalInputTokens(t *testing.T) {
+	tests := []struct {
+		name      string
+		usage     *Usage
+		wantInput int
+	}{
+		{
+			name:      "nil usage",
+			usage:     nil,
+			wantInput: 0,
+		},
+		{
+			name: "uses total tokens when present",
+			usage: &Usage{
+				InputTokens:  400,
+				OutputTokens: 50,
+				CacheRead:    200,
+				CacheWrite:   100,
+				TotalTokens:  750,
+			},
+			wantInput: 700,
+		},
+		{
+			// Providers that omit the grand total still report the parts; the
+			// SDK's InputTokens is normalized to the non-cached prompt portion.
+			name: "falls back to components when total missing",
+			usage: &Usage{
+				InputTokens:  400,
+				OutputTokens: 50,
+				CacheRead:    200,
+				CacheWrite:   100,
+			},
+			wantInput: 700,
+		},
+		{
+			name: "ignores a total smaller than the output",
+			usage: &Usage{
+				InputTokens:  30,
+				OutputTokens: 50,
+				TotalTokens:  40,
+			},
+			wantInput: 30,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.usage.TotalInputTokens(); got != tt.wantInput {
+				t.Errorf("TotalInputTokens() = %d, want %d", got, tt.wantInput)
+			}
+		})
+	}
+}
+
 func TestRoleConstants(t *testing.T) {
 	if RoleUser != "user" {
 		t.Errorf("expected user, got %q", RoleUser)

@@ -94,6 +94,15 @@ export interface TranscriptPageShape {
   nextCursor?: string;
 }
 
+// usage_update 的 mothx.dev 附加投影:会话累计提示词缓存量。命中率口径为
+// cacheRead / totalInputTokens,与服务端 Usage.TotalInputTokens 同分母;仅在
+// initialize 声明 usageCacheProjection 且已有 usage 时出现。
+export type UsageCacheProjection = {
+  cacheRead: number;
+  cacheWrite: number;
+  totalInputTokens: number;
+};
+
 export type TranscriptItem =
   | { kind: 'user'; key: string; text: string }
   | { kind: 'agent'; key: string; text: string }
@@ -176,7 +185,7 @@ export interface AppState {
   configOptions: SessionConfigOptionShape[];
   currentMode: string;
   availableCommands: AvailableCommandShape[];
-  usage: { used: number; size: number; cost?: number } | null;
+  usage: { used: number; size: number; cost?: number; cache?: UsageCacheProjection } | null;
   attachments: AttachmentDraft[];
   pendingUserKey: string | null;
   promptInFlight: boolean;

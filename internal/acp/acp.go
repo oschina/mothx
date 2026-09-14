@@ -215,8 +215,39 @@ type sessionRuntime struct {
 	mcp              []*mcp.Client
 	agentMgr         *agent.AgentManager
 
-	usageMu sync.Mutex
-	cost    float64
+	usageMu    sync.Mutex
+	cost       float64
+	usageCache cacheUsage
+}
+
+// cacheUsage holds the session-cumulative prompt-cache totals projected on
+// usage_update under _meta["mothx.dev"] (feature key usageCacheProjection).
+// One accumulator serves both the persisted-history seed and live usage
+// events, so every surface computes the hit ratio on the same footing as the
+// TUI, whose denominator is Usage.TotalInputTokens.
+type cacheUsage struct {
+	cacheRead  int
+	cacheWrite int
+	inputTotal int
+}
+
+func (c *cacheUsage) addTurn(cacheRead, cacheWrite, totalInput int) {
+	c.cacheRead += cacheRead
+	c.cacheWrite += cacheWrite
+	c.inputTotal += totalInput
+}
+
+// meta projects the additive extension, or nil while no input token has been
+// observed; clients that see no extension keep the standard ACP payload.
+func (c cacheUsage) meta() map[string]any {
+	if c.inputTotal <= 0 {
+		return nil
+	}
+	return map[string]any{mothxExtensionNamespace: map[string]any{
+		"cacheRead":        c.cacheRead,
+		"cacheWrite":       c.cacheWrite,
+		"totalInputTokens": c.inputTotal,
+	}}
 }
 
 func (s *server) artifactEnabled() bool {
@@ -1608,6 +1639,9 @@ func (s *server) handleInitialize(req rpcRequest) {
 				"decisionDeadline",
 				"subagentEvents",
 				"toolResultImages",
+				// usage_update carries the cumulative prompt-cache totals under
+				// _meta["mothx.dev"] only while this key is advertised.
+				"usageCacheProjection",
 				"attachmentList",
 				"manageSettings",
 				"manageApplicationSettings",
@@ -2514,11 +2548,13 @@ func (s *server) openSessionRuntime(sessionID, cwd string, servers []mcp.ServerC
 	runRuntime.SetRunStore(agentruntime.RunStore{SessionDir: s.settings.GetSessionDir()})
 	runtime.SetExecution(runRuntime)
 	runRuntime.SetEventSink(agentruntime.SessionRunEventSink{SessionDir: s.settings.GetSessionDir()})
+	seededCost, seededUsage := persistedSessionUsage(mgr, runtimeModel(runtime))
 	rt := &sessionRuntime{
 		runtime: runtime, execution: runRuntime,
 		decisions: &agentruntime.DecisionService{},
 		id:        sessionID, mgr: mgr, registry: registry, mcp: mcpClients, agentMgr: teamAgentMgr,
-		cost: s.persistedSessionCost(mgr, runtimeModel(runtime)),
+		cost:       seededCost,
+		usageCache: seededUsage,
 	}
 	runtime.SetDecisions(rt.decisions)
 	if err := s.rehydrateSessionDecisions(rt); err != nil {
@@ -4040,14 +4076,17 @@ func (s *server) emitUsageUpdate(sessionID string, ev agentpkg.Event, addCost bo
 			ev.Usage.CalculateCost(model.Cost.Input, model.Cost.Output, model.Cost.CacheRead, model.Cost.CacheWrite)
 		}
 		rt.cost += ev.Usage.Cost.Total
+		rt.usageCache.addTurn(ev.Usage.CacheRead, ev.Usage.CacheWrite, ev.Usage.TotalInputTokens())
 	}
 	cost := rt.cost
+	usageCache := rt.usageCache
 	rt.usageMu.Unlock()
 
 	update := sessionUpdate{
 		SessionUpdate: "usage_update",
 		Used:          &used,
 		Size:          &size,
+		Meta:          usageCache.meta(),
 	}
 	if cost > 0 {
 		update.Cost = &usageCost{Amount: cost, Currency: "USD"}
@@ -4085,11 +4124,17 @@ func usageContext(contextUsage *agentpkg.ContextUsage, usage *agentpkg.Usage, mo
 	return used, size
 }
 
-func (s *server) persistedSessionCost(mgr *session.Manager, model *provider.Model) float64 {
+// persistedSessionUsage rebuilds the cumulative usage_update projections from
+// the canonical persisted history so a loaded, resumed, or reattached session
+// reports the same baseline as an uninterrupted one. Cost and the prompt-cache
+// totals intentionally share this single pass. Compacted messages drop their
+// usage by design, so compacted history contributes nothing to either.
+func persistedSessionUsage(mgr *session.Manager, model *provider.Model) (float64, cacheUsage) {
 	if mgr == nil {
-		return 0
+		return 0, cacheUsage{}
 	}
 	var total float64
+	var usage cacheUsage
 	for _, msg := range mgr.GetMessages() {
 		if msg.Usage == nil {
 			continue
@@ -4098,8 +4143,9 @@ func (s *server) persistedSessionCost(mgr *session.Manager, model *provider.Mode
 			msg.Usage.CalculateCost(model)
 		}
 		total += msg.Usage.Cost.Total
+		usage.addTurn(msg.Usage.CacheRead, msg.Usage.CacheWrite, msg.Usage.TotalInputTokens())
 	}
-	return total
+	return total, usage
 }
 
 func formatACPPlan(plan *agentpkg.TaskPlan) string {

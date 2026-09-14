@@ -5,7 +5,7 @@
 import { acp, desktop, invoke } from './api';
 import { requestChatScroll } from './bus';
 import { getLocale, t } from './i18n';
-import { emit, setSessionStatus, state, type ToolCallContentShape, type TranscriptItem } from './state';
+import { emit, setSessionStatus, state, type ToolCallContentShape, type TranscriptItem, type UsageCacheProjection } from './state';
 import { previewImage, toast } from './ui-host';
 
 export type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>;
@@ -234,6 +234,7 @@ export function applySessionUpdate(sessionId: string, update: Record<string, unk
         used: Number(update.used || 0),
         size: Number(update.size || 0),
         cost: update.cost ? Number((update.cost as { amount?: number }).amount || 0) : state.usage?.cost,
+        cache: usageCacheProjection(update) ?? state.usage?.cache,
       };
       emit();
       return;
@@ -265,6 +266,17 @@ export function applySessionUpdate(sessionId: string, update: Record<string, unk
     default:
       return;
   }
+}
+
+function usageCacheProjection(update: Record<string, unknown>): UsageCacheProjection | null {
+  const dev = (update._meta as Record<string, unknown> | undefined)?.['mothx.dev'] as Record<string, unknown> | undefined;
+  const totalInputTokens = Number(dev?.totalInputTokens || 0);
+  if (!(totalInputTokens > 0)) return null;
+  return {
+    cacheRead: Number(dev?.cacheRead || 0),
+    cacheWrite: Number(dev?.cacheWrite || 0),
+    totalInputTokens,
+  };
 }
 
 function applyMetaOnlyUpdate(sessionId: string, update: Record<string, unknown>): void {
