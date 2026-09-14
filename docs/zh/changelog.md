@@ -19,6 +19,10 @@
 
 ### 🐛 问题修复
 
+- **Serve：Windows 上保存配置不再报 "Access is denied"**
+  - 在 Windows（包括把数据放在 exFAT 移动磁盘上的便携部署）上，通过 Web UI 启用微信/飞书通道或保存任何 `serve.json` 变更都会失败，提示 `sync config directory: Access is denied`。原子配置写入在重命名后会对父目录执行 fsync——这是 POSIX 的持久化惯例——但在 Windows 上，`FlushFileBuffers` 作用于只读目录句柄时，在任何文件系统（包括 exFAT）上都必然返回 `ERROR_ACCESS_DENIED`。由于失败发生在配置文件已经替换到位之后，接口返回了错误，但新配置从未应用到运行时。
+  - 现在在 Windows 上跳过重命名后的目录刷新（与 etcd/bolt 的做法一致）；配置文件本身仍在重命名前 fsync，持久性不受影响，Unix 平台行为不变。
+
 - **MCP：图片类工具结果不再退化为占位符，模型能看到真实图像**
   - 返回图片内容的 MCP 工具，到达模型时只剩字面量 `[image content: image/png]`。base64 载荷其实已经在 MCP 响应里，但客户端把所有内容块一律解码成文本，工具也只返回文本结果，于是截图类 MCP server 能报告坐标、模型却看不到画面。`resources/read` 的二进制资源更彻底：`blob` 字段没有对应的结构体字段，反序列化时整个载荷被丢弃，连占位符都不会出现。
   - 现在 `tools/call` 与 `resources/read` 会把 image 块投影为 `tools.ToolResult.Contents` 中真实的 provider 图片内容，复用与 `read`、`browser` 截图工具完全相同的 provider 感知预处理，并补上 `blob`/`uri` 资源字段的解码。无图片的结果保持历史文本形态，现有文本类 MCP 工具行为不变；解码失败、超限或超量（单次上限 4 张，与 ACP 投影上限一致）的图片降级为文本说明而非让调用失败。非视觉模型是否接收图片仍由 Agent Core 的图片能力闸门决定。

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 )
 
@@ -458,6 +459,21 @@ func atomicWritePrivateFile(path string, data []byte) error {
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replace serve config: %w", err)
+	}
+	return syncConfigDirForOS(dir, runtime.GOOS == "windows")
+}
+
+// syncConfigDirForOS flushes the parent directory entry after an atomic rename
+// so the new name survives a crash. Directory fsync is a POSIX durability idiom
+// with no Windows equivalent: Go opens directories with read-only access while
+// FlushFileBuffers requires FILE_WRITE_DATA, so the call always fails with
+// ERROR_ACCESS_DENIED ("Access is denied") on every Windows filesystem,
+// including exFAT volumes. Windows must therefore skip the directory flush
+// (matching etcd/bolt practice) instead of failing an otherwise successful
+// config write; the file data itself is already synced before the rename.
+func syncConfigDirForOS(dir string, windows bool) error {
+	if windows {
+		return nil
 	}
 	dirHandle, err := os.Open(dir)
 	if err != nil {

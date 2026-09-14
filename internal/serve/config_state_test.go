@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -250,6 +251,58 @@ func TestServeConfigStateUpdateFullRestoresOnApplyFailure(t *testing.T) {
 	}
 	if got := state.Snapshot().API.Listen; got != oldListen {
 		t.Fatalf("effective config changed after apply failure: %q", got)
+	}
+}
+
+func TestSyncConfigDirForOSSkipsOnWindows(t *testing.T) {
+	// Windows FlushFileBuffers on a read-only directory handle always returns
+	// ERROR_ACCESS_DENIED ("Access is denied") on every filesystem, exFAT
+	// included, so the Windows branch must not touch the directory at all.
+	if err := syncConfigDirForOS(filepath.Join(t.TempDir(), "missing"), true); err != nil {
+		t.Fatalf("windows directory sync must be skipped: %v", err)
+	}
+}
+
+func TestSyncConfigDirForOSFlushesOffWindows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory fsync is unavailable on Windows")
+	}
+	dir := t.TempDir()
+	if err := syncConfigDirForOS(dir, false); err != nil {
+		t.Fatalf("syncConfigDirForOS: %v", err)
+	}
+	if err := syncConfigDirForOS(filepath.Join(dir, "missing"), false); err == nil {
+		t.Fatal("expected error for a missing directory")
+	}
+}
+
+func TestAtomicWritePrivateFileReplacesAndLeavesNoTempFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "serve.json")
+	if err := os.WriteFile(path, []byte("stale\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"api\":{\"listen\":\":7000\"}}\n"
+	if err := atomicWritePrivateFile(path, []byte(want)); err != nil {
+		t.Fatalf("atomicWritePrivateFile: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != want {
+		t.Fatalf("written config = %q, want %q", data, want)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("temp file leaked: %v", names)
 	}
 }
 
