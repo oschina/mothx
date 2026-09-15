@@ -49,6 +49,10 @@ This file contains the changes for the **current version only**. The full histor
   - A provider stream that died with a transient transport error (`connection reset by peer`, unexpected EOF, gateway 5xx, ...) after text or thinking had already been streamed failed the whole run with `stream read error: ...`: provider-level retries only cover streams that break before any visible output, and the agent-level retry only covered idle-stream timeouts.
   - The agent loop now performs a bounded continuation retry (up to 2 attempts) for such transient errors. Already-streamed partial output is persisted into history and a continuation instruction quoting the exact suffix is injected, so the model resumes from the interruption point instead of duplicating what the user already saw; with no visible output yet, the turn simply re-runs. Turns with an already-emitted tool call, context overflow (dedicated compaction recovery), and idle-stream timeouts (dedicated timeout retry) keep their existing behavior, and Responses remote-state turns keep their existing failover path.
 
+- **Desktop: The Skill Marketplace Now Defaults to SkillHub.cn Instead of ClawHub**
+  - The Desktop skills view selected the first entry of the ACP market list, which is sorted alphabetically, so `clawhub.ai` beat `skillhub.cn` and the catalog defaulted to ClawHub even when the canonical `skillHub.defaultMarket` setting (product default SkillHub.cn) said otherwise. The default market is canonical configuration state, not something an adapter should guess from list ordering.
+  - `mothx/manage/skillhub/markets` now additionally projects the settings-resolved `defaultMarket` (falling back to the product default `skillhub.cn` when blank), and the Desktop catalog bootstrap resolves user preference → ACP-projected default market → first market. The categories/search/detail/install fallbacks use the same resolver, so an explicitly blank configured value no longer fails with `unsupported skill market`.
+
 ### 🔧 Improvements
 
 - **SQLite: Three-Phase Write-Pressure Reduction for the Session Database**

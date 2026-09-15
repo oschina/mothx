@@ -43,16 +43,28 @@ func manageSkillHubView(settings *config.Settings) map[string]any {
 	if strings.TrimSpace(defaultInstallScope) == "" {
 		defaultInstallScope = config.DefaultSettings().SkillHub.DefaultInstallScope
 	}
-	defaultMarket := settings.SkillHub.DefaultMarket
-	if strings.TrimSpace(defaultMarket) == "" {
-		defaultMarket = config.DefaultSettings().SkillHub.DefaultMarket
-	}
+	defaultMarket := manageSkillHubDefaultMarket(settings)
 	return map[string]any{
 		"defaultMarket":       defaultMarket,
 		"defaultInstallScope": defaultInstallScope,
 		"officialHandles":     officialHandles,
 		"markets":             viewMarkets,
 	}
+}
+
+// manageSkillHubDefaultMarket resolves the canonical default market once: the
+// persisted setting wins, and the product default (skillhub.cn) fills an empty
+// value. Every ACP projection and catalog fallback must use this resolver
+// instead of guessing from market ordering or an adapter-local constant.
+func manageSkillHubDefaultMarket(settings *config.Settings) string {
+	if settings == nil {
+		return config.DefaultSettings().SkillHub.DefaultMarket
+	}
+	defaultMarket := strings.TrimSpace(settings.SkillHub.DefaultMarket)
+	if defaultMarket == "" {
+		defaultMarket = config.DefaultSettings().SkillHub.DefaultMarket
+	}
+	return defaultMarket
 }
 
 // handleManageSkillHubGet projects the current SkillHub settings without ever

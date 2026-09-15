@@ -200,6 +200,8 @@ test('online skills catalog is capability-gated and remains an ACP projection', 
   ]);
   assert.doesNotMatch(skillhubCore, /fetch\(|desktop\.storeSet|localStorage/i, 'catalog must not add HTTP or Desktop-owned persistence');
   assert.doesNotMatch(skillsView, /desktop\.storeSet|localStorage/i, 'catalog UI must not persist locally');
+  assert.match(skillhubCore, /marketResult\.defaultMarket/, 'catalog bootstrap must read the ACP-projected default market');
+  assert.match(skillhubCore, /item\.id === defaultMarket/, 'catalog bootstrap must prefer the canonical default market over alphabetical market order');
   assertBilingual(['skills.marketplace', 'skills.marketplaceSearch', 'skills.install', 'skills.activate', 'skills.uninstall', 'skills.confirmUpdate']);
 });
 

@@ -798,6 +798,9 @@ func TestManageSkillHubCatalogProjectsRuntimeOwnedTargets(t *testing.T) {
 	if got, ok := markets["markets"].([]any); !ok || len(got) == 0 {
 		t.Fatalf("markets = %#v, want configured SkillHub market projections", markets)
 	}
+	if got, _ := markets["defaultMarket"].(string); got != "skillhub.cn" {
+		t.Fatalf("markets defaultMarket = %#v, want the canonical skillhub.cn default", markets["defaultMarket"])
+	}
 
 	message := callManageFixture(t, srv, output, 3, "mothx/manage/skillhub/targets", map[string]any{})
 	if code, _ := manageFixtureError(t, message); code != "skillhub_invalid_request" {

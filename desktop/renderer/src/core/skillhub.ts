@@ -30,14 +30,21 @@ export interface CatalogBootstrap {
 
 export async function loadCatalogBootstrap(sessionId: string, preferredMarket: string, preferredTargetDir: string, preferredScope: 'project' | 'global'): Promise<CatalogBootstrap> {
   const [marketResult, targetResult, installedResult] = await Promise.all([
-    invoke<{ markets?: Market[] }>('mothx/manage/skillhub/markets', { sessionId }),
+    invoke<{ markets?: Market[]; defaultMarket?: string }>('mothx/manage/skillhub/markets', { sessionId }),
     invoke<{ targets?: Target[] }>('mothx/manage/skillhub/targets', { sessionId }),
     invoke<{ session?: SessionActiveSkills }>('mothx/manage/skillhub/installed', { sessionId }),
   ]);
   const markets = marketResult.markets || [];
   const targets = targetResult.targets || [];
   const activeSkills = installedResult.session?.activeSkills || [];
-  const market = markets.some((item) => item.id === preferredMarket) ? preferredMarket : (markets[0]?.id || '');
+  // 默认市场是 ACP 投影的 Runtime/settings 状态(产品默认 skillhub.cn);
+  // 只有在运行时未给出默认值时才退回列表首个市场。
+  const defaultMarket = marketResult.defaultMarket || '';
+  const market = markets.some((item) => item.id === preferredMarket)
+    ? preferredMarket
+    : markets.some((item) => item.id === defaultMarket)
+      ? defaultMarket
+      : markets[0]?.id || '';
   const target = targets.find((item) => item.path === preferredTargetDir) || targets.find((item) => item.scope === preferredScope) || targets[0];
   return { markets, targets, activeSkills, market, target };
 }

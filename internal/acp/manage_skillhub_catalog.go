@@ -118,7 +118,13 @@ func (s *server) handleManageSkillHubMarkets(req rpcRequest) {
 		s.writeManageSkillHubCatalogError(req, err)
 		return
 	}
-	s.writeResponse(req.ID, map[string]any{"markets": service.Markets()}, nil)
+	result := map[string]any{"markets": service.Markets()}
+	// Project the canonical default market so clients select SkillHub.cn (or the
+	// configured default) instead of guessing from the alphabetical market order.
+	if settings, settingsErr := s.manageSettings(); settingsErr == nil {
+		result["defaultMarket"] = manageSkillHubDefaultMarket(settings)
+	}
+	s.writeResponse(req.ID, result, nil)
 }
 
 func (s *server) handleManageSkillHubCategories(req rpcRequest) {
@@ -128,7 +134,7 @@ func (s *server) handleManageSkillHubCategories(req rpcRequest) {
 		return
 	}
 	settings, _ := s.manageSettings()
-	market, err := manageSkillHubMarket(in.Market, settings.SkillHub.DefaultMarket)
+	market, err := manageSkillHubMarket(in.Market, manageSkillHubDefaultMarket(settings))
 	if err == nil {
 		var categories []skillhub.Category
 		categories, err = service.Categories(context.Background(), market)
@@ -162,7 +168,7 @@ func (s *server) handleManageSkillHubSearch(req rpcRequest) {
 	in, _, service, err := s.manageSkillHubCatalog(req)
 	if err == nil {
 		settings, _ := s.manageSettings()
-		market, marketErr := manageSkillHubMarket(in.Market, settings.SkillHub.DefaultMarket)
+		market, marketErr := manageSkillHubMarket(in.Market, manageSkillHubDefaultMarket(settings))
 		if marketErr != nil {
 			err = marketErr
 		} else {
@@ -184,7 +190,7 @@ func (s *server) handleManageSkillHubDetail(req rpcRequest) {
 	}
 	if err == nil {
 		settings, _ := s.manageSettings()
-		market, marketErr := manageSkillHubMarket(in.Market, settings.SkillHub.DefaultMarket)
+		market, marketErr := manageSkillHubMarket(in.Market, manageSkillHubDefaultMarket(settings))
 		if marketErr != nil {
 			err = marketErr
 		} else {
@@ -257,7 +263,7 @@ func (s *server) handleManageSkillHubInstall(req rpcRequest) {
 	}
 	if err == nil {
 		settings, _ := s.manageSettings()
-		market, marketErr := manageSkillHubMarket(in.Market, settings.SkillHub.DefaultMarket)
+		market, marketErr := manageSkillHubMarket(in.Market, manageSkillHubDefaultMarket(settings))
 		if marketErr != nil {
 			err = marketErr
 		} else {

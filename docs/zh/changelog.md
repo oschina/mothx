@@ -47,6 +47,10 @@
   - 供应商流在已输出正文/思考内容之后遭遇瞬时传输错误（`connection reset by peer`、意外 EOF、网关 5xx 等）时，此前整个 Run 直接以 `stream read error: ...` 失败：供应商级重试只覆盖尚未出现可见输出的流，Agent 级重试只覆盖空闲流超时。
   - 现在 Agent 循环会对这类瞬时错误做有限续写重试（最多 2 次）：已输出的部分内容被持久化进历史，并注入引用精确后缀的续写指令，模型从中断点直接继续生成，不会重复用户已经看到的内容；尚无可见输出时则直接重跑整轮。已发出工具调用的回合、上下文溢出（有专门的压缩恢复路径）与空闲流超时（有专门的重试路径）保持原有行为，Responses 远端状态回合也继续沿用既有的 failover 路径。
 
+- **Desktop：技能市场默认选中 SkillHub.cn 而非 ClawHub**
+  - Desktop 技能页的市场此前取 ACP 市场列表的第一个条目，而该列表按字母序排列，`clawhub.ai` 排在 `skillhub.cn` 之前，于是即使全局配置的 `skillHub.defaultMarket`（产品默认即 SkillHub.cn）另有指定，目录也会默认落在 ClawHub。默认市场是规范配置状态，适配器不应按列表顺序猜测。
+  - `mothx/manage/skillhub/markets` 现在增量投影按 settings 解析的 `defaultMarket`（留空时回落产品默认 `skillhub.cn`），Desktop 目录引导按「用户已选 → ACP 投影的默认市场 → 首个市场」解析；categories/search/detail/install 的兑底市场也改走同一解析器，显式留空的配置不再报 `unsupported skill market`。
+
 ### 🔧 改进
 
 - **SQLite：会话库写压力三阶段优化**
