@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/startvibecoding/mothx/internal/agentruntime"
 	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/startvibecoding/mothx/internal/cron"
 	"github.com/startvibecoding/mothx/internal/session"
 )
 
@@ -73,6 +75,25 @@ func (rt *channelRuntime) knowledgeBaseService() (*agentruntime.KnowledgeBaseSer
 		return nil, err
 	}
 	return agentruntime.NewKnowledgeBaseServiceWithSettings(rt.sessionDir, agentruntime.DefaultKnowledgeBaseIndexPolicy(), settings)
+}
+
+// runKnowledgeBaseCronJob routes namespaced knowledge-base reindex jobs
+// through the shared Runtime handler. The cron store is shared by sessionDir,
+// so schedules persisted by Desktop/ACP are also claimed by this scheduler;
+// without this handler they would execute as ordinary agent prompts inside
+// the knowledge source directory.
+func (rt *channelRuntime) runKnowledgeBaseCronJob(ctx context.Context, job cron.CronJob) (bool, string, error) {
+	if _, ok := agentruntime.KnowledgeBaseIDFromCronJobID(job.ID); !ok {
+		return false, "", nil
+	}
+	if rt == nil || strings.TrimSpace(rt.sessionDir) == "" {
+		return true, "", fmt.Errorf("knowledge base runtime is unavailable")
+	}
+	service, err := rt.knowledgeBaseService()
+	if err != nil {
+		return true, "", err
+	}
+	return agentruntime.RunKnowledgeBaseCronJob(ctx, service, job.ID)
 }
 
 func (rt *channelRuntime) knowledgeBaseView(ctx context.Context, base session.KnowledgeBase) (knowledgeBaseView, error) {

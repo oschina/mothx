@@ -1473,3 +1473,103 @@ func TestInitializeFeaturesIncludeManageKeys(t *testing.T) {
 		t.Fatalf("protocol version changed: %#v", result["protocolVersion"])
 	}
 }
+
+// TestManageKnowledgeBasesScanProjectsBackgroundProgress pins the fix for the
+// broken progress projection: the management plane must share one cached
+// Runtime service so list/get observe the running background job (including
+// during a base's very first scan), and duplicate scan requests must converge
+// on the single running job.
+func TestManageKnowledgeBasesScanProjectsBackgroundProgress(t *testing.T) {
+	configDir := t.TempDir()
+	settings := writeManageSettings(t, configDir, nil)
+	source := filepath.Join(t.TempDir(), "progress-notes")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "runtime.md"), []byte("# Runtime\n\nDurable runs own the lifecycle.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	output := &syncedBuffer{}
+	srv := newManageFixtureServer(output, configDir)
+	srv.settings = settings
+	created := manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/knowledge-bases/create", map[string]any{
+		"knowledgeBase": map[string]any{
+			"name": "Progress", "rootDir": source, "preprocessProfile": "documents",
+			"provider": "", "model": "", "mode": "yolo", "schedule": "manual", "enabled": true,
+		},
+	}))
+	base, _ := created["knowledgeBase"].(map[string]any)
+	baseID, _ := base["id"].(string)
+	rootDir, _ := base["rootDir"].(string)
+	if baseID == "" {
+		t.Fatalf("create result = %#v", created)
+	}
+
+	// Hold the dedicated-session admission lease so the background scan stays
+	// in flight deterministically while management RPCs poll for progress.
+	librarianID := agentruntime.KnowledgeLibrarianSessionID(baseID, rootDir)
+	librarian := session.New(rootDir, settings.GetSessionDir())
+	if err := librarian.InitWithID(librarianID); err != nil {
+		t.Fatalf("seed librarian session: %v", err)
+	}
+	guard, err := agentruntime.AcquireExecutionAdmission(t.Context(), settings.GetSessionDir(), librarianID, agentruntime.ExecutionAdmissionOptions{})
+	if err != nil {
+		t.Fatalf("pre-acquire knowledge admission: %v", err)
+	}
+	defer guard.Release()
+
+	scanned := manageFixtureResult(t, callManageFixture(t, srv, output, 2, "mothx/manage/knowledge-bases/scan", map[string]any{"id": baseID}))
+	indexing, _ := scanned["indexing"].(map[string]any)
+	if scanned["started"] != true || scanned["alreadyRunning"] != false || indexing == nil || indexing["running"] != true {
+		t.Fatalf("first scan = %#v, want a fresh background job", scanned)
+	}
+
+	// A duplicate scan while one is in flight must join the same job instead
+	// of queueing a second full pass.
+	rescanned := manageFixtureResult(t, callManageFixture(t, srv, output, 3, "mothx/manage/knowledge-bases/scan", map[string]any{"id": baseID}))
+	dupIndexing, _ := rescanned["indexing"].(map[string]any)
+	if rescanned["alreadyRunning"] != true || dupIndexing == nil || dupIndexing["running"] != true {
+		t.Fatalf("duplicate scan = %#v, want alreadyRunning with the same job", rescanned)
+	}
+
+	// list must project the running job even though the base has no active
+	// snapshot yet: the first scan is exactly when hosts need to poll.
+	listed := manageFixtureResult(t, callManageFixture(t, srv, output, 4, "mothx/manage/knowledge-bases/list", map[string]any{}))
+	items, _ := listed["knowledgeBases"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("list during scan = %#v", listed)
+	}
+	view, _ := items[0].(map[string]any)
+	progress, _ := view["indexing"].(map[string]any)
+	if view["status"] != "unindexed" || progress == nil || progress["running"] != true {
+		t.Fatalf("list during first scan = %#v, want indexing.running", view)
+	}
+
+	// get/status project the same running view.
+	got := manageFixtureResult(t, callManageFixture(t, srv, output, 5, "mothx/manage/knowledge-bases/status", map[string]any{"id": baseID}))
+	gotProgress, _ := got["indexing"].(map[string]any)
+	if gotProgress == nil || gotProgress["running"] != true {
+		t.Fatalf("status during first scan = %#v, want indexing.running", got)
+	}
+
+	guard.Release()
+
+	// After the lease is released the queued scan completes. The snapshot
+	// commit and the job's terminal progress flip are separate steps, so poll
+	// until the view converges on the terminal projection: completed status
+	// without a running-job overlay.
+	completed := false
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		polled := manageFixtureResult(t, callManageFixture(t, srv, output, 20, "mothx/manage/knowledge-bases/get", map[string]any{"id": baseID}))
+		_, stillRunning := polled["indexing"]
+		if polled["status"] == "completed" && !stillRunning {
+			completed = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !completed {
+		t.Fatal("background scan did not reach a terminal projection after the admission lease was released")
+	}
+}

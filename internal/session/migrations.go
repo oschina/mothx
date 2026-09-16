@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/startvibecoding/mothx/internal/dao"
 )
 
 const currentSchemaVersion = 43
@@ -936,7 +938,7 @@ CREATE TABLE knowledge_evidence (
 CREATE INDEX idx_knowledge_evidence_chunk ON knowledge_evidence(snapshot_id, chunk_id, node_id, edge_id);
 `
 
-const knowledgeStoreSchemaVersion = 1
+const knowledgeStoreSchemaVersion = 2
 
 // EnsureKnowledgeBaseSchema migrates one dedicated knowledge-base SQLite
 // database. It intentionally does not invoke EnsureCurrentSchema, which owns
@@ -964,12 +966,59 @@ func EnsureKnowledgeBaseSchema(db *sql.DB) error {
 		if _, err := tx.Exec(knowledgeStoreSchema); err != nil {
 			return fmt.Errorf("create knowledge store schema: %w", err)
 		}
-		if _, err := tx.Exec(`INSERT INTO knowledge_store_schema(version) VALUES (?)`, knowledgeStoreSchemaVersion); err != nil {
+		if _, err := tx.Exec(`INSERT INTO knowledge_store_schema(version) VALUES (?)`, 1); err != nil {
+			return fmt.Errorf("record knowledge store schema version: %w", err)
+		}
+	}
+	if version < 2 {
+		// v2 stores CJK-bigram-split text in the knowledge_chunk_fts mirror so
+		// Chinese phrase queries can match through the unicode61 tokenizer.
+		// Rebuild the mirror from the canonical chunk rows; graph data and the
+		// active snapshot stay valid because knowledge_chunks.text is unchanged.
+		if err := reindexKnowledgeChunkFTS(tx); err != nil {
+			return fmt.Errorf("reindex knowledge chunk FTS: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO knowledge_store_schema(version) VALUES (?)`, 2); err != nil {
 			return fmt.Errorf("record knowledge store schema version: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit knowledge store schema: %w", err)
+	}
+	return nil
+}
+
+// reindexKnowledgeChunkFTS rebuilds the FTS mirror from knowledge_chunks with
+// the current dao text transform. It runs inside the schema migration
+// transaction, so an interrupted migration leaves the previous mirror intact.
+func reindexKnowledgeChunkFTS(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT id, snapshot_id, text FROM knowledge_chunks`)
+	if err != nil {
+		return err
+	}
+	type ftsRow struct{ id, snapshotID, text string }
+	pending := make([]ftsRow, 0, 64)
+	for rows.Next() {
+		var row ftsRow
+		if err := rows.Scan(&row.id, &row.snapshotID, &row.text); err != nil {
+			rows.Close()
+			return err
+		}
+		row.text = dao.KnowledgeFTSIndexText(row.text)
+		pending = append(pending, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if _, err := tx.Exec(`DELETE FROM knowledge_chunk_fts`); err != nil {
+		return err
+	}
+	for _, row := range pending {
+		if _, err := tx.Exec(`INSERT INTO knowledge_chunk_fts(chunk_id, snapshot_id, text) VALUES (?, ?, ?)`, row.id, row.snapshotID, row.text); err != nil {
+			return err
+		}
 	}
 	return nil
 }

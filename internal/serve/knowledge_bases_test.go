@@ -9,6 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/startvibecoding/mothx/internal/cron"
+	"github.com/startvibecoding/mothx/internal/session"
 )
 
 func TestKnowledgeBaseHandlersManageRuntimeOwnedIndexes(t *testing.T) {
@@ -84,4 +88,48 @@ func knowledgeBaseRequest(t *testing.T, runtime *channelRuntime, method, path, b
 func quoteJSON(value string) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)
+}
+
+// TestKnowledgeBaseCronJobsRouteThroughRuntimeHandler pins the shared-store
+// contract: the serve scheduler claims the same namespaced jobs Desktop/ACP
+// persists, and must run them through the Runtime index path instead of
+// falling through to a bare agent prompt in the knowledge source directory.
+func TestKnowledgeBaseCronJobsRouteThroughRuntimeHandler(t *testing.T) {
+	sessionDir := t.TempDir()
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "guide.md"), []byte("# Guide\n\nScheduled scans reuse the runtime handler.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &channelRuntime{sessionDir: sessionDir}
+
+	handled, response, err := runtime.runKnowledgeBaseCronJob(t.Context(), cron.CronJob{ID: "ordinary-job", Prompt: "do something"})
+	if handled || response != "" || err != nil {
+		t.Fatalf("foreign cron job = (%v, %q, %v), want scheduler fallthrough", handled, response, err)
+	}
+
+	handled, _, err = runtime.runKnowledgeBaseCronJob(t.Context(), cron.CronJob{ID: agentruntime.KnowledgeBaseCronJobID("missing")})
+	if !handled || err == nil {
+		t.Fatalf("missing base cron job = (%v, %v), want a handled failure", handled, err)
+	}
+
+	base, err := session.CreateKnowledgeBase(t.Context(), sessionDir, session.KnowledgeBaseSpec{
+		Name: "Scheduled", RootDir: sourceDir, PreprocessProfile: "documents", Schedule: "daily", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, response, err = runtime.runKnowledgeBaseCronJob(t.Context(), cron.CronJob{ID: agentruntime.KnowledgeBaseCronJobID(base.ID)})
+	if !handled || err != nil {
+		t.Fatalf("knowledge cron job = (%v, %v)", handled, err)
+	}
+	if !strings.Contains(response, "indexed knowledge base "+base.ID) {
+		t.Fatalf("cron response = %q", response)
+	}
+	reloaded, err := session.GetKnowledgeBase(t.Context(), sessionDir, base.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(reloaded.ActiveSnapshotID) == "" {
+		t.Fatalf("cron reindex left no active snapshot: %#v", reloaded)
+	}
 }

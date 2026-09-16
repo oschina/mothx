@@ -181,6 +181,13 @@ type server struct {
 	cronScheduler *cron.Scheduler
 	cronStore     cron.CronStore
 	cronAgentMgr  *agent.AgentManager
+
+	// knowledgeMu guards the cached Runtime knowledge-base service. The cache
+	// keeps the background index-job registry alive across management RPCs so
+	// hosts that poll list/get observe scan progress and duplicate scan
+	// requests converge on the single running job.
+	knowledgeMu      sync.Mutex
+	knowledgeService *agentruntime.KnowledgeBaseService
 }
 
 type sessionRuntime struct {
