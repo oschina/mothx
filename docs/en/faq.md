@@ -336,6 +336,19 @@ du -sh ~/.mothx/sessions/
 cp -a ~/.mothx/sessions ~/backups/sessions
 ```
 
+### Q: Shows "Database migration error" on startup
+
+**A:**
+
+When `sessions.db` can no longer be migrated by the current version, MothX does not get stuck: it first backs the
+old database up next to it as `sessions.db.migration-failed-<timestamp>.bak`, creates a new empty `sessions.db`, and
+reports the migration failure in the startup notice and the logs.
+
+- The previous sessions are all in the backup file; nothing was deleted, and the new database is usable immediately.
+- Other mothx processes sharing that session directory receive a local UDP notice (`database_rebuilt`) and drop their old database handles, so they stop writing to the replaced file; the broadcast stays on the loopback network and never leaves the host.
+- To get the old data back, fix the cause of the migration failure (for example open the database with the older MothX build), then rename the `.bak` file back to `sessions.db`.
+- Once the old data is no longer needed, delete the `.bak` file.
+
 ---
 
 ## 🛠️ Tool Usage

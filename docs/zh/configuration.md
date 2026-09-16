@@ -241,7 +241,7 @@ TUI 专用状态行命令配置。启用后，MothX 会在交互式 TUI 中把�
 2. `baseUrl` 自动识别
 3. 通用 fallback：`openai-chat`、`openai-responses`、`anthropic-messages`、`google-gemini` 或 `google-vertex`
 
-内置厂商适配器包括 `openai`、`anthropic`、`claude`、`deepseek`、`google-gemini`、`google-vertex`、`xiaomi`、`xiaomi-token-plan-ams`、`xiaomi-token-plan-cn`、`xiaomi-token-plan-sgp`、`volcengine`、`kimi`、`minimax`、`qianfan`、`bailian`、`gitee`、`openrouter`、`together`、`groq`、`fireworks`、`mistral`、`github-copilot`、`cloudflare-ai-gateway`、`cloudflare-workers-ai` 和 `amazon-bedrock`。
+内置厂商适配器包括 `openai`、`anthropic`、`claude`、`deepseek`、`agnes`、`google-gemini`、`google-vertex`、`xiaomi`、`xiaomi-token-plan-ams`、`xiaomi-token-plan-cn`、`xiaomi-token-plan-sgp`、`volcengine`、`kimi`、`minimax`、`qianfan`、`bailian`、`gitee`、`openrouter`、`together`、`groq`、`fireworks`、`mistral`、`github-copilot`、`cloudflare-ai-gateway`、`cloudflare-workers-ai` 和 `amazon-bedrock`。
 
 ```json
 {

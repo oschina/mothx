@@ -722,6 +722,8 @@ func TestVendorFromBaseURL(t *testing.T) {
 		{"api.together.xyz", "together"},
 		{"api.groq.com", "groq"},
 		{"api.fireworks.ai", "fireworks"},
+		{"apihub.agnes-ai.com", "agnes"},
+		{"api.agnes-ai.cn", "agnes"},
 		{"unknown.api.com", ""},
 		{"", ""},
 	}

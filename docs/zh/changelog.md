@@ -17,6 +17,14 @@
 - **Gitee/Moark 新增模型：`deepseek-v4.1-flash`**
   - `gitee` 和 `moark` 两个提供商均新增 `deepseek-v4.1-flash`，支持 1M 上下文窗口与文本/图片输入；默认不发送 max_tokens。
 
+- **新增 Agnes AI 供应商（国际版 + 国内版）**
+  - 通过新的 `agnes` OpenAI 兼容厂商适配器新增 `agnes`（`https://apihub.agnes-ai.com/v1`，`${AGNES_API_KEY}`）与 `agnes-cn`（`https://api.agnes-ai.cn/v1`，`${AGNES_CN_API_KEY}`）两个提供商，均提供 `agnes-2.5-flash`（200K 上下文）、`agnes-2.5-pro`（256K 上下文）和 `agnes-3.0-flash`（512K 上下文，最大输出 65535 tokens）。
+  - 三个模型均标记为支持思考（reasoning）与多模态（`text,image`）。`agnes-2.5-flash` 和 `agnes-2.5-pro` 自身不发送默认 `max_tokens`，使用供应商默认值；`agnes-3.0-flash` 最大输出为 65535 tokens。
+
+- **数据库被重建时通知其他 mothx 进程**
+  - 某个进程因 schema 迁移失败而备份并重建数据库后，现在会通过已有的 advisory UDP 总线广播 `database_rebuilt` 通知。其他共享同一会话目录的 mothx 进程收到后会丢弃自己缓存的数据库连接（否则会继续通过旧句柄读写已被替换的文件）、记录日志，并在 TUI 中提示用户。通知只带被替换的文件路径，迁移原因和备份路径仍保留在重建进程侧。
+  - 总线仍是仅限本机：`127.255.255.255` 定向广播且只接受 loopback 来源，报文不会离开本机。
+
 ### 🐛 问题修复
 
 - **被内容审核拒绝的图片不再让整个会话失效**
@@ -50,6 +58,10 @@
 - **Desktop：技能市场默认选中 SkillHub.cn 而非 ClawHub**
   - Desktop 技能页的市场此前取 ACP 市场列表的第一个条目，而该列表按字母序排列，`clawhub.ai` 排在 `skillhub.cn` 之前，于是即使全局配置的 `skillHub.defaultMarket`（产品默认即 SkillHub.cn）另有指定，目录也会默认落在 ClawHub。默认市场是规范配置状态，适配器不应按列表顺序猜测。
   - `mothx/manage/skillhub/markets` 现在增量投影按 settings 解析的 `defaultMarket`（留空时回落产品默认 `skillhub.cn`），Desktop 目录引导按「用户已选 → ACP 投影的默认市场 → 首个市场」解析；categories/search/detail/install 的兑底市场也改走同一解析器，显式留空的配置不再报 `unsupported skill market`。
+
+- **数据库迁移失败时改为备份并重建，不再阻塞启动**
+  - 当 `sessions.db` 的 schema 无法被当前版本升级时（迁移不可应用，或表缺少必需列），此前每条命令都会以 `database schema is incompatible` 失败，用户除了手动删库没有别的出路。现在 `internal/db` 会对每个数据库做一次恢复：把无法迁移的库快照到原文件旁边（`sessions.db.migration-failed-<时间戳>.bak`，优先使用 SQLite `VACUUM INTO`，VACUUM 本身失败时回退为 checkpoint 加原始文件拷贝），删除旧文件集（含 `-wal`/`-shm`/`-journal`），再在其位置新建空库。
+  - 恢复会明确告知用户而非静默处理：`internal/db` 记录日志，CLI/TUI 在启动时打印 “Database migration error” 提示并给出备份文件路径（旧会话都还在里面）。只有 schema 拥有者（`internal/session`）能把失败标记为可重建；写锁竞争、迁移被取消、只读文件等情况一律保持数据库原样，并把原因附在错误信息里，因此健康数据库在外部压力下永远不会被替换。
 
 ### 🔧 改进
 

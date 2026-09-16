@@ -16,6 +16,16 @@ func TestRuntimeLeaseBusSubprocessHelper(t *testing.T) {
 	if os.Getenv("MOTHX_RUNTIME_BUS_HELPER") != "1" {
 		return
 	}
+	if os.Getenv("MOTHX_RUNTIME_BUS_HELPER_MODE") == "publish_database_rebuilt" {
+		// A peer process that rebuilt a database announces it to whoever is
+		// listening on the shared port; it never listens itself.
+		publishRuntimeLeaseNotification(RuntimeLeaseNotification{
+			Type:   runtimeLeaseBusDatabaseRebuilt,
+			Path:   os.Getenv("MOTHX_RUNTIME_BUS_HELPER_PATH"),
+			Origin: "db",
+		})
+		return
+	}
 	received := make(chan RuntimeLeaseNotification, 1)
 	stop := SubscribeRuntimeLeaseNotifications(func(notification RuntimeLeaseNotification) {
 		received <- notification
@@ -131,7 +141,7 @@ type runtimeLeaseBusHelper struct {
 	lines <-chan string
 }
 
-func startRuntimeLeaseBusHelper(t *testing.T) *runtimeLeaseBusHelper {
+func startRuntimeLeaseBusHelper(t *testing.T, extraEnv ...string) *runtimeLeaseBusHelper {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=TestRuntimeLeaseBusSubprocessHelper")
 	stdout, err := cmd.StdoutPipe()
@@ -140,6 +150,7 @@ func startRuntimeLeaseBusHelper(t *testing.T) *runtimeLeaseBusHelper {
 	}
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "MOTHX_RUNTIME_BUS_HELPER=1")
+	cmd.Env = append(cmd.Env, extraEnv...)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -188,4 +199,66 @@ func waitForRuntimeLeaseBusListener(timeout time.Duration) bool {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return false
+}
+
+// TestRuntimeLeaseBusDatabaseRebuiltReachesAnotherProcess proves the rebuild
+// notice travels the real path: a peer process broadcasts over UDP, this
+// process retires the cached connection of the reported database, and the
+// notice is reported once through the shared front-end API.
+func TestRuntimeLeaseBusDatabaseRebuiltReachesAnotherProcess(t *testing.T) {
+	probe, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.LocalAddr().(*net.UDPAddr).Port
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOTHX_RUNTIME_BUS_PORT", strconv.Itoa(port))
+
+	sessionDir := t.TempDir()
+	path := RootDatabasePath(sessionDir)
+	cached, err := OpenRootDB(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		TakeDatabaseRecoveries()
+		if err := CloseDatabases(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	notices := make(chan DatabaseRecovery, 1)
+	stop := WatchDatabaseRebuilds(func(recovery DatabaseRecovery) { notices <- recovery })
+	defer stop()
+	if !waitForRuntimeLeaseBusListener(5 * time.Second) {
+		t.Fatal("database rebuild watcher did not start the UDP listener")
+	}
+
+	helper := startRuntimeLeaseBusHelper(t,
+		"MOTHX_RUNTIME_BUS_HELPER_MODE=publish_database_rebuilt",
+		"MOTHX_RUNTIME_BUS_HELPER_PATH="+path,
+	)
+	defer helper.stop()
+
+	select {
+	case recovery := <-notices:
+		if !recovery.Peer || recovery.Path != path {
+			t.Fatalf("peer notice = %#v, want a peer rebuild of %s", recovery, path)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the peer database rebuild notice never arrived")
+	}
+
+	reopened, err := OpenRootDB(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened == cached {
+		t.Fatal("the cached connection survived a peer database rebuild")
+	}
+	if drained := TakeDatabaseRecoveries(); len(drained) != 1 || !drained[0].Peer {
+		t.Fatalf("drained recoveries = %#v, want the single peer notice", drained)
+	}
 }

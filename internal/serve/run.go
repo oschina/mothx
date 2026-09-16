@@ -195,6 +195,12 @@ func Run(opts RunOptions, version string) error {
 	})
 	defer stopUDPLogs()
 
+	// A database another process rebuilt after a failed migration replaces the file
+	// this process may still hold open; retire the cached connection (the notice is
+	// logged into the serve log stream).
+	stopDatabaseWatch := session.WatchDatabaseRebuilds(nil)
+	defer stopDatabaseWatch()
+
 	rt, err := startChannels(cfg, settings, version)
 	if err != nil {
 		return err

@@ -206,6 +206,38 @@ func TestVendorFromBaseURLDetectsGoogleAdapters(t *testing.T) {
 	}
 }
 
+func TestResolveAdapterConfigBaseURLDetectAgnes(t *testing.T) {
+	tests := []struct {
+		url    string
+		vendor string
+	}{
+		{"https://apihub.agnes-ai.com/v1", "agnes"},
+		{"https://api.agnes-ai.cn/v1", "agnes"},
+	}
+	for _, tt := range tests {
+		resolved := ResolveAdapterConfig(&config.ProviderConfig{BaseURL: tt.url, API: "openai-chat"})
+		if resolved.Vendor != tt.vendor {
+			t.Fatalf("ResolveAdapterConfig(%q).Vendor = %q, want %q", tt.url, resolved.Vendor, tt.vendor)
+		}
+		if resolved.API != "openai-chat" {
+			t.Fatalf("ResolveAdapterConfig(%q).API = %q, want openai-chat", tt.url, resolved.API)
+		}
+	}
+}
+
+func TestResolveAdapterConfigExplicitVendorAgnes(t *testing.T) {
+	resolved := ResolveAdapterConfig(&config.ProviderConfig{
+		Vendor:  "Agnes",
+		BaseURL: "https://apihub.agnes-ai.com/v1",
+	})
+	if resolved.Vendor != "agnes" {
+		t.Fatalf("Vendor = %q, want agnes", resolved.Vendor)
+	}
+	if resolved.API != "openai-chat" {
+		t.Fatalf("API = %q, want openai-chat", resolved.API)
+	}
+}
+
 func TestResolveAdapterConfigExplicitVendorAMDRadeon(t *testing.T) {
 	resolved := ResolveAdapterConfig(&config.ProviderConfig{
 		Vendor:  "amd-radeon",

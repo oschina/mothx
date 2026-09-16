@@ -19,7 +19,19 @@ type agentDoneMsg struct {
 }
 type updateNoticeMsg string
 
+// noticeMsg carries a process-level notice (for example a database that another
+// mothx process rebuilt) into the view.
+type noticeMsg string
+
 // ShowUpdateNotice displays an update notification from a background check.
+// ShowNotice displays a process-level notice raised by a background watcher.
+func (a *App) ShowNotice(notice string) {
+	if notice == "" || a.program == nil {
+		return
+	}
+	a.program.Send(noticeMsg(notice))
+}
+
 func (a *App) ShowUpdateNotice(notice string) {
 	if notice == "" || a.program == nil {
 		return

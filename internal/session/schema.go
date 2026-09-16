@@ -521,7 +521,13 @@ func (b busyRetryDatabase) Begin() (*sql.Tx, error) {
 
 // EnsureCurrentSchema creates the current schema only for an empty database.
 // Existing databases are validated but never migrated or otherwise modified.
+//
+// Failures that mean the schema cannot be brought to the current version (an
+// unappliable migration, or a table missing required columns) are marked with
+// database.SchemaIncompatible. internal/db reacts by backing the database up and
+// starting a new empty one; every other failure is reported unchanged.
 func EnsureCurrentSchema(db *sql.DB) error {
+	ensureDatabaseRecoveryHook()
 	var tableCount int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master
 		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations'`).Scan(&tableCount); err != nil {
@@ -551,7 +557,11 @@ func EnsureCurrentSchema(db *sql.DB) error {
 	}
 
 	if err := applySchemaMigrations(busyRetryDatabase{db: db}); err != nil {
-		return fmt.Errorf("apply schema migrations: %w", err)
+		// A migration this build cannot apply means the database cannot be
+		// upgraded in place. internal/db turns the marked failure into a backed-up
+		// rebuild (and still refuses when the cause is transient, cancelled, or a
+		// read-only file).
+		return database.SchemaIncompatible(fmt.Errorf("apply schema migrations: %w", err))
 	}
 
 	for table, requiredColumns := range requiredSchema {
@@ -580,7 +590,7 @@ func EnsureCurrentSchema(db *sql.DB) error {
 			}
 		}
 		if len(missing) > 0 {
-			return fmt.Errorf("database schema is incompatible: table %s is missing columns %s", table, strings.Join(missing, ", "))
+			return database.SchemaIncompatible(fmt.Errorf("database schema is incompatible: table %s is missing columns %s", table, strings.Join(missing, ", ")))
 		}
 	}
 	return nil

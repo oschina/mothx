@@ -1042,6 +1042,10 @@ func Run(opts RunOptions) (runErr error) {
 		}
 	})
 	defer stopLeaseNotifications()
+	// A database another process rebuilt after a failed migration replaces the file
+	// this process may still hold open; retire the cached connection.
+	stopDatabaseWatch := session.WatchDatabaseRebuilds(nil)
+	defer stopDatabaseWatch()
 	defer srv.shutdownAllSessionRuntimes()
 	// Defers run LIFO: stop the management-plane cron scheduler before the
 	// session runtimes so in-flight job runs are cancelled first.

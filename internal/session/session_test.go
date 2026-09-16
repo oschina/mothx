@@ -1544,8 +1544,12 @@ func TestWriteEntryDurable(t *testing.T) {
 	}
 }
 
-func TestOldSchemaIsRejectedWithoutModification(t *testing.T) {
-	t.Helper()
+// TestOldSchemaIsBackedUpAndRebuilt pins the recovery contract for a database
+// whose schema this build cannot upgrade: the previous database is preserved
+// untouched in a backup next to it, a fresh database is created in its place,
+// and the recovery is reported so the user can be told where their data went.
+func TestOldSchemaIsBackedUpAndRebuilt(t *testing.T) {
+	TakeDatabaseRecoveries()
 	tmpDir := t.TempDir()
 	sessionDir := filepath.Join(tmpDir, "sessions")
 	dbPath := filepath.Join(sessionDir, "sessions.db")
@@ -1584,28 +1588,71 @@ func TestOldSchemaIsRejectedWithoutModification(t *testing.T) {
 	db.Close()
 
 	m := New("/tmp/test-old-schema", sessionDir)
-	if err := m.Init(); err == nil || !strings.Contains(err.Error(), "database schema is incompatible") {
-		t.Fatalf("Init error = %v, want incompatible schema", err)
+	if err := m.Init(); err != nil {
+		t.Fatalf("Init after an incompatible legacy schema: %v", err)
+	}
+	if _, err := m.AppendMessage(provider.NewUserMessage("recovered")); err != nil {
+		t.Fatalf("append after rebuild: %v", err)
+	}
+	if err := CloseDatabases(); err != nil {
+		t.Fatal(err)
 	}
 
-	db2, err := sql.Open("sqlite", dbPath)
+	recoveries := TakeDatabaseRecoveries()
+	if len(recoveries) != 1 {
+		t.Fatalf("recoveries = %#v, want exactly one", recoveries)
+	}
+	if !strings.Contains(recoveries[0].Err.Error(), "database schema is incompatible") {
+		t.Fatalf("recovery error = %v, want the incompatible-schema failure", recoveries[0].Err)
+	}
+	if recoveries[0].BackupPath == "" {
+		t.Fatal("recovery did not report a backup path")
+	}
+
+	// The previous database is preserved as it was: the legacy tables are there
+	// and nothing current was added to it.
+	legacy, err := sql.Open("sqlite", recoveries[0].BackupPath)
+	if err != nil {
+		t.Fatalf("open backup database: %v", err)
+	}
+	defer legacy.Close()
+	var tableCount int
+	if err := legacy.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").Scan(&tableCount); err != nil {
+		t.Fatal(err)
+	}
+	if tableCount != 1 {
+		t.Fatal("backup does not hold the legacy sessions table")
+	}
+	if err := legacy.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'request_stats'").Scan(&tableCount); err != nil {
+		t.Fatal(err)
+	}
+	if tableCount != 0 {
+		t.Fatal("backup was modified with current schema tables")
+	}
+	if err := legacy.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&tableCount); err != nil {
+		t.Fatal(err)
+	}
+	if tableCount != 0 {
+		t.Fatalf("backup sessions count = %d, want the untouched legacy database", tableCount)
+	}
+
+	// The database in place is a current, usable one.
+	live, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db2.Close()
-
-	var tableCount int
-	if err := db2.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'request_stats'").Scan(&tableCount); err != nil {
+	defer live.Close()
+	if err := live.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'request_stats'").Scan(&tableCount); err != nil {
 		t.Fatal(err)
 	}
-	if tableCount != 0 {
-		t.Fatal("old database was modified despite migrations being disabled")
+	if tableCount != 1 {
+		t.Fatal("rebuilt database is missing the current schema")
 	}
-	if err := db2.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&tableCount); err != nil {
+	if err := live.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&tableCount); err != nil {
 		t.Fatal(err)
 	}
-	if tableCount != 0 {
-		t.Fatalf("sessions count = %d, want 0", tableCount)
+	if tableCount != 1 {
+		t.Fatalf("rebuilt sessions count = %d, want the session created after recovery", tableCount)
 	}
 }
 

@@ -19,6 +19,14 @@ This file contains the changes for the **current version only**. The full histor
 - **New Gitee/Moark Model: `deepseek-v4.1-flash`**
   - Added `deepseek-v4.1-flash` to the `gitee` and `moark` providers with a 1M context window and text+image input; no default max_tokens is sent.
 
+- **New Agnes AI Providers (International + China)**
+  - Added `agnes` (`https://apihub.agnes-ai.com/v1`, `${AGNES_API_KEY}`) and `agnes-cn` (`https://api.agnes-ai.cn/v1`, `${AGNES_CN_API_KEY}`) through a new OpenAI-compatible `agnes` vendor adapter. Both expose `agnes-2.5-flash` (200K context), `agnes-2.5-pro` (256K context), and `agnes-3.0-flash` (512K context, 65535 max output tokens).
+  - Every model is declared reasoning-capable and multimodal (`text,image`). `agnes-2.5-flash` and `agnes-2.5-pro` send no default `max_tokens` of their own, so the provider default applies; `agnes-3.0-flash` caps output at 65535 tokens.
+
+- **Cross-Process Notice When a Database Is Rebuilt**
+  - A process that backs up and rebuilds a database after a schema migration failure now announces it over the existing advisory UDP bus (`database_rebuilt`). Every other mothx process sharing that session directory retires its cached connection — otherwise it would keep reading and writing the replaced file through its open handle — logs the recovery, and shows the notice to the user in the TUI. The notice carries only the replaced file path; the reason and the backup stay with the recovering process.
+  - The bus stays host-only: a directed broadcast on the loopback /8 network that only accepts loopback sources, so it reaches this host's other mothx processes and never leaves the machine.
+
 ### 🐛 Bug Fixes
 
 - **Content-Inspected Images No Longer Kill the Session**
@@ -52,6 +60,10 @@ This file contains the changes for the **current version only**. The full histor
 - **Desktop: The Skill Marketplace Now Defaults to SkillHub.cn Instead of ClawHub**
   - The Desktop skills view selected the first entry of the ACP market list, which is sorted alphabetically, so `clawhub.ai` beat `skillhub.cn` and the catalog defaulted to ClawHub even when the canonical `skillHub.defaultMarket` setting (product default SkillHub.cn) said otherwise. The default market is canonical configuration state, not something an adapter should guess from list ordering.
   - `mothx/manage/skillhub/markets` now additionally projects the settings-resolved `defaultMarket` (falling back to the product default `skillhub.cn` when blank), and the Desktop catalog bootstrap resolves user preference → ACP-projected default market → first market. The categories/search/detail/install fallbacks use the same resolver, so an explicitly blank configured value no longer fails with `unsupported skill market`.
+
+- **Database Migration Failure Backs Up and Rebuilds Instead of Blocking Startup**
+  - A `sessions.db` whose schema the current build cannot upgrade — an unappliable migration or a table missing required columns — failed every command with `database schema is incompatible`, leaving the user no way forward but deleting the database by hand. `internal/db` now recovers once per database: it snapshots the unrecoverable database next to the original (`sessions.db.migration-failed-<timestamp>.bak`, written with SQLite `VACUUM INTO` and falling back to a checkpoint plus raw file copies when VACUUM itself fails), deletes the old file set including `-wal`/`-shm`/`-journal`, and initializes a fresh empty database in its place.
+  - The recovery is reported, not silent: `internal/db` logs it and the CLI/TUI print a "Database migration error" startup notice naming the backup file, which still holds the previous sessions. Only a schema owner (`internal/session`) can mark a failure as rebuildable, and writer contention, a cancelled migration, or a read-only file leave the database untouched with the reason appended to the error, so a healthy database under external pressure is never replaced.
 
 ### 🔧 Improvements
 

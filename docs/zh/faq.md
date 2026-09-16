@@ -336,6 +336,18 @@ du -sh ~/.mothx/sessions/
 cp -a ~/.mothx/sessions ~/backups/sessions
 ```
 
+### Q: 启动时提示 “Database migration error”（数据库迁移失败）
+
+**A:**
+
+当 `sessions.db` 的 schema 已经无法被当前版本迁移时，MothX 不会卡死：它会先把旧数据库完整备份到同一目录下的
+`sessions.db.migration-failed-<时间戳>.bak`，再新建一个空的 `sessions.db`，并在启动界面和日志里明确提示迁移失败。
+
+- 旧会话数据都在备份文件里，没有被删除；新库是空的，可以立即继续使用。
+- 其他正在共享同一会话目录的 mothx 进程（本机 UDP 广播）会收到 `database_rebuilt` 通知并自动丢弃旧的数据库句柄，不会继续往已被替换的文件里写；广播只在 loopback 网络上发送，不会离开本机。
+- 想恢复旧数据：先修复迁移失败的原因（例如用旧版本 MothX 打开该库），再把 `.bak` 改回 `sessions.db`。
+- 确认不再需要旧数据后，可以直接删除 `.bak` 文件。
+
 ---
 
 ## 🛠️ 工具使用

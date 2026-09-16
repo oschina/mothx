@@ -21,12 +21,18 @@ import (
 // checked). This is acceptable because notifications are advisory only; every
 // receiver re-validates against the authoritative SQLite lease and Run rows
 // before acting, so a forged packet can at most trigger a redundant database
-// re-read, never an ownership change.
+// re-read (or, for a rebuild notice, retire a cached connection and log a
+// warning), never an ownership or content change. The bus is deliberately
+// host-only: it is a directed broadcast on the loopback network, so it never
+// reaches another machine.
 type RuntimeLeaseNotification struct {
-	Version          int    `json:"version"`
-	MessageID        string `json:"messageId"`
-	Type             string `json:"type"`
-	SessionID        string `json:"sessionId"`
+	Version   int    `json:"version"`
+	MessageID string `json:"messageId"`
+	Type      string `json:"type"`
+	SessionID string `json:"sessionId,omitempty"`
+	// Path names the database file for the database_rebuilt wake-up; lease
+	// notifications leave it empty because they are session-scoped.
+	Path             string `json:"path,omitempty"`
 	Origin           string `json:"origin,omitempty"`
 	OriginInstanceID string `json:"originInstanceId"`
 	OwnerInstanceID  string `json:"ownerInstanceId,omitempty"`
@@ -127,7 +133,10 @@ func runtimeLeaseBusAddresses() (listen, broadcast string) {
 		port = runtimeLeaseBusDefaultPort
 	}
 	// A wildcard bind is required to receive the directed broadcast. Every
-	// listener verifies the packet source is loopback before processing it.
+	// listener verifies the packet source is loopback before processing it, and
+	// the send address is always the loopback directed broadcast: the bus is
+	// host-only by design, so no environment variable widens it to a LAN
+	// broadcast.
 	return net.JoinHostPort("", port), net.JoinHostPort("127.255.255.255", port)
 }
 
@@ -228,7 +237,15 @@ func rememberRuntimeLeaseMessageLocked(messageID string, now time.Time) bool {
 }
 
 func validRuntimeLeaseNotification(notification RuntimeLeaseNotification) bool {
-	if notification.Version != runtimeLeaseBusVersion || strings.TrimSpace(notification.MessageID) == "" || len(notification.MessageID) > 256 || strings.TrimSpace(notification.SessionID) == "" || len(notification.SessionID) > 256 || strings.TrimSpace(notification.OriginInstanceID) == "" || len(notification.OriginInstanceID) > 256 || len(notification.Origin) > 128 {
+	if notification.Version != runtimeLeaseBusVersion || strings.TrimSpace(notification.MessageID) == "" || len(notification.MessageID) > 256 || strings.TrimSpace(notification.OriginInstanceID) == "" || len(notification.OriginInstanceID) > 256 || len(notification.Origin) > 128 {
+		return false
+	}
+	if notification.Type == runtimeLeaseBusDatabaseRebuilt {
+		// A rebuild notice is database-scoped: it carries the replaced file and
+		// no session, and carries no content at all.
+		return strings.TrimSpace(notification.Path) != "" && len(notification.Path) <= 4096
+	}
+	if strings.TrimSpace(notification.SessionID) == "" || len(notification.SessionID) > 256 {
 		return false
 	}
 	switch notification.Type {
@@ -240,7 +257,7 @@ func validRuntimeLeaseNotification(notification RuntimeLeaseNotification) bool {
 }
 
 func publishRuntimeLeaseNotification(notification RuntimeLeaseNotification) {
-	if notification.SessionID == "" {
+	if notification.SessionID == "" && notification.Type != runtimeLeaseBusDatabaseRebuilt {
 		return
 	}
 	notification.Version = runtimeLeaseBusVersion
@@ -277,3 +294,10 @@ func publishRuntimeLeaseNotification(notification RuntimeLeaseNotification) {
 func NotifyRuntimeStateChanged(sessionID, origin string) {
 	publishRuntimeLeaseNotification(RuntimeLeaseNotification{Type: "state_changed", SessionID: sessionID, Origin: origin})
 }
+
+// runtimeLeaseBusDatabaseRebuilt is the advisory wake-up published after a
+// database was backed up and rebuilt because its schema could not be migrated.
+// Receivers must not treat it as state: it only tells them the file they may
+// still hold open was replaced, so they retire their cached connection and warn
+// the user. The reason and the backup path stay with the recovering process.
+const runtimeLeaseBusDatabaseRebuilt = "database_rebuilt"
