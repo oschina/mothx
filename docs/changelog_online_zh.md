@@ -19,11 +19,23 @@
 - **Gitee/Moark 新增模型：`deepseek-v4.1-flash`**
   - `gitee` 和 `moark` 两个提供商均新增 `deepseek-v4.1-flash`，支持 1M 上下文窗口与文本/图片输入；默认不发送 max_tokens。
 
+- **新增 Agnes AI 供应商（国际版 + 国内版）**
+  - 通过新的 `agnes` OpenAI 兼容厂商适配器新增 `agnes`（`https://apihub.agnes-ai.com/v1`，`${AGNES_API_KEY}`）与 `agnes-cn`（`https://api.agnes-ai.cn/v1`，`${AGNES_CN_API_KEY}`）两个提供商，均提供 `agnes-2.5-flash`（200K 上下文）、`agnes-2.5-pro`（256K 上下文）和 `agnes-3.0-flash`（512K 上下文，最大输出 65535 tokens）。
+  - 三个模型均标记为支持思考（reasoning）与多模态（`text,image`）。`agnes-2.5-flash` 和 `agnes-2.5-pro` 自身不发送默认 `max_tokens`，使用供应商默认值；`agnes-3.0-flash` 最大输出为 65535 tokens。
+
+- **数据库被重建时通知其他 mothx 进程**
+  - 某个进程因 schema 迁移失败而备份并重建数据库后，现在会通过已有的 advisory UDP 总线广播 `database_rebuilt` 通知。其他共享同一会话目录的 mothx 进程收到后会丢弃自己缓存的数据库连接（否则会继续通过旧句柄读写已被替换的文件）、记录日志，并在 TUI 中提示用户。通知只带被替换的文件路径，迁移原因和备份路径仍保留在重建进程侧。
+  - 总线仍是仅限本机：`127.255.255.255` 定向广播且只接受 loopback 来源，报文不会离开本机。
+
 ### 🐛 问题修复
 
 - **会话运行时租约不再被短暂的数据库抖动打断**
   - 长任务偶尔会被 `session runtime lease was lost` 中断，即使并没有其他进程占用该会话。“每租约一个心跳”被合并为“每个会话目录一个调度器”时引入了一个竞态：只要某个 tick 观察到该目录为空，调度器就退出循环，即便片刻前刚申请到的租约仍然存活；它在调度器注册表里留下一个“已停止但仍被登记”的条目，后续申请再也无法替换它，于是该租约永远得不到续期，之后某次执行期写入便发现它已过期。
   - 现在调度器只有在真正把自己从空闲目录的注册表中注销后才退出；而仅因数据库繁忙/不可达导致的续期超时会在下一个心跳 tick 继续重试，不再被当作归属丢失。归属由 `owner`/`epoch`/`token` 的 fenced CAS 判定，而非墙钟过期：抢占必然 bump epoch，所以“过期但仍带自己身份”的行依然属于自己。只有真正的 fenced 抢占或已 release 才判定丢失。心跳重试预算改由共享的 `busy_timeout`（`db.BusyTimeout`）推导，使单个 tick 能完整消化一次被争用的 begin，并且租约丢失现在会带原因打日志。
+
+- **Web UI：知识库扫描状态在刷新后不再丢失**
+  - 在 Web UI 知识库页面点击重新扫描时，HTTP 请求会一直阻塞到整个索引完成，且没有记录任何进行中的作业信息，于是该知识库只会显示为「未索引」，刷新页面后扫描状态就完全消失了。
+  - 现在 serve 处理器通过进程级缓存的 Runtime service 把扫描作为后台索引作业提交并立即返回运行中的作业投影，list/get 接口使用与 ACP 相同的投影暴露实时的 `indexing` 进度（阶段、已完成/总文件数）。知识库页面会渲染当前阶段，并在扫描进行时轮询，因此刷新页面会继续显示状态，而不是把它丢掉。
 
 - **被内容审核拒绝的图片不再让整个会话失效**
   - 供应商的内容策略拒绝——例如 DashScope/千问的 `InternalError.Algo.DataInspectionFailed: Input image data may contain inappropriate content`——以 HTTP 400 返回，但此前所有 4xx 都被当作可重试。同一张被拒的图片会在 provider 的退避重试与 Agent 的流失败重试中被反复发送（数分钟的 "Retrying…"），而拒绝是永久性的，最终 run 仍然失败；更糟的是，出问题的图片留在持久化历史里，之后的每一轮都会重发它，于是什么都无法继续，只有新建会话才能恢复——连 `/clear` 都不行，因为它会重新加载同一份历史。
@@ -52,6 +64,14 @@
 - **流中途网络中断自动重试，不再直接终止回复**
   - 供应商流在已输出正文/思考内容之后遭遇瞬时传输错误（`connection reset by peer`、意外 EOF、网关 5xx 等）时，此前整个 Run 直接以 `stream read error: ...` 失败：供应商级重试只覆盖尚未出现可见输出的流，Agent 级重试只覆盖空闲流超时。
   - 现在 Agent 循环会对这类瞬时错误做有限续写重试（最多 2 次）：已输出的部分内容被持久化进历史，并注入引用精确后缀的续写指令，模型从中断点直接继续生成，不会重复用户已经看到的内容；尚无可见输出时则直接重跑整轮。已发出工具调用的回合、上下文溢出（有专门的压缩恢复路径）与空闲流超时（有专门的重试路径）保持原有行为，Responses 远端状态回合也继续沿用既有的 failover 路径。
+
+- **Desktop：技能市场默认选中 SkillHub.cn 而非 ClawHub**
+  - Desktop 技能页的市场此前取 ACP 市场列表的第一个条目，而该列表按字母序排列，`clawhub.ai` 排在 `skillhub.cn` 之前，于是即使全局配置的 `skillHub.defaultMarket`（产品默认即 SkillHub.cn）另有指定，目录也会默认落在 ClawHub。默认市场是规范配置状态，适配器不应按列表顺序猜测。
+  - `mothx/manage/skillhub/markets` 现在增量投影按 settings 解析的 `defaultMarket`（留空时回落产品默认 `skillhub.cn`），Desktop 目录引导按「用户已选 → ACP 投影的默认市场 → 首个市场」解析；categories/search/detail/install 的兑底市场也改走同一解析器，显式留空的配置不再报 `unsupported skill market`。
+
+- **数据库迁移失败时改为备份并重建，不再阻塞启动**
+  - 当 `sessions.db` 的 schema 无法被当前版本升级时（迁移不可应用，或表缺少必需列），此前每条命令都会以 `database schema is incompatible` 失败，用户除了手动删库没有别的出路。现在 `internal/db` 会对每个数据库做一次恢复：把无法迁移的库快照到原文件旁边（`sessions.db.migration-failed-<时间戳>.bak`，优先使用 SQLite `VACUUM INTO`，VACUUM 本身失败时回退为 checkpoint 加原始文件拷贝），删除旧文件集（含 `-wal`/`-shm`/`-journal`），再在其位置新建空库。
+  - 恢复会明确告知用户而非静默处理：`internal/db` 记录日志，CLI/TUI 在启动时打印 “Database migration error” 提示并给出备份文件路径（旧会话都还在里面）。只有 schema 拥有者（`internal/session`）能把失败标记为可重建；写锁竞争、迁移被取消、只读文件等情况一律保持数据库原样，并把原因附在错误信息里，因此健康数据库在外部压力下永远不会被替换。
 
 ### 🔧 改进
 

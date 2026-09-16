@@ -233,7 +233,15 @@ func openKnowledgeLibrarianSession(sessionDir string, base session.KnowledgeBase
 }
 
 func knowledgeLibrarianSessionID(base session.KnowledgeBase) string {
-	sum := sha256.Sum256([]byte(base.ID + "\x00" + base.RootDir))
+	return KnowledgeLibrarianSessionID(base.ID, base.RootDir)
+}
+
+// KnowledgeLibrarianSessionID derives the deterministic dedicated-session
+// identity for one knowledge base. It is exported so cross-package contract
+// tests can pin the derivation that index/librarian Run provenance and
+// same-base admission mutual exclusion depend on.
+func KnowledgeLibrarianSessionID(baseID, rootDir string) string {
+	sum := sha256.Sum256([]byte(baseID + "\x00" + rootDir))
 	return knowledgeLibrarianSessionPrefix + hex.EncodeToString(sum[:12])
 }
 

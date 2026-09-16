@@ -169,7 +169,75 @@ func Close(path string) error {
 	return errors.Join(errs...)
 }
 
+// open opens one database file and recovers from a schema migration failure
+// that cannot be repaired in place (see SchemaIncompatible): the unrecoverable
+// database is snapshotted next to the original and a fresh database is
+// initialized in its place, so a stale or damaged schema never blocks startup.
+//
+// Every other failure is returned unchanged, including a migration error that
+// was not classified as incompatible and a classified failure that a rebuild
+// must not "fix" (writer contention, a cancelled migration, a read-only file).
+// Those are reported with the reason appended so the distinction stays visible.
 func open(path string, migrate Migrator, opts Options) (*bun.DB, error) {
+	connection, err := openOnce(path, migrate, opts)
+	if err == nil {
+		return connection, nil
+	}
+	var failed *migrationFailedError
+	if !errors.As(err, &failed) {
+		return nil, err
+	}
+	if !IsSchemaIncompatible(failed.err) {
+		// A migration failure nobody classified: report it and release the
+		// connection that openOnce intentionally left open.
+		_ = failed.sqlDB.Close()
+		return nil, err
+	}
+	if reason := unrebuildableReason(failed.err); reason != "" {
+		_ = failed.sqlDB.Close()
+		return nil, fmt.Errorf("%w (%s; the database was left untouched)", err, reason)
+	}
+	recovery, recoveryErr := recoverFromMigrationFailure(failed.sqlDB, path, failed.err)
+	if recoveryErr != nil {
+		return nil, errors.Join(err, fmt.Errorf("rebuild database after migration failure: %w", recoveryErr))
+	}
+	rebuilt, rebuildErr := openOnce(path, migrate, opts)
+	if rebuildErr != nil {
+		var retried *migrationFailedError
+		if errors.As(rebuildErr, &retried) {
+			_ = retried.sqlDB.Close()
+		}
+		return nil, errors.Join(err, fmt.Errorf("open database rebuilt from %s: %w", recovery.BackupPath, rebuildErr))
+	}
+	recordMigrationRecovery(recovery)
+	return rebuilt, nil
+}
+
+// unrebuildableReason reports why a migration failure must not trigger a
+// schema rebuild, or "" when a rebuild is allowed. Rebuilding deletes the
+// database file, so every failure that a healthy database can also produce under
+// external pressure has to be excluded explicitly: writer contention from
+// another process, a cancelled migration, and a read-only file or directory.
+func unrebuildableReason(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		return "the migration was cancelled"
+	case isSQLiteBusy(err):
+		return "another process holds the SQLite writer lock"
+	case isSQLiteReadOnly(err):
+		return "the database file is read-only"
+	default:
+		return ""
+	}
+}
+
+// openOnce opens, checks, and initializes one database file without any
+// recovery. A migration failure is returned as a migrationFailedError so the
+// caller can snapshot the database through the connection that produced it, so
+// that connection stays open on that one error path and is closed by the caller.
+func openOnce(path string, migrate Migrator, opts Options) (*bun.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
@@ -197,8 +265,7 @@ func open(path string, migrate Migrator, opts Options) (*bun.DB, error) {
 	}
 	if migrate != nil {
 		if err := migrate(sqlDB); err != nil {
-			_ = sqlDB.Close()
-			return nil, fmt.Errorf("apply database migration: %w", err)
+			return nil, &migrationFailedError{sqlDB: sqlDB, err: fmt.Errorf("apply database migration: %w", err)}
 		}
 	}
 	return bun.NewDB(sqlDB, sqlitedialect.New()), nil

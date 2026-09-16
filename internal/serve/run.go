@@ -60,21 +60,26 @@ type RunOptions struct {
 	Shutdown <-chan struct{}
 }
 type channelRuntime struct {
-	mu                    sync.RWMutex
-	cronMu                sync.Mutex
-	platformMu            sync.Mutex
-	cfg                   *Config
-	configState           *ServeConfigState
-	version               string
-	dispatcher            *channels.Dispatcher
-	platforms             *PlatformSupervisor
-	wechatLogin           *wechatLoginSession
-	logHub                *logHub
-	cronStore             cron.CronStore
-	cronStorePath         string
-	cronScheduler         *cron.Scheduler
-	sessionDir            string
-	identityMux           *session.IdentityLocks
+	mu            sync.RWMutex
+	cronMu        sync.Mutex
+	platformMu    sync.Mutex
+	cfg           *Config
+	configState   *ServeConfigState
+	version       string
+	dispatcher    *channels.Dispatcher
+	platforms     *PlatformSupervisor
+	wechatLogin   *wechatLoginSession
+	logHub        *logHub
+	cronStore     cron.CronStore
+	cronStorePath string
+	cronScheduler *cron.Scheduler
+	sessionDir    string
+	identityMux   *session.IdentityLocks
+	// knowledgeMu guards the cached Runtime knowledge-base service. The service
+	// owns the background index-job registry, so a fresh instance per request
+	// would hide a running scan from progress polling and start duplicate jobs.
+	knowledgeMu           sync.Mutex
+	knowledgeService      *agentruntime.KnowledgeBaseService
 	nativeDirectoryPicker func(context.Context, string) (string, error)
 	deliveryCancel        context.CancelFunc
 	deliveryDone          chan struct{}
@@ -194,6 +199,12 @@ func Run(opts RunOptions, version string) error {
 		logHub.publish(serveLogEvent{Type: "log", Message: message, Timestamp: time.Now()})
 	})
 	defer stopUDPLogs()
+
+	// A database another process rebuilt after a failed migration replaces the file
+	// this process may still hold open; retire the cached connection (the notice is
+	// logged into the serve log stream).
+	stopDatabaseWatch := session.WatchDatabaseRebuilds(nil)
+	defer stopDatabaseWatch()
 
 	rt, err := startChannels(cfg, settings, version)
 	if err != nil {
@@ -604,7 +615,7 @@ func (rt *channelRuntime) setupCronScheduler(hCfg *channels.Config) {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
-	rt.cronScheduler = cron.NewSchedulerWithSessionDir(rt.cronStore, rt.dispatcher.AgentManager(), interval, rt.sessionDir)
+	rt.cronScheduler = cron.NewSchedulerWithSessionDirAndHandler(rt.cronStore, rt.dispatcher.AgentManager(), interval, rt.sessionDir, rt.runKnowledgeBaseCronJob)
 	rt.cronScheduler.SetCompletionObserver(rt.pushBoundSessionResult)
 	rt.dispatcher.SetCronScheduler(rt.cronScheduler)
 	rt.cronScheduler.Start()
@@ -678,7 +689,7 @@ func (rt *channelRuntime) syncCronRuntime() {
 		if interval <= 0 {
 			interval = 30 * time.Second
 		}
-		rt.cronScheduler = cron.NewSchedulerWithSessionDir(rt.cronStore, rt.dispatcher.AgentManager(), interval, rt.sessionDir)
+		rt.cronScheduler = cron.NewSchedulerWithSessionDirAndHandler(rt.cronStore, rt.dispatcher.AgentManager(), interval, rt.sessionDir, rt.runKnowledgeBaseCronJob)
 		rt.cronScheduler.SetCompletionObserver(rt.pushBoundSessionResult)
 		rt.dispatcher.SetCronScheduler(rt.cronScheduler)
 		rt.cronScheduler.Start()

@@ -14,6 +14,8 @@ const {
   knowledgeBasePayload,
   validateKnowledgeBase,
   normalizeKnowledgeBaseView,
+  knowledgeBaseIndexing,
+  knowledgeBaseIsIndexing,
   listKnowledgeBases,
   getKnowledgeBase,
   createKnowledgeBase,
@@ -108,6 +110,37 @@ test('normalizeKnowledgeBaseView fills missing fields with defaults', () => {
   assert.equal(normalized.knowledgeBase.enabled, true);
   assert.equal(normalized.knowledgeBase.preprocessProfile, 'documents');
   assert.equal(normalized.status, 'unindexed');
+});
+
+test('normalizeKnowledgeBaseView keeps a live indexing projection', () => {
+  const normalized = normalizeKnowledgeBaseView({
+    knowledgeBase: { id: 'kb-1', name: 'A' },
+    status: 'indexing',
+    indexing: { running: true, phase: 'scanning', filesDone: 3, filesTotal: 10 }
+  });
+  assert.equal(normalized.indexing.running, true);
+  assert.equal(normalized.indexing.phase, 'scanning');
+  assert.equal(normalized.indexing.filesTotal, 10);
+  // A finished job projection must not masquerade as a running scan.
+  assert.equal(normalizeKnowledgeBaseView({ indexing: { running: false } }).indexing, null);
+  assert.equal(normalizeKnowledgeBaseView({}).indexing, null);
+});
+
+test('knowledgeBaseIndexing exposes only running scans', () => {
+  assert.equal(knowledgeBaseIndexing(null), null);
+  assert.equal(knowledgeBaseIndexing({}), null);
+  assert.equal(knowledgeBaseIndexing({ indexing: { running: false } }), null);
+  assert.deepEqual(
+    knowledgeBaseIndexing({ indexing: { running: true, phase: 'indexing' } }),
+    { running: true, phase: 'indexing' }
+  );
+});
+
+test('knowledgeBaseIsIndexing drives polling for the whole list', () => {
+  assert.equal(knowledgeBaseIsIndexing([]), false);
+  assert.equal(knowledgeBaseIsIndexing(null), false);
+  assert.equal(knowledgeBaseIsIndexing([{ indexing: { running: false } }]), false);
+  assert.equal(knowledgeBaseIsIndexing([{ indexing: { running: true } }, {}]), true);
 });
 
 test('normalizeKnowledgeBaseView is safe for null and non-objects', () => {

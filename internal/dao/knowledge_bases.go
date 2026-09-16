@@ -196,7 +196,7 @@ func (d *KnowledgeBaseDAO) InsertChunks(ctx context.Context, executor bun.IDB, r
 		return err
 	}
 	for _, record := range records {
-		if _, err := executor.NewRaw(`INSERT INTO knowledge_chunk_fts(chunk_id, snapshot_id, text) VALUES (?, ?, ?)`, record.ID, record.SnapshotID, record.Text).Exec(ctx); err != nil {
+		if _, err := executor.NewRaw(`INSERT INTO knowledge_chunk_fts(chunk_id, snapshot_id, text) VALUES (?, ?, ?)`, record.ID, record.SnapshotID, KnowledgeFTSIndexText(record.Text)).Exec(ctx); err != nil {
 			return err
 		}
 	}
@@ -430,14 +430,81 @@ func (d *KnowledgeBaseDAO) ActiveGraphProjection(ctx context.Context, executor b
 
 func knowledgeFTSQuery(query string) string {
 	terms := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
-		return !(r == '_' || r == '-' || r == '.' || r == '/' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= 0x4e00 && r <= 0x9fff)
+		return !(r == '_' || r == '-' || r == '.' || r == '/' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || knowledgeIsFTSCJK(r))
 	})
 	quoted := make([]string, 0, len(terms))
 	for _, term := range terms {
 		term = strings.TrimSpace(strings.ReplaceAll(term, `"`, ``))
-		if term != "" {
-			quoted = append(quoted, `"`+term+`"`)
+		// Punctuation-only terms would produce an empty FTS5 phrase and a
+		// MATCH syntax error, so they are dropped instead of quoted.
+		if term == "" || !knowledgeFTSHasTokenRune(term) {
+			continue
 		}
+		// The index-side bigram rewrite turns CJK terms into adjacent token
+		// phrases that the unicode61 tokenizer can actually match.
+		quoted = append(quoted, `"`+strings.TrimSpace(KnowledgeFTSIndexText(term))+`"`)
 	}
 	return strings.Join(quoted, " OR ")
+}
+
+// knowledgeIsFTSCJK reports whether r is in the CJK range preserved by the
+// knowledge FTS query tokenizer. Only this range receives bigram splitting on
+// both the index and query side so the two stay symmetric.
+func knowledgeIsFTSCJK(r rune) bool {
+	return r >= 0x4e00 && r <= 0x9fff
+}
+
+// knowledgeFTSHasTokenRune reports whether a query term contains at least one
+// rune the unicode61 tokenizer can index.
+func knowledgeFTSHasTokenRune(term string) bool {
+	for _, r := range term {
+		switch {
+		case r == '_', r >= '0' && r <= '9', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', knowledgeIsFTSCJK(r):
+			return true
+		}
+	}
+	return false
+}
+
+// KnowledgeFTSIndexText rewrites chunk text for the knowledge_chunk_fts mirror
+// column. The default unicode61 tokenizer treats a whole CJK run as one token,
+// so Chinese phrase queries would never match substrings of that token. Every
+// CJK run is therefore split into overlapping bigrams (an isolated single
+// character is kept as-is) and padded with spaces so it never fuses with an
+// adjacent non-CJK token. The canonical chunk text in knowledge_chunks stays
+// untouched; only the FTS mirror carries this form, and knowledgeFTSQuery
+// applies the same rewrite to each query term.
+func KnowledgeFTSIndexText(text string) string {
+	if !strings.ContainsFunc(text, knowledgeIsFTSCJK) {
+		return text
+	}
+	runes := []rune(text)
+	var builder strings.Builder
+	builder.Grow(len(text) * 2)
+	for i := 0; i < len(runes); {
+		if !knowledgeIsFTSCJK(runes[i]) {
+			builder.WriteRune(runes[i])
+			i++
+			continue
+		}
+		start := i
+		for i < len(runes) && knowledgeIsFTSCJK(runes[i]) {
+			i++
+		}
+		run := runes[start:i]
+		builder.WriteByte(' ')
+		if len(run) == 1 {
+			builder.WriteRune(run[0])
+		} else {
+			for j := 0; j+1 < len(run); j++ {
+				if j > 0 {
+					builder.WriteByte(' ')
+				}
+				builder.WriteRune(run[j])
+				builder.WriteRune(run[j+1])
+			}
+		}
+		builder.WriteByte(' ')
+	}
+	return builder.String()
 }

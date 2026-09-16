@@ -27,8 +27,22 @@ export function emptyKnowledgeBaseView() {
   return {
     knowledgeBase: { id: '', ...defaultKnowledgeBase() },
     snapshot: null,
-    status: 'unindexed'
+    status: 'unindexed',
+    indexing: null
   };
+}
+
+// knowledgeBaseIndexing returns the live background scan projection when a
+// scan is running, and null otherwise. The view polls while this is non-null.
+export function knowledgeBaseIndexing(view) {
+  const indexing = view?.indexing;
+  return indexing && indexing.running ? indexing : null;
+}
+
+// knowledgeBaseIsIndexing reports whether any base currently has a scan in
+// flight, which drives periodic progress polling in the knowledge view.
+export function knowledgeBaseIsIndexing(views) {
+  return Array.isArray(views) && views.some((view) => knowledgeBaseIndexing(view) !== null);
 }
 
 export async function listKnowledgeBases() {
@@ -76,6 +90,7 @@ export function normalizeKnowledgeBaseView(value) {
       schedule: DEFAULT_SCHEDULE
     },
     snapshot: value.snapshot && typeof value.snapshot === 'object' ? value.snapshot : null,
+    indexing: value.indexing && value.indexing.running ? { ...value.indexing } : null,
     status: String(value.status || value.snapshot?.status || 'unindexed')
   };
 }

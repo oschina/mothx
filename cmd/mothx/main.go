@@ -403,6 +403,9 @@ func run(args []string, opts runOptions) error {
 		startUpdateCheck(settings, func(notice string) {
 			fmt.Fprintln(os.Stderr, notice)
 		})
+		if notice := databaseRecoveryNotice(); notice != "" {
+			fmt.Fprintln(os.Stderr, notice)
+		}
 		return runPrint(args, p, selection.name, model, selection.mode, provider.ThinkingLevel(selection.thinkingLevel), settings, registry, sessionSetup.manager, extraContext, ruleContent, opts.multiAgent, opts.delegate, opts.workflows, opts.json, runtime.agentManager, sharedRuntime)
 	}
 
@@ -414,6 +417,7 @@ func run(args []string, opts runOptions) error {
 		settingsMeta:     settingsMeta,
 		session:          sessionSetup.manager,
 		sessionInfo:      sessionSetup.info,
+		databaseNotice:   databaseRecoveryNotice(),
 		registry:         registry,
 		sandboxInfo:      sbInfo,
 		extraContext:     extraContext,
@@ -598,6 +602,23 @@ func continuingSessionInfo(sess *session.Manager) string {
 	return info
 }
 
+// databaseRecoveryNotice drains the sessions-database recoveries internal/db
+// performed in this process and renders the user-facing warning. A migration
+// failure is recovered by backing the old database up and starting empty, so the
+// user has to be told: their earlier sessions exist only in that backup file.
+func databaseRecoveryNotice() string {
+	recoveries := session.TakeDatabaseRecoveries()
+	if len(recoveries) == 0 {
+		return ""
+	}
+	lines := []string{"⚠️ Database migration error: the sessions database could not be upgraded."}
+	for _, recovery := range recoveries {
+		lines = append(lines, "   "+recovery.Describe())
+	}
+	lines = append(lines, "   Fix the migration error before relying on the previous data; it is only in the backup.")
+	return strings.Join(lines, "\n")
+}
+
 func registerA2AMasterTool(registry *tools.Registry, opts runOptions) error {
 	if !opts.enableA2AMaster {
 		return nil
@@ -742,6 +763,7 @@ type runInteractiveConfig struct {
 	settingsMeta     config.LoadMeta
 	session          *session.Manager
 	sessionInfo      string
+	databaseNotice   string
 	registry         *tools.Registry
 	sandboxInfo      string
 	extraContext     string
@@ -788,6 +810,13 @@ func runInteractive(cfg runInteractiveConfig) error {
 	p2 := tea.NewProgram(app, teaProgramOptions()...)
 	app.SetProgram(p2)
 	startUpdateCheck(cfg.settings, app.ShowUpdateNotice)
+	// Another mothx process may rebuild a database whose schema it cannot migrate
+	// (see internal/db). That replaces the file this process may still hold open,
+	// so retire the cached connection and tell the user.
+	stopDatabaseWatch := session.WatchDatabaseRebuilds(func(recovery session.DatabaseRecovery) {
+		app.ShowNotice("\u26a0\ufe0f " + recovery.Describe() + "\n   The database was replaced and will be reopened; fix the migration error before relying on the previous data.")
+	})
+	defer stopDatabaseWatch()
 	if _, err := p2.Run(); err != nil {
 		return fmt.Errorf("run TUI: %w", err)
 	}
@@ -803,6 +832,9 @@ func runInteractive(cfg runInteractiveConfig) error {
 
 func buildInitialMessage(cfg runInteractiveConfig) string {
 	parts := []string{}
+	if cfg.databaseNotice != "" {
+		parts = append(parts, cfg.databaseNotice)
+	}
 	if cfg.contextFilesInfo != "" {
 		parts = append(parts, cfg.contextFilesInfo)
 	}

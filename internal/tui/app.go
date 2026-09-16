@@ -892,6 +892,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.updateViewportContent()
 		return a, nil
 
+	case noticeMsg:
+		a.addCommandStatus(string(msg))
+		a.updateViewportContent()
+		return a, nil
+
 	case backgroundSubmittedMsg:
 		if msg.Err != nil {
 			a.runtime.DiscardInput(context.Background(), msg.Submission)

@@ -1066,6 +1066,21 @@
 
 ---
 
+### 40. Agnes AI（国际版 / 国内版）
+
+- **Vendor**: `agnes`
+- **BaseURL**: `https://apihub.agnes-ai.com/v1`（国际版 `agnes`）/ `https://api.agnes-ai.cn/v1`（国内版 `agnes-cn`）
+- **API**: `openai-chat`
+- **API Key**: `${AGNES_API_KEY}`（国际版）/ `${AGNES_CN_API_KEY}`（国内版）
+
+| 模型 | Context | MaxTokens | 推理 | 输入 |
+|------|---------|-----------|------|------|
+| agnes-2.5-flash | 200K | 未设置（默认） | **是** | text,image |
+| agnes-2.5-pro | 256K | 未设置（默认） | **是** | text,image |
+| agnes-3.0-flash | 512K | 65535 | **是** | text,image |
+
+---
+
 ## 按供应商分类的 Quick Reference
 
 | 供应商 | Vendor 名 | API 协议 | Thinking 格式 | 模型数 |
@@ -1110,6 +1125,7 @@
 | 百度千帆 | `qianfan`×2 | openai-chat | - | 4/6 |
 | 阶跃星辰 | `stepfun` | openai-chat | - | 1 |
 | AMD Radeon | `amd-radeon` | openai-chat | - | 2 |
+| Agnes AI | `agnes`/`agnes-cn` | openai-chat | - | 3 |
 
 ---
 

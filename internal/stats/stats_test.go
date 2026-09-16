@@ -266,8 +266,12 @@ func TestRecentFiltered(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsOldSchemaWithoutMigrating(t *testing.T) {
-	t.Helper()
+// TestOpenBacksUpAndRebuildsOldSchema pins the recovery contract for a reader
+// such as the stats dashboard: a database whose schema this build cannot upgrade
+// is backed up next to itself, rebuilt empty, and the recovery is reported
+// instead of blocking the command.
+func TestOpenBacksUpAndRebuildsOldSchema(t *testing.T) {
+	session.TakeDatabaseRecoveries()
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "sessions.db")
 
@@ -300,25 +304,39 @@ func TestOpenRejectsOldSchemaWithoutMigrating(t *testing.T) {
 	db.Close()
 
 	sdb, err := Open(dbPath)
-	if err == nil {
-		sdb.Close()
-		t.Fatal("Open succeeded for an old schema")
+	if err != nil {
+		t.Fatalf("Open after an incompatible legacy schema: %v", err)
 	}
-	if !strings.Contains(err.Error(), "database schema is incompatible") {
-		t.Fatalf("Open error = %v, want incompatible schema", err)
+	defer sdb.Close()
+	defer session.CloseDatabases()
+
+	recoveries := session.TakeDatabaseRecoveries()
+	if len(recoveries) != 1 {
+		t.Fatalf("recoveries = %#v, want exactly one", recoveries)
+	}
+	if !strings.Contains(recoveries[0].Err.Error(), "database schema is incompatible") {
+		t.Fatalf("recovery error = %v, want the incompatible-schema failure", recoveries[0].Err)
 	}
 
-	db, err = sql.Open("sqlite", dbPath)
-	if err != nil {
+	var count int
+	if err := sdb.db.Bun().QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'request_stats'").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'request_stats'").Scan(&count); err != nil {
+	if count != 1 {
+		t.Fatal("rebuilt database is missing the current schema")
+	}
+
+	// The previous database is preserved untouched in the backup.
+	legacy, err := sql.Open("sqlite", recoveries[0].BackupPath)
+	if err != nil {
+		t.Fatalf("open backup database: %v", err)
+	}
+	defer legacy.Close()
+	if err := legacy.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'request_stats'").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
-		t.Fatal("old schema was modified")
+		t.Fatal("backup was modified with current schema tables")
 	}
 }
 

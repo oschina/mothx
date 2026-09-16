@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -444,6 +445,59 @@ func TestVolcengineAgentPlanKimiK3Context(t *testing.T) {
 	model := s.GetModelConfig("volcengine-agentplan", "kimi-k3")
 	if model == nil || model.ContextWindow != 1000000 {
 		t.Fatalf("volcengine-agentplan kimi-k3 = %#v, want 1M context", model)
+	}
+}
+
+func TestDefaultAgnesProviders(t *testing.T) {
+	s := DefaultSettings()
+	wantEndpoints := map[string]string{
+		"agnes":    "https://apihub.agnes-ai.com/v1",
+		"agnes-cn": "https://api.agnes-ai.cn/v1",
+	}
+	wantModels := map[string]struct {
+		contextWindow int
+		maxTokens     int
+	}{
+		"agnes-2.5-flash": {200000, 0},
+		"agnes-2.5-pro":   {256000, 0},
+		"agnes-3.0-flash": {512000, 65535},
+	}
+
+	for name, baseURL := range wantEndpoints {
+		provider := s.Providers[name]
+		if provider == nil {
+			t.Fatalf("expected default %s provider", name)
+		}
+		if provider.Vendor != "agnes" {
+			t.Fatalf("%s vendor = %q, want agnes", name, provider.Vendor)
+		}
+		if provider.BaseURL != baseURL || provider.API != "openai-chat" {
+			t.Fatalf("%s endpoint = (%q, %q), want (%q, openai-chat)", name, provider.BaseURL, provider.API, baseURL)
+		}
+		if len(provider.Models) != len(wantModels) {
+			t.Fatalf("%s model count = %d, want %d", name, len(provider.Models), len(wantModels))
+		}
+		for modelID, want := range wantModels {
+			model := s.GetModelConfig(name, modelID)
+			if model == nil {
+				t.Fatalf("%s missing model %q", name, modelID)
+			}
+			if model.ContextWindow != want.contextWindow {
+				t.Fatalf("%s %s context window = %d, want %d", name, modelID, model.ContextWindow, want.contextWindow)
+			}
+			if model.MaxTokens != want.maxTokens {
+				t.Fatalf("%s %s maxTokens = %d, want %d", name, modelID, model.MaxTokens, want.maxTokens)
+			}
+			if want.maxTokens == 0 && model.MaxTokensWasSet() {
+				t.Fatalf("%s %s must omit maxTokens so the provider default applies", name, modelID)
+			}
+			if !model.Reasoning {
+				t.Fatalf("%s %s must support reasoning", name, modelID)
+			}
+			if !slices.Contains(model.Input, "text") || !slices.Contains(model.Input, "image") {
+				t.Fatalf("%s %s input = %v, want text+image", name, modelID, model.Input)
+			}
+		}
 	}
 }
 

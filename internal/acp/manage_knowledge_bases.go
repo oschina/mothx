@@ -17,8 +17,6 @@ import (
 	"github.com/startvibecoding/mothx/internal/session"
 )
 
-const knowledgeBaseCronJobPrefix = "knowledge-base-index:"
-
 // The knowledge-base management RPCs project Runtime/session owned state. They
 // deliberately do not expose graph tables or source files wholesale: query is
 // a bounded preview endpoint, while normal Desktop prompts will use the
@@ -100,11 +98,25 @@ func manageKnowledgeIndexViewFrom(progress agentruntime.KnowledgeIndexProgress) 
 	}
 }
 
+// manageKnowledgeBaseService returns the process-wide cached Runtime service.
+// Caching matters: the service owns the background index-job registry, so a
+// fresh instance per RPC would hide a running scan from progress polling and
+// let duplicate scan requests start parallel jobs.
 func (s *server) manageKnowledgeBaseService() (*agentruntime.KnowledgeBaseService, error) {
 	if s == nil || s.settings == nil {
 		return nil, fmt.Errorf("knowledge base runtime is unavailable")
 	}
-	return agentruntime.NewKnowledgeBaseServiceWithSettings(s.settings.GetSessionDir(), agentruntime.DefaultKnowledgeBaseIndexPolicy(), s.settings)
+	s.knowledgeMu.Lock()
+	defer s.knowledgeMu.Unlock()
+	if s.knowledgeService != nil {
+		return s.knowledgeService, nil
+	}
+	service, err := agentruntime.NewKnowledgeBaseServiceWithSettings(s.settings.GetSessionDir(), agentruntime.DefaultKnowledgeBaseIndexPolicy(), s.settings)
+	if err != nil {
+		return nil, err
+	}
+	s.knowledgeService = service
+	return service, nil
 }
 
 func knowledgeBaseMCPServerName(id string) string {
@@ -186,12 +198,11 @@ func (s *server) handleManageKnowledgeBaseMCPApply(req rpcRequest) {
 }
 
 func knowledgeBaseCronJobID(id string) string {
-	return knowledgeBaseCronJobPrefix + strings.TrimSpace(id)
+	return agentruntime.KnowledgeBaseCronJobID(id)
 }
 
 func knowledgeBaseIDFromCronJob(job cron.CronJob) (string, bool) {
-	id := strings.TrimSpace(strings.TrimPrefix(job.ID, knowledgeBaseCronJobPrefix))
-	return id, strings.HasPrefix(job.ID, knowledgeBaseCronJobPrefix) && id != ""
+	return agentruntime.KnowledgeBaseIDFromCronJobID(job.ID)
 }
 
 // syncKnowledgeBaseSchedule projects the persisted knowledge-base cadence
@@ -303,29 +314,19 @@ func (s *server) removeKnowledgeBaseSchedule(id string) error {
 }
 
 // runKnowledgeBaseCronJob is called by the shared Scheduler only for its
-// namespaced jobs. IndexDurable records the actual maintenance Run; Cron then
-// records the scheduling outcome and moves the next-run cursor.
+// namespaced jobs. It delegates to the Runtime-owned handler through the
+// cached service, so scheduled scans share one background-job registry with
+// manual scans; Cron then records the scheduling outcome and moves the
+// next-run cursor.
 func (s *server) runKnowledgeBaseCronJob(ctx context.Context, job cron.CronJob) (bool, string, error) {
-	id, ok := knowledgeBaseIDFromCronJob(job)
-	if !ok {
+	if _, ok := agentruntime.KnowledgeBaseIDFromCronJobID(job.ID); !ok {
 		return false, "", nil
 	}
 	service, err := s.manageKnowledgeBaseService()
 	if err != nil {
 		return true, "", err
 	}
-	// Scheduled scans share the same background job machinery as manual scans;
-	// the cron goroutine waits for the terminal result so Cron records the
-	// scheduling outcome and moves the next-run cursor.
-	indexJob, err := service.StartIndex(ctx, id, agentruntime.SourceCron)
-	if err != nil {
-		return true, "", err
-	}
-	snapshot, err := indexJob.Wait(ctx)
-	if err != nil {
-		return true, "", err
-	}
-	return true, fmt.Sprintf("indexed knowledge base %s: %d files, %d chunks", id, snapshot.FileCount, snapshot.ChunkCount), nil
+	return agentruntime.RunKnowledgeBaseCronJob(ctx, service, job.ID)
 }
 
 func (s *server) syncAllKnowledgeBaseSchedulesWithStore(store cron.CronStore) error {
@@ -359,15 +360,16 @@ func (s *server) syncAllKnowledgeBaseSchedulesWithStore(store cron.CronStore) er
 
 func (s *server) manageKnowledgeBaseView(ctx context.Context, base session.KnowledgeBase) (manageKnowledgeBaseView, error) {
 	view := manageKnowledgeBaseView{KnowledgeBase: base, Status: "unindexed"}
-	if strings.TrimSpace(base.ActiveSnapshotID) == "" {
-		return view, nil
+	if strings.TrimSpace(base.ActiveSnapshotID) != "" {
+		snapshot, err := session.GetKnowledgeSnapshot(ctx, s.settings.GetSessionDir(), base.ActiveSnapshotID)
+		if err != nil {
+			return manageKnowledgeBaseView{}, err
+		}
+		view.Snapshot = &snapshot
+		view.Status = snapshot.Status
 	}
-	snapshot, err := session.GetKnowledgeSnapshot(ctx, s.settings.GetSessionDir(), base.ActiveSnapshotID)
-	if err != nil {
-		return manageKnowledgeBaseView{}, err
-	}
-	view.Snapshot = &snapshot
-	view.Status = snapshot.Status
+	// Progress must project even without an active snapshot: the first scan of
+	// a new base is exactly when hosts need the running-job view to poll.
 	s.attachKnowledgeIndexProgress(ctx, &view, base.ID)
 	return view, nil
 }

@@ -442,3 +442,64 @@ func TestKnowledgeLibrarianUsesDedicatedAgentSessionAndDurableRun(t *testing.T) 
 		t.Fatalf("librarian durable Run missing from %#v", runs)
 	}
 }
+
+// TestKnowledgeBaseQueryMatchesChineseEvidence pins the CJK bigram FTS
+// contract end to end: indexing a Chinese document and querying Chinese
+// phrases must return the cited chunk, which the default unicode61 tokenizer
+// cannot do without the dao-side bigram rewrite.
+func TestKnowledgeBaseQueryMatchesChineseEvidence(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	content := "# 架构说明\n\n知识库是一个可重建的图谱索引系统。\n\n## 调度\n\n定时扫描复用 canonical Run 生命周期。\n"
+	if err := os.WriteFile(filepath.Join(source, "架构.md"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(context.Background(), root, session.KnowledgeBaseSpec{
+		Name: "产品文档", RootDir: source, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := service.Index(context.Background(), base.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Status != "completed" || snapshot.FileCount != 1 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	for _, query := range []string{"知识库", "图谱索引", "索引系统", "定时扫描"} {
+		result, err := service.Query(context.Background(), base.ID, query, 4)
+		if err != nil {
+			t.Fatalf("query %q: %v", query, err)
+		}
+		if len(result.Chunks) == 0 {
+			t.Fatalf("query %q returned no chunks; CJK evidence must be findable", query)
+		}
+		if result.Chunks[0].RelativePath != "架构.md" {
+			t.Fatalf("query %q chunk path = %q", query, result.Chunks[0].RelativePath)
+		}
+		if !strings.Contains(result.Chunks[0].Text, "知识库") {
+			t.Fatalf("query %q returned original chunk text = %q", query, result.Chunks[0].Text)
+		}
+	}
+	// The section nodes keep working for Chinese headings too.
+	result, err := service.Query(context.Background(), base.ID, "架构说明", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Chunks) == 0 {
+		t.Fatalf("heading query returned no chunks")
+	}
+	// An absent phrase stays empty instead of matching everything.
+	absent, err := service.Query(context.Background(), base.ID, "向量数据库", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(absent.Chunks) != 0 {
+		t.Fatalf("absent phrase matched %d chunks", len(absent.Chunks))
+	}
+}

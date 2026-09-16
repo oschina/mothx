@@ -283,3 +283,19 @@ func TestManageSkillHubPreservesUnknownFields(t *testing.T) {
 		t.Fatalf("apiToken not preserved, got %s", markets[0]["apiToken"])
 	}
 }
+
+func TestManageSkillHubDefaultMarketFallsBackToProductDefault(t *testing.T) {
+	if got := manageSkillHubDefaultMarket(nil); got != "skillhub.cn" {
+		t.Fatalf("nil settings defaultMarket = %q, want skillhub.cn", got)
+	}
+	blank := config.DefaultSettings()
+	blank.SkillHub.DefaultMarket = "  "
+	if got := manageSkillHubDefaultMarket(blank); got != "skillhub.cn" {
+		t.Fatalf("blank defaultMarket = %q, want skillhub.cn", got)
+	}
+	custom := config.DefaultSettings()
+	custom.SkillHub.DefaultMarket = "clawhub.ai"
+	if got := manageSkillHubDefaultMarket(custom); got != "clawhub.ai" {
+		t.Fatalf("configured defaultMarket = %q, want clawhub.ai", got)
+	}
+}

@@ -241,7 +241,7 @@ Selection order:
 2. Base URL detection
 3. Generic fallback: `openai-chat`, `openai-responses`, `anthropic-messages`, `google-gemini`, or `google-vertex`
 
-Built-in vendor adapters include `openai`, `anthropic`, `claude`, `deepseek`, `google-gemini`, `google-vertex`, `xiaomi`, `xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, `volcengine`, `kimi`, `minimax`, `qianfan`, `bailian`, `gitee`, `openrouter`, `together`, `groq`, `fireworks`, `mistral`, `github-copilot`, `cloudflare-ai-gateway`, `cloudflare-workers-ai`, and `amazon-bedrock`.
+Built-in vendor adapters include `openai`, `anthropic`, `claude`, `deepseek`, `agnes`, `google-gemini`, `google-vertex`, `xiaomi`, `xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, `volcengine`, `kimi`, `minimax`, `qianfan`, `bailian`, `gitee`, `openrouter`, `together`, `groq`, `fireworks`, `mistral`, `github-copilot`, `cloudflare-ai-gateway`, `cloudflare-workers-ai`, and `amazon-bedrock`.
 
 ```json
 {

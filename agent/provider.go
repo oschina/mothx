@@ -196,6 +196,8 @@ func VendorFromBaseURL(baseURL string) string {
 		"api.groq.com":              "groq",
 		"api.fireworks.ai":          "fireworks",
 		// newly added to match vendor adapters
+		"apihub.agnes-ai.com":               "agnes",
+		"api.agnes-ai.cn":                   "agnes",
 		"api.anthropic.com":                 "anthropic",
 		"api.ant-ling.com":                  "ant-ling",
 		"api.cerebras.ai":                   "cerebras",
