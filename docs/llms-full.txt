@@ -716,7 +716,9 @@ The server sends `session/update` notifications with the following event types:
 | `user_message_chunk` | historical user message |
 | `tool_call` | tool being called |
 | `tool_call_update` | tool status update (pending/in_progress/completed/failed) |
-| `usage_update` | Current context usage, context window size, and cumulative cost |
+| `usage_update` | Current context usage, context window size, and cumulative cost; plus the additive cache projection below |
+
+`usage_update` keeps the standard ACP shape. When `initialize._meta["mothx.dev"].features` advertises `usageCacheProjection`, the notification additionally carries `_meta["mothx.dev"]` with the session-cumulative `cacheRead`, `cacheWrite`, and `totalInputTokens`; the cache hit ratio is `cacheRead / totalInputTokens`, the same denominator the Runtime uses for `Usage.TotalInputTokens`. Both the cumulative cost and these totals are rebuilt from the canonical persisted history on `session/load`, and the extension is omitted until the first usage event.
 
 `session/load` replays the full conversation history before returning.
 
@@ -1498,6 +1500,18 @@ Source: https://mothx.net/en/changelog.md
 
 ### 🐛 Bug Fixes
 
+- **Session Runtime Leases Now Survive Transient Database Stalls**
+  - Long runs could be interrupted by `session runtime lease was lost` even when no other process held the session. The per-directory heartbeat scheduler stopped whenever a tick observed an empty directory, even if a lease admitted moments earlier was still live: it left a registered-but-stopped entry in the scheduler registry that no later acquire could replace, so the lease was never renewed again and a later execution-path write found it expired. This was introduced when the per-lease heartbeats were coalesced into one scheduler per session directory.
+  - The scheduler now exits only after it has actually unregistered itself for an idle directory, and a renewal that merely times out (a busy or unreachable session database) is retried on the next heartbeat tick instead of being reported as ownership loss. Ownership is decided by the fenced `owner`/`epoch`/`token` CAS, not by wall-clock expiry: taking over bumps the epoch, so a row that expired while still carrying our identity remains ours. Only a genuine fenced takeover or a released lease marks it lost. The heartbeat retry budget is derived from the shared `busy_timeout` (`db.BusyTimeout`) so a single tick can absorb a full contended begin, and lease loss is now logged with its reason.
+
+- **Content-Inspected Images No Longer Kill the Session**
+  - A provider content-policy refusal — for example DashScope/Qwen's `InternalError.Algo.DataInspectionFailed: Input image data may contain inappropriate content` — arrives as an HTTP 400, but every 4xx was treated as retryable. The same rejected image was re-sent through the provider's backoff retries plus the agent's stream-failure retries (minutes of "Retrying…"), and because a refusal is permanent the run finally failed; worse, the offending image stayed in the persisted history and was replayed on every later turn, so nothing could continue. Only starting a brand-new session recovered — not even `/clear`, which reloads the same history.
+  - `provider.IsContentRejectionError` now classifies this narrow family (data inspection, content policy/moderation/filter, "inappropriate content") and `IsRetryable` returns false for it, so the failure surfaces immediately instead of burning the retry budget. Agent Core then recovers in place: it strips the refused images — first from the current turn, then, if the refusal persists, from the whole conversation — replacing each with a model-visible note that explains the provider's content filter blocked the image and that the pixels are unavailable, and records an append-only `content_override` session entry so replay (same process or after reload) never re-sends it. The run retries without the image and the session keeps working; a turn that already streamed output is healed but not re-run, so no output is duplicated.
+
+- **Serve: Config Saves No Longer Fail with "Access is denied" on Windows**
+  - On Windows (including portable setups running from exFAT drives), enabling the WeChat/Feishu channel from the Web UI or saving any `serve.json` change failed with `sync config directory: Access is denied`. The atomic config writer fsynced the parent directory after the rename — a POSIX durability idiom — but `FlushFileBuffers` on a read-only directory handle always returns `ERROR_ACCESS_DENIED` on Windows, on every filesystem including exFAT. Because the failure happened after the file had already been swapped into place, the API reported an error while the new config was never applied to the runtime.
+  - The post-rename directory flush is now skipped on Windows (matching etcd/bolt practice); the config file itself is still fsynced before the rename, so durability is preserved and Unix behavior is unchanged.
+
 - **MCP: Image Tool Results Reach the Model Instead of a Placeholder**
   - An MCP tool that returned image content reached the model as the literal string `[image content: image/png]`. The base64 payload was already present in the MCP response, but the client decoded every content block into text only, and the tool returned a text-only result, so a screenshot-style MCP server could report coordinates while the model never saw the picture. `resources/read` binary resources were worse: the `blob` field had no matching struct field, so the payload was dropped during decode and not even the placeholder appeared.
   - `tools/call` and `resources/read` now project image blocks into `tools.ToolResult.Contents` as real provider image content, reusing the same provider-aware preprocessing as the `read` and `browser` screenshot tools, and decode `blob`/`uri` resource fields. Results without images keep the historical text-only shape, so existing text MCP tools are unchanged. Malformed, oversized, or excess images (capped at 4 per result, matching the ACP projection limit) degrade to a text note instead of failing the call. The image capability gate in Agent Core still decides whether a non-vision model receives images at all.
@@ -1518,6 +1532,15 @@ Source: https://mothx.net/en/changelog.md
   - A provider stream that died with a transient transport error (`connection reset by peer`, unexpected EOF, gateway 5xx, ...) after text or thinking had already been streamed failed the whole run with `stream read error: ...`: provider-level retries only cover streams that break before any visible output, and the agent-level retry only covered idle-stream timeouts.
   - The agent loop now performs a bounded continuation retry (up to 2 attempts) for such transient errors. Already-streamed partial output is persisted into history and a continuation instruction quoting the exact suffix is injected, so the model resumes from the interruption point instead of duplicating what the user already saw; with no visible output yet, the turn simply re-runs. Turns with an already-emitted tool call, context overflow (dedicated compaction recovery), and idle-stream timeouts (dedicated timeout retry) keep their existing behavior, and Responses remote-state turns keep their existing failover path.
 
+### 🔧 Improvements
+
+- **SQLite: Three-Phase Write-Pressure Reduction for the Session Database**
+  - The connection durability policy moves from `synchronous(FULL)` to the WAL-recommended `synchronous(NORMAL)`: a commit no longer fsyncs while holding the single writer lock (the fsync moves to checkpoint time), so writer-lock occupancy across processes sharing one session directory shrinks from fsync scale to page-cache scale, largely eliminating the recorded "another process keeps committing until begin exceeds busy_timeout and reports database is locked" scenario. Process crashes still lose nothing; an OS crash or power loss can roll back the seconds of commits since the last checkpoint (the database stays consistent, and a missing run terminal state converges through the existing lease-expiry → orphan → bounded-recovery path). `MOTHX_SQLITE_SYNCHRONOUS=FULL` restores the legacy durability per process, and mixed old/new processes sharing one database file is safe.
+  - Tool results now persist in batches: the session domain gained `AppendMessages`, writing one agent iteration's tool results as a parent-chained single transaction (capped at 64 entries per transaction, chunked above that) with the lease fence and the leaf-conflict check still inside the write transaction; tool-heavy rounds drop from N+3 write transactions to about 3. The assistant message still persists before tool side effects, and a failed batch still fails the run with `session_save`.
+  - Lease heartbeats are coalesced: instead of one goroutine committing a renewal transaction per active lease every 3 seconds, a single scheduler per session directory renews all of this process's leases for that database in one transaction (the per-lease owner/epoch/token CAS fence is unchanged, so a displaced or released lease still only loses itself); steady-state heartbeat writes drop from N transactions/3s to 1 transaction/3s/process. TTL, heartbeat interval, retry budget, and the 30-second bounded-recovery guarantee are untouched, and the scheduler retires after the last lease is released.
+  - `internal/db` gained process-wide busy-retry and transaction-begin wait metrics (`BusyRetryStats`/`BeginWaitStats`), published through expvar as `mothx_sqlite` and readable on the `--debug` pprof server's `/debug/vars`, making cross-process writer contention observable.
+  - Full plan, multi-process reasoning, and load-test matrix: `docs/proposal/sqlite-write-pressure-reduction-proposal.md`.
+
 ### ✅ Tests
 
 - Database: `internal/db` pins the begin-retry policy — only SQLITE_BUSY/SQLITE_LOCKED are retried, other driver errors and an expiring context are surfaced unchanged, driver codes are classified through the error's own `Code()` method, and `RunInTx` keeps commit/rollback semantics.
@@ -1530,6 +1553,7 @@ Source: https://mothx.net/en/changelog.md
 - Architecture: a guard rejects new use of the legacy session run/lease APIs or a low-level `agent.New` in adapter test files, with a documented allowlist for the remaining fixtures.
 - `systeminit`: the shared `/systeminit` prompt is pinned — interactive-only question guidance, trimmed extra instructions before the final note, blank extra input ignored, and determinism.
 - Stream-failure recovery: a mid-stream connection reset resumes through the continuation retry — partial output persists and continues from the exact suffix, no visible output re-runs the turn fresh, and exhausting the budget surfaces the original error — while a turn with an already-emitted tool call or a non-retryable error never retries.
+- SQLite write pressure: `internal/db` pins the synchronous default (NORMAL), the `MOTHX_SQLITE_SYNCHRONOUS=FULL` override, and busy-retry counting that never charges permanent errors; session tests cover the `AppendMessages` parent chain and replay order, whole-batch stale-writer rejection persisting no rows, chunking above the transaction cap, and sub-agent table isolation; the heartbeat scheduler test covers one scheduler per directory, batched renewal, a displaced lease losing only itself while the survivor renews, and retirement after the last release. Plus write-pressure load shapes A/B/C (multi-process distinct-session writers, mixed FULL/NORMAL deployment, single-process many sessions with leases) reporting busy/begin contention metrics, scalable through `MOTHX_WRITE_PRESSURE_SCALE` for baseline runs.
 ## v1.2.100
 
 ### ✨ New Features
@@ -6933,6 +6957,7 @@ These environment variables override settings at runtime:
 | `VIBECODING_THINKING` | `defaultThinkingLevel` | `export VIBECODING_THINKING=high` |
 | `VIBECODING_DEBUG` | Enable provider-level request/response debug output | `export VIBECODING_DEBUG=1` |
 | `VIBECODING_PPROF_ADDR` | pprof listen address when `--debug` is set | `export VIBECODING_PPROF_ADDR=127.0.0.1:6061` |
+| `MOTHX_SQLITE_SYNCHRONOUS` | Session-database SQLite durability: defaults to `NORMAL` (the WAL-recommended pairing, no per-commit fsync); set to `FULL` to restore per-commit fsync | `export MOTHX_SQLITE_SYNCHRONOUS=FULL` |
 | `VIBECODING_NO_UPDATE_CHECK` | Disable update check | `export VIBECODING_NO_UPDATE_CHECK=1` |
 | `VIBECODING_NPM_REGISTRY` | Override npm registry for update checks | `export VIBECODING_NPM_REGISTRY=https://registry.npmjs.org` |
 
@@ -11791,6 +11816,15 @@ Entries keep stable IDs and parent IDs so the conversation can be replayed as a 
 | `session_info` | Display metadata such as session name |
 | `branch_summary` | Branch switch summary |
 | `label` | User-defined label |
+
+### Durability and Write Performance
+
+`sessions.db` runs in WAL mode with the durability level defaulting to the SQLite-recommended `synchronous(NORMAL)`: commits no longer fsync individually (syncing is concentrated at WAL checkpoints), which markedly lowers writer-lock contention and write latency when several processes (Serve, TUI, ACP, CLI) share one session directory. The semantics are:
+
+- A process crash (kill -9, panic) loses nothing.
+- An OS crash or power loss does not corrupt the database, but commits made since the last checkpoint (typically seconds of writes) may roll back; a missing run terminal state converges through the lease-expiry → orphan-recovery path, so a session never stays stuck as "running" forever.
+
+Deployments sensitive to power loss (unstable power, some network drives) can restore the legacy per-commit fsync behavior with the `MOTHX_SQLITE_SYNCHRONOUS=FULL` environment variable; it takes effect per process, and mixed old/new processes sharing one database file is safe. With `--debug`, the `mothx_sqlite` metrics on the `/debug/vars` endpoint (busy-retry hits and backoff total, transaction begin count/total wait/slowest single wait) make cross-process writer contention observable. Full design and load-test matrix: `docs/proposal/sqlite-write-pressure-reduction-proposal.md`.
 
 ## Session Operations
 

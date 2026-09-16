@@ -19,6 +19,10 @@
 
 ### 🐛 问题修复
 
+- **会话运行时租约不再被短暂的数据库抖动打断**
+  - 长任务偶尔会被 `session runtime lease was lost` 中断，即使并没有其他进程占用该会话。“每租约一个心跳”被合并为“每个会话目录一个调度器”时引入了一个竞态：只要某个 tick 观察到该目录为空，调度器就退出循环，即便片刻前刚申请到的租约仍然存活；它在调度器注册表里留下一个“已停止但仍被登记”的条目，后续申请再也无法替换它，于是该租约永远得不到续期，之后某次执行期写入便发现它已过期。
+  - 现在调度器只有在真正把自己从空闲目录的注册表中注销后才退出；而仅因数据库繁忙/不可达导致的续期超时会在下一个心跳 tick 继续重试，不再被当作归属丢失。归属由 `owner`/`epoch`/`token` 的 fenced CAS 判定，而非墙钟过期：抢占必然 bump epoch，所以“过期但仍带自己身份”的行依然属于自己。只有真正的 fenced 抢占或已 release 才判定丢失。心跳重试预算改由共享的 `busy_timeout`（`db.BusyTimeout`）推导，使单个 tick 能完整消化一次被争用的 begin，并且租约丢失现在会带原因打日志。
+
 - **被内容审核拒绝的图片不再让整个会话失效**
   - 供应商的内容策略拒绝——例如 DashScope/千问的 `InternalError.Algo.DataInspectionFailed: Input image data may contain inappropriate content`——以 HTTP 400 返回，但此前所有 4xx 都被当作可重试。同一张被拒的图片会在 provider 的退避重试与 Agent 的流失败重试中被反复发送（数分钟的 "Retrying…"），而拒绝是永久性的，最终 run 仍然失败；更糟的是，出问题的图片留在持久化历史里，之后的每一轮都会重发它，于是什么都无法继续，只有新建会话才能恢复——连 `/clear` 都不行，因为它会重新加载同一份历史。
   - `provider.IsContentRejectionError` 现在单独识别这一窄类文案（data inspection、content policy/moderation/filter、"inappropriate content"），并让 `IsRetryable` 对它返回 false，失败因此立即浮现而不再消耗重试预算。Agent Core 随后就地自愈：先剥离本轮新增的图片，若仍被拒再剥离整个对话中的图片，把每张替换为模型可见的说明（告知该图片被供应商内容过滤拦截、像素已不可用），并追加一条可重放的 `content_override` 会话记录，使重放（同进程或重新加载后）都不会再次发送该图片。run 会在不含该图片的情况下重试，会话得以继续；若该回合已经流出可见输出，则只做自愈不再重跑，避免输出重复。

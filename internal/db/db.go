@@ -242,6 +242,13 @@ func synchronousMode() string {
 	return "NORMAL"
 }
 
+// BusyTimeout is the SQLite busy_timeout applied to every managed connection: a
+// writer waits this long for the single writer lock before returning
+// SQLITE_BUSY. It is the per-statement stall budget that callers which must
+// tolerate transient contention (for example the session runtime heartbeat)
+// need to exceed to absorb one contended begin within a single attempt.
+const BusyTimeout = 10 * time.Second
+
 func dsnForOS(path string, windows bool, foreignKeys bool) string {
 	uriPath := filepath.ToSlash(path)
 	if windows && !strings.HasPrefix(uriPath, "/") {
@@ -249,7 +256,7 @@ func dsnForOS(path string, windows bool, foreignKeys bool) string {
 	}
 	u := url.URL{Scheme: "file", Path: uriPath}
 	q := u.Query()
-	q.Add("_pragma", "busy_timeout(10000)")
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", BusyTimeout.Milliseconds()))
 	// Foreign key enforcement is opt-in per database. The canonical session
 	// database keeps it OFF so referential integrity stays a repository-layer
 	// concern (transactional writes, centralized deletion cleanup, integrity

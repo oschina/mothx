@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/startvibecoding/mothx/internal/dao"
+	database "github.com/startvibecoding/mothx/internal/db"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,14 +21,15 @@ import (
 const (
 	runtimeLeaseTTL       = 15 * time.Second
 	runtimeHeartbeatEvery = 3 * time.Second
-	// runtimeHeartbeatRetry bounds how long a failed renewal is retried before
-	// the owner gives up. It must cover transient SQLite write contention, whose
-	// single statement may block for busy_timeout (10s). With the 3s heartbeat
-	// interval the worst-case detection lands at roughly one TTL, so the real
-	// safety guarantee is the DAO fence (owner/epoch/token): a competing process
-	// can only take over through Acquire, which bumps the epoch, and a displaced
-	// owner can never renew again.
-	runtimeHeartbeatRetry = runtimeLeaseTTL - runtimeHeartbeatEvery
+	// runtimeHeartbeatRetry bounds how long one heartbeat tick keeps retrying a
+	// failed renewal before yielding to the next tick. It must absorb at least one
+	// full SQLite busy_timeout stall (database.BusyTimeout, the longest a single
+	// renewal statement can block) plus a follow-up attempt, so a transient timeout
+	// is retried within the tick instead of spilling into the next one. Exhausting
+	// it is NOT ownership loss: a database timeout is retried on the following
+	// tick, and a lease is only ever marked lost when a renewal actually executes
+	// and the fenced owner/epoch/token CAS no longer matches.
+	runtimeHeartbeatRetry = database.BusyTimeout + 2*runtimeHeartbeatEvery
 )
 
 var (
@@ -345,47 +348,61 @@ func (s *leaseHeartbeatScheduler) run() {
 		case <-ticker.C:
 			leases := snapshotRuntimeLeasesForDir(s.dirKey)
 			if len(leases) == 0 {
-				s.retire()
-				return
+				// retire only reports success when it unregistered this scheduler
+				// while the directory was still empty. A lease acquired in the
+				// meantime must keep this scheduler running: returning here anyway
+				// would leave a registered-but-stopped entry that no later acquire
+				// could replace, so the live lease would never be renewed again.
+				if s.retire() {
+					return
+				}
+				continue
 			}
 			s.renew(leases)
 		}
 	}
 }
 
-// retire removes the scheduler once no lease remains for its directory. The
-// registry is rechecked while holding the scheduler map lock, so a concurrent
-// acquire can never end up without a running heartbeat: either retire sees
-// the new lease and keeps ticking, or the acquire's ensure call (which blocks
-// on the same lock) creates a fresh scheduler.
-func (s *leaseHeartbeatScheduler) retire() {
+// retire unregisters the scheduler once no lease remains for its directory and
+// reports whether this scheduler was retired and must stop. The registry and
+// the lease snapshot are rechecked while holding the scheduler map lock, so a
+// concurrent acquire is never stranded without a heartbeat: either it is
+// observed here (retire declines and the loop keeps ticking, picking up the new
+// lease on the next tick) or this scheduler is unregistered first and the
+// acquire's ensure call creates a fresh scheduler.
+func (s *leaseHeartbeatScheduler) retire() bool {
 	leaseHeartbeatSchedulers.Lock()
-	if leaseHeartbeatSchedulers.schedulers[s.dirKey] == s && len(snapshotRuntimeLeasesForDir(s.dirKey)) == 0 {
-		delete(leaseHeartbeatSchedulers.schedulers, s.dirKey)
+	if leaseHeartbeatSchedulers.schedulers[s.dirKey] != s {
+		// Another path already removed or replaced this scheduler; stop it.
 		leaseHeartbeatSchedulers.Unlock()
-		s.stopOnce.Do(func() { close(s.stop) })
-		return
+		return true
 	}
+	if len(snapshotRuntimeLeasesForDir(s.dirKey)) != 0 {
+		leaseHeartbeatSchedulers.Unlock()
+		return false
+	}
+	delete(leaseHeartbeatSchedulers.schedulers, s.dirKey)
 	leaseHeartbeatSchedulers.Unlock()
+	s.stopOnce.Do(func() { close(s.stop) })
+	return true
 }
 
-// renew batch-renews one snapshot of leases. Transient SQLite failures are
-// retried within the same runtimeHeartbeatRetry budget the per-lease
-// heartbeat used: continuing an Agent after that interval would permit
-// external side effects after the lease can no longer be proven live, so an
-// exhausted budget marks every lease in the batch lost, matching the former
-// per-lease outcome. Each attempt is bounded by a context deadline so the
-// managed transaction's busy-begin retry can never outlive the budget. A
-// lease released or displaced mid-flight renews to zero affected rows (the
-// DAO fences on owner/epoch/token) or drops out of the refreshed snapshot;
-// markRuntimeLeaseLost is a no-op for an already released lease.
+// renew batch-renews one snapshot of leases. A transient SQLite failure (a busy
+// or unreachable database) is retried within the runtimeHeartbeatRetry budget
+// and, if still failing, simply left for the next heartbeat tick: a database
+// timeout is not proof of ownership loss and must never interrupt a live run.
+// Only a renewal that actually executes and reports zero affected rows is
+// treated as loss, because the fenced owner/epoch/token CAS matching nothing is
+// the one definitive sign that another process took over or the lease was
+// released. Each attempt is bounded by a context deadline so the managed
+// transaction's busy-begin retry can never outlive the budget.
 func (s *leaseHeartbeatScheduler) renew(leases []*runtimeLease) {
 	deadline := time.Now().Add(runtimeHeartbeatRetry)
 	current := leases
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			break
+			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), remaining)
 		results, err := renewLeaseBatchOnce(ctx, s.dirKey, current)
@@ -393,7 +410,7 @@ func (s *leaseHeartbeatScheduler) renew(leases []*runtimeLease) {
 		if err == nil {
 			for _, lease := range current {
 				if results[lease.sessionID] != 1 {
-					markRuntimeLeaseLost(lease)
+					markRuntimeLeaseLost(lease, "renewal fenced out by another owner")
 				}
 			}
 			return
@@ -408,9 +425,6 @@ func (s *leaseHeartbeatScheduler) renew(leases []*runtimeLease) {
 			return
 		}
 		current = refreshed
-	}
-	for _, lease := range current {
-		markRuntimeLeaseLost(lease)
 	}
 }
 
@@ -438,7 +452,7 @@ func renewLeaseBatchOnce(ctx context.Context, sessionDir string, leases []*runti
 	return results, nil
 }
 
-func markRuntimeLeaseLost(lease *runtimeLease) {
+func markRuntimeLeaseLost(lease *runtimeLease, reason string) {
 	if lease == nil {
 		return
 	}
@@ -454,6 +468,7 @@ func markRuntimeLeaseLost(lease *runtimeLease) {
 	epoch := lease.epoch
 	sessionID := lease.sessionID
 	lease.bindingMu.Unlock()
+	log.Printf("[session] runtime lease lost for %s (owner=%s epoch=%d): %s", sessionID, ownerID, epoch, reason)
 	forgetRuntimeLease(lease)
 	lease.lostOnce.Do(func() {
 		close(lease.lost)
@@ -626,14 +641,16 @@ func validateRuntimeLeaseTxContext(ctx context.Context, tx *dao.Tx, sessionDir, 
 	if err != nil {
 		return err
 	}
-	now, err := sqliteNowContext(tx, ctx)
-	if err != nil {
-		return err
-	}
 	activeRuntimeLeases.Lock()
 	lease := activeRuntimeLeases.leases[runtimeLockKey(sessionDir, sessionID)]
 	activeRuntimeLeases.Unlock()
-	if record.State != "active" || lease == nil || lease.ownerID != record.OwnerID || lease.tokenHash != record.TokenHash || lease.epoch != record.Epoch || record.ExpiresAt <= now {
+	// Ownership is proven by the fenced identity (state/owner/epoch/token), not by
+	// wall-clock freshness. A competing process can only take over through
+	// Acquire, which bumps the epoch, so an expired row that still carries our
+	// identity is still ours (mirroring Renew's contract). Failing on expiry would
+	// let a transient database stall that delays the heartbeat kill a live run
+	// even though no other process ever took the session.
+	if record.State != "active" || lease == nil || lease.ownerID != record.OwnerID || lease.tokenHash != record.TokenHash || lease.epoch != record.Epoch {
 		return ErrRuntimeLeaseLost
 	}
 	return nil

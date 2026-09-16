@@ -146,7 +146,7 @@ func (d *RuntimeLeaseDAO) Bind(ctx context.Context, executor bun.IDB, sessionID,
 
 func (d *RuntimeLeaseDAO) Binding(ctx context.Context, executor bun.IDB, sessionID, ownerID string, epoch int64, tokenHash string) (*RuntimeLeaseRecord, error) {
 	record := new(RuntimeLeaseRecord)
-	err := executor.NewSelect().Model(record).Where("session_id = ? AND owner_instance_id = ? AND epoch = ? AND lease_token_hash = ? AND state = ? AND expires_at > CAST(strftime('%s','now') AS INTEGER)", sessionID, ownerID, epoch, tokenHash, "active").Limit(1).Scan(ctx)
+	err := executor.NewSelect().Model(record).Where("session_id = ? AND owner_instance_id = ? AND epoch = ? AND lease_token_hash = ? AND state = ?", sessionID, ownerID, epoch, tokenHash, "active").Limit(1).Scan(ctx)
 	return record, err
 }
 
