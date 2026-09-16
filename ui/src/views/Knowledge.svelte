@@ -9,6 +9,8 @@
     queryKnowledgeBase,
     defaultKnowledgeBase,
     knowledgeBasePayload,
+    knowledgeBaseIndexing,
+    knowledgeBaseIsIndexing,
     validateKnowledgeBase
   } from '../lib/knowledge-base.js';
   import { postJSON } from '../lib/api.js';
@@ -25,14 +27,56 @@
   let queryResult = null;
   let busy = '';
   let dirBrowserOpen = false;
+  let pollTimer = null;
 
-  onMount(load);
+  const PHASE_KEYS = {
+    scanning: 'knowledge.phase.scanning',
+    indexing: 'knowledge.phase.indexing',
+    enriching: 'knowledge.phase.enriching',
+    committing: 'knowledge.phase.committing'
+  };
+
+  function phaseLabel(phase) {
+    const key = PHASE_KEYS[phase];
+    return key ? $t(key) : phase || $t('knowledge.phase.indexing');
+  }
 
   function status(view) {
+    const indexing = knowledgeBaseIndexing(view);
+    if (indexing) {
+      const phase = phaseLabel(indexing.phase);
+      return indexing.filesTotal > 0
+        ? $t('knowledge.indexing', { phase, done: indexing.filesDone, total: indexing.filesTotal })
+        : $t('knowledge.indexingIndeterminate', { phase });
+    }
+    if (view?.knowledgeBase?.enabled === false) return $t('knowledge.disabled');
     return view?.status === 'completed' || view?.snapshot?.status === 'completed'
       ? $t('knowledge.indexed')
       : $t('knowledge.notIndexed');
   }
+
+  // Poll while any base is scanning so a running (or just-triggered) scan keeps
+  // its progress visible across page reloads instead of being lost.
+  $: if (typeof window !== 'undefined') {
+    if (knowledgeBaseIsIndexing(bases)) startPolling();
+    else stopPolling();
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(() => { load(true); }, 3000);
+  }
+
+  function stopPolling() {
+    if (!pollTimer) return;
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  onMount(() => {
+    load();
+    return stopPolling;
+  });
 
   function openEditor(view) {
     editing = view ? { ...view.knowledgeBase } : defaultKnowledgeBase();
@@ -40,12 +84,12 @@
     queryResult = null;
   }
 
-  async function load() {
-    loading = true;
+  async function load(silent = false) {
+    if (!silent) loading = true;
     try {
       bases = await listKnowledgeBases();
     } catch (err) {
-      setError(err);
+      if (!silent) setError(err);
     } finally {
       loading = false;
     }
@@ -113,7 +157,7 @@
     try {
       await scanKnowledgeBase(id);
       setNotice($t('knowledge.scanStarted', { name: view.knowledgeBase.name }));
-      await load();
+      await load(true);
     } catch (err) {
       setError(err);
     } finally {
@@ -188,10 +232,10 @@
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={busy === `scan:${view.knowledgeBase.id}` || view.knowledgeBase.enabled === false}
+                    disabled={busy === `scan:${view.knowledgeBase.id}` || view.knowledgeBase.enabled === false || knowledgeBaseIndexing(view) !== null}
                     onclick={() => scan(view)}
                   >
-                    {busy === `scan:${view.knowledgeBase.id}` ? $t('knowledge.scanning') : $t('knowledge.scan')}
+                    {knowledgeBaseIndexing(view) ? $t('knowledge.scanning') : $t('knowledge.scan')}
                   </Button>
                   <Button
                     size="sm"

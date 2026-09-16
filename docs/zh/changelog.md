@@ -27,6 +27,10 @@
 
 ### 🐛 问题修复
 
+- **Web UI：知识库扫描状态在刷新后不再丢失**
+  - 在 Web UI 知识库页面点击重新扫描时，HTTP 请求会一直阻塞到整个索引完成，且没有记录任何进行中的作业信息，于是该知识库只会显示为「未索引」，刷新页面后扫描状态就完全消失了。
+  - 现在 serve 处理器通过进程级缓存的 Runtime service 把扫描作为后台索引作业提交并立即返回运行中的作业投影，list/get 接口使用与 ACP 相同的投影暴露实时的 `indexing` 进度（阶段、已完成/总文件数）。知识库页面会渲染当前阶段，并在扫描进行时轮询，因此刷新页面会继续显示状态，而不是把它丢掉。
+
 - **被内容审核拒绝的图片不再让整个会话失效**
   - 供应商的内容策略拒绝——例如 DashScope/千问的 `InternalError.Algo.DataInspectionFailed: Input image data may contain inappropriate content`——以 HTTP 400 返回，但此前所有 4xx 都被当作可重试。同一张被拒的图片会在 provider 的退避重试与 Agent 的流失败重试中被反复发送（数分钟的 "Retrying…"），而拒绝是永久性的，最终 run 仍然失败；更糟的是，出问题的图片留在持久化历史里，之后的每一轮都会重发它，于是什么都无法继续，只有新建会话才能恢复——连 `/clear` 都不行，因为它会重新加载同一份历史。
   - `provider.IsContentRejectionError` 现在单独识别这一窄类文案（data inspection、content policy/moderation/filter、"inappropriate content"），并让 `IsRetryable` 对它返回 false，失败因此立即浮现而不再消耗重试预算。Agent Core 随后就地自愈：先剥离本轮新增的图片，若仍被拒再剥离整个对话中的图片，把每张替换为模型可见的说明（告知该图片被供应商内容过滤拦截、像素已不可用），并追加一条可重放的 `content_override` 会话记录，使重放（同进程或重新加载后）都不会再次发送该图片。run 会在不含该图片的情况下重试，会话得以继续；若该回合已经流出可见输出，则只做自愈不再重跑，避免输出重复。

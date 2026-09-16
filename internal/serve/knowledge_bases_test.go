@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/startvibecoding/mothx/internal/agentruntime"
 	"github.com/startvibecoding/mothx/internal/cron"
@@ -46,13 +47,40 @@ func TestKnowledgeBaseHandlersManageRuntimeOwnedIndexes(t *testing.T) {
 		t.Fatalf("invalid indexer update = %d: %s", invalidIndexer.Code, invalidIndexer.Body.String())
 	}
 
+	// Scans are admitted in the background: the POST returns immediately with a
+	// running-job projection so a page reload can observe the scan in progress.
 	scanned := knowledgeBaseRequest(t, runtime, http.MethodPost, "/api/knowledge-bases/"+view.KnowledgeBase.ID+"/scan", "{}")
 	if scanned.Code != http.StatusOK {
 		t.Fatalf("scan = %d: %s", scanned.Code, scanned.Body.String())
 	}
-	if err := json.Unmarshal(scanned.Body.Bytes(), &view); err != nil {
+	var scanView knowledgeBaseView
+	if err := json.Unmarshal(scanned.Body.Bytes(), &scanView); err != nil {
 		t.Fatal(err)
 	}
+	if scanView.KnowledgeBase.ID != view.KnowledgeBase.ID {
+		t.Fatalf("scan view = %#v", scanView)
+	}
+	// Poll the management projection until the background scan commits its
+	// snapshot; this mirrors how the WebUI tracks progress after a reload.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		scanView = knowledgeBaseView{}
+		listed := knowledgeBaseRequest(t, runtime, http.MethodGet, "/api/knowledge-bases/"+view.KnowledgeBase.ID, "")
+		if listed.Code != http.StatusOK {
+			t.Fatalf("poll = %d: %s", listed.Code, listed.Body.String())
+		}
+		if err := json.Unmarshal(listed.Body.Bytes(), &scanView); err != nil {
+			t.Fatal(err)
+		}
+		if scanView.Snapshot != nil && scanView.Status == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("scan did not complete: %#v", scanView)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	view = scanView
 	if view.Snapshot == nil || view.Status != "completed" || view.Snapshot.ChunkCount == 0 {
 		t.Fatalf("scan view = %#v", view)
 	}

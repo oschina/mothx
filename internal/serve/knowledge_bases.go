@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/startvibecoding/mothx/internal/agentruntime"
 	"github.com/startvibecoding/mothx/internal/config"
@@ -67,14 +68,51 @@ type knowledgeBaseView struct {
 	KnowledgeBase session.KnowledgeBase      `json:"knowledgeBase"`
 	Snapshot      *session.KnowledgeSnapshot `json:"snapshot"`
 	Status        string                     `json:"status"`
+	Indexing      *knowledgeIndexView        `json:"indexing,omitempty"`
 }
 
+// knowledgeIndexView projects the live background scan progress. WebUI polls
+// list/status while running instead of blocking on the scan request, so a page
+// reload can still observe a scan that is in flight.
+type knowledgeIndexView struct {
+	Running    bool      `json:"running"`
+	Phase      string    `json:"phase,omitempty"`
+	FilesTotal int64     `json:"filesTotal"`
+	FilesDone  int64     `json:"filesDone"`
+	Chunks     int64     `json:"chunks"`
+	StartedAt  time.Time `json:"startedAt,omitempty"`
+	RunID      string    `json:"runId,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
+func knowledgeIndexViewFrom(progress agentruntime.KnowledgeIndexProgress) knowledgeIndexView {
+	return knowledgeIndexView{
+		Running: progress.Running, Phase: progress.Phase,
+		FilesTotal: progress.FilesTotal, FilesDone: progress.FilesDone, Chunks: progress.Chunks,
+		StartedAt: progress.StartedAt, RunID: progress.RunID, Error: progress.Error,
+	}
+}
+
+// knowledgeBaseService returns the process-wide cached Runtime service. Caching
+// is required because the service owns the background index-job registry: a
+// fresh instance per request would hide a running scan from progress polling on
+// reload and let repeated scan requests start parallel jobs.
 func (rt *channelRuntime) knowledgeBaseService() (*agentruntime.KnowledgeBaseService, error) {
+	rt.knowledgeMu.Lock()
+	defer rt.knowledgeMu.Unlock()
+	if rt.knowledgeService != nil {
+		return rt.knowledgeService, nil
+	}
 	settings, err := config.LoadSettings()
 	if err != nil {
 		return nil, err
 	}
-	return agentruntime.NewKnowledgeBaseServiceWithSettings(rt.sessionDir, agentruntime.DefaultKnowledgeBaseIndexPolicy(), settings)
+	service, err := agentruntime.NewKnowledgeBaseServiceWithSettings(rt.sessionDir, agentruntime.DefaultKnowledgeBaseIndexPolicy(), settings)
+	if err != nil {
+		return nil, err
+	}
+	rt.knowledgeService = service
+	return service, nil
 }
 
 // runKnowledgeBaseCronJob routes namespaced knowledge-base reindex jobs
@@ -98,16 +136,33 @@ func (rt *channelRuntime) runKnowledgeBaseCronJob(ctx context.Context, job cron.
 
 func (rt *channelRuntime) knowledgeBaseView(ctx context.Context, base session.KnowledgeBase) (knowledgeBaseView, error) {
 	view := knowledgeBaseView{KnowledgeBase: base, Status: "unindexed"}
-	if strings.TrimSpace(base.ActiveSnapshotID) == "" {
-		return view, nil
+	if strings.TrimSpace(base.ActiveSnapshotID) != "" {
+		snapshot, err := session.GetKnowledgeSnapshot(ctx, rt.sessionDir, base.ActiveSnapshotID)
+		if err != nil {
+			return knowledgeBaseView{}, err
+		}
+		view.Snapshot = &snapshot
+		view.Status = snapshot.Status
 	}
-	snapshot, err := session.GetKnowledgeSnapshot(ctx, rt.sessionDir, base.ActiveSnapshotID)
-	if err != nil {
-		return knowledgeBaseView{}, err
-	}
-	view.Snapshot = &snapshot
-	view.Status = snapshot.Status
+	// Project live progress even without an active snapshot: the first scan of a
+	// new base is exactly when the WebUI needs the running-job view to poll.
+	rt.attachKnowledgeIndexProgress(&view, base.ID)
 	return view, nil
+}
+
+// attachKnowledgeIndexProgress adds the live scan progress (when a background
+// index job is running) so the WebUI can render and poll an in-flight scan.
+func (rt *channelRuntime) attachKnowledgeIndexProgress(view *knowledgeBaseView, baseID string) {
+	service, err := rt.knowledgeBaseService()
+	if err != nil {
+		return
+	}
+	progress, running := service.IndexProgress(baseID)
+	if !running {
+		return
+	}
+	indexing := knowledgeIndexViewFrom(progress)
+	view.Indexing = &indexing
 }
 
 func (rt *channelRuntime) handleKnowledgeBases(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +270,12 @@ func (rt *channelRuntime) createKnowledgeBase(w http.ResponseWriter, r *http.Req
 		writeKnowledgeBaseError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, knowledgeBaseView{KnowledgeBase: base, Status: "unindexed"})
+	view, err := rt.knowledgeBaseView(r.Context(), base)
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, view)
 }
 
 func (rt *channelRuntime) updateKnowledgeBase(w http.ResponseWriter, r *http.Request, id string) {
@@ -236,7 +296,12 @@ func (rt *channelRuntime) updateKnowledgeBase(w http.ResponseWriter, r *http.Req
 		writeKnowledgeBaseError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, knowledgeBaseView{KnowledgeBase: base, Status: "unindexed"})
+	view, err := rt.knowledgeBaseView(r.Context(), base)
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func (rt *channelRuntime) deleteKnowledgeBase(w http.ResponseWriter, r *http.Request, id string) {
@@ -253,7 +318,12 @@ func (rt *channelRuntime) scanKnowledgeBase(w http.ResponseWriter, r *http.Reque
 		writeKnowledgeBaseError(w, err)
 		return
 	}
-	snapshot, err := service.IndexDurable(r.Context(), id, agentruntime.SourceWebUI)
+	// Scans always run in the background so the HTTP handler never blocks on a
+	// long index and a page reload can still observe the running job. The WebUI
+	// polls list/status while indexing.running is true and refreshes to the
+	// terminal snapshot state afterwards. Concurrent scans of the same base share
+	// one job.
+	job, err := service.StartIndex(r.Context(), id, agentruntime.SourceWebUI)
 	if err != nil {
 		writeKnowledgeBaseError(w, err)
 		return
@@ -263,7 +333,18 @@ func (rt *channelRuntime) scanKnowledgeBase(w http.ResponseWriter, r *http.Reque
 		writeKnowledgeBaseError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, knowledgeBaseView{KnowledgeBase: base, Snapshot: &snapshot, Status: snapshot.Status})
+	view, err := rt.knowledgeBaseView(r.Context(), base)
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	// Prefer the admitted job's progress over a possible race where the job
+	// finished (or was replaced) between admission and this read.
+	if view.Indexing == nil && job.Progress().Running {
+		indexing := knowledgeIndexViewFrom(job.Progress())
+		view.Indexing = &indexing
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func (rt *channelRuntime) queryKnowledgeBase(w http.ResponseWriter, r *http.Request, id string) {

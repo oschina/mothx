@@ -60,21 +60,26 @@ type RunOptions struct {
 	Shutdown <-chan struct{}
 }
 type channelRuntime struct {
-	mu                    sync.RWMutex
-	cronMu                sync.Mutex
-	platformMu            sync.Mutex
-	cfg                   *Config
-	configState           *ServeConfigState
-	version               string
-	dispatcher            *channels.Dispatcher
-	platforms             *PlatformSupervisor
-	wechatLogin           *wechatLoginSession
-	logHub                *logHub
-	cronStore             cron.CronStore
-	cronStorePath         string
-	cronScheduler         *cron.Scheduler
-	sessionDir            string
-	identityMux           *session.IdentityLocks
+	mu            sync.RWMutex
+	cronMu        sync.Mutex
+	platformMu    sync.Mutex
+	cfg           *Config
+	configState   *ServeConfigState
+	version       string
+	dispatcher    *channels.Dispatcher
+	platforms     *PlatformSupervisor
+	wechatLogin   *wechatLoginSession
+	logHub        *logHub
+	cronStore     cron.CronStore
+	cronStorePath string
+	cronScheduler *cron.Scheduler
+	sessionDir    string
+	identityMux   *session.IdentityLocks
+	// knowledgeMu guards the cached Runtime knowledge-base service. The service
+	// owns the background index-job registry, so a fresh instance per request
+	// would hide a running scan from progress polling and start duplicate jobs.
+	knowledgeMu           sync.Mutex
+	knowledgeService      *agentruntime.KnowledgeBaseService
 	nativeDirectoryPicker func(context.Context, string) (string, error)
 	deliveryCancel        context.CancelFunc
 	deliveryDone          chan struct{}
