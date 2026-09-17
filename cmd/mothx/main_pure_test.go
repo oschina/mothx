@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,5 +65,27 @@ func TestPureSessionDirPrefersExplicitFlag(t *testing.T) {
 	}
 	if strings.HasPrefix(dir, "~") {
 		t.Fatalf("explicit session dir %q was not home-expanded", dir)
+	}
+}
+
+func TestPureCommandReportsHowToRecoverFromAMoveFailure(t *testing.T) {
+	// A regular file where the session directory should be makes the reset
+	// fail, exercising the guidance appended to the error (the Windows case is
+	// an open handle blocking the move instead).
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newPureCommand()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--session-dir", filepath.Join(blocker, "sessions")})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected the reset to fail")
+	}
+	if !strings.Contains(err.Error(), "stop every other mothx process") {
+		t.Fatalf("error = %v, want the recovery hint", err)
 	}
 }

@@ -30,7 +30,9 @@ func newPureCommand() *cobra.Command {
 			}
 			backup, err := session.ResetDatabase(dir)
 			if err != nil {
-				return err
+				// On Windows an open handle blocks the move, so point the user at
+				// the usual cause instead of a bare "Access is denied".
+				return fmt.Errorf("reset sessions database in %s (stop every other mothx process using this directory and retry): %w", dir, err)
 			}
 			out := cmd.OutOrStdout()
 			if backup != "" {
