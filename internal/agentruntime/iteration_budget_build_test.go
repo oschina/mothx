@@ -36,3 +36,24 @@ func TestExtendBudgetToolIsLeadOnly(t *testing.T) {
 		t.Fatalf("a transient build must not register %s", agent.IterationBudgetToolName)
 	}
 }
+
+// TestResolveIterationBudget pins the shared budget resolver: the zero policy
+// resolves to the source-aware defaults for the supplied soft limit, and an
+// explicit policy overrides them field by field.
+func TestResolveIterationBudget(t *testing.T) {
+	def := ResolveIterationBudget(agent.IterationBudgetPolicy{}, 90)
+	if def.Soft != 90 || def.Hard != 180 {
+		t.Fatalf("default soft/hard = %d/%d, want 90/180", def.Soft, def.Hard)
+	}
+	if !def.Enabled() {
+		t.Fatal("the resolved budget must be enabled")
+	}
+
+	override := ResolveIterationBudget(agent.IterationBudgetPolicy{Hard: 100, MaxRenewals: 1}, 90)
+	if override.Hard != 100 || override.MaxRenewals != 1 {
+		t.Fatalf("override = %#v, want the explicit hard/renewals", override)
+	}
+	if override.Soft != 90 {
+		t.Fatalf("override soft = %d, want the supplied soft limit 90", override.Soft)
+	}
+}

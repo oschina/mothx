@@ -326,11 +326,13 @@ func responsesHostedDeadline(active provider.Provider) time.Time {
 // defaultBackgroundRunMaxDuration caps how long the coordinator polls a remote
 // Responses run before declaring it incomplete. Without a cap a remote run
 // that never reaches a terminal state would hold the session runtime lock
-// forever, blocking channel /new and any other run for the session.
-const defaultBackgroundRunMaxDuration = 6 * time.Hour
+// forever, blocking channel /new and any other run for the session. It matches
+// the agent loop's wall-clock budget so a run the policy still allows is not cut
+// short by a shorter polling cap.
+const defaultBackgroundRunMaxDuration = agent.DefaultIterationBudgetWallClock
 
 // backgroundRunMaxDuration returns the configured hard cap for durable
-// background polling (api.backgroundRunMaxSeconds, default 6h).
+// background polling (api.backgroundRunMaxSeconds, default 16h).
 func (s *Server) backgroundRunMaxDuration() time.Duration {
 	if s == nil {
 		return defaultBackgroundRunMaxDuration

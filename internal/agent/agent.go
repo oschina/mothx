@@ -1969,7 +1969,14 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 							"Complete the current task and summarize progress.",
 						remainingTurns, limit, remaining*100)
 					if budget != nil {
-						warnMsg += " If the task is genuinely unfinished, call " + IterationBudgetToolName + " with a concrete reason."
+						// Only point the model at the renewal tool while a renewal is
+						// actually possible; once the ceiling or the renewal budget is
+						// spent, asking the model to call it would only waste a turn.
+						if budget.CanRenew() {
+							warnMsg += " If the task is genuinely unfinished, call " + IterationBudgetToolName + " with a concrete reason."
+						} else {
+							warnMsg += " The iteration budget can no longer be extended; finish the task and summarize progress."
+						}
 					}
 					a.sendEvent(ch, Event{
 						Type:            EventBudgetPressure,

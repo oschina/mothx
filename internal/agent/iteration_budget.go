@@ -16,10 +16,14 @@ import (
 const IterationBudgetToolName = "extend_budget"
 
 const (
-	defaultIterationBudgetSoft      = 200
-	defaultRenewFactor              = 0.5
-	defaultMaxRenewals              = 2
-	defaultIterationBudgetWallClock = 16 * time.Hour
+	defaultIterationBudgetSoft = 200
+	defaultRenewFactor         = 0.5
+	defaultMaxRenewals         = 2
+	// DefaultIterationBudgetWallClock is the default total wall-clock cap for one
+	// run. It is exported so the serve run watchdog and durable background-polling
+	// caps agree with the agent loop instead of drifting to a shorter limit that
+	// would cut short a run the policy still allows.
+	DefaultIterationBudgetWallClock = 16 * time.Hour
 )
 
 // IterationBudgetPolicy bounds the main loop's iteration count and governs
@@ -71,7 +75,7 @@ func (p IterationBudgetPolicy) Normalize(soft int) IterationBudgetPolicy {
 		}
 	}
 	if out.MaxWallClock <= 0 {
-		out.MaxWallClock = defaultIterationBudgetWallClock
+		out.MaxWallClock = DefaultIterationBudgetWallClock
 	}
 	return out
 }
@@ -148,6 +152,19 @@ func (b *iterationBudget) Renewals() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.renewals
+}
+
+// CanRenew reports whether another renewal could currently be granted: there is
+// both renewal budget left and headroom below the hard ceiling. It gates the
+// model-facing hint so a run that can no longer extend never tells the model to
+// call the renewal tool.
+func (b *iterationBudget) CanRenew() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.renewals < b.maxRenewals && b.limit < b.hard
 }
 
 // setTurn records the current iteration index so the tool can enforce the

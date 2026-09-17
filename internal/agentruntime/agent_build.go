@@ -41,9 +41,9 @@ type AgentBuildOptions struct {
 	MaxIterations          int
 	ContextPressure        float64
 	BudgetPressure         float64
-	// IterationBudget governs model-requested iteration renewals for the
-	// session's conversational lead. The zero value is normalized to the Runtime
-	// defaults (soft = MaxIterations or 200, hard = 2x soft, 16h wall clock).
+	// IterationBudget overrides the Runtime-resolved iteration-budget policy for
+	// this build. The zero value uses the policy resolved by the SessionRuntime
+	// (source-aware defaults); only a conversational lead receives renewal.
 	IterationBudget      agent.IterationBudgetPolicy
 	BeforeToolCall       func(agent.BeforeToolCallContext) *agent.ToolCallBlockResult
 	BeforeToolExecute    func(agent.BeforeToolExecuteContext) *agent.ToolCallBlockResult
@@ -90,6 +90,7 @@ func (r *SessionRuntime) BuildAgent(opts AgentBuildOptions) (*agent.Agent, error
 	r.mu.RLock()
 	registry := r.Registry
 	manager := r.Manager
+	policyBudget := r.Policy.IterationBudget
 	if opts.Provider == nil {
 		opts.Provider = r.Provider
 	}
@@ -106,6 +107,11 @@ func (r *SessionRuntime) BuildAgent(opts AgentBuildOptions) (*agent.Agent, error
 		opts.ThinkingLevel = r.ThinkingLevel
 	}
 	r.mu.RUnlock()
+	// The source/mode policy is the single owner of the budget defaults; a build
+	// may still override it explicitly.
+	if opts.IterationBudget == (agent.IterationBudgetPolicy{}) {
+		opts.IterationBudget = policyBudget
+	}
 	return r.buildAgent(registry, manager, opts, true)
 }
 
@@ -229,11 +235,12 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 	// so sub-agents built from their own factory registries cannot reach it.
 	budgetPolicy := agent.IterationBudgetPolicy{}
 	if enableIterationBudget && !opts.AuxiliaryRole && opts.ParentID == "" {
-		budgetPolicy = opts.IterationBudget.Normalize(opts.MaxIterations)
+		// ResolveIterationBudget always yields an enabled policy (hard > soft), so a
+		// lead build always receives the renewal tool; the guard keeps the invariant
+		// explicit.
+		budgetPolicy = ResolveIterationBudget(opts.IterationBudget, opts.MaxIterations)
 		if budgetPolicy.Enabled() {
 			registry.Register(agent.NewExtendBudgetTool())
-		} else {
-			budgetPolicy = agent.IterationBudgetPolicy{}
 		}
 	}
 	return agent.NewWithLoopConfig(agent.AgentLoopConfig{

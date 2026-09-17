@@ -625,7 +625,12 @@ func shouldInvalidateSession(previous, next *Config, key string) bool {
 // to the channel session observer. It is the delivery path of last resort for
 // children whose parent event stream already closed: the stream-forwarded copy
 // is dropped in that case, and the sink deduplicates when both paths deliver.
-func (d *Dispatcher) forwardChildTerminalStatus(st agent.ManagedAgentStatus) {
+//
+// mgr is the manager that owns the child (the session-scoped manager for channel
+// runs). It is captured by the listener registration because the dispatcher-wide
+// manager does not track session children, and using the wrong manager would both
+// mis-resolve the root and drop the mapping while children are still live.
+func (d *Dispatcher) forwardChildTerminalStatus(mgr *agent.AgentManager, st agent.ManagedAgentStatus) {
 	if d == nil {
 		return
 	}
@@ -638,7 +643,9 @@ func (d *Dispatcher) forwardChildTerminalStatus(st agent.ManagedAgentStatus) {
 		// activity.
 		return
 	}
-	mgr := d.AgentManager()
+	if mgr == nil {
+		mgr = d.AgentManager()
+	}
 	if mgr != nil {
 		for depth := 0; depth < 8; depth++ {
 			parent, ok := mgr.Parent(root)
@@ -678,20 +685,34 @@ func (d *Dispatcher) forwardChildTerminalStatus(st agent.ManagedAgentStatus) {
 	}
 	d.notifySubAgentObserver(sessionID, channelSafeSubAgentEvent(ev))
 	d.notifyRunObserver(sessionID)
+	// Now that this child is terminal, the root's mapping can be released once the
+	// root has finished and no other child is still live. Doing it here (instead of
+	// only at run cleanup) is what lets a child that outlives its parent stream be
+	// delivered and still have its mapping cleaned up.
+	d.releaseAgentSession(mgr, root)
 }
 
 func isTerminalChildState(state string) bool {
 	return state == "done" || state == "incomplete" || state == "error" || state == "canceled"
 }
 
-// releaseAgentSession drops the root-agent → session mapping once the run has
-// no non-terminal children left. Mappings must survive the run while children
-// are still active so their late terminal events can be routed.
-func (d *Dispatcher) releaseAgentSession(id agentpkg.AgentID) {
+// releaseAgentSession drops the root-agent → session mapping once the root has
+// finished and no non-terminal child is left in mgr. Mappings must survive the
+// run while children are still active so their late terminal events can be
+// routed, so a still-running root or a live child keeps the mapping.
+func (d *Dispatcher) releaseAgentSession(mgr *agent.AgentManager, id agentpkg.AgentID) {
 	if d == nil {
 		return
 	}
-	if mgr := d.AgentManager(); mgr != nil {
+	if mgr == nil {
+		mgr = d.AgentManager()
+	}
+	if mgr != nil {
+		// The root is removed from the manager when its run finishes, so a present
+		// status means the run is still live and may still spawn more children.
+		if _, running := mgr.Status(id); running {
+			return
+		}
 		for _, st := range mgr.Statuses() {
 			if st.ParentID == id && !isTerminalChildState(st.State) {
 				return
@@ -754,7 +775,9 @@ func (d *Dispatcher) ensureAgentManager() *agent.AgentManager {
 	// The manager is the authoritative source of terminal child-agent states:
 	// an asynchronously spawned child can outlive the parent event stream, and
 	// events forwarded through that stream are dropped once it closes.
-	d.agentMgr.AddStatusListener(d.forwardChildTerminalStatus)
+	d.agentMgr.AddStatusListener(func(st agent.ManagedAgentStatus) {
+		d.forwardChildTerminalStatus(d.agentMgr, st)
+	})
 	return d.agentMgr
 }
 
@@ -793,7 +816,9 @@ func (d *Dispatcher) newSessionAgentManager(runtime *agentruntime.SessionRuntime
 		log.Printf("[channels] create session agent manager: %v", err)
 		return nil
 	}
-	manager.AddStatusListener(d.forwardChildTerminalStatus)
+	manager.AddStatusListener(func(st agent.ManagedAgentStatus) {
+		d.forwardChildTerminalStatus(manager, st)
+	})
 	return manager
 }
 
@@ -2312,7 +2337,7 @@ func (d *Dispatcher) buildAgent(ctx context.Context, sess *ChannelSession, appro
 			// Finish first: terminal child transitions fired from it must still
 			// resolve this root agent to its session.
 			agentMgr.Finish(a.ID(), runErr)
-			d.releaseAgentSession(a.ID())
+			d.releaseAgentSession(agentMgr, a.ID())
 		}
 	}
 

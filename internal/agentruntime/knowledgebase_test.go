@@ -503,3 +503,46 @@ func TestKnowledgeBaseQueryMatchesChineseEvidence(t *testing.T) {
 		t.Fatalf("absent phrase matched %d chunks", len(absent.Chunks))
 	}
 }
+
+// TestKnowledgeBaseServiceSetSettings pins that a cached service follows a
+// settings change in place: the next scan resolves the indexer provider through
+// the refreshed snapshot, and the same instance (which owns the background
+// index-job registry) keeps serving.
+func TestKnowledgeBaseServiceSetSettings(t *testing.T) {
+	sessionDir := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "notes.md"), []byte("# Notes\n\nAlpha is documented here.\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	model := &provider.Model{ID: "indexer-model", Name: "Indexer model"}
+	indexer := &knowledgeIndexerTestProvider{model: model}
+	var seen []string
+	service, err := NewKnowledgeBaseServiceWithProviderFactory(sessionDir, DefaultKnowledgeBaseIndexPolicy(),
+		&config.Settings{SessionDir: sessionDir, DefaultModel: "first"},
+		func(settings *config.Settings, _, _ string) (provider.Provider, *provider.Model, error) {
+			seen = append(seen, settings.DefaultModel)
+			return indexer, model, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), sessionDir, session.KnowledgeBaseSpec{
+		Name: "Notes", RootDir: source, PreprocessProfile: "documents",
+		Provider: "indexer", Model: model.ID, Mode: ModeYolo, Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.resolveKnowledgeIndexer(base); err != nil {
+		t.Fatal(err)
+	}
+
+	service.SetSettings(&config.Settings{SessionDir: sessionDir, DefaultModel: "second"})
+	if _, err := service.resolveKnowledgeIndexer(base); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(seen) != 2 || seen[0] != "first" || seen[1] != "second" {
+		t.Fatalf("factory settings = %#v, want the refreshed snapshot on the second resolution", seen)
+	}
+}

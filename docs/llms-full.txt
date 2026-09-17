@@ -1498,11 +1498,32 @@ Source: https://mothx.net/en/changelog.md
 - **New Gitee/Moark Model: `deepseek-v4.1-flash`**
   - Added `deepseek-v4.1-flash` to the `gitee` and `moark` providers with a 1M context window and text+image input; no default max_tokens is sent.
 
+- **New Agnes AI Providers (International + China)**
+  - Added `agnes` (`https://apihub.agnes-ai.com/v1`, `${AGNES_API_KEY}`) and `agnes-cn` (`https://api.agnes-ai.cn/v1`, `${AGNES_CN_API_KEY}`) through a new OpenAI-compatible `agnes` vendor adapter. Both expose `agnes-2.5-flash` (200K context), `agnes-2.5-pro` (256K context), and `agnes-3.0-flash` (512K context, 65535 max output tokens).
+  - Every model is declared reasoning-capable and multimodal (`text,image`). `agnes-2.5-flash` and `agnes-2.5-pro` send no default `max_tokens` of their own, so the provider default applies; `agnes-3.0-flash` caps output at 65535 tokens.
+
+- **Cross-Process Notice When a Database Is Rebuilt**
+  - A process that backs up and rebuilds a database after a schema migration failure now announces it over the existing advisory UDP bus (`database_rebuilt`). Every other mothx process sharing that session directory retires its cached connection — otherwise it would keep reading and writing the replaced file through its open handle — logs the recovery, and shows the notice to the user in the TUI. The notice carries only the replaced file path; the reason and the backup stay with the recovering process.
+  - The bus stays host-only: a directed broadcast on the loopback /8 network that only accepts loopback sources, so it reaches this host's other mothx processes and never leaves the machine.
+
+- **Model-Visible, Renewably Bounded Iteration Budget**
+  - The agent loop's `MaxIterations` was a hidden hard counter: the budget-pressure event was rendered by adapters but never reached the model, and nothing inside a run could raise the limit, so a long task that was genuinely progressing still ended as `incomplete` at exactly 200 turns, with no chance for the model to converge or explain.
+  - The budget is now injected into the run context as a transient, tail-appended system message when the remaining turns cross the pressure threshold, so the model sees the countdown. The notice is never persisted to the transcript and cache markers skip it, so it costs no prompt-cache prefix. A Runtime-clamped `extend_budget` tool then lets the model request more turns with a concrete reason, and the Runtime decides the grant.
+  - `IterationBudgetPolicy` (soft/hard limit, renew factor, max renewals, minimum interval, 16-hour wall clock) is normalized in the shared Runtime and wired only for a session's conversational lead: transient builds, auxiliary roles, sub-agents, and expert-team members keep their capability ceiling and never receive the tool. Every exit path still emits exactly one terminal event, and the channel run-watchdog and durable background-polling defaults are raised to 57600s to match the wall-clock budget.
+
 ### 🐛 Bug Fixes
 
 - **Session Runtime Leases Now Survive Transient Database Stalls**
   - Long runs could be interrupted by `session runtime lease was lost` even when no other process held the session. The per-directory heartbeat scheduler stopped whenever a tick observed an empty directory, even if a lease admitted moments earlier was still live: it left a registered-but-stopped entry in the scheduler registry that no later acquire could replace, so the lease was never renewed again and a later execution-path write found it expired. This was introduced when the per-lease heartbeats were coalesced into one scheduler per session directory.
   - The scheduler now exits only after it has actually unregistered itself for an idle directory, and a renewal that merely times out (a busy or unreachable session database) is retried on the next heartbeat tick instead of being reported as ownership loss. Ownership is decided by the fenced `owner`/`epoch`/`token` CAS, not by wall-clock expiry: taking over bumps the epoch, so a row that expired while still carrying our identity remains ours. Only a genuine fenced takeover or a released lease marks it lost. The heartbeat retry budget is derived from the shared `busy_timeout` (`db.BusyTimeout`) so a single tick can absorb a full contended begin, and lease loss is now logged with its reason.
+
+- **Channel Sub-Agent Terminal Events Reach Observers After the Parent Run Ends**
+  - A child agent spawned by a channel session can outlive its parent's event stream (for example when it is cancelled as the run ends). The dispatcher dropped the root-agent → session mapping as soon as the parent run finished, because it checked the dispatcher-wide manager instead of the session-scoped manager that actually owns the children. The late terminal event could then no longer be routed, so observers stayed on "running" forever and a completed or failed member was never reported. The mapping now survives while the root is still running or any child is still live, and is released once the root has finished and its last child reaches a terminal state.
+
+- **Web UI: Knowledge Base Scans Keep Their Status Across Reloads**
+  - Starting a scan from the Web UI knowledge page blocked the HTTP request until the entire index finished and recorded nothing about the in-flight job, so the base read as merely "not indexed" and reloading the page lost the scanning state entirely.
+  - The serve handler now admits the scan as a background Runtime index job through the process-wide cached service and returns a running-job projection immediately, and list/get expose the live `indexing` progress (phase, files done/total) using the same projection ACP already publishes. The knowledge view renders the current phase and polls while a scan is running, so a reload resumes the status instead of dropping it.
+  - The cached serve service now refreshes its settings snapshot when settings.json changes, so a later scan uses the updated Indexer provider/model without losing the in-flight background job registry.
 
 - **Content-Inspected Images No Longer Kill the Session**
   - A provider content-policy refusal — for example DashScope/Qwen's `InternalError.Algo.DataInspectionFailed: Input image data may contain inappropriate content` — arrives as an HTTP 400, but every 4xx was treated as retryable. The same rejected image was re-sent through the provider's backoff retries plus the agent's stream-failure retries (minutes of "Retrying…"), and because a refusal is permanent the run finally failed; worse, the offending image stayed in the persisted history and was replayed on every later turn, so nothing could continue. Only starting a brand-new session recovered — not even `/clear`, which reloads the same history.
@@ -1531,6 +1552,14 @@ Source: https://mothx.net/en/changelog.md
 - **Mid-Stream Network Failures Retry Automatically Instead of Ending the Reply**
   - A provider stream that died with a transient transport error (`connection reset by peer`, unexpected EOF, gateway 5xx, ...) after text or thinking had already been streamed failed the whole run with `stream read error: ...`: provider-level retries only cover streams that break before any visible output, and the agent-level retry only covered idle-stream timeouts.
   - The agent loop now performs a bounded continuation retry (up to 2 attempts) for such transient errors. Already-streamed partial output is persisted into history and a continuation instruction quoting the exact suffix is injected, so the model resumes from the interruption point instead of duplicating what the user already saw; with no visible output yet, the turn simply re-runs. Turns with an already-emitted tool call, context overflow (dedicated compaction recovery), and idle-stream timeouts (dedicated timeout retry) keep their existing behavior, and Responses remote-state turns keep their existing failover path.
+
+- **Desktop: The Skill Marketplace Now Defaults to SkillHub.cn Instead of ClawHub**
+  - The Desktop skills view selected the first entry of the ACP market list, which is sorted alphabetically, so `clawhub.ai` beat `skillhub.cn` and the catalog defaulted to ClawHub even when the canonical `skillHub.defaultMarket` setting (product default SkillHub.cn) said otherwise. The default market is canonical configuration state, not something an adapter should guess from list ordering.
+  - `mothx/manage/skillhub/markets` now additionally projects the settings-resolved `defaultMarket` (falling back to the product default `skillhub.cn` when blank), and the Desktop catalog bootstrap resolves user preference → ACP-projected default market → first market. The categories/search/detail/install fallbacks use the same resolver, so an explicitly blank configured value no longer fails with `unsupported skill market`.
+
+- **Database Migration Failure Backs Up and Rebuilds Instead of Blocking Startup**
+  - A `sessions.db` whose schema the current build cannot upgrade — an unappliable migration or a table missing required columns — failed every command with `database schema is incompatible`, leaving the user no way forward but deleting the database by hand. `internal/db` now recovers once per database: it snapshots the unrecoverable database next to the original (`sessions.db.migration-failed-<timestamp>.bak`, written with SQLite `VACUUM INTO` and falling back to a checkpoint plus raw file copies when VACUUM itself fails), deletes the old file set including `-wal`/`-shm`/`-journal`, and initializes a fresh empty database in its place.
+  - The recovery is reported, not silent: `internal/db` logs it and the CLI/TUI print a "Database migration error" startup notice naming the backup file, which still holds the previous sessions. Only a schema owner (`internal/session`) can mark a failure as rebuildable, and writer contention, a cancelled migration, or a read-only file leave the database untouched with the reason appended to the error, so a healthy database under external pressure is never replaced.
 
 ### 🔧 Improvements
 
@@ -5964,7 +5993,7 @@ Selection order:
 2. Base URL detection
 3. Generic fallback: `openai-chat`, `openai-responses`, `anthropic-messages`, `google-gemini`, or `google-vertex`
 
-Built-in vendor adapters include `openai`, `anthropic`, `claude`, `deepseek`, `google-gemini`, `google-vertex`, `xiaomi`, `xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, `volcengine`, `kimi`, `minimax`, `qianfan`, `bailian`, `gitee`, `openrouter`, `together`, `groq`, `fireworks`, `mistral`, `github-copilot`, `cloudflare-ai-gateway`, `cloudflare-workers-ai`, and `amazon-bedrock`.
+Built-in vendor adapters include `openai`, `anthropic`, `claude`, `deepseek`, `agnes`, `google-gemini`, `google-vertex`, `xiaomi`, `xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, `volcengine`, `kimi`, `minimax`, `qianfan`, `bailian`, `gitee`, `openrouter`, `together`, `groq`, `fireworks`, `mistral`, `github-copilot`, `cloudflare-ai-gateway`, `cloudflare-workers-ai`, and `amazon-bedrock`.
 
 ```json
 {
@@ -8064,6 +8093,19 @@ du -sh ~/.mothx/sessions/
 # Back up the whole session root before manual cleanup; it contains sessions.db
 cp -a ~/.mothx/sessions ~/backups/sessions
 ```
+
+### Q: Shows "Database migration error" on startup
+
+**A:**
+
+When `sessions.db` can no longer be migrated by the current version, MothX does not get stuck: it first backs the
+old database up next to it as `sessions.db.migration-failed-<timestamp>.bak`, creates a new empty `sessions.db`, and
+reports the migration failure in the startup notice and the logs.
+
+- The previous sessions are all in the backup file; nothing was deleted, and the new database is usable immediately.
+- Other mothx processes sharing that session directory receive a local UDP notice (`database_rebuilt`) and drop their old database handles, so they stop writing to the replaced file; the broadcast stays on the loopback network and never leaves the host.
+- To get the old data back, fix the cause of the migration failure (for example open the database with the older MothX build), then rename the `.bak` file back to `sessions.db`.
+- Once the old data is no longer needed, delete the `.bak` file.
 
 ---
 

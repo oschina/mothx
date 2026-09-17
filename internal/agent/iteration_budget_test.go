@@ -38,8 +38,8 @@ func TestIterationBudgetPolicyNormalize(t *testing.T) {
 	if p.MinInterval != 9 {
 		t.Fatalf("min interval = %d, want 9 (soft/10)", p.MinInterval)
 	}
-	if p.MaxWallClock != defaultIterationBudgetWallClock {
-		t.Fatalf("wall clock = %v, want %v", p.MaxWallClock, defaultIterationBudgetWallClock)
+	if p.MaxWallClock != DefaultIterationBudgetWallClock {
+		t.Fatalf("wall clock = %v, want %v", p.MaxWallClock, DefaultIterationBudgetWallClock)
 	}
 	if !p.Enabled() {
 		t.Fatal("normalized policy must be enabled")
@@ -84,6 +84,50 @@ func TestIterationBudgetRequestClamp(t *testing.T) {
 	b.setTurn(9)
 	if _, _, _, err := b.Request(0, "one more"); err == nil {
 		t.Fatal("a request past MaxRenewals must be rejected")
+	}
+}
+
+// TestIterationBudgetCanRenew pins the gate that decides whether the model-facing
+// budget notice still points at the renewal tool.
+func TestIterationBudgetCanRenew(t *testing.T) {
+	var absent *iterationBudget
+	if absent.CanRenew() {
+		t.Fatal("a nil budget can never renew")
+	}
+
+	b := newIterationBudget(IterationBudgetPolicy{
+		Soft: 10, Hard: 20, RenewFactor: 0.5, MaxRenewals: 2, MinInterval: 3, MaxWallClock: time.Hour,
+	}, 10)
+	if !b.CanRenew() {
+		t.Fatal("a fresh budget below the ceiling may renew")
+	}
+
+	// Spend every renewal: no more grants are possible even below the ceiling.
+	b.setTurn(0)
+	if _, _, _, err := b.Request(0, "first"); err != nil {
+		t.Fatalf("first request: %v", err)
+	}
+	b.setTurn(4)
+	if _, _, _, err := b.Request(0, "second"); err != nil {
+		t.Fatalf("second request: %v", err)
+	}
+	if b.CanRenew() {
+		t.Fatal("a budget with no renewals left must not advertise renewal")
+	}
+
+	// A single-renewal budget that lands exactly on the hard ceiling is done too.
+	capped := newIterationBudget(IterationBudgetPolicy{
+		Soft: 10, Hard: 15, RenewFactor: 0.5, MaxRenewals: 5, MinInterval: 1, MaxWallClock: time.Hour,
+	}, 10)
+	capped.setTurn(0)
+	if _, _, _, err := capped.Request(100, "to the ceiling"); err != nil {
+		t.Fatalf("ceiling request: %v", err)
+	}
+	if capped.Limit() != 15 {
+		t.Fatalf("limit = %d, want the hard ceiling 15", capped.Limit())
+	}
+	if capped.CanRenew() {
+		t.Fatal("a budget at its hard ceiling must not advertise renewal")
 	}
 }
 

@@ -22,7 +22,8 @@ type knowledgeIndexerBinding struct {
 }
 
 func (s *KnowledgeBaseService) resolveKnowledgeIndexer(base session.KnowledgeBase) (*knowledgeIndexerBinding, error) {
-	if s == nil || s.settings == nil || s.providerFactory == nil {
+	settings := s.currentSettings()
+	if s == nil || settings == nil || s.providerFactory == nil {
 		return nil, nil
 	}
 	if strings.TrimSpace(base.Provider) == "" && strings.TrimSpace(base.Model) == "" {
@@ -31,7 +32,7 @@ func (s *KnowledgeBaseService) resolveKnowledgeIndexer(base session.KnowledgeBas
 	if strings.TrimSpace(base.Provider) == "" || strings.TrimSpace(base.Model) == "" {
 		return nil, fmt.Errorf("knowledge base %q must configure provider and model together", base.Name)
 	}
-	p, model, err := s.providerFactory(cloneKnowledgeSettings(s.settings), base.Provider, base.Model)
+	p, model, err := s.providerFactory(cloneKnowledgeSettings(settings), base.Provider, base.Model)
 	if err != nil {
 		return nil, fmt.Errorf("create knowledge indexer provider: %w", err)
 	}
@@ -85,7 +86,7 @@ func (s *KnowledgeBaseService) enrichGraphWithIndexer(ctx context.Context, execu
 		return fmt.Errorf("configure knowledge indexer runtime: %w", err)
 	}
 	agentInstance, err := runtime.BuildTransientAgent(registry, AgentBuildOptions{
-		Provider: binding.provider, ProviderName: binding.providerName, Model: binding.model, Settings: cloneKnowledgeSettings(s.settings),
+		Provider: binding.provider, ProviderName: binding.providerName, Model: binding.model, Settings: cloneKnowledgeSettings(s.currentSettings()),
 		Mode: mode, ThinkingLevel: binding.thinking, ExtraContext: indexerRoleInstructions(base), MaxIterations: 4,
 	})
 	if err != nil {

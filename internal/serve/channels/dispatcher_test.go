@@ -719,11 +719,17 @@ func TestHandleMessagePersistsChannelFailureEvent(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "HTTP 522") {
 		t.Fatalf("HandleMessage error = %v, want provider diagnostic", err)
 	}
-	if len(progress) != 1 || progress[0] != "↻ Retrying (1/5); waiting 1s..." {
-		t.Fatalf("progress = %#v, want structured retry notice", progress)
+	// The provider emits a retry notice and then fails; Agent Core's bounded
+	// continuation retry re-runs the turn, so the same provider notice appears
+	// once per attempt. Every notice must be the structured adapter projection and
+	// never the raw provider retry detail.
+	if len(progress) == 0 || progress[0] != "↻ Retrying (1/5); waiting 1s..." {
+		t.Fatalf("progress = %#v, want the structured retry notice first", progress)
 	}
-	if strings.Contains(progress[0], "server overloaded") {
-		t.Fatalf("progress = %#v, must not render provider retry detail", progress)
+	for _, line := range progress {
+		if strings.Contains(line, "server overloaded") {
+			t.Fatalf("progress = %#v, must not render provider retry detail", progress)
+		}
 	}
 	sess, err := d.resolveSession("wechat", "failure-user")
 	if err != nil {

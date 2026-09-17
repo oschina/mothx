@@ -42,6 +42,7 @@ func DefaultKnowledgeBaseIndexPolicy() KnowledgeBaseIndexPolicy {
 type KnowledgeBaseService struct {
 	sessionDir      string
 	policy          KnowledgeBaseIndexPolicy
+	settingsMu      sync.RWMutex
 	settings        *config.Settings
 	providerFactory KnowledgeBaseProviderFactory
 	// indexJobs tracks background scans so management RPCs can start a scan
@@ -83,6 +84,38 @@ func NewKnowledgeBaseServiceWithProviderFactory(sessionDir string, policy Knowle
 		settingsCopy = &value
 	}
 	return &KnowledgeBaseService{sessionDir: filepath.Clean(sessionDir), policy: policy, settings: settingsCopy, providerFactory: factory}, nil
+}
+
+// SetSettings replaces the settings snapshot used to resolve the optional Indexer
+// role. A management surface that caches one service for the process calls it
+// when settings.json changes, so a later scan uses the new provider/model without
+// losing the in-flight background job registry. The stored value is a private
+// copy and the previous copy is never mutated, so a concurrent reader may keep
+// the pointer it already obtained.
+func (s *KnowledgeBaseService) SetSettings(settings *config.Settings) {
+	if s == nil {
+		return
+	}
+	var copy *config.Settings
+	if settings != nil {
+		value := *settings
+		copy = &value
+	}
+	s.settingsMu.Lock()
+	s.settings = copy
+	s.settingsMu.Unlock()
+}
+
+// currentSettings returns the settings snapshot for the current index job. The
+// returned pointer is immutable (SetSettings replaces it), so callers may read it
+// without holding the lock.
+func (s *KnowledgeBaseService) currentSettings() *config.Settings {
+	if s == nil {
+		return nil
+	}
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.settings
 }
 
 func (s *KnowledgeBaseService) Index(ctx context.Context, knowledgeBaseID string) (session.KnowledgeSnapshot, error) {

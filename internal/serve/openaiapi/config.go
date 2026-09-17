@@ -34,7 +34,7 @@ type Config struct {
 	ToolVisibility       ToolVisibilityConfig `json:"toolVisibility"`
 	SystemPromptMode     string               `json:"systemPromptMode,omitempty"` // "append" (default), "ignore"
 	RequestTimeoutSecs   int                  `json:"requestTimeoutSeconds,omitempty"`
-	BackgroundRunMaxSecs int                  `json:"backgroundRunMaxSeconds,omitempty"` // hard cap for durable background polling (default 21600)
+	BackgroundRunMaxSecs int                  `json:"backgroundRunMaxSeconds,omitempty"` // hard cap for durable background polling (default 57600)
 	MaxConcurrentReqs    int                  `json:"maxConcurrentRequests,omitempty"`
 	LogLevel             string               `json:"logLevel,omitempty"`
 }

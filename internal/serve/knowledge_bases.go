@@ -165,6 +165,23 @@ func (rt *channelRuntime) attachKnowledgeIndexProgress(view *knowledgeBaseView, 
 	view.Indexing = &indexing
 }
 
+// refreshKnowledgeServiceSettings updates the cached Runtime service's settings
+// snapshot so a later scan resolves the new Indexer provider/model. It never
+// creates the service (a process that has not touched knowledge bases pays
+// nothing) and never rebuilds it, because the cached instance owns the in-flight
+// background index-job registry that progress polling depends on.
+func (rt *channelRuntime) refreshKnowledgeServiceSettings(settings *config.Settings) {
+	if rt == nil {
+		return
+	}
+	rt.knowledgeMu.Lock()
+	service := rt.knowledgeService
+	rt.knowledgeMu.Unlock()
+	if service != nil {
+		service.SetSettings(settings)
+	}
+}
+
 func (rt *channelRuntime) handleKnowledgeBases(w http.ResponseWriter, r *http.Request) {
 	if rt == nil || strings.TrimSpace(rt.sessionDir) == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "knowledge base runtime is unavailable"})

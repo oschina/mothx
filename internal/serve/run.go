@@ -2651,6 +2651,10 @@ func (rt *channelRuntime) handleSettings(srv *openaiapi.Server) http.HandlerFunc
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
+			// Keep the cached knowledge-base service's settings snapshot current so a
+			// later scan uses the new Indexer provider/model without losing its
+			// in-flight background job registry.
+			rt.refreshKnowledgeServiceSettings(&settings)
 			if srv != nil {
 				if err := srv.ApplySettings(&settings); err != nil {
 					log.Printf("serve: apply settings: %v", err)
