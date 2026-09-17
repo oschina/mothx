@@ -251,13 +251,9 @@ func openOnce(path string, migrate Migrator, opts Options) (*bun.DB, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("initialize sqlite connection: %w", err)
 	}
-	var integrity string
-	if err := sqlDB.QueryRow("PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
+	if err := checkIntegrity(sqlDB); err != nil {
 		_ = sqlDB.Close()
-		if err != nil {
-			return nil, fmt.Errorf("run sqlite integrity check: %w", err)
-		}
-		return nil, fmt.Errorf("sqlite integrity check failed: %s", integrity)
+		return nil, err
 	}
 	if err := enableWAL(sqlDB); err != nil {
 		_ = sqlDB.Close()
@@ -269,6 +265,45 @@ func openOnce(path string, migrate Migrator, opts Options) (*bun.DB, error) {
 		}
 	}
 	return bun.NewDB(sqlDB, sqlitedialect.New()), nil
+}
+
+// checkIntegrity validates the database before it is used. SQLite can report a
+// stale secondary-index entry after an interrupted write even when every table
+// page remains intact. Rebuilding indexes is lossless because their contents
+// are derived from table rows, so repair that precise case and verify it before
+// continuing. Other integrity failures may affect canonical data and must stay
+// visible to the caller rather than being treated as recoverable.
+func checkIntegrity(sqlDB *sql.DB) error {
+	integrity, err := quickCheck(sqlDB)
+	if err != nil {
+		return fmt.Errorf("run sqlite integrity check: %w", err)
+	}
+	if integrity == "ok" {
+		return nil
+	}
+	if !strings.Contains(strings.ToLower(integrity), "wrong # of entries in index") {
+		return fmt.Errorf("sqlite integrity check failed: %s", integrity)
+	}
+
+	if _, err := sqlDB.Exec("REINDEX"); err != nil {
+		return fmt.Errorf("repair SQLite indexes after integrity check %q: %w", integrity, err)
+	}
+	integrity, err = quickCheck(sqlDB)
+	if err != nil {
+		return fmt.Errorf("run sqlite integrity check after index repair: %w", err)
+	}
+	if integrity != "ok" {
+		return fmt.Errorf("sqlite integrity check failed after index repair: %s", integrity)
+	}
+	return nil
+}
+
+func quickCheck(sqlDB *sql.DB) (string, error) {
+	var integrity string
+	if err := sqlDB.QueryRow("PRAGMA quick_check").Scan(&integrity); err != nil {
+		return "", err
+	}
+	return integrity, nil
 }
 
 func dsn(path string, foreignKeys bool) string {

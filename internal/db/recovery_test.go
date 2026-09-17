@@ -1,8 +1,10 @@
 package db
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -159,6 +161,87 @@ func TestUnclassifiedMigrationFailureKeepsDatabase(t *testing.T) {
 		t.Fatalf("unexpected backups: %#v", backups)
 	}
 	requireLegacyRow(t, path)
+}
+
+// TestOpenRepairsStaleSecondaryIndex exercises the narrow repair path used
+// when SQLite's quick_check reports that an index contains the wrong number of
+// entries. The table pages are deliberately left intact; REINDEX must restore
+// the derived index without losing those rows.
+func TestOpenRepairsStaleSecondaryIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	migrate := func(sqlDB *sql.DB) error {
+		if _, err := sqlDB.Exec(`CREATE TABLE IF NOT EXISTS entries (session_id TEXT NOT NULL, type TEXT NOT NULL)`); err != nil {
+			return err
+		}
+		_, err := sqlDB.Exec(`CREATE INDEX IF NOT EXISTS idx_entries_session_type ON entries(session_id, type)`)
+		return err
+	}
+
+	db, err := Open(path, migrate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO entries (session_id, type) VALUES ('session-1', 'message'), ('session-2', 'tool')`); err != nil {
+		t.Fatal(err)
+	}
+	var rootPage, pageSize int
+	if err := db.QueryRow(`SELECT rootpage FROM sqlite_master WHERE type = 'index' AND name = 'idx_entries_session_type'`).Scan(&rootPage); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
+		t.Fatal(err)
+	}
+	if err := CloseAll(); err != nil {
+		t.Fatal(err)
+	}
+
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageOffset := (rootPage - 1) * pageSize
+	if pageOffset < 0 || pageOffset+pageSize > len(contents) {
+		t.Fatalf("index root page is outside the database: page=%d", rootPage)
+	}
+	indexPage := contents[pageOffset : pageOffset+pageSize]
+	if indexPage[0] != 0x0a {
+		t.Fatalf("index root page is not an index leaf: page=%d type=%#x", rootPage, indexPage[0])
+	}
+	// Change an index key but leave the B-tree mechanically valid. SQLite then
+	// sees a table row missing from the index, the same lossless condition that
+	// the REINDEX repair path handles.
+	keyOffset := bytes.Index(indexPage, []byte("session-1"))
+	if keyOffset < 0 {
+		t.Fatal("index root page does not contain the expected index key")
+	}
+	indexPage[keyOffset+len("session-")-1] = 'x'
+	if err := os.WriteFile(path, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := Open(path, migrate)
+	if err != nil {
+		t.Fatalf("Open should repair the stale index: %v", err)
+	}
+	defer func() {
+		if err := CloseAll(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	var count int
+	if err := repaired.QueryRow(`SELECT COUNT(*) FROM entries INDEXED BY idx_entries_session_type`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("table rows after index repair = %d, want 2", count)
+	}
+	var integrity string
+	if err := repaired.QueryRow(`PRAGMA quick_check`).Scan(&integrity); err != nil {
+		t.Fatal(err)
+	}
+	if integrity != "ok" {
+		t.Fatalf("quick_check after index repair = %q, want ok", integrity)
+	}
 }
 
 // TestRebuildGuardrailsSkipTransientFailures proves a rebuild is refused when a
