@@ -162,6 +162,29 @@ mothx stats --cli
 mothx stats --cli --db ~/.mothx/sessions/sessions.db
 ```
 
+### `pure` - Archive the Sessions Database
+
+Move the shared `sessions.db` (and its SQLite sidecars) aside and create a fresh, empty database in its place. Nothing is deleted: the previous database is renamed next to the new one as `sessions.db.pure-<timestamp>.bak`, so its sessions stay recoverable.
+
+```
+mothx pure [flags]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--session-dir` | - | Configured session directory | Session directory to reset |
+
+Examples:
+```bash
+# Archive the default sessions database and start fresh
+mothx pure
+
+# Reset a specific session directory
+mothx pure --session-dir ~/.mothx/sessions
+```
+
+Stop every other `mothx` process first; a database moved while another process still holds it open keeps being written there.
+
 ### `doctor` - Environment Diagnostics
 
 Diagnose your MothX environment: OS info, config files, providers, models, sandbox, MCP, and more.

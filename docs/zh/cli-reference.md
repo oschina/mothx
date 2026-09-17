@@ -162,6 +162,29 @@ mothx stats --cli
 mothx stats --cli --db ~/.mothx/sessions/sessions.db
 ```
 
+### `pure` - 归档会话数据库
+
+将共享的 `sessions.db`（及其 SQLite 附属文件）移走，并在原位置创建一个全新的空数据库。不会删除任何内容：原数据库会以 `sessions.db.pure-<时间戳>.bak` 命名保存在新数据库旁边，其中的会话仍可恢复。
+
+```
+mothx pure [flags]
+```
+
+| 标志 | 简写 | 默认值 | 描述 |
+|------|------|--------|------|
+| `--session-dir` | - | 已配置的会话目录 | 要重置的会话目录 |
+
+示例：
+```bash
+# 归档默认会话数据库并重新开始
+mothx pure
+
+# 重置指定的会话目录
+mothx pure --session-dir ~/.mothx/sessions
+```
+
+运行前请先停止其他所有 `mothx` 进程；若数据库被其他进程占用时被移走，该进程仍会继续写入被移走的文件。
+
 ### `doctor` - 环境诊断
 
 诊断你的 MothX 环境：系统信息、配置文件、Provider、模型、沙箱、MCP 等。
