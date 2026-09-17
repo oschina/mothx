@@ -41,17 +41,21 @@ type AgentBuildOptions struct {
 	MaxIterations          int
 	ContextPressure        float64
 	BudgetPressure         float64
-	BeforeToolCall         func(agent.BeforeToolCallContext) *agent.ToolCallBlockResult
-	BeforeToolExecute      func(agent.BeforeToolExecuteContext) *agent.ToolCallBlockResult
-	AfterToolCall          func(agent.AfterToolCallContext) *agent.ToolCallResult
-	GetSteeringMessages    func() []provider.Message
-	ConversationTurnID     string
-	IntentID               string
-	RunID                  string
-	ConversationTurn       bool
-	RuntimeOwnsTurnEnd     bool
-	RuntimeOwnsUserEntry   bool
-	UserEntryID            string
+	// IterationBudget governs model-requested iteration renewals for the
+	// session's conversational lead. The zero value is normalized to the Runtime
+	// defaults (soft = MaxIterations or 200, hard = 2x soft, 16h wall clock).
+	IterationBudget      agent.IterationBudgetPolicy
+	BeforeToolCall       func(agent.BeforeToolCallContext) *agent.ToolCallBlockResult
+	BeforeToolExecute    func(agent.BeforeToolExecuteContext) *agent.ToolCallBlockResult
+	AfterToolCall        func(agent.AfterToolCallContext) *agent.ToolCallResult
+	GetSteeringMessages  func() []provider.Message
+	ConversationTurnID   string
+	IntentID             string
+	RunID                string
+	ConversationTurn     bool
+	RuntimeOwnsTurnEnd   bool
+	RuntimeOwnsUserEntry bool
+	UserEntryID          string
 	// AuxiliaryRole marks a build that is not the session's conversational lead
 	// even though it runs on the session's own manager (the legacy knowledge
 	// librarian query bridge). Such a build never receives the team member
@@ -102,7 +106,7 @@ func (r *SessionRuntime) BuildAgent(opts AgentBuildOptions) (*agent.Agent, error
 		opts.ThinkingLevel = r.ThinkingLevel
 	}
 	r.mu.RUnlock()
-	return r.buildAgent(registry, manager, opts)
+	return r.buildAgent(registry, manager, opts, true)
 }
 
 // BuildTransientAgent constructs a non-persisted agent over an adapter-provided
@@ -116,10 +120,10 @@ func (r *SessionRuntime) BuildTransientAgent(registry *tools.Registry, opts Agen
 	if registry == nil {
 		return nil, fmt.Errorf("transient agent registry is required")
 	}
-	return r.buildAgent(registry, nil, opts)
+	return r.buildAgent(registry, nil, opts, false)
 }
 
-func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.Manager, opts AgentBuildOptions) (*agent.Agent, error) {
+func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.Manager, opts AgentBuildOptions, enableIterationBudget bool) (*agent.Agent, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("agent runtime registry is required")
 	}
@@ -219,6 +223,19 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 	if opts.MaxTokensSet {
 		maxTokens = opts.MaxTokens
 	}
+	// Iteration budget renewal is a lead-only capability. Transient builds (side
+	// questions, knowledge indexing) and auxiliary roles never receive it, and
+	// the extend_budget tool is registered on the shared registry only for a lead
+	// so sub-agents built from their own factory registries cannot reach it.
+	budgetPolicy := agent.IterationBudgetPolicy{}
+	if enableIterationBudget && !opts.AuxiliaryRole && opts.ParentID == "" {
+		budgetPolicy = opts.IterationBudget.Normalize(opts.MaxIterations)
+		if budgetPolicy.Enabled() {
+			registry.Register(agent.NewExtendBudgetTool())
+		} else {
+			budgetPolicy = agent.IterationBudgetPolicy{}
+		}
+	}
 	return agent.NewWithLoopConfig(agent.AgentLoopConfig{
 		Config: agent.Config{
 			ID: opts.ID, ParentID: opts.ParentID, Provider: opts.Provider, Vendor: opts.ProviderName, Model: opts.Model, Mode: mode,
@@ -236,7 +253,8 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 		},
 		ToolExecutionMode: toolExecutionMode, MaxToolConcurrency: maxToolConcurrency,
 		MaxIterations: opts.MaxIterations, ContextPressureThreshold: opts.ContextPressure,
-		BudgetPressureThreshold: opts.BudgetPressure, BeforeToolCall: beforeToolCall, BeforeToolExecute: beforeToolExecute,
+		BudgetPressureThreshold: opts.BudgetPressure, IterationBudget: budgetPolicy,
+		BeforeToolCall: beforeToolCall, BeforeToolExecute: beforeToolExecute,
 		AfterToolCall:       opts.AfterToolCall,
 		GetSteeringMessages: steeringMessages,
 		GetFollowUpMessages: followUpMessages,

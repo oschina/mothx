@@ -94,13 +94,13 @@ type AgentConfig struct {
 	BudgetPressureThreshold  float64 `json:"budget_pressure_threshold,omitempty"`  // remaining ratio (0-1), default 0.20
 	ContextPressureThreshold float64 `json:"context_pressure_threshold,omitempty"` // usage ratio (0-1), default 0.55
 	RunStaleTimeoutSecs      int     `json:"run_stale_timeout_secs,omitempty"`     // watchdog: abort a run with no agent events for this long (default 600)
-	RunMaxDurationSecs       int     `json:"run_max_duration_secs,omitempty"`      // watchdog: abort a run exceeding this total duration (default 14400)
+	RunMaxDurationSecs       int     `json:"run_max_duration_secs,omitempty"`      // watchdog: abort a run exceeding this total duration (default 57600)
 	BackgroundRunMaxSecs     int     `json:"background_run_max_secs,omitempty"`    // hard cap for durable background polling (default 21600)
 }
 
 const (
 	defaultRunStaleTimeoutSecs  = 600
-	defaultRunMaxDurationSecs   = 14400
+	defaultRunMaxDurationSecs   = 57600
 	defaultBackgroundRunMaxSecs = 21600
 )
 

@@ -238,6 +238,10 @@ type AgentLoopConfig struct {
 	// 0 means disabled. Default: 0.20 (remaining 20%).
 	BudgetPressureThreshold float64
 
+	// IterationBudget governs model-requested iteration renewals. The zero value
+	// disables renewal and keeps the fixed MaxIterations behavior.
+	IterationBudget IterationBudgetPolicy
+
 	// MaxConsecutiveNoText is the max tool-only turns before a stuck-detection warning.
 	// 0 means default (95).
 	MaxConsecutiveNoText int
@@ -959,6 +963,24 @@ func (a *Agent) logDroppedEvents() {
 	}
 }
 
+// injectTransientMessage appends a system-injected message to the run context
+// only. It is deliberately not persisted to the session transcript: a transient
+// notice (for example a budget-pressure warning) must not leak a stale count
+// into replay or later runs. System-injected messages are skipped by cache
+// markers, so appending at the tail never invalidates the cached prompt prefix.
+func (a *Agent) injectTransientMessage(msg provider.Message) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.messages = append(a.messages, msg)
+	a.messageIDs = append(a.messageIDs, "")
+	if a.context != nil {
+		a.context.Messages = append(a.context.Messages, msg)
+	}
+}
+
 func (a *Agent) beginConversationTurn(msg provider.Message) (conversationTurnStore, bool) {
 	if a == nil || a.config.Session == nil || !a.config.ConversationTurn || msg.SystemInjected {
 		return nil, true
@@ -1311,6 +1333,17 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 	// reject the next request with a 400 error.
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
+	// Per-run iteration budget: the loop owns the limit, the extend_budget tool
+	// (reached through the run context) may only request a clamped increase.
+	var budget *iterationBudget
+	wallClock := time.Duration(0)
+	if a.config.IterationBudget.Enabled() {
+		policy := a.config.IterationBudget.Normalize(a.config.MaxIterations)
+		budget = newIterationBudget(policy, a.config.MaxIterations)
+		runCtx = contextWithIterationBudget(runCtx, budget)
+		wallClock = policy.MaxWallClock
+	}
+	runStart := time.Now()
 	a.setRunContext(runCtx)
 	defer a.setRunContext(nil)
 	go func() {
@@ -1373,7 +1406,30 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 	// and retry once instead of failing the session permanently.
 	contextOverflowRetried := false
 	responsesReplayFallback := false
-	for i := 0; i < a.config.MaxIterations; i++ {
+	// lastRenewals tracks granted renewals so a fresh budget notice can be
+	// injected at the next threshold after the model extends the budget.
+	lastRenewals := 0
+	for i := 0; ; i++ {
+		limit := a.config.MaxIterations
+		if budget != nil {
+			budget.setTurn(i)
+			limit = budget.Limit()
+			if renewals := budget.Renewals(); renewals > lastRenewals {
+				lastRenewals = renewals
+				budgetPressureFired = false
+				a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Iteration budget renewed to %d turns", limit)})
+			}
+		}
+		if i >= limit {
+			break
+		}
+		if wallClock > 0 && time.Since(runStart) >= wallClock {
+			err := fmt.Errorf("run exceeded the %s wall-clock budget", wallClock)
+			a.emitRunFinished(ch, TaskIncomplete, "wall_clock_limit", err, nil, nil)
+			ch <- Event{Type: EventError, Error: err, StopReason: "wall_clock_limit"}
+			ch <- a.agentEndEvent()
+			return
+		}
 		select {
 		case <-runCtx.Done():
 			a.emitRunFinished(ch, TaskCanceled, "aborted", runCtx.Err(), nil, nil)
@@ -1903,20 +1959,32 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 			if threshold <= 0 {
 				threshold = 0.20 // default 20%
 			}
-			remaining := float64(a.config.MaxIterations-i) / float64(a.config.MaxIterations)
-			if remaining <= threshold {
-				budgetPressureFired = true
-				remainingTurns := a.config.MaxIterations - i
-				warnMsg := fmt.Sprintf(
-					"[Budget Pressure] %d/%d turns remaining (%.0f%%). "+
-						"Complete the current task and summarize progress.",
-					remainingTurns, a.config.MaxIterations, remaining*100)
-				a.sendEvent(ch, Event{
-					Type:            EventBudgetPressure,
-					PressureMessage: warnMsg,
-					PressureType:    "budget",
-					PressurePercent: remaining * 100,
-				})
+			if limit > 0 {
+				remaining := float64(limit-i) / float64(limit)
+				if remaining <= threshold {
+					budgetPressureFired = true
+					remainingTurns := limit - i
+					warnMsg := fmt.Sprintf(
+						"[Budget Pressure] %d/%d turns remaining (%.0f%%). "+
+							"Complete the current task and summarize progress.",
+						remainingTurns, limit, remaining*100)
+					if budget != nil {
+						warnMsg += " If the task is genuinely unfinished, call " + IterationBudgetToolName + " with a concrete reason."
+					}
+					a.sendEvent(ch, Event{
+						Type:            EventBudgetPressure,
+						PressureMessage: warnMsg,
+						PressureType:    "budget",
+						PressurePercent: remaining * 100,
+					})
+					if budget != nil {
+						// Make the budget visible to the model. The notice is a transient,
+						// system-injected message appended at the tail: cache markers skip
+						// it, so it never invalidates the cached prompt prefix, and it is not
+						// persisted to the session transcript.
+						a.injectTransientMessage(provider.NewSystemInjectedUserMessage(warnMsg))
+					}
+				}
 			}
 		}
 
@@ -1983,8 +2051,12 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 		continue
 	}
 
+	maxErr := fmt.Errorf("max iterations (%d) exceeded", a.config.MaxIterations)
+	if budget != nil {
+		maxErr = fmt.Errorf("max iterations (%d) exceeded (soft %d, hard %d, %d renewal(s) used)", budget.Limit(), budget.Soft(), budget.Hard(), budget.Renewals())
+	}
 	a.emitRunFinished(ch, TaskIncomplete, "max_iterations", nil, nil, nil)
-	ch <- Event{Type: EventError, Error: fmt.Errorf("max iterations (%d) exceeded", a.config.MaxIterations), StopReason: "max_iterations"}
+	ch <- Event{Type: EventError, Error: maxErr, StopReason: "max_iterations"}
 	ch <- a.agentEndEvent()
 }
 
