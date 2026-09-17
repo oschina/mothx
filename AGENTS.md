@@ -2,6 +2,18 @@
 
 Guidance for AI coding agents working in this repository. Read this file before exploring or editing code. Keep changes focused, preserve existing behavior and APIs, and validate the smallest relevant scope.
 
+## Core philosophy
+
+**One Agent Core, one front-end-neutral Agent Runtime; every entry point (TUI, CLI, WebUI/API, WeChat/Feishu, ACP) is a thin projection of them.** Complexity may grow in exactly one place — the shared Runtime — while adapters may only get thinner. “Reuse” means reusing the same runtime path and lifecycle, not merely calling the same low-level Agent loop from several orchestrators.
+
+- **One core, many projections.** The unique Agent Core and `internal/agentruntime` own prompts, events, tools, sessions, attachments, decisions, and run lifecycle. Adapters map protocols and render; they do not own semantics or state.
+- **One source of truth, one owner each.** Construction, execution/lifecycle, source/policy resolution, session resources, decisions, event semantics, input/content, attachment/artifact lifecycle, and database access each have exactly one owner. Canonical IDs, Run ownership, ordering, and terminal semantics are preserved across every projection; only wire format and rendering differ.
+- **Policy, not forks.** Entry-point differences are expressed as `RuntimeSource`/`ExecutionPolicy`/capabilities/explicit hooks. No parallel implementations, no “temporary” adapter defaults, no copied Session Runtime. If the shared abstraction is genuinely insufficient, extend it once in `internal/agentruntime` and migrate all adapters.
+- **Boundaries are enforced, not aspirational.** `internal/architecture` statically rejects bypasses, and every migration bridge needs a named owner and a removal condition. Change a boundary and its cross-entry contract tests move with it; never weaken a guard to make one entry point work.
+- **One database direction.** `internal/db` owns connection/transaction lifecycle, `internal/dao` owns all SQL, query construction, and row mapping, and business/runtime code only calls DAOs. Schema changes go through migrations, and `settings.json`/`serve.json` field meanings are compatibility surface. The public SDK boundary is `agent/` and must not import `internal/`.
+- **Reliability favors long-task continuity.** A held execution lease keeps being renewed for as long as the process holds it; a transient renewal failure is an availability problem to retry, never ownership loss. Ownership is decided by the fenced `session_runtime_leases` CAS (`owner`/`epoch`/`token`), so wall-clock expiry or a single renewal timeout must not cancel a live run.
+- **Disciplined, minimal change.** Read before editing, keep changes focused, prefer policy over duplication, add deterministic tests when behavior changes, keep bilingual docs in sync, and never hand-edit generated artifacts.
+
 ## Project snapshot
 
 - **Primary language:** Go 1.27 (`go.mod`), with a Cobra CLI and Bubble Tea/Lipgloss TUI.
