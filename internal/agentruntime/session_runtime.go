@@ -261,9 +261,22 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 	if err != nil {
 		return err
 	}
+	inputs, err := NewInputMaterializer(manager.GetSessionDir(), header.Cwd, DefaultInputPolicy())
+	if err != nil {
+		return err
+	}
+	attachments, err := NewAttachmentService(manager.GetSessionDir(), DefaultAttachmentPolicy())
+	if err != nil {
+		return err
+	}
+	prepared, err := r.prepareBoundSessionResources(manager)
+	if err != nil {
+		return err
+	}
+
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.closed {
-		r.mu.Unlock()
 		return fmt.Errorf("agent runtime is closed")
 	}
 	r.ID = header.ID
@@ -272,23 +285,21 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 	r.Policy.Source = resolved.Source
 	r.WorkDir = header.Cwd
 	r.Manager = manager
-	inputs, err := NewInputMaterializer(manager.GetSessionDir(), header.Cwd, DefaultInputPolicy())
-	if err != nil {
-		r.mu.Unlock()
-		return err
-	}
 	r.Inputs = inputs
-	if r.Attachments == nil {
-		attachments, err := NewAttachmentService(manager.GetSessionDir(), DefaultAttachmentPolicy())
-		if err != nil {
-			r.mu.Unlock()
-			return err
+	r.Attachments = attachments
+	r.ExpertCenter = &expert.Center{ProjectDir: header.Cwd}
+	r.Expert = prepared.binding
+	if prepared.hasResources {
+		if r.Registry != nil {
+			r.Registry.Register(tools.NewSkillRefTool(prepared.skillsMgr))
 		}
-		r.Attachments = attachments
+		r.synchronizeCoreToolsLocked(r.resourceBrowser)
+		r.SkillsMgr = prepared.skillsMgr
+		r.ExtraContext = prepared.extraContext
+		r.RuleContent = prepared.ruleContent
 	}
 	r.LastUsed = time.Now()
-	r.mu.Unlock()
-	return r.rehydrateBoundResources()
+	return nil
 }
 
 // ConfigureSession installs the initial per-session provider, model, mode, and

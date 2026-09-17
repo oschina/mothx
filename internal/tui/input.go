@@ -657,28 +657,34 @@ func (a *App) ensureSession() error {
 		if err != nil {
 			return err
 		}
-		a.session = sess
-		if sess.GetHeader() != nil && sess.GetHeader().Cwd != "" {
-			a.cwd = sess.GetHeader().Cwd
-		}
-		if err := recoverTUIOrphanedDecisions(a.getSessionDir(), sess.GetHeader().ID); err != nil {
-			return err
-		}
-		return a.bindRuntimeSession(sess)
+		return a.activateSession(sess)
 	}
 	sessionDir := a.getSessionDir()
 	sess, err := agentruntime.CreateSession(agentruntime.CreateSessionOptions{WorkDir: cwd, SessionDir: sessionDir})
 	if err != nil {
 		return err
 	}
-	if sess.GetHeader() != nil && sess.GetHeader().Cwd != "" {
-		a.cwd = sess.GetHeader().Cwd
+	return a.activateSession(sess)
+}
+
+// activateSession commits a newly created or opened session to the TUI only
+// after recovery and Runtime binding have both succeeded. Retaining the prior
+// session on failure prevents the adapter and shared Runtime from diverging.
+func (a *App) activateSession(sess *session.Manager) error {
+	if sess == nil || sess.GetHeader() == nil {
+		return fmt.Errorf("initialized session manager is required")
 	}
-	a.session = sess
 	if err := recoverTUIOrphanedDecisions(a.getSessionDir(), sess.GetHeader().ID); err != nil {
 		return err
 	}
-	return a.bindRuntimeSession(sess)
+	if err := a.bindRuntimeSession(sess); err != nil {
+		return err
+	}
+	a.session = sess
+	if cwd := sess.GetHeader().Cwd; cwd != "" {
+		a.cwd = cwd
+	}
+	return nil
 }
 
 // ensureAgent lazily constructs the main agent and loads session history.

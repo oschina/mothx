@@ -355,12 +355,8 @@ func (a *App) switchToSession(detail session.SessionDetail) error {
 	// cannot update the new session's UI.
 	a.closeBtw()
 	a.invalidateStatusLineRequests()
-	a.session = newSess
-	if err := recoverTUIOrphanedDecisions(a.getSessionDir(), newSess.GetHeader().ID); err != nil {
-		return fmt.Errorf("recover session decisions: %w", err)
-	}
-	if err := a.bindRuntimeSession(newSess); err != nil {
-		return fmt.Errorf("bind session runtime: %w", err)
+	if err := a.activateSession(newSess); err != nil {
+		return fmt.Errorf("activate session: %w", err)
 	}
 	a.cwd = newSess.GetHeader().Cwd
 	a.agentActivities = make(map[agentpkg.AgentID]*agentActivity)

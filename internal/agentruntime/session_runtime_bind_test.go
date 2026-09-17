@@ -69,6 +69,33 @@ func TestSessionRuntimeBindSessionUpdatesLazyIdentity(t *testing.T) {
 	}
 }
 
+func TestBindSessionKeepsPreviousIdentityWhenPreparationFails(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+	first := session.New(workDir, sessionDir)
+	if err := first.Init(); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &SessionRuntime{Source: SourceTUI, WorkDir: workDir}
+	if err := runtime.BindSession(first, SourceTUI); err != nil {
+		t.Fatalf("bind initial session: %v", err)
+	}
+
+	invalid := session.New(workDir, sessionDir)
+	if err := invalid.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := invalid.SetExpertBinding("does-not-exist"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.BindSession(invalid, SourceTUI); err == nil {
+		t.Fatal("binding a session with an invalid expert unexpectedly succeeded")
+	}
+	if runtime.Manager != first || runtime.ID != first.GetHeader().ID || runtime.WorkDir != first.GetHeader().Cwd {
+		t.Fatalf("runtime identity changed after failed binding: manager=%p id=%q cwd=%q", runtime.Manager, runtime.ID, runtime.WorkDir)
+	}
+}
+
 func TestSessionRuntimeBindSessionRejectsClosedRuntime(t *testing.T) {
 	manager := session.New(t.TempDir(), t.TempDir())
 	if err := manager.Init(); err != nil {

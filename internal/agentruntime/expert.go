@@ -326,6 +326,45 @@ func (r *SessionRuntime) prepareExpertResources(expertID string) (*preparedExper
 	return prepared, nil
 }
 
+// prepareBoundSessionResources validates every session-dependent resource
+// before BindSession publishes a new identity. A failed expert/context load
+// must leave the Runtime attached to its previous session.
+func (r *SessionRuntime) prepareBoundSessionResources(manager *session.Manager) (*preparedExpertResources, error) {
+	if r == nil {
+		return nil, fmt.Errorf("agent runtime is nil")
+	}
+	if manager == nil || manager.GetHeader() == nil {
+		return nil, fmt.Errorf("initialized session manager is required")
+	}
+	header := manager.GetHeader()
+	r.mu.RLock()
+	settings := r.resourceSettings
+	workflows := r.resourceWorkflows
+	browserEnabled := r.resourceBrowser
+	r.mu.RUnlock()
+
+	bundle, err := resolveBoundExpertBundle(header.Cwd, manager)
+	if err != nil {
+		return nil, err
+	}
+	prepared := &preparedExpertResources{}
+	if bundle != nil {
+		prepared.binding = newExpertBinding(bundle)
+	}
+	if settings == nil {
+		return prepared, nil
+	}
+	resources, err := LoadContextResourcesWithExpert(settings, header.Cwd, workflows, browserEnabled, bundle)
+	if err != nil {
+		return nil, err
+	}
+	prepared.skillsMgr = resources.SkillsMgr
+	prepared.extraContext = resources.ExtraContext
+	prepared.ruleContent = resources.RuleContent
+	prepared.hasResources = true
+	return prepared, nil
+}
+
 // publishPreparedExpertResources installs a successful preflight result. It
 // performs only in-memory assignments and registry synchronization, so it
 // cannot invalidate the already-committed session binding with a late loader
