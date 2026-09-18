@@ -3,16 +3,33 @@ package serve
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/startvibecoding/mothx/internal/config"
 	"github.com/startvibecoding/mothx/internal/cron"
 	"github.com/startvibecoding/mothx/internal/session"
 	"github.com/startvibecoding/mothx/internal/util"
 )
+
+// cronMaintenancePolicy resolves the Runtime maintenance policy from the current
+// global settings so serve projects the operator's cadence and on/off choice.
+// An unreadable settings file keeps the Runtime default, which is safe: the
+// reconciliation is bounded by the attachment retention window and fails closed
+// when the durable reference set cannot be read.
+func cronMaintenancePolicy() agentruntime.MaintenancePolicy {
+	settings, err := config.LoadSettings()
+	if err != nil {
+		log.Printf("[serve] load settings for the cron maintenance policy: %v", err)
+		return agentruntime.DefaultMaintenancePolicy()
+	}
+	return agentruntime.MaintenancePolicyFromSettings(settings)
+}
 
 type cronAPIResponse struct {
 	Enabled bool           `json:"enabled"`
@@ -262,6 +279,9 @@ func (rt *channelRuntime) listCronJobs(sessionID string) ([]cron.CronJob, error)
 	if err != nil {
 		return nil, err
 	}
+	// Runtime-owned maintenance jobs are scheduled housekeeping, not user
+	// automations, so the Web UI cron view never renders them.
+	jobs = cron.UserVisibleJobs(jobs)
 	sort.Slice(jobs, func(i, j int) bool {
 		if jobs[i].CreatedAt.Equal(jobs[j].CreatedAt) {
 			return jobs[i].ID < jobs[j].ID

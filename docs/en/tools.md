@@ -383,6 +383,8 @@ In Channels messaging mode, the assistant can record user preferences, decisions
 
 Enables creating and managing cron-like scheduled tasks that execute in the background via sub-agents. 
 
+MothX also schedules one Runtime-owned maintenance job (`mothx-maintenance:artifact-storage`, daily) that reclaims unreferenced attachment storage through this same scheduler. It is host housekeeping rather than a user task, so it is excluded from `list`, from name resolution, and from the Web UI and Desktop automation views; it is created automatically whenever a cron scheduler starts. See [`mothx pure`](cli-reference.md#pure---archive-the-sessions-database) for the reclamation rules and the on-demand pass.
+
 #### Parameters:
 
 | Parameter | Type | Required | Default | Description |

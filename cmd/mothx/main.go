@@ -404,7 +404,7 @@ func run(args []string, opts runOptions) error {
 		startUpdateCheck(settings, func(notice string) {
 			fmt.Fprintln(os.Stderr, notice)
 		})
-		if notice := databaseRecoveryNotice(); notice != "" {
+		if notice := databaseMaintenanceNotice(); notice != "" {
 			fmt.Fprintln(os.Stderr, notice)
 		}
 		return runPrint(args, p, selection.name, model, selection.mode, provider.ThinkingLevel(selection.thinkingLevel), settings, registry, sessionSetup.manager, extraContext, ruleContent, opts.multiAgent, opts.delegate, opts.workflows, opts.json, runtime.agentManager, sharedRuntime)
@@ -418,7 +418,7 @@ func run(args []string, opts runOptions) error {
 		settingsMeta:     settingsMeta,
 		session:          sessionSetup.manager,
 		sessionInfo:      sessionSetup.info,
-		databaseNotice:   databaseRecoveryNotice(),
+		databaseNotice:   databaseMaintenanceNotice(),
 		registry:         registry,
 		sandboxInfo:      sbInfo,
 		extraContext:     extraContext,
@@ -603,20 +603,33 @@ func continuingSessionInfo(sess *session.Manager) string {
 	return info
 }
 
-// databaseRecoveryNotice drains the sessions-database recoveries internal/db
-// performed in this process and renders the user-facing warning. A migration
-// failure is recovered by backing the old database up and starting empty, so the
-// user has to be told: their earlier sessions exist only in that backup file.
-func databaseRecoveryNotice() string {
+// databaseMaintenanceNotice drains the startup notices internal/db recorded in
+// this process and renders the user-facing warning. A migration failure is
+// recovered by backing the old database up and starting empty, so the user has
+// to be told: their earlier sessions exist only in that backup file. A rebuilt
+// stale index lost nothing but still reports that the file survived a failed
+// write.
+func databaseMaintenanceNotice() string {
 	recoveries := session.TakeDatabaseRecoveries()
-	if len(recoveries) == 0 {
+	repairs := session.TakeDatabaseIndexRepairs()
+	if len(recoveries) == 0 && len(repairs) == 0 {
 		return ""
 	}
-	lines := []string{"⚠️ Database migration error: the sessions database could not be upgraded."}
-	for _, recovery := range recoveries {
-		lines = append(lines, "   "+recovery.Describe())
+	lines := make([]string, 0, len(recoveries)+len(repairs)+2)
+	if len(recoveries) > 0 {
+		lines = append(lines, "⚠️ Database migration error: the sessions database could not be upgraded.")
+		for _, recovery := range recoveries {
+			lines = append(lines, "   "+recovery.Describe())
+		}
+		lines = append(lines, "   Fix the migration error before relying on the previous data; it is only in the backup.")
 	}
-	lines = append(lines, "   Fix the migration error before relying on the previous data; it is only in the backup.")
+	if len(repairs) > 0 {
+		lines = append(lines, "ℹ️ SQLite reported a stale index while opening the sessions database; it was rebuilt from the table rows.")
+		for _, repair := range repairs {
+			lines = append(lines, "   "+repair.Describe())
+		}
+		lines = append(lines, "   No data was changed: the notice means an earlier write was interrupted.")
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -726,6 +739,7 @@ func setupAgentRuntime(ctx context.Context, p provider.Provider, providerName st
 		globalStore := cron.NewSQLiteCronStore(settings.GetSessionDir())
 		runtime.cronStore = cron.NewSessionScopedStoreWithWorkDir(globalStore, sessionID, workDir)
 		runtime.cronScheduler = cron.NewSchedulerWithSessionDir(globalStore, agentMgr, 30*time.Second, settings.GetSessionDir())
+		runtime.cronScheduler.SetMaintenancePolicy(agentruntime.MaintenancePolicyFromSettings(settings))
 		runtime.cronScheduler.Start()
 		registry.Register(cron.NewCronTool(runtime.cronStore, runtime.cronScheduler))
 		closeRuntime := runtime.cleanup

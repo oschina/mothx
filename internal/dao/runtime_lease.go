@@ -49,6 +49,19 @@ func (d *RuntimeLeaseDAO) Find(ctx context.Context, executor bun.IDB, sessionID 
 	return record, err
 }
 
+// ListActive returns every lease still marked active past now. It is a plain
+// read (no fencing identity): callers use it to discover who is holding runs in
+// a database they are about to maintain, which is advisory by nature. An
+// expired row is excluded because only a live lease can still be written to.
+func (d *RuntimeLeaseDAO) ListActive(ctx context.Context, executor bun.IDB, now int64) ([]RuntimeLeaseRecord, error) {
+	var records []RuntimeLeaseRecord
+	err := executor.NewSelect().Model((*RuntimeLeaseRecord)(nil)).
+		Where("state = ? AND expires_at > ?", "active", now).
+		OrderExpr("session_id ASC").
+		Scan(ctx, &records)
+	return records, err
+}
+
 func (d *RuntimeLeaseDAO) Insert(ctx context.Context, executor bun.IDB, record *RuntimeLeaseRecord) error {
 	_, err := executor.NewInsert().Model(record).Exec(ctx)
 	return err

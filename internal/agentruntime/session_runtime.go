@@ -288,17 +288,7 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 	r.Inputs = inputs
 	r.Attachments = attachments
 	r.ExpertCenter = &expert.Center{ProjectDir: header.Cwd}
-	r.Expert = prepared.binding
-	if prepared.hasResources {
-		if r.Registry != nil {
-			r.Registry.Register(tools.NewSkillRefTool(prepared.skillsMgr))
-		}
-		r.synchronizeCoreToolsLocked(r.resourceBrowser)
-		r.SkillsMgr = prepared.skillsMgr
-		r.ExtraContext = prepared.extraContext
-		r.RuleContent = prepared.ruleContent
-	}
-	r.LastUsed = time.Now()
+	r.publishPreparedExpertResourcesLocked(prepared)
 	return nil
 }
 

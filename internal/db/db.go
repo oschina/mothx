@@ -20,7 +20,12 @@ import (
 
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
-	"modernc.org/sqlite"
+
+	// This package registers the SQLite driver for the whole process: every
+	// managed and standalone connection it opens uses the "sqlite" DSN, and no
+	// other production package imports the driver. Keep the blank import even when
+	// no symbol from it is referenced.
+	_ "modernc.org/sqlite"
 )
 
 // Migrator initializes or validates a database. It is intentionally kept
@@ -251,7 +256,7 @@ func openOnce(path string, migrate Migrator, opts Options) (*bun.DB, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("initialize sqlite connection: %w", err)
 	}
-	if err := checkIntegrity(sqlDB); err != nil {
+	if err := checkIntegrity(sqlDB, path); err != nil {
 		_ = sqlDB.Close()
 		return nil, err
 	}
@@ -267,13 +272,23 @@ func openOnce(path string, migrate Migrator, opts Options) (*bun.DB, error) {
 	return bun.NewDB(sqlDB, sqlitedialect.New()), nil
 }
 
+// indexRepairBudget bounds how long opening a database keeps retrying a lost
+// index repair. It is the same per-statement stall budget every managed
+// connection already carries, and it is a variable only so the contention path
+// can be tested without a full-budget stall.
+var indexRepairBudget = BusyTimeout
+
 // checkIntegrity validates the database before it is used. SQLite can report a
 // stale secondary-index entry after an interrupted write even when every table
 // page remains intact. Rebuilding indexes is lossless because their contents
 // are derived from table rows, so repair that precise case and verify it before
 // continuing. Other integrity failures may affect canonical data and must stay
 // visible to the caller rather than being treated as recoverable.
-func checkIntegrity(sqlDB *sql.DB) error {
+//
+// A repair that cannot take the writer lock is a contention failure, not damage:
+// another MothX process is alive against this file, and the error has to say so
+// instead of reporting a failed repair of a corrupted database.
+func checkIntegrity(sqlDB *sql.DB, path string) error {
 	integrity, err := quickCheck(sqlDB)
 	if err != nil {
 		return fmt.Errorf("run sqlite integrity check: %w", err)
@@ -281,12 +296,23 @@ func checkIntegrity(sqlDB *sql.DB) error {
 	if integrity == "ok" {
 		return nil
 	}
-	if !strings.Contains(strings.ToLower(integrity), "wrong # of entries in index") {
+	if !isStaleIndexReport(integrity) {
 		return fmt.Errorf("sqlite integrity check failed: %s", integrity)
 	}
+	cause := integrity
 
-	if _, err := sqlDB.Exec("REINDEX"); err != nil {
-		return fmt.Errorf("repair SQLite indexes after integrity check %q: %w", integrity, err)
+	if err := attemptWhileBusy(indexRepairBudget, func() error {
+		_, err := sqlDB.Exec("REINDEX")
+		return err
+	}); err != nil {
+		switch {
+		case isSQLiteBusy(err):
+			return fmt.Errorf("sqlite reported a stale index (%s) but the writer lock was unavailable for %s, so it was not repaired: another process still holds the SQLite writer lock on %s; stop it and retry: %w", cause, indexRepairBudget, path, err)
+		case isSQLiteReadOnly(err):
+			return fmt.Errorf("sqlite reported a stale index (%s) but %s is read-only, so it could not be repaired: %w", cause, path, err)
+		default:
+			return fmt.Errorf("repair SQLite indexes after integrity check %q: %w", cause, err)
+		}
 	}
 	integrity, err = quickCheck(sqlDB)
 	if err != nil {
@@ -295,7 +321,15 @@ func checkIntegrity(sqlDB *sql.DB) error {
 	if integrity != "ok" {
 		return fmt.Errorf("sqlite integrity check failed after index repair: %s", integrity)
 	}
+	recordIndexRepair(IndexRepair{Path: path, Cause: cause, At: time.Now()})
 	return nil
+}
+
+// isStaleIndexReport reports whether a quick_check line describes only a
+// secondary index disagreeing with the table rows it derives from - the one
+// integrity outcome that REINDEX fixes without touching data.
+func isStaleIndexReport(integrity string) bool {
+	return strings.Contains(strings.ToLower(integrity), "wrong # of entries in index")
 }
 
 func quickCheck(sqlDB *sql.DB) (string, error) {
@@ -382,21 +416,37 @@ func dsnForOS(path string, windows bool, foreignKeys bool) string {
 	return u.String()
 }
 
-func enableWAL(sqlDB *sql.DB) error {
-	deadline := time.Now().Add(10 * time.Second)
+// sqliteRetryDelay is the pause between retries of a startup statement that hit
+// writer contention.
+const sqliteRetryDelay = 25 * time.Millisecond
+
+// attemptWhileBusy runs one SQLite statement, retrying only while the driver
+// reports writer contention (SQLITE_BUSY/SQLITE_LOCKED) and the budget lasts.
+// Both statements that open a database has to survive a peer holding the single
+// writer: enabling WAL and rebuilding a stale index. Any other error returns
+// immediately, so a genuinely damaged or unwritable file is never retried into
+// a stall, and exhausting the budget returns the last transient error so the
+// caller keeps the driver's diagnostic.
+func attemptWhileBusy(budget time.Duration, statement func() error) error {
+	deadline := time.Now().Add(budget)
 	for {
-		var mode string
-		err := sqlDB.QueryRow("PRAGMA journal_mode=WAL").Scan(&mode)
-		if err == nil {
-			if strings.EqualFold(mode, "wal") {
-				return nil
-			}
-			return fmt.Errorf("sqlite journal mode is %q, want WAL", mode)
+		err := statement()
+		if err == nil || !isSQLiteBusy(err) || !time.Now().Add(sqliteRetryDelay).Before(deadline) {
+			return err
 		}
-		var sqliteErr *sqlite.Error
-		if !errors.As(err, &sqliteErr) || (sqliteErr.Code()&0xff != 5 && sqliteErr.Code()&0xff != 6) || time.Now().After(deadline) {
-			return fmt.Errorf("enable sqlite WAL mode: %w", err)
-		}
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(sqliteRetryDelay)
 	}
+}
+
+func enableWAL(sqlDB *sql.DB) error {
+	var mode string
+	if err := attemptWhileBusy(BusyTimeout, func() error {
+		return sqlDB.QueryRow("PRAGMA journal_mode=WAL").Scan(&mode)
+	}); err != nil {
+		return fmt.Errorf("enable sqlite WAL mode: %w", err)
+	}
+	if !strings.EqualFold(mode, "wal") {
+		return fmt.Errorf("sqlite journal mode is %q, want WAL", mode)
+	}
+	return nil
 }

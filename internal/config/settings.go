@@ -45,7 +45,23 @@ type Settings struct {
 	Theme                string                     `json:"theme,omitempty"`
 	Retry                RetrySettings              `json:"retry"`
 	Approval             ApprovalSettings           `json:"approval"`
+	Maintenance          *MaintenanceSettings       `json:"maintenance,omitempty"`
 	UpdateCheck          *bool                      `json:"updateCheck,omitempty"` // nil/true = check npm for updates on startup, false = disabled
+}
+
+// MaintenanceSettings configures Runtime-owned housekeeping that is scheduled
+// through the shared cron lifecycle but is not a user automation task. Absent
+// means every default applies, and the defaults keep the previous behavior:
+// attachment storage reconciliation runs once a day.
+type MaintenanceSettings struct {
+	// ReclaimAttachmentStorage gates the private attachment-store reconciliation.
+	// nil/true = enabled, false = the scheduled job is removed and the work is
+	// refused even if a stale job row still exists.
+	ReclaimAttachmentStorage *bool `json:"reclaimAttachmentStorage,omitempty"`
+	// StorageReconcileSchedule overrides the cadence of that reconciliation
+	// (for example "@every 12h" or "0 4 * * *"). Empty uses the Runtime default,
+	// and an invalid value falls back to it with a cron log line.
+	StorageReconcileSchedule string `json:"storageReconcileSchedule,omitempty"`
 }
 
 // MarshalJSON keeps sparse settings files sparse. encoding/json does not omit
@@ -1852,6 +1868,29 @@ func (s *Settings) IsUpdateCheckEnabled() bool {
 		return true
 	}
 	return *s.UpdateCheck
+}
+
+// IsAttachmentStorageReclaimEnabled reports whether the Runtime-owned
+// reconciliation of unreferenced attachment storage is scheduled and allowed to
+// run. It defaults to true when unset, matching updateCheck: the work is bounded
+// by the attachment retention window and only removes bytes the durable store no
+// longer claims, so it is on unless an operator turns it off.
+func (s *Settings) IsAttachmentStorageReclaimEnabled() bool {
+	if s == nil || s.Maintenance == nil || s.Maintenance.ReclaimAttachmentStorage == nil {
+		return true
+	}
+	return *s.Maintenance.ReclaimAttachmentStorage
+}
+
+// AttachmentStorageReclaimSchedule returns the configured cadence for the
+// attachment storage reconciliation, or "" when the Runtime default applies.
+// The value is intentionally not validated here: the scheduler that owns the
+// schedule grammar validates it, so config does not grow a second parser.
+func (s *Settings) AttachmentStorageReclaimSchedule() string {
+	if s == nil || s.Maintenance == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.Maintenance.StorageReconcileSchedule)
 }
 
 func (s *Settings) IsWebSearchEnabled() bool {

@@ -168,6 +168,7 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `tuilang` | string | `"auto"` | TUI language: `"auto"`, `"zh"`, or `"en"` |
 | `retry` | object | *(see below)* | API call retry settings |
 | `approval` | object | *(see below)* | Bash command approval settings |
+| `maintenance` | object | *(see below)* | Runtime-owned background housekeeping (attachment storage reclamation) |
 | `webSearch` | object | *(see below)* | Hosted web search settings |
 | `updateCheck` | bool | `true` | Enable npm-based update notifications |
 
@@ -993,6 +994,27 @@ In --print mode:
   }
 }
 ```
+
+### maintenance
+
+Runtime-owned background housekeeping. These are not user automation tasks: MothX schedules them through the shared cron lifecycle, and they stay out of the cron views in the Web UI and Desktop, the `/api/cron` management surface, and the `cron` tool.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `reclaimAttachmentStorage` | bool | `true` | Reclaim attachment storage that no durable row references any more |
+| `storageReconcileSchedule` | string | `@daily` | Cadence of that reconciliation (`@daily`, `@every 12h`, or a 5-field cron expression) |
+
+```json
+{
+  "maintenance": {
+    "reclaimAttachmentStorage": false
+  }
+}
+```
+
+Reclamation removes only directories under the session directory's `artifacts/` store that (a) no `session_attachments` row references **and** (b) were last written before the attachment retention window plus a 24-hour grace period (8 days by default with the 7-day retention). It fails closed when the sessions database cannot be read, never follows symbolic links, and ignores anything not shaped like its own generated attachment identifiers, so unrelated data is never interpreted as reclaimable storage. That floor is also what keeps reclamation from destroying anything a restored `mothx pure` archive could still serve. See [`mothx pure`](cli-reference.md#pure---archive-the-sessions-database).
+
+An invalid `storageReconcileSchedule` falls back to the default with a `[cron]` log line, and changing the cadence updates only the scheduled job's schedule - run counters and status are preserved. Turning reclamation off removes the scheduled job at the next scheduler start, and a stale job row that still fires is refused instead of deleting anything.
 
 ### Project-Level Allow Rules (`allow.json`)
 

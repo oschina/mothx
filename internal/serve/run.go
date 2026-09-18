@@ -616,6 +616,7 @@ func (rt *channelRuntime) setupCronScheduler(hCfg *channels.Config) {
 		interval = 30 * time.Second
 	}
 	rt.cronScheduler = cron.NewSchedulerWithSessionDirAndHandler(rt.cronStore, rt.dispatcher.AgentManager(), interval, rt.sessionDir, rt.runKnowledgeBaseCronJob)
+	rt.cronScheduler.SetMaintenancePolicy(cronMaintenancePolicy())
 	rt.cronScheduler.SetCompletionObserver(rt.pushBoundSessionResult)
 	rt.dispatcher.SetCronScheduler(rt.cronScheduler)
 	rt.cronScheduler.Start()
@@ -690,6 +691,7 @@ func (rt *channelRuntime) syncCronRuntime() {
 			interval = 30 * time.Second
 		}
 		rt.cronScheduler = cron.NewSchedulerWithSessionDirAndHandler(rt.cronStore, rt.dispatcher.AgentManager(), interval, rt.sessionDir, rt.runKnowledgeBaseCronJob)
+		rt.cronScheduler.SetMaintenancePolicy(cronMaintenancePolicy())
 		rt.cronScheduler.SetCompletionObserver(rt.pushBoundSessionResult)
 		rt.dispatcher.SetCronScheduler(rt.cronScheduler)
 		rt.cronScheduler.Start()

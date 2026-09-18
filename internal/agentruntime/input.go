@@ -143,6 +143,11 @@ func (s *AttachmentService) acceptArtifact(ctx context.Context, sessionID, runID
 	// cleanup hiccup must not make a trusted self-hosted user's new attachment
 	// unusable; its durable write below remains the authoritative operation.
 	_, _ = s.CleanupExpired(ctx)
+	// Expiry only sees rows the database still has. The throttled directory pass
+	// beside it is what reclaims storage whose rows are gone - a failed intake, a
+	// deleted session, or an archived database - so the private store cannot grow
+	// without bound between maintenance runs.
+	reconcileArtifactStorageOpportunistic(s.sessionDir, s.policy)
 
 	maxBytes := s.policy.MaxFileBytes
 	if ingress.Kind == AttachmentImage {

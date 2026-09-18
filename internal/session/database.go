@@ -29,6 +29,20 @@ func RootDatabasePath(sessionDir string) string {
 // BackupPath.
 type DatabaseRecovery = database.MigrationRecovery
 
+// DatabaseIndexRepair reports a stale secondary index internal/db rebuilt while
+// opening a database. Nothing is lost - index contents are derived from the
+// table rows - but the file has already survived a failed write, which a
+// front-end should surface once.
+type DatabaseIndexRepair = database.IndexRepair
+
+// TakeDatabaseIndexRepairs returns and clears the index repairs recorded since
+// the last call. Only this process's own repairs are reported: a repair replaces
+// no file, so peers never announce them (unlike a migration rebuild, which must
+// retire every other process's cached connection).
+func TakeDatabaseIndexRepairs() []DatabaseIndexRepair {
+	return database.TakeIndexRepairs()
+}
+
 // TakeDatabaseRecoveries returns the database recoveries recorded since the last
 // call and clears them, so a front-end can tell the user exactly once what was
 // backed up and why. internal/db also logs each recovery.

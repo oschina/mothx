@@ -358,7 +358,6 @@ func (a *App) switchToSession(detail session.SessionDetail) error {
 	if err := a.activateSession(newSess); err != nil {
 		return fmt.Errorf("activate session: %w", err)
 	}
-	a.cwd = newSess.GetHeader().Cwd
 	a.agentActivities = make(map[agentpkg.AgentID]*agentActivity)
 	a.agentActivityOrder = nil
 	a.historyLoaded = false

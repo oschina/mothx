@@ -65,6 +65,31 @@ func (d *AttachmentDAO) ListBySession(ctx context.Context, sessionID, status str
 	return records, err
 }
 
+// ListStorageReferences returns the ID and storage key of every attachment row
+// in the database, across sessions and regardless of lifecycle status. It is the
+// durable side of the private-store reconciliation: the Runtime compares the
+// artifact directories it finds on disk against this set, so a row in any status
+// keeps its bytes referenced. An expired row still protects its content until
+// CleanupExpired removes both together.
+func (d *AttachmentDAO) ListStorageReferences(ctx context.Context, executor bun.IDB) ([]AttachmentStorageReference, error) {
+	var records []AttachmentStorageReference
+	err := executor.NewSelect().Table("session_attachments").
+		Column("id", "storage_key").
+		OrderExpr("id ASC").
+		Scan(ctx, &records)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return records, err
+}
+
+// AttachmentStorageReference is the minimal projection the private-store
+// reconciliation needs: which artifact object a durable row still claims.
+type AttachmentStorageReference struct {
+	ID         string `bun:"id"`
+	StorageKey string `bun:"storage_key"`
+}
+
 func (d *AttachmentDAO) Expired(ctx context.Context, executor bun.IDB, now string) ([]AttachmentRecord, error) {
 	var records []AttachmentRecord
 	err := executor.NewSelect().Model(&records).Column("id", "storage_key").Where("expires_at <= ?", now).Scan(ctx)

@@ -290,9 +290,6 @@ func (r *SessionRuntime) prepareExpertResources(expertID string) (*preparedExper
 	r.mu.RLock()
 	center := r.ExpertCenter
 	workDir := r.WorkDir
-	settings := r.resourceSettings
-	workflows := r.resourceWorkflows
-	browserEnabled := r.resourceBrowser
 	r.mu.RUnlock()
 	if center == nil {
 		center = &expert.Center{ProjectDir: workDir}
@@ -308,6 +305,38 @@ func (r *SessionRuntime) prepareExpertResources(expertID string) (*preparedExper
 			return nil, fmt.Errorf("expert bundle %q is invalid: %s", expertID, bundle.InvalidReason)
 		}
 	}
+	return r.prepareResourcesForBundle(bundle, workDir)
+}
+
+// prepareBoundSessionResources validates every session-dependent resource
+// before BindSession publishes a new identity. A failed expert/context load
+// must leave the Runtime attached to its previous session.
+func (r *SessionRuntime) prepareBoundSessionResources(manager *session.Manager) (*preparedExpertResources, error) {
+	if r == nil {
+		return nil, fmt.Errorf("agent runtime is nil")
+	}
+	if manager == nil || manager.GetHeader() == nil {
+		return nil, fmt.Errorf("initialized session manager is required")
+	}
+	header := manager.GetHeader()
+	bundle, err := resolveBoundExpertBundle(header.Cwd, manager)
+	if err != nil {
+		return nil, err
+	}
+	return r.prepareResourcesForBundle(bundle, header.Cwd)
+}
+
+// prepareResourcesForBundle turns one resolved bundle into the Runtime-owned
+// resources that depend on it. Expert switching and session binding resolve
+// their bundle differently but must produce the same prepared result, so the
+// assembly lives here alone.
+func (r *SessionRuntime) prepareResourcesForBundle(bundle *expert.Bundle, workDir string) (*preparedExpertResources, error) {
+	r.mu.RLock()
+	settings := r.resourceSettings
+	workflows := r.resourceWorkflows
+	browserEnabled := r.resourceBrowser
+	r.mu.RUnlock()
+
 	prepared := &preparedExpertResources{}
 	if bundle != nil {
 		prepared.binding = newExpertBinding(bundle)
@@ -326,49 +355,7 @@ func (r *SessionRuntime) prepareExpertResources(expertID string) (*preparedExper
 	return prepared, nil
 }
 
-// prepareBoundSessionResources validates every session-dependent resource
-// before BindSession publishes a new identity. A failed expert/context load
-// must leave the Runtime attached to its previous session.
-func (r *SessionRuntime) prepareBoundSessionResources(manager *session.Manager) (*preparedExpertResources, error) {
-	if r == nil {
-		return nil, fmt.Errorf("agent runtime is nil")
-	}
-	if manager == nil || manager.GetHeader() == nil {
-		return nil, fmt.Errorf("initialized session manager is required")
-	}
-	header := manager.GetHeader()
-	r.mu.RLock()
-	settings := r.resourceSettings
-	workflows := r.resourceWorkflows
-	browserEnabled := r.resourceBrowser
-	r.mu.RUnlock()
-
-	bundle, err := resolveBoundExpertBundle(header.Cwd, manager)
-	if err != nil {
-		return nil, err
-	}
-	prepared := &preparedExpertResources{}
-	if bundle != nil {
-		prepared.binding = newExpertBinding(bundle)
-	}
-	if settings == nil {
-		return prepared, nil
-	}
-	resources, err := LoadContextResourcesWithExpert(settings, header.Cwd, workflows, browserEnabled, bundle)
-	if err != nil {
-		return nil, err
-	}
-	prepared.skillsMgr = resources.SkillsMgr
-	prepared.extraContext = resources.ExtraContext
-	prepared.ruleContent = resources.RuleContent
-	prepared.hasResources = true
-	return prepared, nil
-}
-
-// publishPreparedExpertResources installs a successful preflight result. It
-// performs only in-memory assignments and registry synchronization, so it
-// cannot invalidate the already-committed session binding with a late loader
-// error.
+// publishPreparedExpertResources installs a successful preflight result.
 func (r *SessionRuntime) publishPreparedExpertResources(prepared *preparedExpertResources) error {
 	if r == nil || prepared == nil {
 		return fmt.Errorf("prepared expert resources are required")
@@ -378,6 +365,17 @@ func (r *SessionRuntime) publishPreparedExpertResources(prepared *preparedExpert
 	if r.closed {
 		return fmt.Errorf("agent runtime is closed")
 	}
+	r.publishPreparedExpertResourcesLocked(prepared)
+	return nil
+}
+
+// publishPreparedExpertResourcesLocked installs a successful preflight result.
+// The caller must hold r.mu for writing: BindSession publishes inside the same
+// critical section as the new session identity, so no adapter can observe the
+// resources of one session attached to another. It performs only in-memory
+// assignments and registry synchronization, so it cannot invalidate an
+// already-committed session binding with a late loader error.
+func (r *SessionRuntime) publishPreparedExpertResourcesLocked(prepared *preparedExpertResources) {
 	r.Expert = prepared.binding
 	if prepared.hasResources {
 		if r.Registry != nil {
@@ -389,7 +387,6 @@ func (r *SessionRuntime) publishPreparedExpertResources(prepared *preparedExpert
 		r.RuleContent = prepared.ruleContent
 	}
 	r.LastUsed = time.Now()
-	return nil
 }
 
 func newExpertBinding(bundle *expert.Bundle) *ExpertBinding {

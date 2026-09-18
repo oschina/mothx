@@ -23,6 +23,7 @@ type Scheduler struct {
 	store              CronStore
 	manager            *agent.AgentManager
 	jobHandler         JobHandler
+	maintenance        *agentruntime.MaintenancePolicy
 	interval           time.Duration
 	sessionDir         string
 	quit               chan struct{}
@@ -159,6 +160,8 @@ func (s *Scheduler) Start() {
 	s.stopCancel = cancel
 	s.loopWG.Add(1)
 	s.mu.Unlock()
+
+	s.ensureMaintenanceJob()
 
 	go func() {
 		defer s.loopWG.Done()
@@ -305,6 +308,21 @@ func (s *Scheduler) executeJobContext(ctx context.Context, job CronJob) {
 		s.notifyCompletion(job.SessionID, response.String(), lastErr)
 		s.notifyJobCompletion(job, response.String(), lastErr)
 	}()
+
+	if agentruntime.IsMaintenanceCronJobID(job.ID) {
+		// Maintenance is Runtime-owned work that reuses this scheduler's claim,
+		// status, and next-run lifecycle. It is dispatched here rather than through
+		// an adapter JobHandler because a handler may legitimately decline a job, and
+		// a declined maintenance job would otherwise fall through and run its prompt
+		// as a model turn.
+		_, maintenanceResponse, maintenanceErr := agentruntime.RunMaintenanceCronJob(ctx, s.sessionDir, job.ID, s.maintenancePolicy())
+		response.WriteString(maintenanceResponse)
+		lastErr = maintenanceErr
+		s.updateJob(job.ID, func(current *CronJob) {
+			s.completeJob(current, lastErr)
+		})
+		return
+	}
 
 	if s.jobHandler != nil {
 		if handled, handlerResponse, handlerErr := s.jobHandler(ctx, job); handled {

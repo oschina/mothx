@@ -168,6 +168,7 @@ MothX 使用两个配置文件:
 | `tuilang` | string | `"auto"` | TUI 语言: `"auto"`、`"zh"` 或 `"en"` |
 | `retry` | object | *(见下文)* | API 调用重试设置 |
 | `approval` | object | *(见下文)* | Bash 命令审批设置 |
+| `maintenance` | object | *(见下文)* | Runtime 自有后台维护（附件存储回收） |
 | `webSearch` | object | *(见下文)* | Hosted web search 设置 |
 | `updateCheck` | bool | `true` | 启用 npm 版本更新检测通知 |
 
@@ -993,6 +994,27 @@ Agent 模式下：
   }
 }
 ```
+
+### maintenance（后台维护）
+
+Runtime 自有的后台维护配置。它们不是用户自动化任务：MothX 复用共享的 cron 生命周期来调度，并且不会出现在 Web UI 与 Desktop 的定时任务视图、`/api/cron` 管理接口以及 `cron` 工具里。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `reclaimAttachmentStorage` | bool | `true` | 回收已不再被任何持久记录引用的附件存储 |
+| `storageReconcileSchedule` | string | `@daily` | 该回收的频率（`@daily`、`@every 12h` 或 5 段 cron 表达式） |
+
+```json
+{
+  "maintenance": {
+    "reclaimAttachmentStorage": false
+  }
+}
+```
+
+回收只处理会话目录下 `artifacts/` 存储中同时满足两个条件的目录：（1）没有任何 `session_attachments` 行引用它，**且**（2）最后一次写入已早于附件保留期外加 24 小时缓冲（默认保留 7 天，即共 8 天）。无法读取会话数据库时一律不删（fail closed），不跟随符号链接，也只处理与自己生成的附件 ID 形状一致的目录，因此无关数据不会被当作可回收存储。正是这个时间下限，保证了回收不可能删掉“恢复 `mothx pure` 归档后仍可用”的数据。详见 [`mothx pure`](cli-reference.md#pure---归档会话数据库)。
+
+`storageReconcileSchedule` 写错时会回退到默认频率并输出 `[cron]` 日志；只改频率也只会更新计定任务的 schedule，运行次数与状态保持不变。关闭回收会在下次调度器启动时移除该计划任务；即使旧进程留下的任务行被触发，也会被拒绝而不是删任何东西。
 
 ### 项目级允许规则（`allow.json`）
 

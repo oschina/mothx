@@ -681,9 +681,11 @@ func (a *App) activateSession(sess *session.Manager) error {
 		return err
 	}
 	a.session = sess
-	if cwd := sess.GetHeader().Cwd; cwd != "" {
-		a.cwd = cwd
-	}
+	// The TUI directory always mirrors what the Runtime bound: BindSession made
+	// header.Cwd the authoritative WorkDir, so committing a different value (or
+	// keeping the previous one when it is empty) would recreate the divergence
+	// this ordering exists to prevent.
+	a.cwd = sess.GetHeader().Cwd
 	return nil
 }
 

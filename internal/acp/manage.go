@@ -1581,6 +1581,7 @@ func (s *server) ensureManageCron() (*cron.Scheduler, cron.CronStore, error) {
 		s.cronAgentMgr = built
 	}
 	scheduler := cron.NewSchedulerWithSessionDirAndHandler(store, manager, manageCronInterval(), sessionDir, s.runKnowledgeBaseCronJob)
+	scheduler.SetMaintenancePolicy(agentruntime.MaintenancePolicyFromSettings(s.settings))
 	// Reconcile schedules persisted by older Desktop processes before the
 	// first tick. This keeps the knowledge-base configuration authoritative and
 	// removes any namespaced job whose base was deleted while ACP was offline.
@@ -1685,6 +1686,9 @@ func (s *server) handleManageCronList(req rpcRequest) {
 			fmt.Sprintf("list cron jobs: %v", err), nil))
 		return
 	}
+	// Maintenance jobs stay out of the Desktop automation view: they are
+	// Runtime-owned storage housekeeping, not tasks the user authored.
+	jobs = cron.UserVisibleJobs(jobs)
 	sort.Slice(jobs, func(i, j int) bool {
 		if jobs[i].CreatedAt.Equal(jobs[j].CreatedAt) {
 			return jobs[i].ID < jobs[j].ID

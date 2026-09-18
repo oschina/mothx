@@ -143,6 +143,8 @@ mothx serve init-config project  # 生成 .mothx/serve.json
 
 ![Web UI 定时任务](assets/image/webui-cron.webp)
 
+该列表只展示用户创建的任务。同一个调度器还会运行一个 Runtime 拥有的维护任务（`mothx-maintenance:artifact-storage`，每日一次），用于回收已无引用的附件存储；它不会出现在该视图与名称查找中，并在调度器启动时自动创建。详见 [`mothx pure`](cli-reference.md#pure---归档会话数据库)。
+
 
 ## 消息通道
 

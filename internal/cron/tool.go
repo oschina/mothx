@@ -125,6 +125,8 @@ func (t *CronTool) executeList() (tools.ToolResult, error) {
 	if err != nil {
 		return tools.ToolResult{}, fmt.Errorf("list cron jobs: %w", err)
 	}
+	// Runtime-owned maintenance jobs are host housekeeping, not user automations.
+	jobs = UserVisibleJobs(jobs)
 	if len(jobs) == 0 {
 		return tools.NewTextToolResult("No cron jobs configured."), nil
 	}
@@ -278,8 +280,10 @@ func (t *CronTool) findJob(id, name string) (*CronJob, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list cron jobs: %w", err)
 	}
+	// A name lookup must never resolve a maintenance job, because its result
+	// feeds the enable/disable/delete/run actions.
 	var matches []CronJob
-	for _, job := range jobs {
+	for _, job := range UserVisibleJobs(jobs) {
 		if strings.EqualFold(job.Name, name) {
 			matches = append(matches, job)
 		}
