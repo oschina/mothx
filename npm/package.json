@@ -1,6 +1,6 @@
 {
   "name": "vibecoding-installer",
-  "version": "1.3.101-pre-4",
+  "version": "1.3.101-pre-5",
   "description": "Compatibility installer for MothX. Use the mothx-installer package for future updates.",
   "scripts": {
     "postinstall": "node scripts/postinstall.js"
@@ -31,23 +31,23 @@
     "node": ">=14"
   },
   "optionalDependencies": {
-    "mothx-installer-darwin-arm64": "1.3.101-pre-4",
-    "mothx-installer-darwin-x64": "1.3.101-pre-4",
-    "mothx-installer-freebsd-arm64": "1.3.101-pre-4",
-    "mothx-installer-freebsd-x64": "1.3.101-pre-4",
-    "mothx-installer-linux-arm64": "1.3.101-pre-4",
-    "mothx-installer-linux-loong64": "1.3.101-pre-4",
-    "mothx-installer-linux-musl-arm64": "1.3.101-pre-4",
-    "mothx-installer-linux-musl-x64": "1.3.101-pre-4",
-    "mothx-installer-linux-ppc64le": "1.3.101-pre-4",
-    "mothx-installer-linux-riscv64": "1.3.101-pre-4",
-    "mothx-installer-linux-s390x": "1.3.101-pre-4",
-    "mothx-installer-linux-x64": "1.3.101-pre-4",
-    "mothx-installer-netbsd-x64": "1.3.101-pre-4",
-    "mothx-installer-openbsd-arm64": "1.3.101-pre-4",
-    "mothx-installer-openbsd-x64": "1.3.101-pre-4",
-    "mothx-installer-win32-arm64": "1.3.101-pre-4",
-    "mothx-installer-win32-x64": "1.3.101-pre-4"
+    "mothx-installer-darwin-arm64": "1.3.101-pre-5",
+    "mothx-installer-darwin-x64": "1.3.101-pre-5",
+    "mothx-installer-freebsd-arm64": "1.3.101-pre-5",
+    "mothx-installer-freebsd-x64": "1.3.101-pre-5",
+    "mothx-installer-linux-arm64": "1.3.101-pre-5",
+    "mothx-installer-linux-loong64": "1.3.101-pre-5",
+    "mothx-installer-linux-musl-arm64": "1.3.101-pre-5",
+    "mothx-installer-linux-musl-x64": "1.3.101-pre-5",
+    "mothx-installer-linux-ppc64le": "1.3.101-pre-5",
+    "mothx-installer-linux-riscv64": "1.3.101-pre-5",
+    "mothx-installer-linux-s390x": "1.3.101-pre-5",
+    "mothx-installer-linux-x64": "1.3.101-pre-5",
+    "mothx-installer-netbsd-x64": "1.3.101-pre-5",
+    "mothx-installer-openbsd-arm64": "1.3.101-pre-5",
+    "mothx-installer-openbsd-x64": "1.3.101-pre-5",
+    "mothx-installer-win32-arm64": "1.3.101-pre-5",
+    "mothx-installer-win32-x64": "1.3.101-pre-5"
   },
   "bin": {
     "vibecoding": "bin/vibecoding"
