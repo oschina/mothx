@@ -139,7 +139,7 @@
 - systeminit：固化共享 `/systeminit` 提示词 —— 交互式才有的 question 指引、去空白的附加指令置于 finalNote 之前、空白输入忽略、确定性。
 - 流失败恢复：流中途 connection reset 经由续写重试恢复 —— 已输出部分被持久化并从精确后缀继续，无可见输出时整轮重跑，预算耗尽后上报原始错误 —— 而已经发出工具调用或错误不可重试的回合不会重试。
 - SQLite 写压力：`internal/db` 固化 synchronous 默认 NORMAL、`MOTHX_SQLITE_SYNCHRONOUS=FULL` 覆盖与 busy 重试计数（永久错误不计数）；会话域覆盖 `AppendMessages` 的父链与重放顺序、stale writer 整批拒绝且不落任何行、超过事务上限自动分批、子代理表隔离；租约心跳调度器覆盖单目录单调度器、同批续期、epoch 被顶替的租约单独 lost 而幸存租约照常续期、最后一个租约释放后调度器退出。另新增写压力压测形状 A/B/C（多进程写不同会话、FULL/NORMAL 混布、单进程多会话多租约）并报告 busy/begin 竞争指标，`MOTHX_WRITE_PRESSURE_SCALE` 可放大负载用于基线对比。
-## v1.2.100
+## v1.3.100
 
 ### ✨ 新功能
 

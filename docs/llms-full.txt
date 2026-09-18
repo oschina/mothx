@@ -1511,7 +1511,44 @@ Source: https://mothx.net/en/changelog.md
   - The budget is now injected into the run context as a transient, tail-appended system message when the remaining turns cross the pressure threshold, so the model sees the countdown. The notice is never persisted to the transcript and cache markers skip it, so it costs no prompt-cache prefix. A Runtime-clamped `extend_budget` tool then lets the model request more turns with a concrete reason, and the Runtime decides the grant.
   - `IterationBudgetPolicy` (soft/hard limit, renew factor, max renewals, minimum interval, 16-hour wall clock) is normalized in the shared Runtime and wired only for a session's conversational lead: transient builds, auxiliary roles, sub-agents, and expert-team members keep their capability ceiling and never receive the tool. Every exit path still emits exactly one terminal event, and the channel run-watchdog and durable background-polling defaults are raised to 57600s to match the wall-clock budget.
 
+- **`mothx pure` Archives the Sessions Database and Starts Fresh**
+  - Starting over previously meant deleting `sessions.db` by hand, which is both destructive and easy to get wrong: a leftover `-wal` or `-shm` sidecar can be picked up by the next database. The new `mothx pure` subcommand moves the shared `sessions.db` and its sidecars aside and creates a fresh, migrated database in its place. Nothing is deleted: each moved file is renamed to `sessions.db.pure-<timestamp>.bak` beside the new database (sidecars keep their suffix), so its sessions stay recoverable. `--session-dir` targets a specific directory; the default is the configured session directory.
+  - Sidecars whose database is already gone - from an interrupted reset or a hand-deleted file - are archived the same way, so the fresh database never inherits a stale write-ahead log and its startup does not depend on how SQLite chooses to treat the leftover.
+  - The command refuses to reset while another process holds an active session run in that directory, naming the session, the owning pid, and the run; `--force` overrides the refusal. A database this process cannot read is an unknown ownership state, not proof that no one is writing, so it also refuses without `--force`.
+  - `pure` now also states what it left in place, and the reason differs per directory: `channels/` holds separate session roots with their own `sessions.db`, each `knowledge-bases/<id>.db` is that knowledge base's own authoritative store, and only `artifacts/` content becomes unreachable once its rows are archived. Only the last is reclaimable, so it is listed with its size while the others are reported as data the reset must not treat as garbage.
+  - When the fresh database cannot be created after the previous files were moved, the error names the archive paths, so a failed reset no longer reads like lost data.
+
+- **Unreferenced Attachment Storage Is Reclaimed**
+  - Attachment bytes were only ever removed through the row-driven expiry path, so storage left behind by a deleted session, by an intake whose row write failed after its content was committed, or by an archived database stayed unreachable and occupied disk forever. The Runtime now also reconciles its private store from the directory side - on the attachment intake path (at most once an hour per process) and once a day through a Runtime-owned cron maintenance job (`mothx-maintenance:artifact-storage`, which is deliberately absent from user cron listings because it is host housekeeping rather than an authored automation) - and removes only directories that no row references **and** that were last written before the attachment retention window plus a 24-hour grace period, which is what keeps reclamation from destroying anything a restored archive could still serve. It fails closed when the sessions database cannot be read, never follows symbolic links, and only considers directories shaped like its own generated identifiers, so unrelated data can never be interpreted as attachment storage. `mothx pure --prune-unreferenced` runs the same pass on demand and reports what it reclaimed and what it kept as too young; `channels/` and `knowledge-bases/` are outside its scope.
+  - The new optional `maintenance` section of `settings.json` controls it: `reclaimAttachmentStorage` (default `true`, so existing files keep the new behavior) and `storageReconcileSchedule` (default `@daily`, validated by the scheduler, falling back to the default with a log line when unparseable). Disabling removes the scheduled job at the next scheduler start and makes a stale job row refuse to delete anything; changing the cadence keeps the job's run counters and status.
+
 ### 🐛 Bug Fixes
+
+- **Provider Stream Timeouts Recover Consistently Across Runs**
+  - A caller deadline, including one applied around an ESM role, could be surfaced as a provider response timeout and misleadingly claim that it had retried zero times. Caller cancellation and deadlines now remain cancelled runs, never provider transport failures.
+  - ESM worker, critic, and audit roles no longer impose a 30-minute deadline: the long-task objective continues until it finishes or is explicitly cancelled. The restricted recovery observer remains bounded.
+  - When a provider stream genuinely stalls, Agent Core now retries with exponential backoff until cancellation. After partial text or reasoning it persists the safe partial response and uses a continuation instruction; retries do not consume the Agent iteration budget. This shared recovery path applies to ordinary, ESM, and other adapter runs without re-running emitted tool calls.
+
+- **ESM Continues Long Objectives Instead of Tripping Internal Circuit Breakers**
+  - Worker, critic, and audit roles now use the Agent Core's explicit unbounded-iteration policy. A role that ends `incomplete` is marked incomplete and recorded as recoverable work, never projected as success.
+  - Recovery and rejected-completion counts remain visible for diagnosis, but neither count pauses an active ESM objective. A rejected completion means remaining work, so the next continuation resumes from persisted state.
+
+- **Session Deletion Is Fenced by the Runtime Mutation Lease**
+  - Deleting a session (TUI `/sessions`, ACP `session/delete`, Serve `/clear` and session deletion, and the CLI) removed its rows and handle without checking whether another process still owned it for execution, so a concurrent run could lose its session underneath it. Deletion now takes the shared Runtime mutation lease for that session and revalidates the fenced `owner`/`epoch`/`token` identity inside the deletion transaction; a multi-session cascade reuses the lease group it already holds instead of reacquiring a process-local lock per child.
+  - The lease preflight used by `mothx pure` now opens the sessions database read-only, with no migrations, integrity repair, or WAL setup, so a safety check never modifies the database it is deciding whether to archive.
+
+- **Unadvertised Tool Calls Are Rejected Before Execution**
+  - A provider response is untrusted input: the agent ran any tool call the provider emitted even when the effective mode had not advertised it, so a hallucinated or injected call could still reach approval, durable claims, and the registry. Execution now checks the Run's frozen registration snapshot first and returns a tool error for a call that is not registered for that run, leaving Registry changes to a subsequent Agent build.
+
+- **Session Identity Is Committed Only After Preparation Succeeds**
+  - `BindSession` published the new session identity before loading the session's expert binding and context resources, so a load failure left the Runtime attached to a half-initialized session while the caller believed the bind had failed. The session-dependent resources are now resolved first and the identity is published only once they succeed, and the TUI's `activateSession` commits `session`/`cwd` only after decision recovery and Runtime binding both succeed, so a failed switch no longer leaves the adapter and the Runtime on different sessions.
+  - Binding now rebuilds the Runtime-owned attachment and input services for the session being bound. A long-lived Runtime (the TUI reuses one across `/sessions`, and the CLI reuses one for `--shared-runtime` runs) therefore no longer keeps writing new uploads into the first session's attachment directory after a session switch.
+  - Serve's `/clear` created a fresh session manager but left the session's Runtime bound to the deleted one, so the next prompt executed against a session that no longer existed. Clearing now rebinds the Runtime to the new manager before the session is reused.
+
+- **SQLite: A Stale Secondary Index Is Repaired Instead of Blocking Startup**
+  - An interrupted write could leave SQLite reporting `wrong # of entries in index` from `PRAGMA quick_check` even though every table page was intact, and the integrity check failed startup with no way forward. Index contents are derived from table rows, so this precise case is now repaired with `REINDEX` and re-verified before continuing; any other integrity failure still aborts startup, since it may affect canonical data.
+  - A repair that cannot take the writer lock is reported as contention - another process still holds the database, so the index was not rebuilt - instead of reading like a failed repair of a corrupted file. It retries within the same busy budget every managed connection already carries, and the untouched database is repaired successfully once that lock is released.
+  - A completed repair is now reported exactly once (a startup notice for the CLI and TUI, a log line for serve, ACP, and channels), because a database that needed one has already survived an interrupted write worth knowing about.
 
 - **Session Runtime Leases Now Survive Transient Database Stalls**
   - Long runs could be interrupted by `session runtime lease was lost` even when no other process held the session. The per-directory heartbeat scheduler stopped whenever a tick observed an empty directory, even if a lease admitted moments earlier was still live: it left a registered-but-stopped entry in the scheduler registry that no later acquire could replace, so the lease was never renewed again and a later execution-path write found it expired. This was introduced when the per-lease heartbeats were coalesced into one scheduler per session directory.
@@ -1583,7 +1620,7 @@ Source: https://mothx.net/en/changelog.md
 - `systeminit`: the shared `/systeminit` prompt is pinned — interactive-only question guidance, trimmed extra instructions before the final note, blank extra input ignored, and determinism.
 - Stream-failure recovery: a mid-stream connection reset resumes through the continuation retry — partial output persists and continues from the exact suffix, no visible output re-runs the turn fresh, and exhausting the budget surfaces the original error — while a turn with an already-emitted tool call or a non-retryable error never retries.
 - SQLite write pressure: `internal/db` pins the synchronous default (NORMAL), the `MOTHX_SQLITE_SYNCHRONOUS=FULL` override, and busy-retry counting that never charges permanent errors; session tests cover the `AppendMessages` parent chain and replay order, whole-batch stale-writer rejection persisting no rows, chunking above the transaction cap, and sub-agent table isolation; the heartbeat scheduler test covers one scheduler per directory, batched renewal, a displaced lease losing only itself while the survivor renews, and retirement after the last release. Plus write-pressure load shapes A/B/C (multi-process distinct-session writers, mixed FULL/NORMAL deployment, single-process many sessions with leases) reporting busy/begin contention metrics, scalable through `MOTHX_WRITE_PRESSURE_SCALE` for baseline runs.
-## v1.2.100
+## v1.3.100
 
 ### ✨ New Features
 
@@ -5419,6 +5456,41 @@ mothx stats --cli
 mothx stats --cli --db ~/.mothx/sessions/sessions.db
 ```
 
+### `pure` - Archive the Sessions Database
+
+Move the shared `sessions.db` aside and create a fresh, empty database in its place. Nothing is deleted: every moved file is renamed next to the new database as `sessions.db.pure-<timestamp>.bak`, and the SQLite sidecars keep their suffix (`...bak-wal`, `...bak-shm`, `...bak-journal`), so the previous sessions stay recoverable. A sidecar whose database is already gone - from an interrupted reset or a hand-deleted file - is archived the same way, so the fresh database can never inherit it.
+
+Only `sessions.db` and its sidecars are archived. Everything else in the session directory stays where it is, and each kind stays for its own reason: `channels/` holds **separate session roots**, each with its own `sessions.db` and session handles; every `knowledge-bases/<id>.db` **is** that knowledge base's own authoritative store (its configuration row and its rebuildable index live inside that file, and bases are enumerated from the directory, not from the shared database); and `artifacts/` holds attachment content that the archived database used to describe. Of the three, only unreferenced attachment storage is reclaimable - the rest is live data that a sessions-database reset does not invalidate. See the reclamation rules below.
+
+```
+mothx pure [flags]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--session-dir` | - | Configured session directory | Session directory to reset |
+| `--force` | - | false | Reset even while another `mothx` process holds an active session run |
+| `--prune-unreferenced` | - | false | Also reclaim attachment storage no row references and that is already past the retention window |
+
+Examples:
+```bash
+# Archive the default sessions database and start fresh
+mothx pure
+
+# Reset a specific session directory
+mothx pure --session-dir ~/.mothx/sessions
+
+# Reset despite an active run in another process
+mothx pure --force
+
+# Reset and immediately reclaim unreferenced attachment storage
+mothx pure --prune-unreferenced
+```
+
+The command refuses to start while a session run is active in that directory, naming the session, the owning pid, and its run. That check reads execution leases, so an idle `mothx` process that only holds the database open is not detected - stop the other processes yourself, or pass `--force`. A database this process cannot open at all is reported as unknown rather than busy and still resets, since that is the case `pure` exists for.
+
+Attachment storage becomes unreachable once the rows that described it are archived, and the same happens when a session is deleted or an intake fails after its content was written. Reclamation never relies on a reset: the Runtime sweeps the private store while accepting new attachments (at most once an hour per process) and once a day through its own cron maintenance job, and removes only directories that no row references **and** that were last written before the attachment retention window plus a 24-hour grace period - eight days by default with the 7-day retention. That floor is why reclamation can never destroy something a restored archive could still serve. `--prune-unreferenced` runs the same pass immediately and reports what it reclaimed and what it kept as too young; `channels/` and `knowledge-bases/` are never touched by it. The scheduled pass is configured by the optional `maintenance` section of `settings.json` (`reclaimAttachmentStorage`, `storageReconcileSchedule`); see [configuration](configuration.md#maintenance).
+
 ### `doctor` - Environment Diagnostics
 
 Diagnose your MothX environment: OS info, config files, providers, models, sandbox, MCP, and more.
@@ -5920,6 +5992,7 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `tuilang` | string | `"auto"` | TUI language: `"auto"`, `"zh"`, or `"en"` |
 | `retry` | object | *(see below)* | API call retry settings |
 | `approval` | object | *(see below)* | Bash command approval settings |
+| `maintenance` | object | *(see below)* | Runtime-owned background housekeeping (attachment storage reclamation) |
 | `webSearch` | object | *(see below)* | Hosted web search settings |
 | `updateCheck` | bool | `true` | Enable npm-based update notifications |
 
@@ -6745,6 +6818,27 @@ In --print mode:
   }
 }
 ```
+
+### maintenance
+
+Runtime-owned background housekeeping. These are not user automation tasks: MothX schedules them through the shared cron lifecycle, and they stay out of the cron views in the Web UI and Desktop, the `/api/cron` management surface, and the `cron` tool.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `reclaimAttachmentStorage` | bool | `true` | Reclaim attachment storage that no durable row references any more |
+| `storageReconcileSchedule` | string | `@daily` | Cadence of that reconciliation (`@daily`, `@every 12h`, or a 5-field cron expression) |
+
+```json
+{
+  "maintenance": {
+    "reclaimAttachmentStorage": false
+  }
+}
+```
+
+Reclamation removes only directories under the session directory's `artifacts/` store that (a) no `session_attachments` row references **and** (b) were last written before the attachment retention window plus a 24-hour grace period (8 days by default with the 7-day retention). It fails closed when the sessions database cannot be read, never follows symbolic links, and ignores anything not shaped like its own generated attachment identifiers, so unrelated data is never interpreted as reclaimable storage. That floor is also what keeps reclamation from destroying anything a restored `mothx pure` archive could still serve. See [`mothx pure`](cli-reference.md#pure---archive-the-sessions-database).
+
+An invalid `storageReconcileSchedule` falls back to the default with a `[cron]` log line, and changing the cadence updates only the scheduled job's schedule - run counters and status are preserved. Turning reclamation off removes the scheduled job at the next scheduler start, and a stale job row that still fires is refused instead of deleting anything.
 
 ### Project-Level Allow Rules (`allow.json`)
 
@@ -11754,6 +11848,8 @@ Access `http://127.0.0.1:7872` to open the Web UI. When authentication is enable
 
 ![Web UI Cron](assets/image/webui-cron.webp)
 
+The list shows user-authored tasks only. One Runtime-owned maintenance job (`mothx-maintenance:artifact-storage`, daily) runs in the same scheduler to reclaim unreferenced attachment storage; it is hidden from this view and from name lookup, and is re-created whenever the scheduler starts. See [`mothx pure`](cli-reference.md#pure---archive-the-sessions-database).
+
 
 ## Messaging Channels
 
@@ -13018,6 +13114,8 @@ In Channels messaging mode, the assistant can record user preferences, decisions
 ### cron - Scheduled Background Tasks
 
 Enables creating and managing cron-like scheduled tasks that execute in the background via sub-agents. 
+
+MothX also schedules one Runtime-owned maintenance job (`mothx-maintenance:artifact-storage`, daily) that reclaims unreferenced attachment storage through this same scheduler. It is host housekeeping rather than a user task, so it is excluded from `list`, from name resolution, and from the Web UI and Desktop automation views; it is created automatically whenever a cron scheduler starts. See [`mothx pure`](cli-reference.md#pure---archive-the-sessions-database) for the reclamation rules and the on-demand pass.
 
 #### Parameters:
 

@@ -139,7 +139,7 @@
 - `systeminit`: the shared `/systeminit` prompt is pinned — interactive-only question guidance, trimmed extra instructions before the final note, blank extra input ignored, and determinism.
 - Stream-failure recovery: a mid-stream connection reset resumes through the continuation retry — partial output persists and continues from the exact suffix, no visible output re-runs the turn fresh, and exhausting the budget surfaces the original error — while a turn with an already-emitted tool call or a non-retryable error never retries.
 - SQLite write pressure: `internal/db` pins the synchronous default (NORMAL), the `MOTHX_SQLITE_SYNCHRONOUS=FULL` override, and busy-retry counting that never charges permanent errors; session tests cover the `AppendMessages` parent chain and replay order, whole-batch stale-writer rejection persisting no rows, chunking above the transaction cap, and sub-agent table isolation; the heartbeat scheduler test covers one scheduler per directory, batched renewal, a displaced lease losing only itself while the survivor renews, and retirement after the last release. Plus write-pressure load shapes A/B/C (multi-process distinct-session writers, mixed FULL/NORMAL deployment, single-process many sessions with leases) reporting busy/begin contention metrics, scalable through `MOTHX_WRITE_PRESSURE_SCALE` for baseline runs.
-## v1.2.100
+## v1.3.100
 
 ### ✨ New Features
 
