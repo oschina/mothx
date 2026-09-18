@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,37 @@ func TestLoopInjectsBudgetNoticeOnce(t *testing.T) {
 	}
 	if notices != 1 {
 		t.Fatalf("budget notices = %d, want exactly 1", notices)
+	}
+}
+
+func TestNegativeMaxIterationsDoesNotEnforceLoopCap(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox())
+	registry.Register(noopTool{})
+	batches := make([][]provider.StreamEvent, 0, 202)
+	for i := 0; i < 201; i++ {
+		batches = append(batches, []provider.StreamEvent{
+			{Type: provider.StreamStart},
+			{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{ID: fmt.Sprintf("noop-%d", i), Name: "noop", Arguments: json.RawMessage(`{}`)}},
+			{Type: provider.StreamDone, StopReason: "tool_use"},
+		})
+	}
+	batches = append(batches, []provider.StreamEvent{
+		{Type: provider.StreamStart},
+		{Type: provider.StreamTextDelta, TextDelta: "finished"},
+		{Type: provider.StreamDone, StopReason: "stop"},
+	})
+	scripted := newScriptedProvider(batches...)
+	a := NewWithLoopConfig(AgentLoopConfig{
+		Config:               Config{ID: "unbounded", Provider: scripted, Model: scripted.models[0], Mode: "yolo"},
+		MaxIterations:        -1,
+		MaxConsecutiveNoText: 1000,
+	}, registry)
+	status, reason, _ := collectTerminalEvents(t, a.Run(context.Background(), "finish"))
+	if status != TaskSuccess || reason != "stop" {
+		t.Fatalf("terminal = %q/%q, want success/stop after >200 turns", status, reason)
+	}
+	if scripted.calls != 202 {
+		t.Fatalf("provider calls = %d, want 202", scripted.calls)
 	}
 }
 

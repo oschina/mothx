@@ -6,14 +6,37 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/startvibecoding/mothx/internal/session"
 )
+
+func TestRoleContextLeavesLongRunningRolesWithoutDeadline(t *testing.T) {
+	ctx, cancel := RoleContext(context.Background(), RoleWorker)
+	defer cancel()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("worker ESM role unexpectedly has a deadline")
+	}
+}
+
+func TestRoleContextBoundsRecoveryObserver(t *testing.T) {
+	before := time.Now()
+	ctx, cancel := RoleContext(context.Background(), RoleRecovery)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("recovery observer must retain its bounded deadline")
+	}
+	if got := deadline.Sub(before); got < RecoveryObserverTimeout-time.Second || got > RecoveryObserverTimeout+time.Second {
+		t.Fatalf("recovery deadline = %s from now, want approximately %s", got, RecoveryObserverTimeout)
+	}
+}
 
 type runtimeTestAdapter struct {
 	responses map[Role]string
 	roles     []Role
 	prompts   map[Role]string
+	requests  map[Role]RoleRequest
 	roleErr   error
 	observers int
 }
@@ -29,6 +52,9 @@ func (e *runtimeTestEvents) PublishESMEvent(_ context.Context, event RuntimeEven
 
 func (a *runtimeTestAdapter) RunRole(_ context.Context, req RoleRequest) (RoleResult, error) {
 	a.roles = append(a.roles, req.Role)
+	if a.requests != nil {
+		a.requests[req.Role] = req
+	}
 	if a.prompts != nil {
 		a.prompts[req.Role] = req.Prompt
 	}
@@ -113,13 +139,13 @@ func TestSupervisorPublishesLifecycleEvents(t *testing.T) {
 	}
 }
 
-func TestSupervisorRecoveryLimitPausesWithoutObserver(t *testing.T) {
+func TestSupervisorRepeatedRecoveryStaysActiveAndUsesObserver(t *testing.T) {
 	store, sessionID := newRuntimeTestStore(t)
 	ctx := context.Background()
 	if _, err := store.Create(ctx, sessionID, "finish the objective"); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < RecoveryLimit; i++ {
+	for i := 0; i < 5; i++ {
 		if _, err := store.RecordRecovery(ctx, sessionID, "previous interruption", "retry", []string{"finish"}); err != nil {
 			t.Fatal(err)
 		}
@@ -129,8 +155,45 @@ func TestSupervisorRecoveryLimitPausesWithoutObserver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if obj.Status != StatusPaused || adapter.observers != 0 {
+	if obj.Status != StatusActive || obj.RecoveryCount != 6 || adapter.observers != 1 {
 		t.Fatalf("objective=%#v observers=%d", obj, adapter.observers)
+	}
+}
+
+func TestSupervisorIncompleteRoleRecoversAndKeepsObjectiveActive(t *testing.T) {
+	store, sessionID := newRuntimeTestStore(t)
+	ctx := context.Background()
+	if _, err := store.Create(ctx, sessionID, "finish the objective"); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &runtimeTestAdapter{roleErr: NewRoleIncompleteError(RoleWorker, "max_iterations", nil)}
+	obj, err := (&Supervisor{Store: store, Adapter: adapter}).Run(ctx, sessionID, "run-incomplete", rootForRuntimeTest(t), "yolo")
+	if err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	if obj == nil || obj.Status != StatusActive || obj.RecoveryCount != 1 || !obj.CanAutoRun() {
+		t.Fatalf("incomplete role did not recover: %#v", obj)
+	}
+}
+
+func TestSupervisorRolesUseUnboundedLongTaskIterations(t *testing.T) {
+	store, sessionID := newRuntimeTestStore(t)
+	ctx := context.Background()
+	if _, err := store.Create(ctx, sessionID, "finish the objective"); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &runtimeTestAdapter{requests: make(map[Role]RoleRequest), responses: map[Role]string{
+		RoleWorker: `{"status":"complete_candidate","summary":"done","evidence":["tests pass"],"remaining_work":[],"blockers":[]}`,
+		RoleCritic: `{"verdict":"pass","review":"critic verified","requirements_checked":["objective -> covered"],"missing_work":[],"evidence":["read source"]}`,
+		RoleAudit:  `{"verdict":"pass","review":"audit verified","requirements_checked":["objective -> covered"],"missing_work":[],"evidence":["read source"]}`,
+	}}
+	if _, err := (&Supervisor{Store: store, Adapter: adapter}).Run(ctx, sessionID, "run-unbounded", rootForRuntimeTest(t), "yolo"); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []Role{RoleWorker, RoleCritic, RoleAudit} {
+		if got := adapter.requests[role].MaxIterations; got != LongTaskMaxIterations {
+			t.Fatalf("%s MaxIterations = %d, want %d", role, got, LongTaskMaxIterations)
+		}
 	}
 }
 
@@ -187,11 +250,10 @@ func rootForRuntimeTest(t *testing.T) string {
 	return t.TempDir()
 }
 
-// TestSupervisorRejectionCircuitBreakerSurvivesContinuations is the P0
-// regression test: rejection streaks are recorded under the base continuation
-// run ID and must survive the Supervisor-owned FinishRun at the end of each
-// continuation, pausing once CompletionRejectionLimit is reached.
-func TestSupervisorRejectionCircuitBreakerSurvivesContinuations(t *testing.T) {
+// TestSupervisorRejectedCompletionsContinueAcrossContinuations verifies that a
+// rejected completion remains work to do rather than an unattended circuit
+// breaker that pauses the long-running objective.
+func TestSupervisorRejectedCompletionsContinueAcrossContinuations(t *testing.T) {
 	store, sessionID := newRuntimeTestStore(t)
 	ctx := context.Background()
 	if _, err := store.Create(ctx, sessionID, "finish the objective"); err != nil {
@@ -201,25 +263,21 @@ func TestSupervisorRejectionCircuitBreakerSurvivesContinuations(t *testing.T) {
 		RoleWorker: `{"status":"complete_candidate","summary":"done","evidence":["tests pass"],"remaining_work":[],"blockers":[]}`,
 		RoleCritic: `{"verdict":"fail","review":"missing regression tests","requirements_checked":["objective -> gap"],"missing_work":["add regression tests"],"evidence":["read source"]}`,
 	}}
-	for i := 1; i <= CompletionRejectionLimit; i++ {
+	for i := 1; i <= 4; i++ {
 		obj, err := (&Supervisor{Store: store, Adapter: adapter}).Run(ctx, sessionID, fmt.Sprintf("run-%d", i), rootForRuntimeTest(t), "yolo")
 		if err != nil {
 			t.Fatalf("Run %d: %v", i, err)
 		}
-		wantStatus := StatusActive
-		if i == CompletionRejectionLimit {
-			wantStatus = StatusPaused
-		}
-		if obj.Status != wantStatus || obj.RejectionCount != i {
-			t.Fatalf("after continuation %d: status=%s rejectionCount=%d, want %s/%d", i, obj.Status, obj.RejectionCount, wantStatus, i)
+		if obj.Status != StatusActive || obj.RejectionCount != i || !obj.CanAutoRun() {
+			t.Fatalf("after continuation %d: %#v", i, obj)
 		}
 	}
 	obj, err := store.Get(ctx, sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if obj.CanAutoRun() {
-		t.Fatalf("circuit breaker did not stop continuation: %#v", obj)
+	if !obj.CanAutoRun() {
+		t.Fatalf("rejected completion stopped continuation: %#v", obj)
 	}
 }
 

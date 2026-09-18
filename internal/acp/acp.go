@@ -2062,7 +2062,7 @@ func (s *server) handleNewSession(req rpcRequest) {
 	id := mgr.GetHeader().ID
 	registry := s.newToolRegistry(cwd, mgr)
 	if registry == nil {
-		_ = session.DeleteSession(mgr.GetFile(), s.settings.GetSessionDir())
+		_ = agentruntime.DeleteSession(s.settings.GetSessionDir(), id)
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: "build ACP registry failed"})
 		return
 	}
@@ -2096,7 +2096,7 @@ func (s *server) handleNewSession(req rpcRequest) {
 	}
 	if err != nil {
 		runtime.Close()
-		if cleanupErr := session.DeleteSession(mgr.GetFile(), s.settings.GetSessionDir()); cleanupErr != nil {
+		if cleanupErr := agentruntime.DeleteSession(s.settings.GetSessionDir(), id); cleanupErr != nil {
 			log.Printf("[acp] cleanup failed session %s: %v", id, cleanupErr)
 		}
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
@@ -3331,7 +3331,7 @@ func (s *server) handleDeleteSession(req rpcRequest) {
 	}
 	defer leaseGroup.Release()
 	for i := len(targets) - 1; i >= 0; i-- {
-		if err := agentruntime.DeleteSession(s.settings.GetSessionDir(), targets[i]); err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
+		if err := agentruntime.DeleteSessionWithMutation(s.settings.GetSessionDir(), targets[i], leaseGroup.Guard(targets[i])); err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
 			s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
 			return
 		}

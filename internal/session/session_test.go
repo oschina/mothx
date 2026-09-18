@@ -1137,6 +1137,35 @@ func TestDeleteSessionNonExistent(t *testing.T) {
 	}
 }
 
+// TestDeleteSessionRefusesAnExecutionOwner ensures a direct deletion cannot
+// remove the lease row beneath another process's live execution. The shared
+// mutation lease is the deletion admission boundary, so the handle and durable
+// session must remain intact until the execution owner releases it.
+func TestDeleteSessionRefusesAnExecutionOwner(t *testing.T) {
+	sessionDir := t.TempDir()
+	m := New(t.TempDir(), sessionDir)
+	if err := m.Init(); err != nil {
+		t.Fatal(err)
+	}
+	guard, err := AcquireExecutionAdmission(sessionDir, m.GetHeader().ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guard.Release()
+
+	err = DeleteSession(m.GetFile(), sessionDir)
+	if !errors.Is(err, ErrRuntimeLeaseBusy) {
+		t.Fatalf("DeleteSession error = %v, want an active execution lease refusal", err)
+	}
+	sessions, err := ListForDir(m.GetHeader().Cwd, sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessionFileID(sessions[0].Path) != m.GetHeader().ID {
+		t.Fatalf("sessions after refused deletion = %#v, want the active session", sessions)
+	}
+}
+
 func TestDeleteSessionRejectsPathOutsideSessionDir(t *testing.T) {
 	sessionDir := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.db")

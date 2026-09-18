@@ -183,9 +183,6 @@ func (a *App) esmPanelLines(width int) []string {
 		a.translator.Text(i18n.MsgESMPanelStage, a.esmPhaseLabel(phase)),
 		a.translator.Text(i18n.MsgESMPanelPipeline, a.renderESMPipeline(phase, obj.Status)),
 	}
-	if obj.Status == esm.StatusPaused && obj.RejectionCount >= esm.CompletionRejectionLimit {
-		lines = append(lines, a.translator.Text(i18n.MsgESMPanelPaused))
-	}
 	lines = appendWrappedESMField(lines, a.translator.Text(i18n.MsgESMPanelObjective), obj.Objective, width)
 
 	if obj.ProgressSummary != "" {
@@ -206,10 +203,10 @@ func (a *App) esmPanelLines(width int) []string {
 		lines = appendWrappedESMField(lines, a.translator.Text(i18n.MsgESMPanelLatestCompletionReview), obj.CompletionReview, width)
 	}
 	if obj.RejectionCount > 0 {
-		lines = append(lines, a.translator.Text(i18n.MsgESMPanelCompletionRejections, obj.RejectionCount, esm.CompletionRejectionLimit))
+		lines = append(lines, a.translator.Text(i18n.MsgESMPanelCompletionRejections, obj.RejectionCount))
 	}
 	if obj.RecoveryCount > 0 {
-		lines = append(lines, "", a.translator.Text(i18n.MsgESMPanelAutomaticRecoveries, obj.RecoveryCount, esm.RecoveryLimit))
+		lines = append(lines, "", a.translator.Text(i18n.MsgESMPanelAutomaticRecoveries, obj.RecoveryCount))
 		if obj.RecoveryReason != "" {
 			lines = appendWrappedESMField(lines, a.translator.Text(i18n.MsgESMPanelLatestRecoveryReason), obj.RecoveryReason, width)
 		}

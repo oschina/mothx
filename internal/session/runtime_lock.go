@@ -832,6 +832,21 @@ type RuntimeLeaseGroup struct {
 	once   sync.Once
 }
 
+// Guard returns the mutation guard this group holds for sessionID. It is used
+// by one shared multi-session operation to fence each per-session write inside
+// its own transaction without attempting to reacquire the process-local lock.
+func (g *RuntimeLeaseGroup) Guard(sessionID string) *RuntimeLeaseGuard {
+	if g == nil {
+		return nil
+	}
+	for _, guard := range g.guards {
+		if guard != nil && guard.Binding().SessionID == sessionID {
+			return guard
+		}
+	}
+	return nil
+}
+
 // Release relinquishes grouped leases in reverse acquisition order.
 func (g *RuntimeLeaseGroup) Release() {
 	if g == nil {

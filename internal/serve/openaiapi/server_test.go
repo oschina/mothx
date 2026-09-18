@@ -1593,6 +1593,28 @@ func newRecordingAPIServer(t *testing.T) (*Server, *recordingAPIProvider) {
 	return srv, p
 }
 
+func TestClearSessionRebindsRuntimeToFreshManager(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.pool.Stop()
+	sess, err := srv.getOrCreateSession("clear-rebind", srv.cfg.GetWorkDir())
+	if err != nil {
+		t.Fatalf("getOrCreateSession: %v", err)
+	}
+	old := sess.Manager
+	if err := srv.clearSession(sess, srv.cfg.GetWorkDir()); err != nil {
+		t.Fatalf("clearSession: %v", err)
+	}
+	if sess.Manager == old {
+		t.Fatal("clearSession retained the deleted manager")
+	}
+	if sess.Runtime == nil || sess.Runtime.Manager != sess.Manager {
+		t.Fatalf("runtime manager = %p, want fresh manager %p", sess.Runtime.Manager, sess.Manager)
+	}
+	if got := sess.Manager.GetMessages(); len(got) != 0 {
+		t.Fatalf("fresh session messages = %#v, want none", got)
+	}
+}
+
 func TestCloneModelCopiesMutableFields(t *testing.T) {
 	model := &provider.Model{
 		ID:     "m1",

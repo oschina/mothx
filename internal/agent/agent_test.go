@@ -73,16 +73,22 @@ type timeoutRecoveringProvider struct {
 	models       []*provider.Model
 	callCount    int
 	timeoutTimes int
+	emitPartial  bool
+	lastParams   provider.ChatParams
 }
 
 func (p *timeoutRecoveringProvider) Chat(ctx context.Context, params provider.ChatParams) <-chan provider.StreamEvent {
 	ch := make(chan provider.StreamEvent, 4)
 	p.callCount++
 	n := p.callCount
+	p.lastParams = params
 	go func() {
 		defer close(ch)
 		ch <- provider.StreamEvent{Type: provider.StreamStart}
 		if n <= p.timeoutTimes {
+			if p.emitPartial {
+				ch <- provider.StreamEvent{Type: provider.StreamTextDelta, TextDelta: "partial"}
+			}
 			ch <- provider.StreamEvent{Type: provider.StreamError, Error: context.DeadlineExceeded, StopReason: "error"}
 			return
 		}
@@ -102,6 +108,13 @@ func (p *timeoutRecoveringProvider) GetModel(id string) *provider.Model {
 		}
 	}
 	return nil
+}
+
+func disableStreamRecoveryBackoff(t *testing.T) {
+	t.Helper()
+	previous := streamRecoveryRetryDelay
+	streamRecoveryRetryDelay = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { streamRecoveryRetryDelay = previous })
 }
 
 // streamFailureRecoveringProvider emits a transient connection-reset stream
@@ -2815,10 +2828,11 @@ func TestEmptyResponseRecoversAfterRetry(t *testing.T) {
 	}
 }
 
-func TestStreamTimeoutRetriesThenErrors(t *testing.T) {
+func TestStreamTimeoutRetriesBeyondPreviousLimit(t *testing.T) {
+	disableStreamRecoveryBackoff(t)
 	p := &timeoutRecoveringProvider{
 		models:       []*provider.Model{{ID: "model1", Name: "Model 1"}},
-		timeoutTimes: 10, // always timeout -> exhaust retries and error
+		timeoutTimes: 3, // exceeds the former two-retry ceiling
 	}
 	cfg := AgentLoopConfig{
 		Config: Config{
@@ -2827,37 +2841,37 @@ func TestStreamTimeoutRetriesThenErrors(t *testing.T) {
 			Mode:     "agent",
 		},
 		ToolExecutionMode: "sequential",
-		MaxIterations:     20,
+		MaxIterations:     1, // retries must not consume the logical turn budget
 	}
 	a := NewWithLoopConfig(cfg, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
 
-	var errEvent *Event
+	var done *Event
 	statusCount := 0
 	for event := range a.Run(context.Background(), "test") {
-		if event.Type == EventError {
+		if event.Type == EventDone {
 			ev := event
-			errEvent = &ev
+			done = &ev
+		}
+		if event.Type == EventError {
+			t.Fatalf("unexpected EventError: %v", event.Error)
 		}
 		if event.Type == EventStatus && strings.HasPrefix(event.StatusMessage, "⚠️") {
 			statusCount++
 		}
 	}
-	if errEvent == nil {
-		t.Fatal("expected EventError after exhausting stream-timeout retries")
+	if done == nil {
+		t.Fatal("expected EventDone after repeated stream-timeout recovery")
 	}
-	// 1 initial + 2 auto-retries = 3 provider calls before giving up.
-	if p.callCount != 3 {
-		t.Fatalf("callCount = %d, want 3 (1 initial + 2 retries)", p.callCount)
+	if p.callCount != 4 {
+		t.Fatalf("callCount = %d, want 4 (3 retries + recovery)", p.callCount)
 	}
-	if statusCount != 2 {
-		t.Fatalf("friendly retry status count = %d, want 2", statusCount)
-	}
-	if !strings.Contains(errEvent.Error.Error(), "供应商响应超时") {
-		t.Fatalf("expected friendly timeout error, got %q", errEvent.Error)
+	if statusCount != 3 {
+		t.Fatalf("friendly retry status count = %d, want 3", statusCount)
 	}
 }
 
 func TestStreamTimeoutRetriesThenRecovers(t *testing.T) {
+	disableStreamRecoveryBackoff(t)
 	p := &timeoutRecoveringProvider{
 		models:       []*provider.Model{{ID: "model1", Name: "Model 1"}},
 		timeoutTimes: 2, // first 2 timeout, 3rd succeeds
@@ -2888,6 +2902,159 @@ func TestStreamTimeoutRetriesThenRecovers(t *testing.T) {
 	}
 	if p.callCount != 3 {
 		t.Fatalf("callCount = %d, want 3 (2 timeout + 1 success)", p.callCount)
+	}
+}
+
+func TestStreamTimeoutContinuesAfterPartialOutput(t *testing.T) {
+	disableStreamRecoveryBackoff(t)
+	p := &timeoutRecoveringProvider{
+		models:       []*provider.Model{{ID: "model1", Name: "Model 1"}},
+		timeoutTimes: 3, // exceeds the former continuation retry ceiling
+		emitPartial:  true,
+	}
+	cfg := AgentLoopConfig{
+		Config: Config{
+			Provider: p,
+			Model:    p.models[0],
+			Mode:     "agent",
+		},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     1, // retries must not consume the logical turn budget
+	}
+	a := NewWithLoopConfig(cfg, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	var done *Event
+	var retry *Event
+	var text strings.Builder
+	for event := range a.Run(context.Background(), "test") {
+		switch event.Type {
+		case EventTextDelta:
+			text.WriteString(event.TextDelta)
+		case EventRetry:
+			if event.RetryContinue {
+				ev := event
+				retry = &ev
+			}
+		case EventDone:
+			ev := event
+			done = &ev
+		case EventError:
+			t.Fatalf("unexpected EventError: %v", event.Error)
+		}
+	}
+	if done == nil {
+		t.Fatal("expected EventDone after stream-timeout continuation")
+	}
+	if p.callCount != 4 {
+		t.Fatalf("callCount = %d, want 4 (3 timeouts + 1 continuation)", p.callCount)
+	}
+	if retry == nil || retry.RetryAttempt != 3 || retry.RetryMaxAttempts != 0 {
+		t.Fatalf("unexpected continuation retry: %+v", retry)
+	}
+	if got := text.String(); !strings.HasSuffix(got, "recovered") {
+		t.Fatalf("streamed text = %q, want a recovered completion", got)
+	}
+	msgs := p.lastParams.Messages
+	if len(msgs) < 2 || !strings.Contains(msgs[len(msgs)-1].Content, "<previous_response_suffix>\npartial\n</previous_response_suffix>") {
+		t.Fatalf("continuation request missing partial suffix: %#v", msgs)
+	}
+}
+
+type contextDeadlineProvider struct {
+	models []*provider.Model
+}
+
+func (p *contextDeadlineProvider) Chat(ctx context.Context, _ provider.ChatParams) <-chan provider.StreamEvent {
+	ch := make(chan provider.StreamEvent, 2)
+	go func() {
+		defer close(ch)
+		ch <- provider.StreamEvent{Type: provider.StreamStart}
+		<-ctx.Done()
+		ch <- provider.StreamEvent{Type: provider.StreamError, Error: ctx.Err(), StopReason: "aborted"}
+	}()
+	return ch
+}
+
+func (p *contextDeadlineProvider) Name() string              { return "context-deadline" }
+func (p *contextDeadlineProvider) API() string               { return "openai-chat" }
+func (p *contextDeadlineProvider) Models() []*provider.Model { return p.models }
+func (p *contextDeadlineProvider) GetModel(id string) *provider.Model {
+	for _, m := range p.models {
+		if m.ID == id {
+			return m
+		}
+	}
+	return nil
+}
+
+func TestRunDeadlineIsNotReportedAsProviderTimeout(t *testing.T) {
+	p := &contextDeadlineProvider{models: []*provider.Model{{ID: "model1", Name: "Model 1"}}}
+	a := NewWithLoopConfig(AgentLoopConfig{
+		Config:            Config{Provider: p, Model: p.models[0], Mode: "agent"},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     20,
+	}, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	var finished *Event
+	var errEvent *Event
+	for event := range a.Run(ctx, "test") {
+		switch event.Type {
+		case EventRunFinished:
+			ev := event
+			finished = &ev
+		case EventError:
+			ev := event
+			errEvent = &ev
+		}
+	}
+	if finished == nil || finished.Status != TaskCanceled || finished.StopReason != "aborted" {
+		t.Fatalf("run finished = %+v, want canceled aborted", finished)
+	}
+	if errEvent == nil || !errors.Is(errEvent.Error, context.DeadlineExceeded) {
+		t.Fatalf("error = %+v, want caller deadline", errEvent)
+	}
+	if strings.Contains(errEvent.Error.Error(), "供应商响应超时") {
+		t.Fatalf("caller deadline was misreported as provider timeout: %v", errEvent.Error)
+	}
+}
+
+func TestPlanModeRejectsRegisteredButUnadvertisedWriteTool(t *testing.T) {
+	workDir := t.TempDir()
+	target := filepath.Join(workDir, "must-not-exist.txt")
+	registry := tools.NewRegistry(workDir, sandbox.NewNoneSandbox())
+	registry.RegisterDefaults()
+	model := &provider.Model{ID: "model1", Name: "Model 1"}
+	mock := provider.NewMockProvider("mock", []*provider.Model{model}, []provider.StreamEvent{
+		{Type: provider.StreamStart},
+		{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{
+			ID: "write-in-plan", Name: "write",
+			Arguments: json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"secret = should-not-be-written"}`, target)),
+		}},
+		{Type: provider.StreamDone, StopReason: "tool_use"},
+	})
+	a := NewWithLoopConfig(AgentLoopConfig{
+		Config:            Config{Provider: mock, Model: model, Mode: "plan"},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     1,
+	}, registry)
+
+	var rejected bool
+	for event := range a.Run(context.Background(), "inspect only") {
+		if event.Type == EventToolExecutionStart && event.ToolName == "write" {
+			t.Fatal("unadvertised write reached tool execution start")
+		}
+		if event.Type == EventToolExecutionEnd && event.ToolName == "write" &&
+			strings.Contains(event.ToolResult, "not registered for this run") {
+			rejected = true
+		}
+	}
+	if !rejected {
+		t.Fatal("expected plan-mode write to be rejected by the frozen registration")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("unadvertised write created %s: %v", target, err)
 	}
 }
 
@@ -2961,6 +3128,49 @@ func TestStreamFailureContinuesAfterPartialOutput(t *testing.T) {
 	partialMsg := msgs[len(msgs)-2]
 	if partialMsg.Role != "assistant" || len(partialMsg.Contents) != 1 || partialMsg.Contents[0].Text != "partial" {
 		t.Fatalf("partial assistant message = %+v", partialMsg)
+	}
+}
+
+func TestStreamFailureContinuationPersistsCompleteAssistantResponse(t *testing.T) {
+	disableStreamRecoveryBackoff(t)
+	p := &streamFailureRecoveringProvider{
+		models:      []*provider.Model{{ID: "model1", Name: "Model 1"}},
+		resetTimes:  1,
+		emitPartial: true,
+	}
+	workDir, sessionDir := t.TempDir(), t.TempDir()
+	mgr := session.New(workDir, sessionDir)
+	if err := mgr.Init(); err != nil {
+		t.Fatalf("initialize session: %v", err)
+	}
+	a := NewWithLoopConfig(AgentLoopConfig{
+		Config:            Config{Provider: p, Model: p.models[0], Mode: "agent", Session: mgr},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     20,
+	}, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	var finished *Event
+	for event := range a.Run(context.Background(), "test") {
+		if event.Type == EventError {
+			t.Fatalf("unexpected EventError: %v", event.Error)
+		}
+		if event.Type == EventRunFinished {
+			ev := event
+			finished = &ev
+		}
+	}
+	if finished == nil || len(finished.AssistantMessage.Contents) != 2 {
+		t.Fatalf("runtime terminal assistant message = %+v, want complete response", finished)
+	}
+	if err := mgr.Reload(); err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	msgs := mgr.GetMessages()
+	if len(msgs) != 2 || len(msgs[1].Contents) != 2 {
+		t.Fatalf("persisted messages = %#v, want user and complete assistant response", msgs)
+	}
+	if got := msgs[1].Contents[0].Text + msgs[1].Contents[1].Text; got != "partial continued" {
+		t.Fatalf("persisted assistant text = %q, want complete streamed response", got)
 	}
 }
 

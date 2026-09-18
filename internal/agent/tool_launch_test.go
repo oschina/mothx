@@ -272,7 +272,7 @@ func TestParallelToolCallsReleaseQueuedCallsWhenAnEarlierCallFails(t *testing.T)
 		{
 			name:    "unknown tool",
 			first:   provider.ToolCallBlock{ID: "call-0", Name: "does_not_exist", Arguments: json.RawMessage(`{}`)},
-			wantErr: "unknown tool",
+			wantErr: "is not registered for this run",
 		},
 	}
 

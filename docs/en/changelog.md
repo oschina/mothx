@@ -33,7 +33,7 @@
 - **`mothx pure` Archives the Sessions Database and Starts Fresh**
   - Starting over previously meant deleting `sessions.db` by hand, which is both destructive and easy to get wrong: a leftover `-wal` or `-shm` sidecar can be picked up by the next database. The new `mothx pure` subcommand moves the shared `sessions.db` and its sidecars aside and creates a fresh, migrated database in its place. Nothing is deleted: each moved file is renamed to `sessions.db.pure-<timestamp>.bak` beside the new database (sidecars keep their suffix), so its sessions stay recoverable. `--session-dir` targets a specific directory; the default is the configured session directory.
   - Sidecars whose database is already gone - from an interrupted reset or a hand-deleted file - are archived the same way, so the fresh database never inherits a stale write-ahead log and its startup does not depend on how SQLite chooses to treat the leftover.
-  - The command refuses to reset while another process holds an active session run in that directory, naming the session, the owning pid, and the run; `--force` overrides the refusal. A database this process cannot open at all is treated as unknown rather than busy and still resets, because that is the case `pure` exists for.
+  - The command refuses to reset while another process holds an active session run in that directory, naming the session, the owning pid, and the run; `--force` overrides the refusal. A database this process cannot read is an unknown ownership state, not proof that no one is writing, so it also refuses without `--force`.
   - `pure` now also states what it left in place, and the reason differs per directory: `channels/` holds separate session roots with their own `sessions.db`, each `knowledge-bases/<id>.db` is that knowledge base's own authoritative store, and only `artifacts/` content becomes unreachable once its rows are archived. Only the last is reclaimable, so it is listed with its size while the others are reported as data the reset must not treat as garbage.
   - When the fresh database cannot be created after the previous files were moved, the error names the archive paths, so a failed reset no longer reads like lost data.
 
@@ -43,9 +43,26 @@
 
 ### 🐛 Bug Fixes
 
+- **Provider Stream Timeouts Recover Consistently Across Runs**
+  - A caller deadline, including one applied around an ESM role, could be surfaced as a provider response timeout and misleadingly claim that it had retried zero times. Caller cancellation and deadlines now remain cancelled runs, never provider transport failures.
+  - ESM worker, critic, and audit roles no longer impose a 30-minute deadline: the long-task objective continues until it finishes or is explicitly cancelled. The restricted recovery observer remains bounded.
+  - When a provider stream genuinely stalls, Agent Core now retries with exponential backoff until cancellation. After partial text or reasoning it persists the safe partial response and uses a continuation instruction; retries do not consume the Agent iteration budget. This shared recovery path applies to ordinary, ESM, and other adapter runs without re-running emitted tool calls.
+
+- **ESM Continues Long Objectives Instead of Tripping Internal Circuit Breakers**
+  - Worker, critic, and audit roles now use the Agent Core's explicit unbounded-iteration policy. A role that ends `incomplete` is marked incomplete and recorded as recoverable work, never projected as success.
+  - Recovery and rejected-completion counts remain visible for diagnosis, but neither count pauses an active ESM objective. A rejected completion means remaining work, so the next continuation resumes from persisted state.
+
+- **Session Deletion Is Fenced by the Runtime Mutation Lease**
+  - Deleting a session (TUI `/sessions`, ACP `session/delete`, Serve `/clear` and session deletion, and the CLI) removed its rows and handle without checking whether another process still owned it for execution, so a concurrent run could lose its session underneath it. Deletion now takes the shared Runtime mutation lease for that session and revalidates the fenced `owner`/`epoch`/`token` identity inside the deletion transaction; a multi-session cascade reuses the lease group it already holds instead of reacquiring a process-local lock per child.
+  - The lease preflight used by `mothx pure` now opens the sessions database read-only, with no migrations, integrity repair, or WAL setup, so a safety check never modifies the database it is deciding whether to archive.
+
+- **Unadvertised Tool Calls Are Rejected Before Execution**
+  - A provider response is untrusted input: the agent ran any tool call the provider emitted even when the effective mode had not advertised it, so a hallucinated or injected call could still reach approval, durable claims, and the registry. Execution now checks the Run's frozen registration snapshot first and returns a tool error for a call that is not registered for that run, leaving Registry changes to a subsequent Agent build.
+
 - **Session Identity Is Committed Only After Preparation Succeeds**
   - `BindSession` published the new session identity before loading the session's expert binding and context resources, so a load failure left the Runtime attached to a half-initialized session while the caller believed the bind had failed. The session-dependent resources are now resolved first and the identity is published only once they succeed, and the TUI's `activateSession` commits `session`/`cwd` only after decision recovery and Runtime binding both succeed, so a failed switch no longer leaves the adapter and the Runtime on different sessions.
   - Binding now rebuilds the Runtime-owned attachment and input services for the session being bound. A long-lived Runtime (the TUI reuses one across `/sessions`, and the CLI reuses one for `--shared-runtime` runs) therefore no longer keeps writing new uploads into the first session's attachment directory after a session switch.
+  - Serve's `/clear` created a fresh session manager but left the session's Runtime bound to the deleted one, so the next prompt executed against a session that no longer existed. Clearing now rebinds the Runtime to the new manager before the session is reused.
 
 - **SQLite: A Stale Secondary Index Is Repaired Instead of Blocking Startup**
   - An interrupted write could leave SQLite reporting `wrong # of entries in index` from `PRAGMA quick_check` even though every table page was intact, and the integrity check failed startup with no way forward. Index contents are derived from table rows, so this precise case is now repaired with `REINDEX` and re-verified before continuing; any other integrity failure still aborts startup, since it may affect canonical data.

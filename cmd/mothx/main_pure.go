@@ -112,14 +112,16 @@ func prunePureArtifacts(out io.Writer, sessionDir string) error {
 // archived inode, so the only reliable signal is a lease another process is
 // still renewing in the database being archived.
 //
-// An unreadable lease table is reported as unknown and does not block the reset.
-// A database this process cannot open is precisely when a reset is the way
-// forward, and refusing then would make the guardrail worse than the risk.
+// An unreadable lease table is an unknown ownership state, not proof that no
+// process is writing. Refuse by default: the explicit --force switch is the
+// operator's acknowledgement that archiving a database a peer may still hold is
+// acceptable.
 func refuseActiveSessionReset(warnings io.Writer, sessionDir string) error {
 	holders, err := session.ActiveRuntimeLeases(sessionDir)
 	if err != nil {
-		fmt.Fprintf(warnings, "warning: cannot check for running mothx processes in %s: %v\n", sessionDir, err)
-		return nil
+		message := fmt.Sprintf("cannot safely check for running mothx processes in %s; refusing to reset without --force", sessionDir)
+		fmt.Fprintf(warnings, "%s: %v\n", message, err)
+		return fmt.Errorf("%s: %w", message, err)
 	}
 	if len(holders) == 0 {
 		return nil

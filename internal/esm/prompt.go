@@ -44,10 +44,10 @@ func SteeringPrompt(obj *Objective) string {
 		b.WriteString(fmt.Sprintf("- remaining work (%d): %s\n", len(obj.RemainingWork), strings.Join(obj.RemainingWork, "; ")))
 	}
 	if obj.RejectionCount > 0 {
-		b.WriteString(fmt.Sprintf("- consecutive completion rejections: %d/%d\n", obj.RejectionCount, CompletionRejectionLimit))
+		b.WriteString(fmt.Sprintf("- consecutive completion rejections: %d\n", obj.RejectionCount))
 	}
 	if obj.RecoveryCount > 0 {
-		b.WriteString(fmt.Sprintf("- consecutive automatic recoveries: %d/%d\n", obj.RecoveryCount, RecoveryLimit))
+		b.WriteString(fmt.Sprintf("- consecutive automatic recoveries: %d\n", obj.RecoveryCount))
 		if obj.RecoveryReason != "" {
 			b.WriteString("- latest recovery reason: " + obj.RecoveryReason + "\n")
 		}
@@ -125,13 +125,13 @@ func WorkerTaskPrompt(obj *Objective) string {
 		b.WriteString(fmt.Sprintf("\nPersisted remaining work (%d):\n- %s\n", len(obj.RemainingWork), strings.Join(obj.RemainingWork, "\n- ")))
 	}
 	if obj.RejectionCount > 0 {
-		b.WriteString(fmt.Sprintf("\nConsecutive completion rejections: %d/%d. Resolve the recorded gaps before proposing completion again.\n", obj.RejectionCount, CompletionRejectionLimit))
+		b.WriteString(fmt.Sprintf("\nConsecutive completion rejections: %d. Resolve the recorded gaps before proposing completion again.\n", obj.RejectionCount))
 	}
 	if obj.BlockedCount > 0 && obj.BlockedReason != "" {
 		b.WriteString(fmt.Sprintf("\nRepeated blocker audit so far: %d/%d (%s)\n", obj.BlockedCount, BlockedAuditLimit, obj.BlockedReason))
 	}
 	if obj.RecoveryCount > 0 && obj.RecoveryReason != "" {
-		b.WriteString(fmt.Sprintf("\nLatest automatic recovery (%d/%d): %s\n", obj.RecoveryCount, RecoveryLimit, obj.RecoveryReason))
+		b.WriteString(fmt.Sprintf("\nLatest automatic recovery (%d): %s\n", obj.RecoveryCount, obj.RecoveryReason))
 	}
 	b.WriteString("\nFinal response format:\n")
 	b.WriteString("Return exactly one JSON object and no markdown. Schema:\n")

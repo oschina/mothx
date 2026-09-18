@@ -301,11 +301,7 @@ type webESMRuntimeAdapter struct {
 }
 
 func (a *webESMRuntimeAdapter) RunRole(parent context.Context, req esm.RoleRequest) (esm.RoleResult, error) {
-	timeout := esm.RoleTimeout
-	if req.Role == esm.RoleRecovery {
-		timeout = esm.RecoveryObserverTimeout
-	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	ctx, cancel := esm.RoleContext(parent, req.Role)
 	defer cancel()
 	if a == nil || a.server == nil || a.sess == nil {
 		return esm.RoleResult{}, fmt.Errorf("webui ESM adapter is unavailable")
@@ -400,7 +396,10 @@ func (a *webESMRuntimeAdapter) RunRole(parent context.Context, req esm.RoleReque
 		switch ev.Type {
 		case agentpkg.EventRunFinished:
 			completed = true
-			if ev.Status == agentpkg.TaskFailed || ev.Status == agentpkg.TaskCanceled {
+			if ev.Status == agentpkg.TaskIncomplete {
+				runErr = esm.NewRoleIncompleteError(req.Role, ev.StopReason, ev.Error)
+				mgr.MarkIncomplete(child.ID(), runErr)
+			} else if ev.Status == agentpkg.TaskFailed || ev.Status == agentpkg.TaskCanceled {
 				runErr = ev.Error
 				mgr.MarkError(child.ID(), ev.Error)
 			} else {

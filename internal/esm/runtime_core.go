@@ -20,10 +20,57 @@ const (
 	RoleRecovery Role = "recovery"
 )
 
+// LongTaskMaxIterations deliberately leaves an ESM worker or reviewer
+// unbounded. ESM owns long-running objectives, so an arbitrary turn count
+// must never turn ongoing work into a completed-looking role result.
+const LongTaskMaxIterations = -1
+
+// ErrRoleIncomplete identifies a role that stopped before completing its
+// assigned work. It is recoverable for an active ESM objective: the next
+// continuation resumes from persisted repository state rather than treating
+// the partial role as success or pausing the objective.
+var ErrRoleIncomplete = errors.New("ESM role incomplete")
+
+// NewRoleIncompleteError preserves an adapter's terminal detail while giving
+// Supervisor one shared classification independent of protocol projection.
+func NewRoleIncompleteError(role Role, stopReason string, cause error) error {
+	detail := strings.TrimSpace(stopReason)
+	if detail == "" {
+		detail = "stopped before completing its work"
+	}
+	if role != "" {
+		detail = string(role) + " " + detail
+	}
+	if cause != nil {
+		return fmt.Errorf("%w: %s: %v", ErrRoleIncomplete, detail, cause)
+	}
+	return fmt.Errorf("%w: %s", ErrRoleIncomplete, detail)
+}
+
 const (
-	RoleTimeout             = 30 * time.Minute
-	RecoveryObserverTimeout = 5 * time.Minute
+	// RoleTimeout intentionally has no hard deadline. ESM is the long-task
+	// execution mode, so it continues until its work finishes or an explicit
+	// cancellation/ownership decision stops it.
+	RoleTimeout             time.Duration = 0
+	RecoveryObserverTimeout               = 5 * time.Minute
 )
+
+// RoleContext applies the ESM-owned deadline policy once for every adapter.
+// A zero timeout preserves the parent context rather than creating an already
+// expired context with context.WithTimeout.
+func RoleContext(parent context.Context, role Role) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	timeout := RoleTimeout
+	if role == RoleRecovery {
+		timeout = RecoveryObserverTimeout
+	}
+	if timeout <= 0 {
+		return parent, func() {}
+	}
+	return context.WithTimeout(parent, timeout)
+}
 
 // RoleRequest is the complete host execution contract. The host runs an
 // isolated agent; it must not make ESM state decisions.
@@ -137,13 +184,13 @@ func (s *Supervisor) runRole(ctx context.Context, obj *Objective, role Role, bas
 	phase := PhaseWorker
 	switch role {
 	case RoleWorker:
-		req.MaxIterations = 200
+		req.MaxIterations = LongTaskMaxIterations
 	case RoleCritic, RoleAudit:
 		phase = PhaseCritic
 		if role == RoleAudit {
 			phase = PhaseAudit
 		}
-		req.MaxIterations = 80
+		req.MaxIterations = LongTaskMaxIterations
 		req.Tools = []string{"read", "grep", "find", "ls"}
 	default:
 		return obj, fmt.Errorf("unsupported ESM role %q", role)
@@ -209,10 +256,10 @@ func (s *Supervisor) handleRoleFailure(ctx context.Context, obj *Objective, req 
 			obj = next
 		}
 	}
+	if errors.Is(runErr, ErrRoleIncomplete) {
+		return s.recordRecovery(ctx, obj, role+" stopped before completion: "+compactESMError(runErr), obj.RemainingWork)
+	}
 	if errors.Is(runErr, context.DeadlineExceeded) {
-		if obj.RecoveryCount >= RecoveryLimit {
-			return s.recordRecovery(ctx, obj, string(req.Role)+" timed out after recovery limit: "+compactESMError(runErr), obj.RemainingWork)
-		}
 		return s.runRecoveryObserver(ctx, obj, req, baseRunID, runErr)
 	}
 	if isRetryableTransportError(runErr) {

@@ -289,7 +289,7 @@ func (s *Server) cmdSessionsForSession(sess *APISession, parts []string) *Comman
 			if currentID != "" && match.ID == currentID {
 				return &CommandResult{Message: "Cannot delete the current session. Switch to another session first, or use /clear to start fresh.", Error: true}
 			}
-			if err := session.DeleteSession(match.Path, sessDir); err != nil {
+			if err := agentruntime.DeleteSession(sessDir, match.ID); err != nil {
 				return &CommandResult{Message: fmt.Sprintf("Failed to delete session: %v", err), Error: true}
 			}
 			s.pool.RemoveByWorkDir(cwd, match.ID)

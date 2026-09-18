@@ -107,7 +107,9 @@ func TestPureCommandReportsHowToRecoverFromAMoveFailure(t *testing.T) {
 	cmd := newPureCommand()
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"--session-dir", filepath.Join(blocker, "sessions")})
+	// The path itself is unreadable for the lease preflight; --force reaches the
+	// reset failure branch this test is intended to cover.
+	cmd.SetArgs([]string{"--session-dir", filepath.Join(blocker, "sessions"), "--force"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected the reset to fail")
@@ -191,10 +193,40 @@ func TestPureCommandRefusesWhileASessionRunIsActive(t *testing.T) {
 	t.Cleanup(func() { _ = session.CloseDatabases() })
 }
 
-// TestPureCommandResetsWhenTheLeaseCheckCannotReadTheDatabase keeps the
-// guardrail from becoming the new lock-out: a database that cannot be opened is
-// unknown, not proven busy, and `mothx pure` exists precisely for that case.
-func TestPureCommandResetsWhenTheLeaseCheckCannotReadTheDatabase(t *testing.T) {
+// TestPureCommandRefusesAnExpiredButUnreleasedLease preserves long-running
+// ownership through a transient heartbeat outage. Expiry alone does not fence
+// the owner out, so the reset must require the same explicit --force escape
+// hatch as for a freshly renewed lease.
+func TestPureCommandRefusesAnExpiredButUnreleasedLease(t *testing.T) {
+	sessionDir := t.TempDir()
+	manager := session.New(t.TempDir(), sessionDir)
+	if err := manager.InitWithID("stalled-session"); err != nil {
+		t.Fatal(err)
+	}
+	insertActiveLease(t, sessionDir, "stalled-session", time.Now().Add(-time.Minute).Unix())
+
+	cmd := newPureCommand()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--session-dir", sessionDir})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("an expired but unreleased lease must block the reset")
+	}
+	if !strings.Contains(err.Error(), "stalled-session") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("error = %v, want the held lease and forced-reset guidance", err)
+	}
+	if _, statErr := os.Stat(session.RootDatabasePath(sessionDir)); statErr != nil {
+		t.Fatalf("a refused reset must leave the database in place: %v", statErr)
+	}
+	t.Cleanup(func() { _ = session.CloseDatabases() })
+}
+
+// TestPureCommandRefusesWhenTheLeaseCheckCannotReadTheDatabase keeps an
+// inconclusive preflight from silently archiving a database another process may
+// still be writing. --force remains the explicit recovery path for a damaged
+// database.
+func TestPureCommandRefusesWhenTheLeaseCheckCannotReadTheDatabase(t *testing.T) {
 	sessionDir := t.TempDir()
 	if err := os.WriteFile(session.RootDatabasePath(sessionDir), []byte("not a sqlite file"), 0600); err != nil {
 		t.Fatal(err)
@@ -206,11 +238,20 @@ func TestPureCommandResetsWhenTheLeaseCheckCannotReadTheDatabase(t *testing.T) {
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(&stderr)
 	cmd.SetArgs([]string{"--session-dir", sessionDir})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("an unreadable lease table must warn and continue: %v", err)
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("an unreadable lease table must refuse without --force")
 	}
-	if !strings.Contains(stderr.String(), "cannot check for running mothx processes") {
-		t.Fatalf("stderr = %q, want the warning that the check was inconclusive", stderr.String())
+	if !strings.Contains(err.Error(), "--force") || !strings.Contains(stderr.String(), "refusing to reset") {
+		t.Fatalf("error = %v, stderr = %q, want the forced-recovery guidance", err, stderr.String())
+	}
+
+	forced := newPureCommand()
+	forced.SetOut(io.Discard)
+	forced.SetErr(io.Discard)
+	forced.SetArgs([]string{"--session-dir", sessionDir, "--force"})
+	if err := forced.Execute(); err != nil {
+		t.Fatalf("--force must permit recovery from an unreadable database: %v", err)
 	}
 }
 

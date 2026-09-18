@@ -199,7 +199,7 @@ func TestApplyESMWorkerContinueResetsCompletionRejectionStreak(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	for i := 1; i <= esm.CompletionRejectionLimit; i++ {
+	for i := 1; i <= 4; i++ {
 		runID := fmt.Sprintf("run-%d", i)
 		obj, err := store.UpdateFromModelForRun(ctx, sessionID, esm.StatusComplete, "worker evidence", runID)
 		if err != nil {

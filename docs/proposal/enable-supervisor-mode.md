@@ -299,7 +299,7 @@ TUI receives EventDone / EventError
 恢复机制：
 - **超时触发**：spawn 一个只读 RecoveryObserver 子代理（5 分钟超时），检查仓库当前状态，确定是否可以安全续跑。Observer 返回 `resume`（附剩余工作列表）或 `blocked`（附具体阻塞原因）。
 - **传输故障**：provider 内建重试失败后，直接记录恢复并启动新 worker 从当前状态重试，无需 observer。
-- **恢复限制**：`RecoveryLimit = 2` 次连续自动恢复；超过后暂停续跑，需要 `/esm resume`。恢复状态显示在 TUI 底部栏（`recover N/2`）。
+- **恢复计数**：连续自动恢复次数仅用于诊断并显示在 TUI 底部栏（`recover N`）；中断不会因计数达到任意阈值而暂停续跑。
 - **计数器重置**：worker 成功续跑后重置恢复计数器。
 - **DB 支持**：migration 015 添加 `recovery_count` 和 `recovery_reason` 列到 `session_esm_objectives` 表。
 - **Prompt 注入**：recovery 信息包含在 steering prompt 和 worker prompt 中，让模型知晓之前的中断情况。
@@ -432,7 +432,7 @@ MothX 落地时统一使用 ESM 命名和本仓库架构，不引入 Codex Rust 
 - **续跑执行体**：自动续跑不再是“主 agent + continuation steering message”，而是 `internal/esm.Supervisor` 驱动的隔离子代理角色流水线（worker → critic → audit，超时中断时追加 recovery observer）。主 agent steering（`SteeringMessage`）仍保留，用于用户在 ESM 活跃时手动发起的 run。草案 §9 的主 run 续跑流程仅作为回退路径保留。
 - **模式与审批（2026-09-03 review 决议）**：ESM 派生角色运行统一走无值守模式解析 `agentruntime.ResolveUnattendedMode`：session 为 `os` 时继承 `os`，其余模式（`plan`/`agent`/`yolo`/空）一律回退 `yolo`，角色运行不因模式触发的交互式审批停等（高危命令硬保护不受模式影响）。草案 §9“Plan mode 下不自动续跑”仅保留给 legacy 主 run 回退路径；子代理续跑路径在 plan 模式下同样自动续跑。草案 §8/§9 中依赖用户审批的无人值守场景不再适用。
 - **预算机制移除（2026-09-03 review 决议）**：草案中的 `token_budget`、`budget_limited` 状态、`/esm budget` 命令与中途预算提示均已移除，不再支持设置任何限制量（草案 §3.1/§4.1/§4.2/§7.2/§10/§11/§12/§14 相关条目不再适用）；`TokensUsed`/`TimeUsedMS` 保留为纯观测计量并在状态栏/面板/`/esm` 详情展示；`usage_limited`（provider 外部配额熔断）保留。DB 的 `token_budget` 列为兼容存量数据库保留但不再读写。
-- **断路器**：新增拒绝断路器（`CompletionRejectionLimit = 3` 次连续完成拒绝后 pause）与恢复限制（`RecoveryLimit = 2`），草案未涵盖。
+- **长任务连续性（2026-09-18 review）**：完成拒绝和恢复次数都仅作诊断，不能暂停活跃目标；被拒绝的完成声明代表仍有工作，下一次续跑从持久化状态继续。worker、critic 与 audit 使用无界迭代策略，角色 `incomplete` 被归为可恢复工作而非成功。
 - **blocked 审计**：落地为按 run 计数（`blocked_count`/`blocked_run_id`，同一 run 幂等、后续运行未重复则清零），并需要具体阻塞原因，与草案 §4.2 的三轮约束一致但机制更细。
 - **内部结构**：`internal/esm/` 实际文件为 `state.go`、`store.go`、`prompt.go`、`report.go`、`tools.go`、`runtime_core.go`、`supervisor.go`，与草案 §6 的 `runtime.go`/`prompts.go` 命名不同。注意命名与内容错位：`Supervisor` 在 `runtime_core.go`，报告应用语义在 `supervisor.go`（已在问题清单记录）。
 - **数据模型**：`session_esm_objectives` 已并入基础 schema（早期以 migration 010/015 引入，现含 `blocked_run_id`、`completion_*`、`completion_rejection_*`、`recovery_count`/`recovery_reason` 等列）；guidance 队列表 `session_esm_guidance` 为 migration 23。

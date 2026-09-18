@@ -1829,7 +1829,7 @@ func (s *Server) clearSession(sess *APISession, workDir string) error {
 	if sess.Manager.GetHeader() != nil && sess.Manager.GetHeader().Cwd != "" {
 		workDir = sess.Manager.GetHeader().Cwd
 	}
-	if err := session.DeleteSession(sess.Manager.GetFile(), sessionDir); err != nil {
+	if err := agentruntime.DeleteSession(sessionDir, sess.ID); err != nil {
 		return fmt.Errorf("delete current session: %w", err)
 	}
 	newMgr, err := agentruntime.CreateSession(agentruntime.CreateSessionOptions{WorkDir: workDir, SessionDir: sessionDir, ID: sess.ID})
@@ -1838,6 +1838,9 @@ func (s *Server) clearSession(sess *APISession, workDir string) error {
 	}
 	sess.Manager = newMgr
 	sess.WorkDir = workDir
+	if err := bindSessionRuntime(sess); err != nil {
+		return fmt.Errorf("rebind fresh session runtime: %w", err)
+	}
 	sess.Touch()
 	sess.ForceCompact = false
 	s.mu.Lock()

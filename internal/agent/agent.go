@@ -201,7 +201,9 @@ type AgentLoopConfig struct {
 	// default from config.
 	MaxToolConcurrency int
 
-	// MaxIterations is the safety limit for agent loop iterations.
+	// MaxIterations is the safety limit for agent loop iterations. Zero uses the
+	// default limit; a negative value intentionally leaves the loop unbounded
+	// until it completes or its context is cancelled.
 	MaxIterations int
 
 	// GetSteeringMessages returns messages to inject mid-run.
@@ -517,6 +519,26 @@ func (a *Agent) buildFrozenPrompt() {
 	)
 	a.frozenToolDefs = toolDefs
 	a.frozenToolNames = toolNames
+}
+
+// isToolRegisteredForRun is the execution-side half of tool registration.
+// The frozen list is derived from Registry.ModeTools when the Agent is built,
+// after Runtime source/mode policy and adapter capabilities have been resolved.
+// A provider response is untrusted input: hiding a tool from its advertised
+// schema is not sufficient authorization to execute a hallucinated or injected
+// tool call. Registry changes apply to a subsequent Agent build only.
+func (a *Agent) isToolRegisteredForRun(name string) bool {
+	if a == nil || name == "" {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, registered := range a.frozenToolNames {
+		if registered == name {
+			return true
+		}
+	}
+	return false
 }
 
 func imageGenerationToolDefinition(settings *config.Settings, providerName string) (provider.ToolDefinition, bool) {
@@ -1370,12 +1392,13 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 	escalated := false
 	recoveryAttempts := 0
 
-	// Stream timeout retry: when the provider stalls (idle/response timeout)
-	// before emitting any visible output, retry the turn a limited number of
-	// times instead of failing the whole run. Retrying is safe here because no
-	// tool has been executed yet and nothing has been persisted for this turn.
+	// Stream timeout retry: when the provider stalls (idle/response timeout),
+	// keep retrying until the run is explicitly cancelled. Retrying is safe
+	// before any tool call because nothing external has been executed yet.
+	// A timeout is an availability failure, not evidence that a long-running
+	// task has completed or should be abandoned.
 	streamTimeoutRetries := 0
-	const maxStreamTimeoutRetries = 2
+	const maxStreamTimeoutRetries = 0 // zero means retry until cancellation
 
 	// Transient stream-failure continuation: when the provider stream fails
 	// mid-turn with a retryable transport error (connection reset, unexpected
@@ -1385,6 +1408,10 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 	// safe here because no tool has been executed yet for this turn.
 	streamFailureRetries := 0
 	const maxStreamFailureRetries = 2
+	// Keep the user-visible fragments from failed streams until a continuation
+	// completes. Provider requests retain them as separate in-memory messages,
+	// while the durable transcript must receive their complete response.
+	var recoveryAssistantContents []provider.ContentBlock
 
 	// Content-rejection recovery: a provider may permanently refuse content
 	// (for example an image flagged by content inspection). That is not
@@ -1420,7 +1447,7 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 				a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Iteration budget renewed to %d turns", limit)})
 			}
 		}
-		if i >= limit {
+		if limit > 0 && i >= limit {
 			break
 		}
 		if wallClock > 0 && time.Since(runStart) >= wallClock {
@@ -1619,6 +1646,18 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 		}
 
 		if streamErr != nil {
+			// A caller-owned deadline (for example an ESM role deadline) is not a
+			// provider response timeout. Providers surface the caller context as a
+			// StreamError, so check the run context before applying any provider
+			// retry or error classification. Retrying a cancelled context cannot
+			// recover the run and used to produce the misleading "retried 0 times"
+			// provider-timeout error.
+			if err := runCtx.Err(); err != nil {
+				a.emitRunFinished(ch, TaskCanceled, "aborted", err, usage, nil)
+				ch <- Event{Type: EventError, Error: err, StopReason: "aborted"}
+				ch <- a.agentEndEvent()
+				return
+			}
 			failureClass := provider.ResponseStateFailureRequestFailed
 			if responseTurnID != "" && responseState.remoteStateActive {
 				failureClass = a.recordResponsesStateFailure(responseTurnID, responseState, streamErr)
@@ -1638,17 +1677,19 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 				continue
 			}
 			if a.tryRetryStreamTimeout(runCtx, ch, &streamTimeoutRetries, maxStreamTimeoutRetries, textContent, thinkContent, streamErr) {
+				i-- // transport recovery is not a new logical agent iteration
 				continue
 			}
 			// Responses remote-state turns keep their existing failover path: the
 			// remote holds the conversation, so a locally persisted partial turn
 			// plus continuation injection would desync the lineage.
 			if !responseState.remoteStateActive &&
-				a.tryContinueStreamFailure(runCtx, ch, &streamFailureRetries, maxStreamFailureRetries, textContent, thinkContent, thinkSignature, toolCalls, streamErr) {
+				a.tryContinueStreamFailure(runCtx, ch, &streamFailureRetries, maxStreamFailureRetries, textContent, thinkContent, thinkSignature, toolCalls, &recoveryAssistantContents, streamErr) {
+				i-- // continuation resumes the interrupted turn, not a new turn
 				continue
 			}
 			if provider.IsStreamTimeoutError(streamErr) {
-				streamErr = fmt.Errorf("供应商响应超时，已自动重试 %d 次仍未恢复，请稍后重试或检查网络/供应商状态", streamTimeoutRetries)
+				streamErr = fmt.Errorf("供应商响应超时，已自动重试 %d 次仍未恢复，请稍后重试或检查网络/供应商状态", streamTimeoutRetries+streamFailureRetries)
 			}
 			a.emitRunFinished(ch, TaskFailed, stopReason, streamErr, usage, nil)
 			ch <- Event{Type: EventError, Error: streamErr, StopReason: stopReason, ResponseStateFailureClass: func() string {
@@ -1749,11 +1790,26 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 		}
 
 		assistantMsg := provider.NewAssistantMessage(contents)
+		// The in-memory continuation scaffold deliberately contains a partial
+		// assistant message and an injected recovery instruction. Neither is a
+		// durable transcript boundary on its own; persist one complete assistant
+		// response so a later Session replay matches what was streamed to users.
+		persistedAssistantMsg := assistantMsg
+		if len(recoveryAssistantContents) > 0 {
+			persistedAssistantMsg.Contents = make([]provider.ContentBlock, 0, len(recoveryAssistantContents)+len(contents))
+			for _, block := range recoveryAssistantContents {
+				persistedAssistantMsg.Contents = append(persistedAssistantMsg.Contents, cloneContentBlock(block))
+			}
+			for _, block := range contents {
+				persistedAssistantMsg.Contents = append(persistedAssistantMsg.Contents, cloneContentBlock(block))
+			}
+		}
 		estimator := ctxpkg.ResolveTokenEstimator(a.config.CompactionSettings, a.config.Model)
 		estimatedUsage := estimateProviderUsage(a.frozenSystemPrompt, messagesWithMarkers, a.frozenToolDefs, assistantMsg, estimator)
 		usage = completeProviderUsage(usage, estimatedUsage)
 		// Store usage in the message for context tracking
 		assistantMsg.Usage = usage
+		persistedAssistantMsg.Usage = usage
 		deferAssistantEntry := a.config.RuntimeOwnsTurnEnd && a.config.Session != nil && len(toolCalls) == 0
 		assistantEntryID := ""
 		if deferAssistantEntry {
@@ -1768,7 +1824,7 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 
 		// Save to session
 		if a.config.Session != nil && !deferAssistantEntry {
-			msgID, err := a.config.Session.AppendMessage(assistantMsg)
+			msgID, err := a.config.Session.AppendMessage(persistedAssistantMsg)
 			if err != nil {
 				a.emitRunFinished(ch, TaskFailed, "session_save", err, usage, nil)
 				ch <- Event{Type: EventError, Error: fmt.Errorf("save assistant message to session: %w", err)}
@@ -1780,8 +1836,9 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 		}
 		a.mu.Lock()
 		a.lastAssistantEntryID = assistantEntryID
-		a.lastAssistantMessage = cloneMessage(assistantMsg)
+		a.lastAssistantMessage = cloneMessage(persistedAssistantMsg)
 		a.mu.Unlock()
+		recoveryAssistantContents = nil
 
 		// Calculate cost
 		if usage != nil && a.config.Model != nil {
@@ -2465,6 +2522,21 @@ func (a *Agent) executeSingleToolCallWithRecovery(ctx context.Context, tc provid
 	}
 	if params == nil {
 		params = map[string]any{}
+	}
+	// Tool registration is the execution authorization boundary. The provider
+	// may emit a call that was not advertised (or that was excluded by the
+	// effective mode), so never reach approval, durable claims, or Registry.Get
+	// unless it belongs to this Run's frozen registration snapshot.
+	if !a.isToolRegisteredForRun(tc.Name) {
+		errMsg := fmt.Sprintf("tool %q is not registered for this run", tc.Name)
+		a.sendEvent(ch, Event{
+			Type:       EventToolExecutionEnd,
+			ToolCallID: tc.ID,
+			ToolName:   tc.Name,
+			ToolResult: errMsg,
+			ToolError:  fmt.Errorf("%s", errMsg),
+		})
+		return toolResult(errMsg, nil, true)
 	}
 
 	// A parallel batch starts in the declared provider order: a later call may

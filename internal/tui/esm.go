@@ -20,8 +20,7 @@ const (
 	esmGetToolName    = "get_esm"
 	esmUpdateToolName = "update_esm"
 
-	esmRoleTimeout             = 30 * time.Minute
-	esmRecoveryObserverTimeout = 5 * time.Minute
+	esmRoleTimeout = esm.RoleTimeout
 )
 
 func (a *App) ensureESMStore() *esm.Store {
@@ -108,10 +107,10 @@ func (a *App) setESMFooter(obj *esm.Objective) {
 		parts = append(parts, formatDuration(time.Duration(obj.TimeUsedMS)*time.Millisecond))
 	}
 	if obj.RejectionCount > 0 {
-		parts = append(parts, fmt.Sprintf("reject %d/%d", obj.RejectionCount, esm.CompletionRejectionLimit))
+		parts = append(parts, fmt.Sprintf("reject %d", obj.RejectionCount))
 	}
 	if obj.RecoveryCount > 0 {
-		parts = append(parts, fmt.Sprintf("recover %d/%d", obj.RecoveryCount, esm.RecoveryLimit))
+		parts = append(parts, fmt.Sprintf("recover %d", obj.RecoveryCount))
 	}
 	a.esmFooter = strings.Join(parts, " ")
 }
@@ -557,7 +556,11 @@ func (a *App) runESMRoleAgentWithTimeoutForRole(ctx context.Context, eventCh cha
 		_ = manager.Destroy(childID)
 	}()
 
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	runCtx := ctx
+	cancel := func() {}
+	if timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
 	defer cancel()
 	manager.MarkRunning(childID)
 	manager.SetCancel(childID, cancel)
@@ -588,6 +591,9 @@ func (a *App) runESMRoleAgentWithTimeoutForRole(ctx context.Context, eventCh cha
 			case agentpkg.TaskFailed:
 				runErr = ev.Error
 				manager.MarkError(childID, ev.Error)
+			case agentpkg.TaskIncomplete:
+				runErr = esm.NewRoleIncompleteError(role, ev.StopReason, ev.Error)
+				manager.MarkIncomplete(childID, runErr)
 			case agentpkg.TaskCanceled:
 				runErr = ev.Error
 				manager.MarkCanceled(childID, ev.Error)
@@ -622,12 +628,7 @@ func formatESMRejectionStatus(subject string, obj *esm.Objective, reason string)
 	if obj == nil {
 		return fmt.Sprintf("ESM %s rejected: %s", subject, strings.ReplaceAll(reason, "\n", "; "))
 	}
-	message := fmt.Sprintf("ESM %s rejected (%d/%d)", subject, obj.RejectionCount, esm.CompletionRejectionLimit)
-	if obj.Status == esm.StatusPaused && obj.RejectionCount >= esm.CompletionRejectionLimit {
-		message = "WARNING: " + message + "; workflow paused by the rejection circuit breaker. Review the remaining work, then run /esm resume"
-	} else {
-		message += "; objective stays active"
-	}
+	message := fmt.Sprintf("ESM %s rejected (%d); objective stays active", subject, obj.RejectionCount)
 	if reason != "" {
 		message += ": " + strings.ReplaceAll(reason, "\n", "; ")
 	}

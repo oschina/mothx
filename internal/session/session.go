@@ -251,6 +251,30 @@ func openExistingSessionDB(sessionDir string) (*dao.Database, bool, error) {
 	return db, err == nil, err
 }
 
+// openExistingSessionDBReadOnly opens an existing sessions database for a
+// safety preflight. Unlike openExistingSessionDB it never runs migrations,
+// integrity repair, or WAL setup, and the caller must close the returned
+// standalone handle.
+func openExistingSessionDBReadOnly(sessionDir string) (*dao.Database, bool, error) {
+	if sessionDir == "" {
+		sessionDir = platform.SessionDir()
+	}
+
+	dbPath := filepath.Join(sessionDir, "sessions.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+
+	connection, err := database.OpenReadOnlyStandalone(dbPath)
+	if err != nil {
+		return nil, false, err
+	}
+	return dao.WrapStandaloneDatabase(connection), true, nil
+}
+
 // OpenRootDB opens the shared sessions.db through the DAO-owned database
 // handle. Callers must not close it; use CloseDatabases for lifecycle control.
 func OpenRootDB(sessionDir string) (*dao.Database, error) {
@@ -1704,58 +1728,111 @@ func deleteSessionDataTx(tx *dao.Tx, sessionID string) error {
 	return dao.NewSessionDAO(nil).DeleteSession(context.Background(), tx, sessionID, sessionChildTables)
 }
 
-// DeleteSession deletes a session file if it is under sessionDir.
+// DeleteSession deletes a session only after acquiring its shared mutation
+// lease. This keeps a direct caller from deleting a session that another
+// process still owns for execution. Callers which already hold a mutation
+// lease for a multi-session operation use DeleteSessionWithMutation instead.
 func DeleteSession(path string, sessionDir string) error {
-	cleanPath, err := filepath.Abs(filepath.Clean(path))
+	cleanPath, sessionID, err := deleteSessionTarget(path, sessionDir)
 	if err != nil {
-		return fmt.Errorf("resolve session path: %w", err)
+		return err
+	}
+	if sessionID == "" {
+		return removeSessionHandle(cleanPath)
+	}
+	guard, err := AcquireMutation(sessionDir, sessionID)
+	if err != nil {
+		if errors.Is(err, ErrRuntimeSessionNotFound) {
+			// Deleting a stale handle remains idempotent.
+			return removeSessionHandle(cleanPath)
+		}
+		return fmt.Errorf("acquire deletion lease for session %s: %w", sessionID, err)
+	}
+	defer guard.Release()
+	return deleteSessionWithMutationTarget(cleanPath, sessionDir, sessionID, guard)
+}
+
+// DeleteSessionWithMutation deletes a session while the caller holds its
+// Runtime-owned mutation lease. It is for coordinated multi-session operations
+// that cannot reacquire the process-local lock per child. The lease identity is
+// checked again inside the deletion transaction before any session row is
+// removed.
+func DeleteSessionWithMutation(path string, sessionDir string, guard *RuntimeLeaseGuard) error {
+	cleanPath, sessionID, err := deleteSessionTarget(path, sessionDir)
+	if err != nil {
+		return err
+	}
+	return deleteSessionWithMutationTarget(cleanPath, sessionDir, sessionID, guard)
+}
+
+// deleteSessionTarget validates a session handle and resolves the session ID it
+// names. It deliberately accepts a missing handle: callers may be cleaning up
+// an already-removed virtual handle, and the durable row remains authoritative.
+func deleteSessionTarget(path string, sessionDir string) (cleanPath, sessionID string, err error) {
+	cleanPath, err = filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", "", fmt.Errorf("resolve session path: %w", err)
 	}
 	cleanSessionDir, err := filepath.Abs(filepath.Clean(sessionDir))
 	if err != nil {
-		return fmt.Errorf("resolve session dir: %w", err)
+		return "", "", fmt.Errorf("resolve session dir: %w", err)
 	}
 	rel, err := filepath.Rel(cleanSessionDir, cleanPath)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("session path %s is outside session directory %s", path, sessionDir)
+		return "", "", fmt.Errorf("session path %s is outside session directory %s", path, sessionDir)
 	}
 	if filepath.Ext(cleanPath) != ".db" {
-		return fmt.Errorf("session path %s is not a .db file", path)
+		return "", "", fmt.Errorf("session path %s is not a .db file", path)
 	}
 	base := filepath.Base(cleanPath)
 	if base == "sessions.db" || strings.HasPrefix(base, "sessions.db-") {
-		return fmt.Errorf("refusing to delete shared SQLite database %s as a session handle", path)
+		return "", "", fmt.Errorf("refusing to delete shared SQLite database %s as a session handle", path)
 	}
 
-	// Read session ID and delete from SQLite DB
-	var sessionID string
 	idBytes, err := os.ReadFile(cleanPath)
 	if err == nil {
 		sessionID = strings.TrimSpace(string(idBytes))
 	} else if os.IsNotExist(err) {
 		sessionID = sessionFileID(cleanPath)
+	} else {
+		return "", "", fmt.Errorf("read session handle %s: %w", cleanPath, err)
 	}
+	return cleanPath, sessionID, nil
+}
 
-	if sessionID != "" {
-		dbPath := resolveDBPath(cleanPath)
-		db, err := cachedDB(dbPath)
-		if err != nil {
-			return err
-		}
-		tx, err := db.Begin()
-		if err != nil {
-			return fmt.Errorf("begin deleting session %s: %w", sessionID, err)
-		}
-		if err := deleteSessionDataTx(tx, sessionID); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit deleting session %s: %w", sessionID, err)
-		}
+func deleteSessionWithMutationTarget(cleanPath, sessionDir, sessionID string, guard *RuntimeLeaseGuard) error {
+	binding := guard.Binding()
+	if binding.SessionID != sessionID || binding.Purpose != RuntimeLeasePurposeMutation || binding.RunID != "" ||
+		binding.DatabaseIdentity != RuntimeDatabaseIdentity(sessionDir) {
+		return ErrRuntimeLeaseLost
 	}
+	dbPath := resolveDBPath(cleanPath)
+	db, err := cachedDB(dbPath)
+	if err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin deleting session %s: %w", sessionID, err)
+	}
+	defer tx.Rollback()
+	if _, err := validateRuntimeLeaseBindingTx(tx, sessionDir, sessionID, "", RuntimeLeasePurposeMutation); err != nil {
+		return fmt.Errorf("validate deletion lease for session %s: %w", sessionID, err)
+	}
+	if err := deleteSessionDataTx(tx, sessionID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit deleting session %s: %w", sessionID, err)
+	}
+	return removeSessionHandle(cleanPath)
+}
 
+func removeSessionHandle(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return os.Remove(path)
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

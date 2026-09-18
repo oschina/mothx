@@ -49,14 +49,19 @@ func (d *RuntimeLeaseDAO) Find(ctx context.Context, executor bun.IDB, sessionID 
 	return record, err
 }
 
-// ListActive returns every lease still marked active past now. It is a plain
-// read (no fencing identity): callers use it to discover who is holding runs in
-// a database they are about to maintain, which is advisory by nature. An
-// expired row is excluded because only a live lease can still be written to.
-func (d *RuntimeLeaseDAO) ListActive(ctx context.Context, executor bun.IDB, now int64) ([]RuntimeLeaseRecord, error) {
+// ListHeld returns every lease still marked active. It is a plain read (no
+// fencing identity): destructive maintenance uses it to discover processes
+// that may still own a run in the database it is about to archive.
+//
+// Expiry is deliberately not a filter. A live owner may miss a heartbeat while
+// retaining its fenced owner/epoch/token identity, and the lease protocol lets
+// that owner renew again unless a competing acquire actually takes it over.
+// Treating a stale expiry as safe to archive would split a live writer onto the
+// renamed database file.
+func (d *RuntimeLeaseDAO) ListHeld(ctx context.Context, executor bun.IDB) ([]RuntimeLeaseRecord, error) {
 	var records []RuntimeLeaseRecord
 	err := executor.NewSelect().Model((*RuntimeLeaseRecord)(nil)).
-		Where("state = ? AND expires_at > ?", "active", now).
+		Where("state = ?", "active").
 		OrderExpr("session_id ASC").
 		Scan(ctx, &records)
 	return records, err

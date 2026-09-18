@@ -109,6 +109,28 @@ func OpenStandalone(path string, migrate Migrator) (*bun.DB, error) {
 	return open(canonical, migrate, Options{})
 }
 
+// OpenReadOnlyStandalone opens an uncached, read-only connection without
+// running integrity repair, WAL setup, or migrations. It is for safety
+// preflights that must inspect an existing database without changing it. The
+// caller owns the returned connection and must close it.
+func OpenReadOnlyStandalone(path string) (*bun.DB, error) {
+	canonical, err := CanonicalPath(path)
+	if err != nil {
+		return nil, err
+	}
+	sqlDB, err := sql.Open("sqlite", readOnlyDSN(canonical))
+	if err != nil {
+		return nil, fmt.Errorf("open read-only sqlite db: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	if err := sqlDB.Ping(); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("initialize read-only sqlite connection: %w", err)
+	}
+	return bun.NewDB(sqlDB, sqlitedialect.New()), nil
+}
+
 // Query runs a read operation through the process-wide connection.
 func Query(path string, migrate Migrator, fn func(*bun.DB) error) error {
 	connection, err := Open(path, migrate)
@@ -342,6 +364,23 @@ func quickCheck(sqlDB *sql.DB) (string, error) {
 
 func dsn(path string, foreignKeys bool) string {
 	return dsnForOS(path, runtime.GOOS == "windows", foreignKeys)
+}
+
+// readOnlyDSN opens an existing SQLite database without permitting any write.
+// In particular it intentionally omits the normal connection pragmas because
+// WAL setup and synchronous configuration are writes unsuitable for a safety
+// preflight. mode=ro still reads an active WAL when one exists.
+func readOnlyDSN(path string) string {
+	uriPath := filepath.ToSlash(path)
+	if runtime.GOOS == "windows" && !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath}
+	q := u.Query()
+	q.Set("mode", "ro")
+	q.Set("_pragma", fmt.Sprintf("busy_timeout(%d)", BusyTimeout.Milliseconds()))
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // DSNForOS returns the configured SQLite file URI with foreign key enforcement

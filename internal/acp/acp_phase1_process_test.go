@@ -622,6 +622,11 @@ func TestACPStdioProcessDecisionDeadlineReminders(t *testing.T) {
 	process.respond(t, 1)
 	process.send(t, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{"cwd": workDir}})
 	sessionID := acpNewSessionID(t, process.respond(t, 2))
+	// The interactive question tool is advertised only outside unattended modes
+	// (yolo), so switch this session to agent mode before prompting. The
+	// execution-side registration check then permits the question call.
+	process.send(t, map[string]any{"jsonrpc": "2.0", "id": 20, "method": "session/set_mode", "params": map[string]any{"sessionId": sessionID, "modeId": "agent"}})
+	process.respond(t, 20)
 	process.send(t, map[string]any{
 		"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
 		"params": map[string]any{"sessionId": sessionID, "prompt": []map[string]any{{"type": "text", "text": "ask me"}}},

@@ -1874,11 +1874,11 @@ func (s *Server) DeleteActiveSession(id string) (bool, error) {
 		if s.settings == nil {
 			return false, nil
 		}
-		mgr, err := session.OpenByIDExact(s.settings.GetSessionDir(), id)
+		_, err := session.OpenByIDExact(s.settings.GetSessionDir(), id)
 		if err != nil {
 			return false, nil
 		}
-		if err := session.DeleteSession(mgr.GetFile(), s.settings.GetSessionDir()); err != nil {
+		if err := agentruntime.DeleteSession(s.settings.GetSessionDir(), id); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -1895,7 +1895,7 @@ func (s *Server) DeleteActiveSession(id string) (bool, error) {
 		sess.MCPClients = nil
 	}
 	if sess.Manager != nil && sess.Manager.GetFile() != "" && s.settings != nil {
-		if err := session.DeleteSession(sess.Manager.GetFile(), s.settings.GetSessionDir()); err != nil {
+		if err := agentruntime.DeleteSession(s.settings.GetSessionDir(), sess.ID); err != nil {
 			return false, err
 		}
 	}

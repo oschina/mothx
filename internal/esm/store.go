@@ -353,8 +353,9 @@ func (s *Store) RecordWorkerProgress(ctx context.Context, sessionID, summary str
 }
 
 // RecordRecovery persists a recovery diagnosis after an interrupted ESM role.
-// It keeps the objective active for a bounded number of automatic retries and
-// pauses it once the recovery limit is exceeded.
+// Recovery is observability, not a circuit breaker: an active long-task
+// objective remains active until it completes, is explicitly stopped, or a
+// real blocker is recorded.
 func (s *Store) RecordRecovery(ctx context.Context, sessionID, reason, summary string, remainingWork []string) (*Objective, error) {
 	reason = strings.TrimSpace(reason)
 	summary = strings.TrimSpace(summary)
@@ -381,12 +382,7 @@ func (s *Store) RecordRecovery(ctx context.Context, sessionID, reason, summary s
 		if remainingWork == nil {
 			remainingWork = current.RemainingWork
 		}
-		nextCount := current.RecoveryCount + 1
-		nextStatus := StatusActive
-		if nextCount > RecoveryLimit {
-			nextStatus = StatusPaused
-		}
-		current.Status, current.RecoveryCount, current.RecoveryReason = nextStatus, nextCount, reason
+		current.Status, current.RecoveryCount, current.RecoveryReason = StatusActive, current.RecoveryCount+1, reason
 		current.ProgressSummary, current.RemainingWork, current.UpdatedAt = summary, trimStringSlice(remainingWork), s.now().UTC()
 		return saveObjective(ctx, tx, current)
 	}); err != nil {
@@ -534,8 +530,8 @@ func (s *Store) MarkCompleteFromAudit(ctx context.Context, sessionID, review str
 	return s.Get(ctx, sessionID)
 }
 
-// RejectCompletionCandidate records a failed completion candidate. Repeated
-// rejections pause unattended continuation at CompletionRejectionLimit.
+// RejectCompletionCandidate records a failed completion candidate. A rejected
+// claim means work remains, so unattended continuation stays active.
 func (s *Store) RejectCompletionCandidate(ctx context.Context, sessionID, review string) (*Objective, error) {
 	current, err := s.Get(ctx, sessionID)
 	if err != nil {
@@ -584,11 +580,7 @@ func (s *Store) recordCompletionRejection(ctx context.Context, sessionID, runID,
 		if runID == "" || current.RejectionRunID != runID {
 			nextCount++
 		}
-		nextStatus := StatusActive
-		if nextCount >= CompletionRejectionLimit {
-			nextStatus = StatusPaused
-		}
-		current.Status, current.CompletionReview, current.RemainingWork = nextStatus, review, trimStringSlice(remainingWork)
+		current.Status, current.CompletionReview, current.RemainingWork = StatusActive, review, trimStringSlice(remainingWork)
 		current.RejectionCount, current.RejectionRunID, current.UpdatedAt = nextCount, runID, s.now().UTC()
 		return saveObjective(ctx, tx, current)
 	}); err != nil {

@@ -107,9 +107,12 @@ func TestRunFinishedSuccessOnNormalCompletion(t *testing.T) {
 }
 
 func TestRunFinishedFailedOnStreamError(t *testing.T) {
+	// A stream timeout is an availability failure that Agent Core keeps
+	// retrying, so a terminal TaskFailed needs a permanent, non-retryable
+	// stream error instead.
 	a := newTerminalContractAgent(t, []provider.StreamEvent{
 		{Type: provider.StreamStart},
-		{Type: provider.StreamError, Error: context.DeadlineExceeded, StopReason: "error"},
+		{Type: provider.StreamError, Error: errors.New("provider returned a permanent failure"), StopReason: "error"},
 	}, 3)
 
 	events := collectRunEvents(t, a.Run(context.Background(), "hi"))

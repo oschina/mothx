@@ -1,7 +1,9 @@
 package session
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,13 +12,15 @@ import (
 	"time"
 
 	"github.com/startvibecoding/mothx/internal/dao"
+	database "github.com/startvibecoding/mothx/internal/db"
 )
 
-// TestActiveRuntimeLeasesReportsOnlyLiveHolders pins the preflight that guards
-// destructive maintenance: a lease another process is still renewing must be
-// reported, a released or expired one must not, and a directory without a
-// database must be answered without creating one.
-func TestActiveRuntimeLeasesReportsOnlyLiveHolders(t *testing.T) {
+// TestActiveRuntimeLeasesReportsHeldHolders pins the preflight that guards
+// destructive maintenance: every active lease must be reported even when its
+// most recent renewal lapsed, because that process retains ownership until a
+// fenced takeover or release. A directory without a database is answered
+// without creating one.
+func TestActiveRuntimeLeasesReportsHeldHolders(t *testing.T) {
 	sessionDir := t.TempDir()
 
 	// No database yet: nothing is held, and a read-only preflight must not
@@ -50,9 +54,9 @@ func TestActiveRuntimeLeasesReportsOnlyLiveHolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A row that lapsed without a takeover is still owned by its process, but it
-	// is no longer evidence of concurrent writing, so the preflight must not
-	// refuse on its behalf.
+	// A row that lapsed without a takeover still belongs to its original owner.
+	// The owner can renew it again, so destructive maintenance must refuse until
+	// it is explicitly released or fenced out by a competing acquire.
 	past := time.Now().Add(-time.Minute).Unix()
 	if err := dao.NewRuntimeLeaseDAO(db.Bun()).Insert(context.Background(), db.Bun(), &dao.RuntimeLeaseRecord{
 		SessionID: "lease-expired", OwnerID: "owner-gone", OwnerPID: 1, OwnerKind: "process",
@@ -66,10 +70,16 @@ func TestActiveRuntimeLeasesReportsOnlyLiveHolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(leases) != 1 {
-		t.Fatalf("active leases = %#v, want only the live holder", leases)
+	if len(leases) != 2 {
+		t.Fatalf("active leases = %#v, want both held owners", leases)
 	}
-	holder := leases[0]
+	var holder ActiveRuntimeLease
+	for _, lease := range leases {
+		if lease.SessionID == "lease-holder" {
+			holder = lease
+			break
+		}
+	}
 	if holder.SessionID != "lease-holder" || holder.OwnerPID != os.Getpid() || holder.Purpose != "run" {
 		t.Fatalf("holder = %#v, want this process' run lease for lease-holder", holder)
 	}
@@ -78,11 +88,68 @@ func TestActiveRuntimeLeasesReportsOnlyLiveHolders(t *testing.T) {
 	}
 
 	lease.release()
+	if _, err := dao.NewRuntimeLeaseDAO(db.Bun()).Release(context.Background(), &dao.RuntimeLeaseRecord{
+		SessionID: "lease-expired", OwnerID: "owner-gone", Epoch: 1, TokenHash: "token-gone",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	leases, err = ActiveRuntimeLeases(sessionDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(leases) != 0 {
 		t.Fatalf("active leases after release = %#v, want none", leases)
+	}
+}
+
+// TestActiveRuntimeLeasesNeverMigratesThePreflightDatabase builds a database
+// which has only the lease table. The normal session opener would apply the
+// entire schema to it; the maintenance preflight must only read the table and
+// leave its file byte-for-byte unchanged.
+func TestActiveRuntimeLeasesNeverMigratesThePreflightDatabase(t *testing.T) {
+	sessionDir := t.TempDir()
+	path := RootDatabasePath(sessionDir)
+	standalone, err := database.OpenStandalone(path, func(sqlDB *sql.DB) error {
+		_, err := sqlDB.Exec(`CREATE TABLE session_runtime_leases (
+			session_id TEXT PRIMARY KEY,
+			owner_instance_id TEXT NOT NULL,
+			owner_pid INTEGER NOT NULL,
+			owner_kind TEXT NOT NULL,
+			lease_token_hash TEXT NOT NULL,
+			epoch INTEGER NOT NULL,
+			run_id TEXT NOT NULL,
+			purpose TEXT NOT NULL,
+			state TEXT NOT NULL,
+			acquired_at INTEGER NOT NULL,
+			heartbeat_at INTEGER NOT NULL,
+			expires_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leases, err := ActiveRuntimeLeases(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("leases = %#v, want none", leases)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("the lease preflight modified the database it inspected")
 	}
 }

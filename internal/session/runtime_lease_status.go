@@ -8,9 +8,9 @@ import (
 	"github.com/startvibecoding/mothx/internal/dao"
 )
 
-// ActiveRuntimeLease is one live session lease recorded in a session database.
-// It names the process that holds it, so destructive maintenance can refuse
-// while another mothx process is still executing a run there.
+// ActiveRuntimeLease is one session lease still recorded as active in a session
+// database. It names the process that holds it, so destructive maintenance can
+// refuse while another mothx process may still be executing a run there.
 type ActiveRuntimeLease struct {
 	SessionID string
 	OwnerID   string
@@ -33,25 +33,25 @@ func (lease ActiveRuntimeLease) Describe() string {
 	return description
 }
 
-// ActiveRuntimeLeases reports the leases currently held in a session directory's
-// database. A directory with no database holds nothing and is not an error, so
-// this is safe to call before the first run or after a reset.
+// ActiveRuntimeLeases reports leases still marked active in a session
+// directory's database. A directory with no database holds nothing and is not
+// an error, so this is safe to call before the first run or after a reset.
 //
 // The check is deliberately narrow: a lease exists only while a process is
 // admitted or executing a run, so an idle TUI, serve, or ACP process holding the
-// same directory open is not reported here. Callers treat an error as unknown
-// rather than empty, because an unreadable database is exactly when a reset is
-// most tempting and least safe.
+// same directory open is not reported here. It opens the file read-only and
+// never migrates, repairs, or initializes it: a safety preflight cannot modify
+// the database it is deciding whether to archive.
 func ActiveRuntimeLeases(sessionDir string) ([]ActiveRuntimeLease, error) {
-	db, ok, err := openExistingSessionDB(sessionDir)
+	db, ok, err := openExistingSessionDBReadOnly(sessionDir)
 	if err != nil {
 		return nil, fmt.Errorf("inspect session leases: %w", err)
 	}
 	if !ok {
 		return nil, nil
 	}
-	now := time.Now().Unix()
-	records, err := dao.NewRuntimeLeaseDAO(db.Bun()).ListActive(context.Background(), db.Bun(), now)
+	defer db.Close()
+	records, err := dao.NewRuntimeLeaseDAO(db.Bun()).ListHeld(context.Background(), db.Bun())
 	if err != nil {
 		return nil, fmt.Errorf("list active session leases: %w", err)
 	}

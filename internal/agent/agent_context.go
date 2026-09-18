@@ -995,7 +995,7 @@ func (a *Agent) tryRecoverContentRejection(ch chan<- Event, stage *int, hasVisib
 }
 
 func (a *Agent) tryRetryStreamTimeout(ctx context.Context, ch chan<- Event, retried *int, maxRetries int, textContent, thinkContent string, cause error) bool {
-	if cause == nil || *retried >= maxRetries {
+	if cause == nil || (maxRetries > 0 && *retried >= maxRetries) {
 		return false
 	}
 	if !provider.IsStreamTimeoutError(cause) {
@@ -1007,9 +1007,39 @@ func (a *Agent) tryRetryStreamTimeout(ctx context.Context, ch chan<- Event, retr
 		return false
 	}
 	*retried++
-	msg := fmt.Sprintf("⚠️ 供应商响应超时（长时间未收到数据），正在自动重试第 %d/%d 次…", *retried, maxRetries)
+	msg := fmt.Sprintf("⚠️ 供应商响应超时（长时间未收到数据），正在自动重试第 %d 次…", *retried)
+	if maxRetries > 0 {
+		msg = fmt.Sprintf("⚠️ 供应商响应超时（长时间未收到数据），正在自动重试第 %d/%d 次…", *retried, maxRetries)
+	}
+	delay := streamRecoveryRetryDelay(*retried)
 	a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: msg})
-	a.sendEvent(ch, Event{Type: EventRetry, RetryAttempt: *retried, RetryMaxAttempts: maxRetries, RetryReason: "timeout"})
+	a.sendEvent(ch, Event{Type: EventRetry, RetryAttempt: *retried, RetryMaxAttempts: maxRetries, RetryAfterMS: int(delay.Milliseconds()), RetryReason: "timeout"})
+	return waitForStreamRecoveryRetry(ctx, delay)
+}
+
+// streamRecoveryRetryDelay bounds retry pressure while a provider is
+// unavailable. It shares the provider backoff curve but stays in Agent Core
+// because this retry resumes an already-started logical turn.
+var streamRecoveryRetryDelay = func(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	return provider.RetryDelay(attempt-1, 1000)
+}
+
+// waitForStreamRecoveryRetry waits without making cancellation sluggish. A
+// cancelled context still returns true so the loop reaches its canonical
+// cancellation terminal path on the next iteration.
+func waitForStreamRecoveryRetry(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 	return true
 }
 
@@ -1021,10 +1051,16 @@ func (a *Agent) tryRetryStreamTimeout(ctx context.Context, ch chan<- Event, retr
 // stream died instead of duplicating output; when nothing visible was streamed
 // yet, the turn is simply re-run. Emitted tool calls block recovery: they have
 // already been projected to adapters, and silently dropping them would desync
-// the visible transcript. Context-overflow errors (own recovery path) and
-// idle-stream stalls (stream-timeout retry path) are excluded.
-func (a *Agent) tryContinueStreamFailure(ctx context.Context, ch chan<- Event, retried *int, maxRetries int, textContent, thinkContent, thinkSignature string, toolCalls []provider.ToolCallBlock, cause error) bool {
-	if cause == nil || *retried >= maxRetries {
+// the visible transcript. Context-overflow errors have their own recovery
+// path. A timeout with no output uses the dedicated fresh-turn retry path;
+// after partial output, this continuation path keeps resuming until the run is
+// explicitly cancelled.
+func (a *Agent) tryContinueStreamFailure(ctx context.Context, ch chan<- Event, retried *int, maxRetries int, textContent, thinkContent, thinkSignature string, toolCalls []provider.ToolCallBlock, recoveryAssistantContents *[]provider.ContentBlock, cause error) bool {
+	if cause == nil {
+		return false
+	}
+	streamTimeout := provider.IsStreamTimeoutError(cause)
+	if !streamTimeout && maxRetries > 0 && *retried >= maxRetries {
 		return false
 	}
 	if ctx.Err() != nil {
@@ -1033,13 +1069,12 @@ func (a *Agent) tryContinueStreamFailure(ctx context.Context, ch chan<- Event, r
 	if len(toolCalls) > 0 || provider.IsContextOverflowError(cause) {
 		return false
 	}
-	// Idle-stream stalls (a wrapped context.DeadlineExceeded) belong to the
-	// dedicated stream-timeout retry path in the caller; keep that budget and
-	// its final error contract unchanged here.
-	if errors.Is(cause, context.DeadlineExceeded) {
+	// The dedicated timeout path retries an empty turn from scratch. Do not add
+	// a continuation entry when there is no partial response to preserve.
+	if streamTimeout && textContent == "" && thinkContent == "" {
 		return false
 	}
-	if !provider.IsRetryable(cause, 0) {
+	if !streamTimeout && !provider.IsRetryable(cause, 0) {
 		return false
 	}
 	*retried++
@@ -1055,6 +1090,11 @@ func (a *Agent) tryContinueStreamFailure(ctx context.Context, ch chan<- Event, r
 		partialContents = append(partialContents, provider.ContentBlock{Type: "text", Text: textContent})
 	}
 	if len(partialContents) > 0 {
+		if recoveryAssistantContents != nil {
+			for _, block := range partialContents {
+				*recoveryAssistantContents = append(*recoveryAssistantContents, cloneContentBlock(block))
+			}
+		}
 		partial := provider.NewAssistantMessage(partialContents)
 		recovery := provider.NewSystemInjectedUserMessage(buildStreamRecoveryMessage(textContent))
 		a.mu.Lock()
@@ -1064,16 +1104,24 @@ func (a *Agent) tryContinueStreamFailure(ctx context.Context, ch chan<- Event, r
 		a.mu.Unlock()
 	}
 
-	a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: retryCompatibilityStatus(*retried, maxRetries, 0), RetryStatus: true, RetryAttempt: *retried, RetryMaxAttempts: maxRetries})
+	retryMaxAttempts := maxRetries
+	if streamTimeout {
+		// A partial response can be continued safely, and a timeout is an
+		// availability loss rather than a reason to abandon the user's task.
+		retryMaxAttempts = 0
+	}
+	delay := streamRecoveryRetryDelay(*retried)
+	a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: retryCompatibilityStatus(*retried, retryMaxAttempts, int(delay.Milliseconds())), RetryStatus: true, RetryAttempt: *retried, RetryMaxAttempts: retryMaxAttempts, RetryAfterMS: int(delay.Milliseconds())})
 	a.sendEvent(ch, Event{
 		Type:             EventRetry,
 		StatusMessage:    provider.RetryErrorDetail(cause),
 		RetryAttempt:     *retried,
-		RetryMaxAttempts: maxRetries,
+		RetryMaxAttempts: retryMaxAttempts,
+		RetryAfterMS:     int(delay.Milliseconds()),
 		RetryReason:      "stream_interrupted",
 		RetryContinue:    len(partialContents) > 0,
 	})
-	return true
+	return waitForStreamRecoveryRetry(ctx, delay)
 }
 
 func (a *Agent) setMessageID(index int, id string) {

@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -50,7 +51,24 @@ func DeleteSession(sessionDir, id string) error {
 	if err != nil {
 		return err
 	}
-	return session.DeleteSession(mgr.GetFile(), sessionDir)
+	guard, err := AcquireSessionMutation(context.Background(), sessionDir, id, ExecutionAdmissionOptions{})
+	if err != nil {
+		return fmt.Errorf("acquire deletion lease for session %s: %w", id, err)
+	}
+	defer guard.Release()
+	return session.DeleteSessionWithMutation(mgr.GetFile(), sessionDir, guard)
+}
+
+// DeleteSessionWithMutation removes a session while the caller already holds
+// its shared mutation lease. It is the multi-session counterpart of
+// DeleteSession and keeps cascade deletion on the same Runtime-owned lifecycle
+// without reacquiring a process-local lock.
+func DeleteSessionWithMutation(sessionDir, id string, guard *session.RuntimeLeaseGuard) error {
+	mgr, err := OpenSession(sessionDir, id)
+	if err != nil {
+		return err
+	}
+	return session.DeleteSessionWithMutation(mgr.GetFile(), sessionDir, guard)
 }
 
 // OpenSessionForWorkDir opens a persisted session scoped to its working directory.

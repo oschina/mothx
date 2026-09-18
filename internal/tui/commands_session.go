@@ -216,7 +216,7 @@ func (a *App) deleteSelectedSessionDialog() {
 		a.scheduleRender()
 		return
 	}
-	if err := session.DeleteSession(item.Path, a.getSessionDir()); err != nil {
+	if err := agentruntime.DeleteSession(a.getSessionDir(), item.ID); err != nil {
 		a.sessionsDialog.Error = a.translator.Text(i18n.MsgSessionsDeleteFailed, err)
 		a.scheduleRender()
 		return
@@ -533,7 +533,7 @@ func (a *App) sessionsDel(id string) {
 		return
 	}
 
-	if err := session.DeleteSession(match.Path, a.getSessionDir()); err != nil {
+	if err := agentruntime.DeleteSession(a.getSessionDir(), match.ID); err != nil {
 		a.addCommandError(a.translator.Text(i18n.MsgSessionsDeleteFailed, err))
 		return
 	}

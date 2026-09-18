@@ -174,7 +174,7 @@ func FormatObjective(obj *Objective) string {
 		b.WriteString(fmt.Sprintf("Remaining work (%d): %s\n", len(obj.RemainingWork), strings.Join(obj.RemainingWork, "; ")))
 	}
 	if obj.RejectionCount > 0 {
-		b.WriteString(fmt.Sprintf("Completion rejections: %d/%d\n", obj.RejectionCount, CompletionRejectionLimit))
+		b.WriteString(fmt.Sprintf("Completion rejections: %d\n", obj.RejectionCount))
 	}
 	if obj.CompletionReason != "" {
 		b.WriteString(fmt.Sprintf("Completion candidate: %s\n", obj.CompletionReason))
