@@ -56,12 +56,21 @@ func newScriptedProvider(batches ...[]provider.StreamEvent) *scriptedProvider {
 
 func collectTerminalEvents(t *testing.T, events <-chan Event) (TaskStatus, string, bool) {
 	t.Helper()
+	return collectTerminalEventsWithin(t, events, 10*time.Second)
+}
+
+// collectTerminalEventsWithin is collectTerminalEvents with an explicit
+// terminal-event deadline. Tests that drive many iterations (e.g. the
+// unbounded-budget stress test) need a larger window than the default 10s
+// because the per-iteration cost is amplified under -race.
+func collectTerminalEventsWithin(t *testing.T, events <-chan Event, within time.Duration) (TaskStatus, string, bool) {
+	t.Helper()
 	var (
 		status     TaskStatus
 		reason     string
 		errorEvent bool
 	)
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(within)
 	for {
 		select {
 		case event, ok := <-events:

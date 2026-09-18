@@ -228,7 +228,7 @@ func TestNegativeMaxIterationsDoesNotEnforceLoopCap(t *testing.T) {
 		MaxIterations:        -1,
 		MaxConsecutiveNoText: 1000,
 	}, registry)
-	status, reason, _ := collectTerminalEvents(t, a.Run(context.Background(), "finish"))
+	status, reason, _ := collectTerminalEventsWithin(t, a.Run(context.Background(), "finish"), 120*time.Second)
 	if status != TaskSuccess || reason != "stop" {
 		t.Fatalf("terminal = %q/%q, want success/stop after >200 turns", status, reason)
 	}
