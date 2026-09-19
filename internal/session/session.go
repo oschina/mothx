@@ -719,6 +719,7 @@ func sessionFileID(path string) string {
 
 // AppendMessage adds a message entry.
 func (m *Manager) AppendMessage(msg provider.Message) (string, error) {
+	msg, _ = provider.NormalizeMessage(msg)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -775,6 +776,7 @@ func (m *Manager) AppendMessages(msgs []provider.Message) ([]string, error) {
 		now := time.Now()
 		parent := m.leafID
 		for i, msg := range chunk {
+			msg, _ = provider.NormalizeMessage(msg)
 			id := GenerateID()
 			ids = append(ids, id)
 			batch[i] = MessageEntry{
@@ -979,6 +981,7 @@ func (m *Manager) AppendContentOverride(targetEntryID string, msg provider.Messa
 	if !found {
 		return "", fmt.Errorf("content override target %s is not a message entry", targetEntryID)
 	}
+	msg, _ = provider.NormalizeMessage(msg)
 
 	id := GenerateID()
 	entry := ContentOverrideEntry{
@@ -1373,6 +1376,7 @@ func applyCompactionEntry(state *replayState, entry CompactionEntry) {
 }
 
 func cloneMessage(msg provider.Message) provider.Message {
+	msg, _ = provider.NormalizeMessage(msg)
 	cloned := msg
 	if len(msg.Contents) > 0 {
 		cloned.Contents = make([]provider.ContentBlock, len(msg.Contents))
@@ -2497,9 +2501,9 @@ func (m *Manager) writeEntry(entry interface{}) error {
 	}
 
 	id, typeStr, parentID, ts := getEntryMetadata(entry)
-	data, err := json.Marshal(entry)
+	data, err := marshalSessionEntry(entry)
 	if err != nil {
-		return fmt.Errorf("marshal entry: %w", err)
+		return err
 	}
 
 	return m.withDB(func(db *dao.Database) error {
@@ -2569,9 +2573,9 @@ func (m *Manager) writeEntries(batch []MessageEntry) error {
 	}
 	rows := make([][]byte, len(batch))
 	for i := range batch {
-		data, err := json.Marshal(batch[i])
+		data, err := marshalSessionEntry(batch[i])
 		if err != nil {
-			return fmt.Errorf("marshal entry: %w", err)
+			return err
 		}
 		rows[i] = data
 	}

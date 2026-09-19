@@ -2,11 +2,11 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/startvibecoding/mothx/internal/dao"
 	"time"
+
+	"github.com/startvibecoding/mothx/internal/dao"
 )
 
 var ErrConversationTurnNotOpen = errors.New("conversation turn is not open")
@@ -44,7 +44,7 @@ func appendTurnEntryTxContext(ctx context.Context, tx *dao.Tx, sessionID string,
 	if id == "" || typeName == "" {
 		return 0, fmt.Errorf("turn entry identity is required")
 	}
-	data, err := json.Marshal(entry)
+	data, err := marshalSessionEntry(entry)
 	if err != nil {
 		return 0, fmt.Errorf("marshal turn entry: %w", err)
 	}

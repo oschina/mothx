@@ -1539,6 +1539,8 @@ func TestInvalidToolArgumentsDoNotBreakSessionSave(t *testing.T) {
 	}
 
 	var sawParseError bool
+	var sawRecoveryNotice bool
+	var sawRecoveryRetry bool
 	for _, event := range events {
 		if event.Type == EventError && event.Error != nil && strings.Contains(event.Error.Error(), "save assistant message to session") {
 			t.Fatalf("unexpected session save error: %v", event.Error)
@@ -1546,9 +1548,21 @@ func TestInvalidToolArgumentsDoNotBreakSessionSave(t *testing.T) {
 		if event.Type == EventToolExecutionEnd && event.ToolError != nil && strings.Contains(event.ToolError.Error(), "invalid character ']'") {
 			sawParseError = true
 		}
+		if event.Type == EventMessageEnd && event.Message.SystemInjected && strings.Contains(event.Message.Content, "Do not assume any side effect occurred") {
+			sawRecoveryNotice = true
+		}
+		if event.Type == EventRetry && event.RetryReason == "invalid_tool_arguments" && event.RetryContinue {
+			sawRecoveryRetry = true
+		}
 	}
 	if !sawParseError {
 		t.Fatal("expected tool argument parse error")
+	}
+	if !sawRecoveryNotice {
+		t.Fatal("expected model-facing tool argument recovery notice")
+	}
+	if !sawRecoveryRetry {
+		t.Fatal("expected invalid-tool-arguments retry event")
 	}
 
 	var foundSanitized, foundInvalid bool
@@ -1579,6 +1593,75 @@ func TestInvalidToolArgumentsDoNotBreakSessionSave(t *testing.T) {
 	}
 	if _, err := session.Open(sess.GetFile()); err != nil {
 		t.Fatalf("reopen session: %v", err)
+	}
+}
+
+func TestEmptyToolArgumentsDoNotBreakAgentSessionSave(t *testing.T) {
+	responses := []provider.StreamEvent{
+		{Type: provider.StreamStart},
+		{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{
+			ID:        "call-empty",
+			Name:      "bash",
+			Arguments: json.RawMessage{},
+		}},
+		{Type: provider.StreamDone},
+	}
+	mockProvider := provider.NewMockProvider("mock", []*provider.Model{
+		{ID: "model1", Name: "Model 1"},
+	}, responses)
+
+	sess := session.New(t.TempDir(), t.TempDir())
+	if err := sess.Init(); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+	a := NewWithLoopConfig(AgentLoopConfig{
+		Config: Config{
+			Provider: mockProvider,
+			Model:    mockProvider.Models()[0],
+			Mode:     "agent",
+			Session:  sess,
+		},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     1,
+	}, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	var events []Event
+	for event := range a.Run(context.Background(), "test") {
+		events = append(events, event)
+	}
+	var sawRecoveryNotice, sawRecoveryRetry bool
+	for _, event := range events {
+		if event.Type == EventError && event.Error != nil && strings.Contains(event.Error.Error(), "session_save") {
+			t.Fatalf("unexpected session save error: %v", event.Error)
+		}
+		if event.Type == EventMessageEnd && event.Message.SystemInjected && strings.Contains(event.Message.Content, "streamed no JSON arguments") {
+			sawRecoveryNotice = true
+		}
+		if event.Type == EventRetry && event.RetryReason == "empty_tool_arguments" && event.RetryContinue {
+			sawRecoveryRetry = true
+		}
+	}
+	if !sawRecoveryNotice {
+		t.Fatal("expected model-facing empty-argument recovery notice")
+	}
+	if !sawRecoveryRetry {
+		t.Fatal("expected empty-tool-arguments retry event")
+	}
+
+	var foundToolCall bool
+	for _, message := range sess.GetMessages() {
+		for _, block := range message.Contents {
+			if block.ToolCall == nil || block.ToolCall.ID != "call-empty" {
+				continue
+			}
+			foundToolCall = true
+			if got := string(block.ToolCall.Arguments); got != "{}" {
+				t.Fatalf("persisted empty arguments = %q, want {}", got)
+			}
+		}
+	}
+	if !foundToolCall {
+		t.Fatal("expected persisted empty-argument tool call")
 	}
 }
 

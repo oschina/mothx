@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -65,6 +66,88 @@ type ToolCallBlock struct {
 	Arguments        json.RawMessage `json:"arguments"`
 	InvalidArguments string          `json:"invalidArguments,omitempty"`
 	ThoughtSignature string          `json:"thoughtSignature,omitempty"`
+}
+
+// ErrInvalidToolCallArguments indicates that a tool call's original argument
+// payload was not valid JSON and therefore was not executed as supplied.
+var ErrInvalidToolCallArguments = errors.New("invalid tool-call JSON arguments")
+
+// NormalizeToolCallArguments makes streamed tool-call arguments safe to
+// persist and replay. Go 1.27's JSON v2 encoder validates json.RawMessage
+// values (jsontext.Value); a non-nil empty value therefore fails with
+// "unexpected end of JSON input". Providers can legitimately produce an
+// empty argument stream for a no-argument tool, so represent that as an empty
+// object. For malformed non-empty arguments, preserve the original payload in
+// InvalidArguments for diagnostics and replace the executable payload with an
+// empty object. Callers must treat the returned error as a failed tool call and
+// must not guess at the original side effect.
+func NormalizeToolCallArguments(tc *ToolCallBlock) (args map[string]any, repaired bool, err error) {
+	if tc == nil {
+		return nil, false, nil
+	}
+	if tc.Arguments == nil {
+		return nil, false, nil
+	}
+	if len(tc.Arguments) == 0 {
+		tc.Arguments = json.RawMessage(`{}`)
+		return map[string]any{}, true, nil
+	}
+	if err := json.Unmarshal(tc.Arguments, &args); err != nil {
+		if tc.InvalidArguments == "" {
+			tc.InvalidArguments = string(tc.Arguments)
+		}
+		tc.Arguments = json.RawMessage(`{}`)
+		return nil, true, fmt.Errorf("%w: %v", ErrInvalidToolCallArguments, err)
+	}
+	return args, false, nil
+}
+
+// NormalizeMessage returns a deep-enough copy of msg for safe persistence and
+// replay. It repairs every embedded tool call while leaving the caller's
+// message and argument buffers untouched. The returned notices identify tool
+// calls that were repaired so the Agent can make the recovery visible to the
+// model instead of silently changing a request.
+func NormalizeMessage(msg Message) (normalized Message, notices []string) {
+	normalized = msg
+	if len(msg.Contents) == 0 {
+		return normalized, nil
+	}
+	normalized.Contents = make([]ContentBlock, len(msg.Contents))
+	for i, block := range msg.Contents {
+		cloned := block
+		if block.Image != nil {
+			image := *block.Image
+			cloned.Image = &image
+		}
+		if block.File != nil {
+			file := *block.File
+			cloned.File = &file
+		}
+		if block.CacheControl != nil {
+			cache := *block.CacheControl
+			cloned.CacheControl = &cache
+		}
+		if block.ToolCall != nil {
+			call := *block.ToolCall
+			if block.ToolCall.Arguments != nil {
+				call.Arguments = make(json.RawMessage, len(block.ToolCall.Arguments))
+				copy(call.Arguments, block.ToolCall.Arguments)
+			}
+			_, repaired, err := NormalizeToolCallArguments(&call)
+			if repaired {
+				notice := fmt.Sprintf("tool %q", call.Name)
+				if err != nil {
+					notice += ": invalid JSON arguments"
+				} else {
+					notice += ": empty arguments"
+				}
+				notices = append(notices, notice)
+			}
+			cloned.ToolCall = &call
+		}
+		normalized.Contents[i] = cloned
+	}
+	return normalized, notices
 }
 
 // Message represents a conversation message.

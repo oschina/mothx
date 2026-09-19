@@ -382,19 +382,8 @@ func cloneContentBlock(block provider.ContentBlock) provider.ContentBlock {
 	return cloned
 }
 
-func normalizeToolCallArguments(tc *provider.ToolCallBlock) (map[string]any, error) {
-	if tc == nil || len(tc.Arguments) == 0 {
-		return nil, nil
-	}
-	var args map[string]any
-	if err := json.Unmarshal(tc.Arguments, &args); err != nil {
-		if tc.InvalidArguments == "" {
-			tc.InvalidArguments = string(tc.Arguments)
-		}
-		tc.Arguments = json.RawMessage(`{}`)
-		return nil, err
-	}
-	return args, nil
+func normalizeToolCallArguments(tc *provider.ToolCallBlock) (map[string]any, bool, error) {
+	return provider.NormalizeToolCallArguments(tc)
 }
 
 // Agent is the core agent loop.
@@ -936,6 +925,7 @@ func (a *Agent) RunWithUserMessage(ctx context.Context, msg provider.Message) <-
 		if msg.Timestamp.IsZero() {
 			msg.Timestamp = time.Now()
 		}
+		msg, _ = provider.NormalizeMessage(msg)
 		a.mu.Lock()
 		msgIndex := len(a.messages)
 		userEntryLoaded := a.config.RuntimeOwnsUserEntry && a.config.UserEntryID != "" &&
@@ -1097,10 +1087,14 @@ func (a *Agent) RunWithMessages(ctx context.Context, messages []provider.Message
 			sink.seal()
 			close(ch)
 		}()
+		normalizedMessages := make([]provider.Message, len(messages))
+		for i, message := range messages {
+			normalizedMessages[i], _ = provider.NormalizeMessage(message)
+		}
 		a.mu.Lock()
-		a.messages = messages
-		a.messageIDs = make([]string, len(messages))
-		a.context.Messages = messages
+		a.messages = normalizedMessages
+		a.messageIDs = make([]string, len(normalizedMessages))
+		a.context.Messages = normalizedMessages
 		a.mu.Unlock()
 		a.loop(contextWithEventSink(ctx, sink), ch)
 		a.logDroppedEvents()
@@ -1412,6 +1406,10 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 	// completes. Provider requests retain them as separate in-memory messages,
 	// while the durable transcript must receive their complete response.
 	var recoveryAssistantContents []provider.ContentBlock
+	// Malformed tool-call arguments are never replayed as a guessed side effect.
+	// They are recorded as a failed tool result and this notice is injected after
+	// that result so the next provider request can safely reconstruct the call.
+	var toolArgumentRecoveryNotices []string
 
 	// Content-rejection recovery: a provider may permanently refuse content
 	// (for example an image flagged by content inspection). That is not
@@ -1603,9 +1601,19 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 					}
 					toolCallIDs[event.ToolCall.ID] = struct{}{}
 					// Parse arguments for the event
-					args, err := normalizeToolCallArguments(event.ToolCall)
+					args, repaired, err := normalizeToolCallArguments(event.ToolCall)
+					if repaired && err == nil {
+						toolArgumentRecoveryNotices = append(toolArgumentRecoveryNotices, fmt.Sprintf(
+							"Tool %q streamed no JSON arguments. The runtime normalized the call to the safe fallback {}. Treat the tool result below as authoritative; use explicit valid JSON arguments for any follow-up call.",
+							event.ToolCall.Name))
+					}
 					if err != nil {
-						// Log parse error but continue - tool execution will handle invalid args.
+						// Keep the original payload in InvalidArguments, execute no
+						// guessed side effect, and explain the recovery to the model on
+						// the next turn.
+						toolArgumentRecoveryNotices = append(toolArgumentRecoveryNotices, fmt.Sprintf(
+							"Tool %q returned malformed JSON arguments (%v). The original arguments were not executed; the safe fallback was {}. Treat this tool call as failed and reconstruct valid JSON before trying again. Do not assume any side effect occurred.",
+							event.ToolCall.Name, err))
 						a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Warning: failed to parse tool arguments: %v", err)})
 					}
 					toolCalls = append(toolCalls, *event.ToolCall)
@@ -1938,6 +1946,19 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 			for i, msgID := range msgIDs {
 				a.setMessageID(baseIndex+i, msgID)
 			}
+		}
+		if len(toolArgumentRecoveryNotices) > 0 {
+			recoveryText := strings.Join(toolArgumentRecoveryNotices, "\n")
+			notice := provider.NewSystemInjectedUserMessage("[System] Tool-call recovery notice:\n" + recoveryText)
+			a.sendEvent(ch, Event{Type: EventMessageStart, Message: notice})
+			a.sendEvent(ch, Event{Type: EventMessageEnd, Message: notice})
+			a.injectTransientMessage(notice)
+			retryReason := "invalid_tool_arguments"
+			if !strings.Contains(recoveryText, "malformed JSON arguments") && strings.Contains(recoveryText, "streamed no JSON arguments") {
+				retryReason = "empty_tool_arguments"
+			}
+			a.sendEvent(ch, Event{Type: EventRetry, RetryAttempt: 1, RetryMaxAttempts: 1, RetryReason: retryReason, RetryContinue: true})
+			toolArgumentRecoveryNotices = nil
 		}
 
 		if textContent == "" {

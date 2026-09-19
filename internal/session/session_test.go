@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -144,6 +145,63 @@ func TestAppendMessage(t *testing.T) {
 
 	if len(m.entries) != 2 {
 		t.Errorf("expected 2 entries, got %d", len(m.entries))
+	}
+}
+
+func TestAppendMessageRepairsEmptyToolCallArguments(t *testing.T) {
+	sessionDir := t.TempDir()
+	m := New("/tmp/test", sessionDir)
+	if err := m.Init(); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+
+	msg := provider.NewAssistantMessage([]provider.ContentBlock{{
+		Type: "toolCall",
+		ToolCall: &provider.ToolCallBlock{
+			ID:        "call-empty",
+			Name:      "read",
+			Arguments: json.RawMessage{},
+		},
+	}})
+	if _, err := m.AppendMessage(msg); err != nil {
+		t.Fatalf("append assistant tool call: %v", err)
+	}
+	messages := m.GetMessages()
+	if len(messages) != 1 || len(messages[0].Contents) != 1 || messages[0].Contents[0].ToolCall == nil {
+		t.Fatalf("stored messages = %#v", messages)
+	}
+	if got := string(messages[0].Contents[0].ToolCall.Arguments); got != "{}" {
+		t.Fatalf("stored arguments = %q, want {}", got)
+	}
+
+	reopened, err := Open(m.GetFile())
+	if err != nil {
+		t.Fatalf("reopen session: %v", err)
+	}
+	replayed := reopened.GetMessages()
+	if len(replayed) != 1 || string(replayed[0].Contents[0].ToolCall.Arguments) != "{}" {
+		t.Fatalf("replayed messages = %#v", replayed)
+	}
+}
+
+func TestMarshalSessionEntryRepairsEmptyToolCallArguments(t *testing.T) {
+	entry := MessageEntry{Message: provider.NewAssistantMessage([]provider.ContentBlock{{
+		Type: "toolCall",
+		ToolCall: &provider.ToolCallBlock{
+			ID:        "call-empty",
+			Name:      "read",
+			Arguments: json.RawMessage{},
+		},
+	}})}
+	data, err := marshalSessionEntry(entry)
+	if err != nil {
+		t.Fatalf("marshalSessionEntry: %v", err)
+	}
+	if !json.Valid(data) {
+		t.Fatalf("marshalSessionEntry returned invalid JSON: %s", data)
+	}
+	if !bytes.Contains(data, []byte(`"arguments":{}`)) {
+		t.Fatalf("marshalSessionEntry did not repair arguments: %s", data)
 	}
 }
 

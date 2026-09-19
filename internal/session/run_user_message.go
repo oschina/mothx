@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/startvibecoding/mothx/internal/dao"
 	"time"
 
+	"github.com/startvibecoding/mothx/internal/dao"
 	"github.com/startvibecoding/mothx/internal/provider"
 )
 
@@ -45,6 +45,7 @@ func RunTerminalEventID(runID, eventType string) string {
 // message. It is useful to validate a recovery payload without persisting the
 // message in a separate adapter-owned table.
 func RunAssistantMessageFingerprint(runID string, message provider.Message) string {
+	message, _ = provider.NormalizeMessage(message)
 	encoded, err := json.Marshal(struct {
 		RunID   string           `json:"runId"`
 		Message provider.Message `json:"message"`
@@ -64,6 +65,7 @@ func appendRunUserMessageTx(tx *dao.Tx, run SessionRun) error {
 		return fmt.Errorf("session run identity is required for user entry")
 	}
 	message := *run.UserMessage
+	message, _ = provider.NormalizeMessage(message)
 	if message.SystemInjected {
 		return fmt.Errorf("runtime-admitted user entry cannot be system injected")
 	}
@@ -108,6 +110,7 @@ func appendRunAssistantMessageTx(tx *dao.Tx, run SessionRun) error {
 		return fmt.Errorf("session run identity is required for assistant entry")
 	}
 	message := *run.AssistantMessage
+	message, _ = provider.NormalizeMessage(message)
 	if message.SystemInjected {
 		return fmt.Errorf("runtime assistant entry cannot be system injected")
 	}

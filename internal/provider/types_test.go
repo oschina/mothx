@@ -1,6 +1,10 @@
 package provider
 
-import "testing"
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+)
 
 func TestUsageCacheInfo(t *testing.T) {
 	tests := []struct {
@@ -295,5 +299,57 @@ func TestIsStubUsage(t *testing.T) {
 	}
 	if IsStubUsage(&Usage{Input: 100, Output: 100, TotalTokens: 200}) {
 		t.Error("normal small usage should not be stub")
+	}
+}
+
+func TestNormalizeToolCallArgumentsRepairsEmptyAndInvalidJSON(t *testing.T) {
+	t.Run("empty raw message", func(t *testing.T) {
+		call := &ToolCallBlock{ID: "empty", Name: "read", Arguments: json.RawMessage{}}
+		args, repaired, err := NormalizeToolCallArguments(call)
+		if err != nil {
+			t.Fatalf("NormalizeToolCallArguments() error = %v", err)
+		}
+		if !repaired || len(args) != 0 || string(call.Arguments) != "{}" {
+			t.Fatalf("repaired = %v, args = %#v, arguments = %q", repaired, args, call.Arguments)
+		}
+		if _, err := json.Marshal(call); err != nil {
+			t.Fatalf("repaired tool call does not marshal: %v", err)
+		}
+	})
+
+	t.Run("malformed raw message", func(t *testing.T) {
+		call := &ToolCallBlock{ID: "invalid", Name: "bash", Arguments: json.RawMessage("{")}
+		args, repaired, err := NormalizeToolCallArguments(call)
+		if !repaired || args != nil {
+			t.Fatalf("repaired = %v, args = %#v, want repaired with nil args", repaired, args)
+		}
+		if !errors.Is(err, ErrInvalidToolCallArguments) {
+			t.Fatalf("error = %v, want ErrInvalidToolCallArguments", err)
+		}
+		if call.InvalidArguments != "{" || string(call.Arguments) != "{}" {
+			t.Fatalf("invalidArguments = %q, arguments = %q", call.InvalidArguments, call.Arguments)
+		}
+		if _, err := json.Marshal(call); err != nil {
+			t.Fatalf("sanitized tool call does not marshal: %v", err)
+		}
+	})
+}
+
+func TestNormalizeMessageCopiesToolCallArguments(t *testing.T) {
+	original := Message{Contents: []ContentBlock{{Type: "toolCall", ToolCall: &ToolCallBlock{
+		ID: "empty", Name: "read", Arguments: json.RawMessage{},
+	}}}}
+	normalized, notices := NormalizeMessage(original)
+	if len(notices) != 1 || notices[0] != `tool "read": empty arguments` {
+		t.Fatalf("notices = %#v", notices)
+	}
+	if len(original.Contents[0].ToolCall.Arguments) != 0 {
+		t.Fatalf("NormalizeMessage mutated original arguments = %q", original.Contents[0].ToolCall.Arguments)
+	}
+	if got := string(normalized.Contents[0].ToolCall.Arguments); got != "{}" {
+		t.Fatalf("normalized arguments = %q, want {}", got)
+	}
+	if _, err := json.Marshal(normalized); err != nil {
+		t.Fatalf("normalized message does not marshal: %v", err)
 	}
 }
