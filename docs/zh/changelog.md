@@ -117,6 +117,10 @@
   - 当 `sessions.db` 的 schema 无法被当前版本升级时（迁移不可应用，或表缺少必需列），此前每条命令都会以 `database schema is incompatible` 失败，用户除了手动删库没有别的出路。现在 `internal/db` 会对每个数据库做一次恢复：把无法迁移的库快照到原文件旁边（`sessions.db.migration-failed-<时间戳>.bak`，优先使用 SQLite `VACUUM INTO`，VACUUM 本身失败时回退为 checkpoint 加原始文件拷贝），删除旧文件集（含 `-wal`/`-shm`/`-journal`），再在其位置新建空库。
   - 恢复会明确告知用户而非静默处理：`internal/db` 记录日志，CLI/TUI 在启动时打印 “Database migration error” 提示并给出备份文件路径（旧会话都还在里面）。只有 schema 拥有者（`internal/session`）能把失败标记为可重建；写锁竞争、迁移被取消、只读文件等情况一律保持数据库原样，并把原因附在错误信息里，因此健康数据库在外部压力下永远不会被替换。
 
+- **流式工具调用参数非法时会被修复，绝不猜测执行**
+  - 供应商可能流式发出参数为空或非 JSON 的工具调用，而 Go 1.27 的 JSON v2 编码器会校验 `json.RawMessage`（`jsontext.Value`），非 nil 的空值会让整条记录在会话与重放边界以 `unexpected end of JSON input` 失败。`provider.NormalizeToolCallArguments`/`NormalizeMessage` 现在会把这类调用修复为安全的空对象 `{}`，同时把原始载荷保留在 `InvalidArguments` 供诊断；所有持久化与重放路径都会在存储前规范化 —— Agent 循环的用户与消息输入、`AppendMessage`/`AppendMessages`/`AppendContentOverride`/clone、run 的用户/助手记录，以及持久化 turn/message 写入。
+  - 非法调用不再被当作「猜测的副作用」重放：Agent 会把它记录为失败的工具结果并注入一条瞬时恢复提示，使下一次请求重建合法的 JSON 参数，而不是假定已发生任何副作用。`marshalSessionEntry` 在修复后重试一次失败的 marshal，作为最后一道防线。
+
 ### 🔧 改进
 
 - **SQLite：会话库写压力三阶段优化**
@@ -139,6 +143,7 @@
 - systeminit：固化共享 `/systeminit` 提示词 —— 交互式才有的 question 指引、去空白的附加指令置于 finalNote 之前、空白输入忽略、确定性。
 - 流失败恢复：流中途 connection reset 经由续写重试恢复 —— 已输出部分被持久化并从精确后缀继续，无可见输出时整轮重跑，预算耗尽后上报原始错误 —— 而已经发出工具调用或错误不可重试的回合不会重试。
 - SQLite 写压力：`internal/db` 固化 synchronous 默认 NORMAL、`MOTHX_SQLITE_SYNCHRONOUS=FULL` 覆盖与 busy 重试计数（永久错误不计数）；会话域覆盖 `AppendMessages` 的父链与重放顺序、stale writer 整批拒绝且不落任何行、超过事务上限自动分批、子代理表隔离；租约心跳调度器覆盖单目录单调度器、同批续期、epoch 被顶替的租约单独 lost 而幸存租约照常续期、最后一个租约释放后调度器退出。另新增写压力压测形状 A/B/C（多进程写不同会话、FULL/NORMAL 混布、单进程多会话多租约）并报告 busy/begin 竞争指标，`MOTHX_WRITE_PRESSURE_SCALE` 可放大负载用于基线对比。
+- 工具调用参数：`provider` 固化空参数与非 JSON 的修复（原始载荷保留在 `InvalidArguments`）；Agent 将非法调用记为失败的工具结果并注入恢复提示，而不是执行猜测的副作用；会话 append/重放保证修复后的记录仍可 marshal。
 ## v1.3.100
 
 ### ✨ 新功能
