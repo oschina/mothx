@@ -15,6 +15,7 @@
   export let onAddHeader = () => {};
   export let onRemoveHeader = () => {};
   export let onAddModel = () => {};
+  export let onModelIDCommit = () => {};
   export let onRemoveModel = () => {};
   export let onFetchModels = () => {};
   export let onTestModel = () => {};
@@ -174,7 +175,7 @@
         </summary>
         <div class="model-detail-body">
           <SettingsField label={$t('settings.app.modelID')}>
-            <Input bind:value={model.id} placeholder={$t('settings.app.modelID')} />
+            <Input bind:value={model.id} onblur={() => onModelIDCommit(provider, model)} placeholder={$t('settings.app.modelID')} />
           </SettingsField>
           <SettingsField label={$t('settings.app.modelName')}>
             <Input bind:value={model.name} placeholder={$t('settings.app.modelName')} />

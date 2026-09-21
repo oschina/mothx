@@ -148,6 +148,13 @@ test('provider model discovery defers adding models until the user selects them 
   assert.match(providersPanel, /toast\(t\('settings\.modelsDiscovered'[\s\S]*?\{ n: added \}\)/, 'confirm must show the existing added-count toast');
 });
 
+test('new provider models use catalog presets with 256K reasoning fallback', () => {
+  assert.match(providersPanel, /function modelDraftDefaults\(/, 'new rows must consume shared model defaults');
+  assert.match(providersPanel, /catalog\.modelDefaults/, 'generic defaults must be projected by ACP');
+  assert.match(providersPanel, /256000/, 'older runtimes must retain the 256K compatibility fallback');
+  assert.match(providersPanel, /onBlur=\{onModelIDCommit\}/, 'entering a model ID must apply a matching catalog preset');
+});
+
 test('provider discovery dialog translations remain bilingual', () => {
   assertBilingual([
     'settings.discoverModelsTitle', 'settings.discoverModelsDesc', 'settings.searchDiscoveredModels',

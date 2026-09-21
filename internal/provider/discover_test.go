@@ -41,6 +41,9 @@ func TestParseDiscoveredModels(t *testing.T) {
 	if got[0].ID != "gemini-2.0-flash" || got[0].Name != "Gemini 2.0 Flash" {
 		t.Fatalf("unexpected Gemini model: %#v", got[0])
 	}
+	if got[0].ContextWindow != 1048576 || got[0].Reasoning || len(got[0].Input) != 2 || got[0].Input[1] != "image" {
+		t.Fatalf("Gemini preset not applied: %#v", got[0])
+	}
 	if got[1].ID != "gpt-4o" || got[1].ContextWindow != 128000 || got[1].MaxTokens != 4096 || len(got[1].Input) != 2 {
 		t.Fatalf("unexpected OpenAI model: %#v", got[1])
 	}
@@ -54,7 +57,7 @@ func TestParseDiscoveredModelsBareArray(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d models, want 2 (deduplicated)", len(got))
 	}
-	if got[0].ID != "a" || got[0].Reasoning {
+	if got[0].ID != "a" || !got[0].Reasoning || got[0].ContextWindow != 256000 {
 		t.Fatalf("unexpected first model: %#v", got[0])
 	}
 	if got[1].ID != "b" || !got[1].Reasoning {
@@ -62,6 +65,20 @@ func TestParseDiscoveredModelsBareArray(t *testing.T) {
 	}
 	if len(got[0].Input) != 1 || got[0].Input[0] != "text" {
 		t.Fatalf("default input = %#v, want [text]", got[0].Input)
+	}
+}
+
+func TestParseDiscoveredModelsExplicitMetadataOverridesPreset(t *testing.T) {
+	got, err := ParseDiscoveredModels([]byte(`[{"id":"gpt-4o","contextWindow":42,"maxTokens":7,"input":["text"],"reasoning":false}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d models, want 1", len(got))
+	}
+	model := got[0]
+	if model.ContextWindow != 42 || model.MaxTokens != 7 || model.Reasoning || len(model.Input) != 1 || model.Input[0] != "text" {
+		t.Fatalf("explicit discovery metadata was not preserved: %#v", model)
 	}
 }
 

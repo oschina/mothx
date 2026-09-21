@@ -158,7 +158,8 @@ export interface ProviderConfigView {
 export interface ProviderCatalog {
   providers?: ProviderView[];
   providerConfigs?: ProviderConfigView[];
-  models?: { id?: string; name?: string; provider?: string; reasoning?: boolean; input?: string[] }[];
+  models?: { id?: string; name?: string; provider?: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number; input?: string[] }[];
+  modelDefaults?: ProviderModelView;
   defaultProvider?: string;
   defaultModel?: string;
 }

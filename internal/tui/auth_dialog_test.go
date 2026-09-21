@@ -955,11 +955,14 @@ func TestInitModelFromDefaultFallsBackToGeneric(t *testing.T) {
 
 	// Unknown model gets generic template
 	me = a.initModelFromDefault("totally-unknown-model")
-	if me.ContextWindow != 128000 {
-		t.Fatalf("ContextWindow = %d, want 128000", me.ContextWindow)
+	if me.ContextWindow != 256000 {
+		t.Fatalf("ContextWindow = %d, want %d", me.ContextWindow, 256000)
 	}
 	if me.MaxTokens != 0 {
 		t.Fatalf("MaxTokens = %d, want 0 for unknown model", me.MaxTokens)
+	}
+	if !me.Reasoning {
+		t.Fatal("Reasoning = false, want true for unknown model")
 	}
 }
 

@@ -52,3 +52,10 @@ test('provider editor renders the tool choice and compat controls', () => {
   assert.match(editorDetail, /bind:value=\{model\.supportsToolChoice\}/);
   assert.match(editorDetail, /bind:value=\{model\.supportsParallelToolCalls\}/);
 });
+
+test('new provider models use catalog presets with 256K reasoning fallback', () => {
+  assert.match(appSettings, /function applyModelIDPreset\(/, 'model IDs must seed a new draft from the shared catalog');
+  assert.match(appSettings, /catalog\.modelDefaults/, 'generic model defaults must come from the server catalog');
+  assert.match(appSettings, /256000/, 'older servers must retain the 256K compatibility fallback');
+  assert.match(editorDetail, /onblur=\{\(\) => onModelIDCommit\(provider, model\)\}/, 'the model ID editor must apply its preset');
+});

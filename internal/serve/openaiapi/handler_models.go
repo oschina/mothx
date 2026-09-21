@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/startvibecoding/mothx/internal/config"
 	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
 )
 
@@ -20,13 +21,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		items = append(items, ModelItem{
-			ID:       m.ID,
-			Name:     m.Name,
-			Object:   "model",
-			Created:  time.Now().Unix(),
-			OwnedBy:  "vibecoding",
-			Provider: m.Provider,
-			Input:    append([]string(nil), m.Input...),
+			ID: m.ID, Name: m.Name, Object: "model", Created: time.Now().Unix(), OwnedBy: "vibecoding",
+			Provider: m.Provider, Input: append([]string(nil), m.Input...), Reasoning: m.Reasoning,
+			ContextWindow: m.ContextWindow, MaxTokens: m.MaxTokens,
 		})
 	}
 
@@ -86,23 +83,22 @@ func (s *Server) handleModelCatalog(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			items = append(items, ModelItem{
-				ID:       m.ID,
-				Name:     m.Name,
-				Object:   "model",
-				Created:  created,
-				OwnedBy:  "vibecoding",
-				Provider: providerID,
-				Input:    append([]string(nil), m.Input...),
+				ID: m.ID, Name: m.Name, Object: "model", Created: created, OwnedBy: "vibecoding",
+				Provider: providerID, Input: append([]string(nil), m.Input...), Reasoning: m.Reasoning,
+				ContextWindow: m.ContextWindow, MaxTokens: m.MaxTokens,
 			})
 		}
 	}
 
+	defaults := config.PresetModelConfig("", "", nil)
 	resp := ModelCatalogResponse{
 		Object:          "list",
 		DefaultProvider: currentProvider,
 		DefaultModel:    currentModel,
 		Providers:       providerIDs,
 		Data:            items,
+		ModelDefaults: ModelDefaults{Input: config.CloneStringSlice(defaults.Input), Reasoning: defaults.Reasoning,
+			ContextWindow: defaults.ContextWindow, MaxTokens: defaults.MaxTokens},
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

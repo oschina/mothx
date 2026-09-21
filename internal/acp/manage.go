@@ -795,12 +795,18 @@ func (s *server) manageProvidersCatalog(settings *config.Settings) (map[string]a
 			models = append(models, map[string]any{
 				"id": model.ID, "name": model.Name, "provider": view.Name,
 				"input": append([]string(nil), model.Input...), "reasoning": model.Reasoning,
+				"contextWindow": model.ContextWindow, "maxTokens": model.MaxTokens,
 			})
 		}
 	}
+	defaults := config.PresetModelConfig("", "", nil)
 	return map[string]any{
 		"providers": views, "providerConfigs": configs, "models": models,
 		"defaultProvider": settings.DefaultProvider, "defaultModel": settings.DefaultModel,
+		"modelDefaults": map[string]any{
+			"reasoning": defaults.Reasoning, "contextWindow": defaults.ContextWindow,
+			"maxTokens": defaults.MaxTokens, "input": config.CloneStringSlice(defaults.Input),
+		},
 	}, nil
 }
 

@@ -123,13 +123,16 @@ func CreateWithOptions(settings *config.Settings, providerName, modelID string, 
 		if opts.RequireModel {
 			return nil, nil, fmt.Errorf("model %q is not available for provider %s", modelID, providerName)
 		}
-		return p, &provider.Model{
-			ID:        modelID,
-			Name:      modelID,
-			Provider:  providerName,
-			Reasoning: false,
-			Input:     []string{"text"},
-		}, nil
+		preset := config.PresetModelConfig(providerName, modelID, settings)
+		return p, applyModelOverrides(&provider.Model{
+			ID:            modelID,
+			Name:          preset.Name,
+			Provider:      providerName,
+			Reasoning:     preset.Reasoning,
+			Input:         config.CloneStringSlice(preset.Input),
+			ContextWindow: preset.ContextWindow,
+			MaxTokens:     preset.MaxTokens,
+		}, settings), nil
 	}
 	return p, applyModelOverrides(model, settings), nil
 }

@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/startvibecoding/mothx/internal/config"
 )
 
 // defaultDiscoverTimeout bounds a single model-discovery request.
@@ -166,7 +168,7 @@ func ParseDiscoveredModels(body []byte) ([]DiscoveredModel, error) {
 			MaxTokensAlt  int      `json:"max_tokens"`
 			Input         []string `json:"input"`
 			InputAlt      []string `json:"input_modalities"`
-			Reasoning     bool     `json:"reasoning"`
+			Reasoning     *bool    `json:"reasoning"`
 		}
 		if err := json.Unmarshal(raw, &item); err != nil {
 			continue
@@ -182,23 +184,27 @@ func ParseDiscoveredModels(body []byte) ([]DiscoveredModel, error) {
 			continue
 		}
 		seen[id] = struct{}{}
+		preset := config.PresetModelConfig("", id, nil)
 		name := strings.TrimSpace(item.Name)
 		if name == "" || normalizeDiscoveredModelID(name) == id {
 			name = strings.TrimSpace(item.DisplayName)
 		}
 		if name == "" {
-			name = id
+			name = preset.Name
 		}
 		input := append([]string(nil), item.Input...)
 		if len(input) == 0 {
 			input = append([]string(nil), item.InputAlt...)
 		}
 		if len(input) == 0 {
-			input = []string{"text"}
+			input = config.CloneStringSlice(preset.Input)
 		}
 		contextWindow := item.ContextWindow
 		if contextWindow == 0 {
 			contextWindow = item.ContextLength
+		}
+		if contextWindow == 0 {
+			contextWindow = preset.ContextWindow
 		}
 		maxTokens := item.MaxTokens
 		if maxTokens == 0 {
@@ -207,7 +213,14 @@ func ParseDiscoveredModels(body []byte) ([]DiscoveredModel, error) {
 		if maxTokens == 0 {
 			maxTokens = item.MaxTokensAlt
 		}
-		result = append(result, DiscoveredModel{ID: id, Name: name, ContextWindow: contextWindow, MaxTokens: maxTokens, Input: input, Reasoning: item.Reasoning})
+		if maxTokens == 0 {
+			maxTokens = preset.MaxTokens
+		}
+		reasoning := preset.Reasoning
+		if item.Reasoning != nil {
+			reasoning = *item.Reasoning
+		}
+		result = append(result, DiscoveredModel{ID: id, Name: name, ContextWindow: contextWindow, MaxTokens: maxTokens, Input: input, Reasoning: reasoning})
 	}
 	return result, nil
 }

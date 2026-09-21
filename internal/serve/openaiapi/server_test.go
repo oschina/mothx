@@ -1496,6 +1496,9 @@ func TestModelCatalogHandler(t *testing.T) {
 	if resp.DefaultProvider != "custom" || resp.DefaultModel != "m1" {
 		t.Errorf("default = %q/%q, want custom/m1", resp.DefaultProvider, resp.DefaultModel)
 	}
+	if resp.ModelDefaults.ContextWindow != 256000 || !resp.ModelDefaults.Reasoning {
+		t.Fatalf("model defaults = %#v", resp.ModelDefaults)
+	}
 	// Shared factory ordering: anthropic (priority 60) before custom (100).
 	if len(resp.Providers) != 2 || resp.Providers[0] != "anthropic" || resp.Providers[1] != "custom" {
 		t.Fatalf("providers = %v, want [anthropic custom]", resp.Providers)
@@ -1507,6 +1510,9 @@ func TestModelCatalogHandler(t *testing.T) {
 			sawPreset = true
 		case m.Provider == "custom" && m.ID == "m1":
 			sawCustom = true
+			if m.ContextWindow != 0 || m.Reasoning {
+				t.Errorf("explicit custom model capabilities changed: %#v", m)
+			}
 			if len(m.Input) != 2 || m.Input[0] != "text" || m.Input[1] != "image" {
 				t.Errorf("m1 input = %#v, want text/image", m.Input)
 			}

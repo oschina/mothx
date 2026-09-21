@@ -471,6 +471,10 @@ func TestManageProvidersListProjectsCatalog(t *testing.T) {
 	if result["defaultProvider"] != "manage-alpha" || result["defaultModel"] != "alpha-model" {
 		t.Fatalf("catalog defaults = %#v", result)
 	}
+	modelDefaults, _ := result["modelDefaults"].(map[string]any)
+	if modelDefaults["contextWindow"] != float64(256000) || modelDefaults["reasoning"] != true {
+		t.Fatalf("modelDefaults = %#v", modelDefaults)
+	}
 	alpha := manageFindProvider(t, result, "manage-alpha")
 	if alpha["modelCount"] != float64(2) || alpha["maskedKey"] != "sk-***654" {
 		t.Fatalf("alpha = %#v", alpha)

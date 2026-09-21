@@ -66,15 +66,6 @@ func (a *App) initAuthForCustom(providerID string) {
 // initModelFromDefault attempts to find a built-in default for the given model
 // under the current provider. Falls back to a generic template if not found.
 func (a *App) initModelFromDefault(modelID string) *modelEditState {
-	if resolved := config.ResolveModelConfig(a.auth.ProviderID, modelID, a.settings); resolved != nil {
-		return modelEditStateFromMC(resolved)
-	}
-	// Generic fallback
-	return &modelEditState{
-		ID:            modelID,
-		Name:          modelID,
-		ContextWindow: 128000,
-		MaxTokens:     0,
-		Input:         []string{"text"},
-	}
+	preset := config.PresetModelConfig(a.auth.ProviderID, modelID, a.settings)
+	return modelEditStateFromMC(&preset)
 }

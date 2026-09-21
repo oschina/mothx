@@ -211,6 +211,16 @@ function filteredProviders(catalog: ProviderCatalog, draft: ProviderConfigView |
   });
 }
 
+function modelDraftDefaults(catalog: ProviderCatalog): ProviderModelView {
+  const defaults = catalog.modelDefaults || {};
+  return {
+    reasoning: defaults.reasoning !== false,
+    contextWindow: Number(defaults.contextWindow) > 0 ? defaults.contextWindow : 256000,
+    maxTokens: Number(defaults.maxTokens) > 0 ? defaults.maxTokens : undefined,
+    input: [...(defaults.input?.length ? defaults.input : ['text'])],
+  };
+}
+
 export function ProvidersPanel() {
   const appState = useAppState();
   const ready = appState.connection.state === 'ready';
@@ -454,6 +464,27 @@ export function ProvidersPanel() {
     setDiscoverSearch('');
   };
 
+  const applyModelIDPreset = (index: number) => {
+    if (!draft) return;
+    const model = draft.provider.models?.[index];
+    const id = String(model?.id || '').trim();
+    if (!model || !id || String(model.name || '').trim()) return;
+    const models = catalog.models || [];
+    const preset = models.find((entry) => entry.provider === draft.id && entry.id === id)
+      || models.find((entry) => entry.id === id)
+      || catalog.modelDefaults
+      || {};
+    patchDraft((next) => {
+      const target = next.provider.models?.[index];
+      if (!target) return;
+      target.name = String(preset.name || id);
+      target.reasoning = preset.reasoning !== false;
+      target.contextWindow = Number(preset.contextWindow) > 0 ? preset.contextWindow : 256000;
+      target.maxTokens = Number(preset.maxTokens) > 0 ? preset.maxTokens : undefined;
+      target.input = [...(preset.input?.length ? preset.input : ['text'])];
+    });
+  };
+
   const visible = filteredProviders(catalog, draft, scope, search.trim().toLowerCase());
   const canTest = draft ? (catalog.providerConfigs || []).some((candidate) => candidate.id === draft.id) : false;
   const isNewProvider = draft ? !draft.globalOverride && !(catalog.providerConfigs || []).some((provider) => provider.id === draft.id && provider.globalOverride) : false;
@@ -659,7 +690,7 @@ export function ProvidersPanel() {
                         onClick={() =>
                           patchDraft((next) => {
                             const models = next.provider.models || (next.provider.models = []);
-                            models.push({ id: '', name: '', input: ['text'] });
+                            models.push({ id: '', name: '', ...modelDraftDefaults(catalog) });
                           })
                         }
                       >
@@ -684,6 +715,7 @@ export function ProvidersPanel() {
                               models[index] = next;
                             })
                           }
+                          onModelIDCommit={() => applyModelIDPreset(index)}
                           onRemove={() =>
                             patchDraft((next) => {
                               const models = next.provider.models || [];
@@ -811,11 +843,11 @@ export function ProvidersPanel() {
   );
 }
 
-function ModelRow({ model, onChange, onRemove }: { model: ProviderModelView; onChange: (next: ProviderModelView) => void; onRemove: () => void }) {
+function ModelRow({ model, onChange, onRemove, onModelIDCommit }: { model: ProviderModelView; onChange: (next: ProviderModelView) => void; onRemove: () => void; onModelIDCommit: () => void }) {
   const set = (patch: Partial<ProviderModelView>) => onChange({ ...model, ...patch });
   return (
     <div className="grid grid-cols-2 items-end gap-[9px] rounded-[10px] border border-border bg-background p-[11px] max-[760px]:grid-cols-1">
-      {labeled(t('settings.modelID'), <Input value={String(model.id || '')} onChange={(event) => set({ id: event.target.value })} />)}
+      {labeled(t('settings.modelID'), <Input value={String(model.id || '')} onChange={(event) => set({ id: event.target.value })} onBlur={onModelIDCommit} />)}
       {labeled(t('settings.modelName'), <Input value={String(model.name || '')} onChange={(event) => set({ name: event.target.value })} />)}
       {labeled(
         t('settings.modelContext'),

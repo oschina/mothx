@@ -65,6 +65,26 @@ func TestCreateAppliesExplicitVendorDefaults(t *testing.T) {
 	}
 }
 
+func TestCreateUnknownModelUsesSharedDraftDefaults(t *testing.T) {
+	settings := &config.Settings{Providers: map[string]*config.ProviderConfig{
+		"custom": {
+			APIKey: "fake-key", BaseURL: "https://example.com/v1", API: "openai-chat",
+			Models: []config.ModelConfig{{ID: "configured", Name: "Configured"}},
+		},
+	}}
+
+	_, model, err := Create(settings, "custom", "totally-unknown-model")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if model.ContextWindow != 256000 || !model.Reasoning {
+		t.Fatalf("unknown model defaults = %#v", model)
+	}
+	if len(model.Input) != 1 || model.Input[0] != "text" {
+		t.Fatalf("unknown model input = %#v, want [text]", model.Input)
+	}
+}
+
 func TestConvertModelConfigsPreservesCompat(t *testing.T) {
 	supportsReasoningEffort := false
 	models := ConvertModelConfigs("test", []config.ModelConfig{

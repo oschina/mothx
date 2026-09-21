@@ -25,7 +25,7 @@ export const sessionBindings = writable([]);
 // it with the same provider-factory logic the TUI uses, so the WebUI picker
 // must not re-derive model lists from raw settings JSON.
 export function emptyModelCatalog() {
-  return { providers: [], models: [], defaultProvider: '', defaultModel: '' };
+  return { providers: [], models: [], modelDefaults: {}, defaultProvider: '', defaultModel: '' };
 }
 export const modelCatalog = writable(emptyModelCatalog());
 export const cronInfo = writable(null);
@@ -622,6 +622,7 @@ export async function refreshModelCatalog() {
     const catalog = {
       providers: (Array.isArray(data?.providers) ? data.providers : []).map(String).filter(Boolean),
       models: Array.isArray(data?.data) ? data.data : [],
+      modelDefaults: data?.modelDefaults || {},
       defaultProvider: stringValue(data?.defaultProvider),
       defaultModel: stringValue(data?.defaultModel)
     };

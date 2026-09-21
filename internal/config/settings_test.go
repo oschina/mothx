@@ -1542,6 +1542,41 @@ func TestResolveModelConfigPreservesCompatibilityFlags(t *testing.T) {
 	}
 }
 
+func TestPresetModelConfigUsesCurrentProviderThenCatalog(t *testing.T) {
+	runtime := &Settings{Providers: map[string]*ProviderConfig{
+		"custom": {Models: []ModelConfig{{
+			ID: "gpt-4o", Name: "Custom GPT-4o", ContextWindow: 42,
+			Input: []string{"text"},
+		}}},
+	}}
+
+	current := PresetModelConfig("custom", "gpt-4o", runtime)
+	if current.Name != "Custom GPT-4o" || current.ContextWindow != 42 || current.Reasoning {
+		t.Fatalf("current-provider preset = %#v", current)
+	}
+
+	known := PresetModelConfig("custom", "claude-sonnet-4-6", runtime)
+	if known.ContextWindow != 1000000 || !known.Reasoning || !slices.Equal(known.Input, []string{"text", "image"}) {
+		t.Fatalf("catalog preset = %#v", known)
+	}
+}
+
+func TestPresetModelConfigUsesGenericDefaults(t *testing.T) {
+	got := PresetModelConfig("custom", "totally-unknown-model", &Settings{})
+	if got.ID != "totally-unknown-model" || got.Name != got.ID {
+		t.Fatalf("identity = %#v", got)
+	}
+	if got.ContextWindow != 256000 {
+		t.Fatalf("ContextWindow = %d, want %d", got.ContextWindow, 256000)
+	}
+	if !got.Reasoning {
+		t.Fatal("Reasoning = false, want true")
+	}
+	if !slices.Equal(got.Input, []string{"text"}) {
+		t.Fatalf("Input = %#v, want [text]", got.Input)
+	}
+}
+
 func TestIsProjectDir(t *testing.T) {
 	plain := t.TempDir()
 	if IsProjectDir(plain) {

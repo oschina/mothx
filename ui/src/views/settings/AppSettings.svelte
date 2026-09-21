@@ -493,20 +493,50 @@
   }
 
   function addModel(provider) {
+    const defaults = newModelDefaults();
     provider.models = [...provider.models, {
       raw: {},
       id: '',
       name: '',
-      reasoning: false,
-      contextWindow: '',
-      maxTokens: '',
-      input: 'text',
+      reasoning: defaults.reasoning,
+      contextWindow: defaults.contextWindow,
+      maxTokens: defaults.maxTokens,
+      input: defaults.input,
       temperature: '',
       topP: '',
       allowSampling: false,
       supportsToolChoice: '',
       supportsParallelToolCalls: ''
     }];
+    form = form;
+  }
+
+  function newModelDefaults() {
+    const defaults = get(modelCatalog)?.modelDefaults || {};
+    return {
+      reasoning: defaults.reasoning !== false,
+      contextWindow: Number(defaults.contextWindow) > 0 ? defaults.contextWindow : 256000,
+      maxTokens: Number(defaults.maxTokens) > 0 ? defaults.maxTokens : '',
+      input: Array.isArray(defaults.input) && defaults.input.length ? defaults.input.join(', ') : 'text'
+    };
+  }
+
+  function applyModelIDPreset(provider, model) {
+    const id = String(model?.id || '').trim();
+    // A non-empty name marks an existing/discovered model or a row the user
+    // already customized. Only seed a newly entered ID.
+    if (!id || String(model?.name || '').trim()) return;
+    const catalog = get(modelCatalog) || {};
+    const models = Array.isArray(catalog.models) ? catalog.models : [];
+    const preset = models.find((item) => item?.provider === provider.id && item?.id === id)
+      || models.find((item) => item?.id === id)
+      || catalog.modelDefaults
+      || {};
+    model.name = String(preset.name || id);
+    model.reasoning = preset.reasoning !== false;
+    model.contextWindow = Number(preset.contextWindow) > 0 ? preset.contextWindow : 256000;
+    model.maxTokens = Number(preset.maxTokens) > 0 ? preset.maxTokens : '';
+    model.input = Array.isArray(preset.input) && preset.input.length ? preset.input.join(', ') : 'text';
     form = form;
   }
 
@@ -1196,6 +1226,7 @@
               onAddHeader={addHeader}
               onRemoveHeader={removeHeader}
               onAddModel={addModel}
+              onModelIDCommit={applyModelIDPreset}
               onRemoveModel={removeModel}
               onFetchModels={fetchProviderModels}
               onTestModel={testProviderModel}
@@ -1231,6 +1262,7 @@
               onAddHeader={addHeader}
               onRemoveHeader={removeHeader}
               onAddModel={addModel}
+              onModelIDCommit={applyModelIDPreset}
               onRemoveModel={removeModel}
               onFetchModels={fetchProviderModels}
               onTestModel={testProviderModel}
