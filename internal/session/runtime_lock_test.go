@@ -162,6 +162,32 @@ func TestReleasedLeaseFencesDelayedOwnerWrite(t *testing.T) {
 	}
 }
 
+func TestRuntimeLeaseReclaimsStrandedSameProcessLease(t *testing.T) {
+	sessionDir := t.TempDir()
+	mgr := New(filepath.Join(t.TempDir(), "work"), sessionDir)
+	if err := mgr.InitWithID("lease-stranded-same-process"); err != nil {
+		t.Fatal(err)
+	}
+
+	oldLease, err := acquireRuntimeLease(sessionDir, "lease-stranded-same-process", "run")
+	if err != nil || oldLease == nil {
+		t.Fatalf("acquire old lease = %v, lease=%v", err, oldLease)
+	}
+	// Model a release whose SQLite tombstone write did not complete. The
+	// process-local owner has gone away, but the durable row remains active.
+	forgetRuntimeLease(oldLease)
+
+	newLease, err := acquireRuntimeLease(sessionDir, "lease-stranded-same-process", "run")
+	if err != nil || newLease == nil {
+		t.Fatalf("reclaim stranded same-process lease = %v, lease=%v", err, newLease)
+	}
+	if newLease.epoch <= oldLease.epoch {
+		t.Fatalf("reclaimed epoch = %d, want > %d", newLease.epoch, oldLease.epoch)
+	}
+	oldLease.release() // Its fenced epoch must not release the replacement.
+	newLease.release()
+}
+
 func TestAcquireExecutionAdmissionRequiresExistingIdleSession(t *testing.T) {
 	sessionDir := t.TempDir()
 	mgr := New(filepath.Join(t.TempDir(), "work"), sessionDir)

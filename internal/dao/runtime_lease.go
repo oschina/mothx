@@ -78,7 +78,12 @@ func (d *RuntimeLeaseDAO) Acquire(ctx context.Context, executor bun.IDB, record 
 		Set("lease_token_hash = ?", record.TokenHash).Set("epoch = ?", record.Epoch).Set("run_id = ?", record.RunID).
 		Set("purpose = ?", record.Purpose).Set("state = ?", "active").Set("acquired_at = ?", now).
 		Set("heartbeat_at = ?", now).Set("expires_at = ?", record.ExpiresAt).Set("updated_at = ?", now).
-		Where("session_id = ? AND epoch = ? AND (state != ? OR expires_at <= ?)", record.SessionID, previousEpoch, "active", now).Exec(ctx)
+		// A process-local lock serializes callers in one process.  If an earlier
+		// release could not write its tombstone (for example, SQLite was briefly
+		// busy), that same process may fence and replace its own stranded active
+		// row. A distinct process must still wait for expiry, preserving the
+		// cross-process ownership boundary.
+		Where("session_id = ? AND epoch = ? AND (state != ? OR expires_at <= ? OR owner_instance_id = ?)", record.SessionID, previousEpoch, "active", now, record.OwnerID).Exec(ctx)
 	if err != nil {
 		return 0, err
 	}

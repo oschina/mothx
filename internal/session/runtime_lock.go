@@ -227,7 +227,11 @@ func acquireRuntimeLeaseWithOptionsContext(ctx context.Context, sessionDir, sess
 	if err != nil && err != dao.ErrNoRows {
 		return nil, err
 	}
-	if err == nil && current.State == "active" && current.ExpiresAt > now {
+	// A process-local runtime lock has already serialized this acquisition. If
+	// the persisted lease belongs to this same process, it can only be a
+	// stranded row from an earlier release whose tombstone write was interrupted.
+	// Fence it with a new epoch instead of reporting it as another process.
+	if err == nil && current.State == "active" && current.ExpiresAt > now && current.OwnerID != ownerID {
 		return nil, ErrRuntimeLeaseBusy
 	}
 	if options.mode != runtimeLeaseAcquireLegacy {
