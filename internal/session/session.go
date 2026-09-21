@@ -1097,7 +1097,11 @@ func (m *Manager) GetReplayState() ReplayState {
 func (m *Manager) GetLeafID() *string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.leafID
+	if m.leafID == nil {
+		return nil
+	}
+	leafID := *m.leafID
+	return &leafID
 }
 
 // GetLatestCompaction returns the newest compaction entry in the current session.
@@ -1179,7 +1183,11 @@ func (m *Manager) GetSessionDir() string {
 func (m *Manager) GetHeader() *Header {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.header
+	if m.header == nil {
+		return nil
+	}
+	header := *m.header
+	return &header
 }
 
 // StartConversationTurn opens the durable boundary used by Session fork
@@ -1215,10 +1223,14 @@ func (m *Manager) StartConversationTurn(turnID, intentID, runID string) error {
 // resolution. It is safe for callers to report failed, cancelled and
 // incomplete outcomes; all are terminal turn states.
 func (m *Manager) EndConversationTurn(turnID, status, stopReason string) error {
-	if m == nil || m.header == nil {
+	if m == nil {
 		return fmt.Errorf("session manager is not initialized")
 	}
 	m.mu.RLock()
+	if m.header == nil {
+		m.mu.RUnlock()
+		return fmt.Errorf("session manager is not initialized")
+	}
 	sessionDir, sessionID, file := m.sessionDir, m.header.ID, m.file
 	m.mu.RUnlock()
 	if sessionDir == "" {

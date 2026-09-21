@@ -55,9 +55,26 @@ func (d *ProjectDAO) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+// DeleteWithMetadata atomically realizes the schema's ON DELETE SET NULL
+// semantics even when SQLite foreign-key enforcement is disabled.
+func (d *ProjectDAO) DeleteWithMetadata(ctx context.Context, executor bun.IDB, id string) error {
+	if _, err := executor.NewUpdate().Model((*SessionMetadataRecord)(nil)).
+		Set("project_id = NULL").
+		Where("project_id = ?", id).
+		Exec(ctx); err != nil {
+		return err
+	}
+	_, err := executor.NewDelete().Model((*ProjectRecord)(nil)).Where("id = ?", id).Exec(ctx)
+	return err
+}
+
 func (d *ProjectDAO) Exists(ctx context.Context, id string) (bool, error) {
+	return d.ExistsWith(ctx, d.db, id)
+}
+
+func (d *ProjectDAO) ExistsWith(ctx context.Context, executor bun.IDB, id string) (bool, error) {
 	var value int
-	err := d.db.NewSelect().Model((*ProjectRecord)(nil)).ColumnExpr("1").Where("id = ?", id).Limit(1).Scan(ctx, &value)
+	err := executor.NewSelect().Model((*ProjectRecord)(nil)).ColumnExpr("1").Where("id = ?", id).Limit(1).Scan(ctx, &value)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -69,6 +86,30 @@ func (d *ProjectDAO) UpsertMetadata(ctx context.Context, record *SessionMetadata
 		On("CONFLICT(session_id) DO UPDATE SET project_id = excluded.project_id, pinned = excluded.pinned, updated_at = excluded.updated_at").
 		Exec(ctx)
 	return err
+}
+
+// UpsertMetadataIfReferencesExist performs the reference checks and write in
+// one SQLite statement. This prevents a concurrent project deletion from
+// committing between an application-level existence check and the upsert.
+func (d *ProjectDAO) UpsertMetadataIfReferencesExist(ctx context.Context, executor bun.IDB, record *SessionMetadataRecord) (int64, error) {
+	var projectID any
+	if record.ProjectID != nil {
+		projectID = *record.ProjectID
+	}
+	result, err := executor.NewRaw(`INSERT INTO session_metadata (session_id, project_id, pinned, updated_at)
+		SELECT ?, ?, ?, ?
+		WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?)
+		  AND (? IS NULL OR EXISTS (SELECT 1 FROM projects WHERE id = ?))
+		ON CONFLICT(session_id) DO UPDATE SET
+		  project_id = excluded.project_id,
+		  pinned = excluded.pinned,
+		  updated_at = excluded.updated_at`,
+		record.SessionID, projectID, record.Pinned, record.UpdatedAt,
+		record.SessionID, projectID, projectID).Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (d *ProjectDAO) Metadata(ctx context.Context, sessionID string) (*SessionMetadataRecord, error) {

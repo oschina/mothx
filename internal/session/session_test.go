@@ -374,6 +374,10 @@ func TestGetHeader(t *testing.T) {
 	if header.Cwd != "/tmp/test" {
 		t.Errorf("expected cwd '/tmp/test', got '%s'", header.Cwd)
 	}
+	header.Cwd = "/tmp/mutated"
+	if got := m.GetHeader().Cwd; got != "/tmp/test" {
+		t.Fatalf("GetHeader exposed mutable state: cwd = %q", got)
+	}
 }
 
 func TestGetLeafID(t *testing.T) {
@@ -394,6 +398,32 @@ func TestGetLeafID(t *testing.T) {
 	leafID = m.GetLeafID()
 	if leafID == nil {
 		t.Error("expected non-nil leaf ID after append")
+	}
+	original := *leafID
+	*leafID = "mutated"
+	if got := m.GetLeafID(); got == nil || *got != original {
+		t.Fatalf("GetLeafID exposed mutable state: got %v, want %q", got, original)
+	}
+}
+
+func TestMemoryStoreGettersReturnCopies(t *testing.T) {
+	store := NewMemoryStore()
+	if err := store.InitWithID("memory-copy"); err != nil {
+		t.Fatal(err)
+	}
+	header := store.GetHeader()
+	header.ID = "mutated"
+	if got := store.GetHeader().ID; got != "memory-copy" {
+		t.Fatalf("GetHeader exposed mutable state: ID = %q", got)
+	}
+	if _, err := store.AppendMessage(provider.NewUserMessage("copy leaf")); err != nil {
+		t.Fatal(err)
+	}
+	leaf := store.GetLeafID()
+	original := *leaf
+	*leaf = "mutated"
+	if got := store.GetLeafID(); got == nil || *got != original {
+		t.Fatalf("GetLeafID exposed mutable state: got %v, want %q", got, original)
 	}
 }
 

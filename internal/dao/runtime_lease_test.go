@@ -57,7 +57,7 @@ func TestRuntimeLeaseRenewKeepsOwnExpiredRow(t *testing.T) {
 	taken, err := leaseDAO.Acquire(ctx, database.Bun(), &dao.RuntimeLeaseRecord{
 		SessionID: "session-takeover", OwnerID: "owner-b", OwnerPID: 2, OwnerKind: "process",
 		TokenHash: "token-b", Epoch: 2, Purpose: "recovery", ExpiresAt: time.Now().Add(time.Minute).Unix(),
-	}, 1, time.Now().Unix())
+	}, 1, time.Now().Unix(), false)
 	if err != nil {
 		t.Fatalf("Acquire takeover: %v", err)
 	}

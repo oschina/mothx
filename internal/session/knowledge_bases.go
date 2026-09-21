@@ -16,8 +16,9 @@ import (
 const KnowledgeGraphSchemaVersion = 1
 
 var (
-	ErrKnowledgeBaseNotFound  = errors.New("knowledge base not found")
-	ErrKnowledgeBaseUnindexed = errors.New("knowledge base has no completed index")
+	ErrKnowledgeBaseNotFound             = errors.New("knowledge base not found")
+	ErrKnowledgeBaseUnindexed            = errors.New("knowledge base has no completed index")
+	ErrKnowledgeBaseConfigurationChanged = errors.New("knowledge base configuration changed during indexing")
 )
 
 // KnowledgeBaseSpec is the editable Desktop configuration. It deliberately
@@ -40,6 +41,7 @@ type KnowledgeBase struct {
 	ActiveSnapshotID string    `json:"activeSnapshotId,omitempty"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+	ConfigRevision   int64     `json:"-"`
 }
 
 type KnowledgeSnapshot struct {
@@ -113,12 +115,13 @@ type KnowledgeEvidence struct {
 // indexer. The session package atomically stores it and switches the active
 // snapshot only after all graph rows are durable.
 type KnowledgeGraphSnapshot struct {
-	Snapshot KnowledgeSnapshot
-	Files    []KnowledgeFile
-	Chunks   []KnowledgeChunk
-	Nodes    []KnowledgeNode
-	Edges    []KnowledgeEdge
-	Evidence []KnowledgeEvidence
+	BaseConfigRevision int64
+	Snapshot           KnowledgeSnapshot
+	Files              []KnowledgeFile
+	Chunks             []KnowledgeChunk
+	Nodes              []KnowledgeNode
+	Edges              []KnowledgeEdge
+	Evidence           []KnowledgeEvidence
 }
 
 type KnowledgeGraphQuery struct {
@@ -140,7 +143,7 @@ func CreateKnowledgeBase(ctx context.Context, sessionDir string, spec KnowledgeB
 		return KnowledgeBase{}, err
 	}
 	now := time.Now().UTC()
-	base := KnowledgeBase{ID: GenerateID(), KnowledgeBaseSpec: spec, CreatedAt: now, UpdatedAt: now}
+	base := KnowledgeBase{ID: GenerateID(), KnowledgeBaseSpec: spec, CreatedAt: now, UpdatedAt: now, ConfigRevision: 1}
 	err := writeKnowledgeBaseDatabase(ctx, sessionDir, base.ID, true, func(tx *dao.Tx) error {
 		return dao.NewKnowledgeBaseDAO(nil).InsertBase(ctx, tx, knowledgeBaseRecord(base))
 	})
@@ -233,14 +236,21 @@ func UpdateKnowledgeBase(ctx context.Context, sessionDir, id string, spec Knowle
 	// scan instead of allowing a stale graph to be queried by callers.
 	base.ActiveSnapshotID = ""
 	base.UpdatedAt = time.Now().UTC()
+	expectedRevision := base.ConfigRevision
+	base.ConfigRevision++
 	err = writeKnowledgeBaseDatabase(ctx, sessionDir, id, false, func(tx *dao.Tx) error {
 		store := dao.NewKnowledgeBaseDAO(nil)
-		changed, err := store.UpdateBase(ctx, tx, knowledgeBaseRecord(base))
+		changed, err := store.UpdateBase(ctx, tx, knowledgeBaseRecord(base), expectedRevision)
 		if err != nil {
 			return err
 		}
 		if changed != 1 {
-			return ErrKnowledgeBaseNotFound
+			if _, findErr := store.FindBaseWith(ctx, tx, id); errors.Is(findErr, dao.ErrNoRows) {
+				return ErrKnowledgeBaseNotFound
+			} else if findErr != nil {
+				return findErr
+			}
+			return ErrKnowledgeBaseConfigurationChanged
 		}
 		// Configuration determines the source and meaning of the graph. Once it
 		// changes, preserve neither a stale active snapshot nor historical graph
@@ -353,12 +363,17 @@ func StoreKnowledgeGraphSnapshot(ctx context.Context, sessionDir string, graph K
 		if err := store.InsertEvidence(ctx, tx, knowledgeEvidenceRecords(graph.Evidence)); err != nil {
 			return err
 		}
-		changed, err := store.ActivateSnapshot(ctx, tx, graph.Snapshot.KnowledgeBaseID, graph.Snapshot.ID, now.Format(time.RFC3339Nano))
+		changed, err := store.ActivateSnapshot(ctx, tx, graph.Snapshot.KnowledgeBaseID, graph.Snapshot.ID, now.Format(time.RFC3339Nano), graph.BaseConfigRevision)
 		if err != nil {
 			return err
 		}
 		if changed != 1 {
-			return ErrKnowledgeBaseNotFound
+			if _, findErr := store.FindBaseWith(ctx, tx, graph.Snapshot.KnowledgeBaseID); errors.Is(findErr, dao.ErrNoRows) {
+				return ErrKnowledgeBaseNotFound
+			} else if findErr != nil {
+				return findErr
+			}
+			return ErrKnowledgeBaseConfigurationChanged
 		}
 		// Keep exactly the snapshot that was just atomically made active. The
 		// graph query projects all needed rows into memory before returning, and
@@ -376,7 +391,7 @@ func StoreKnowledgeGraphSnapshot(ctx context.Context, sessionDir string, graph K
 // when the deterministic scan produced the exact same indexable file set.
 // It deliberately compares content hashes rather than timestamps so a caller
 // cannot serve stale knowledge merely because a tool preserved mtimes.
-func ReuseKnowledgeSnapshotIfFilesMatch(ctx context.Context, sessionDir, baseID string, files []KnowledgeFile) (KnowledgeSnapshot, bool, error) {
+func ReuseKnowledgeSnapshotIfFilesMatch(ctx context.Context, sessionDir, baseID string, expectedRevision int64, files []KnowledgeFile) (KnowledgeSnapshot, bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -391,6 +406,9 @@ func ReuseKnowledgeSnapshotIfFilesMatch(ctx context.Context, sessionDir, baseID 
 		baseRecord, err := store.FindBase(ctx, baseID)
 		if err != nil {
 			return err
+		}
+		if baseRecord.ConfigRevision != expectedRevision {
+			return nil
 		}
 		if strings.TrimSpace(baseRecord.ActiveSnapshotID) == "" {
 			return nil
@@ -463,8 +481,9 @@ type KnowledgeFileGraph struct {
 // current directory manifest. The caller must clone them into a new snapshot;
 // no row, node, chunk or edge identity is shared between snapshots.
 type KnowledgeGraphReusePlan struct {
-	SourceSnapshotID string
-	Files            map[string]KnowledgeFileGraph // key: normalized relative path
+	BaseConfigRevision int64
+	SourceSnapshotID   string
+	Files              map[string]KnowledgeFileGraph // key: normalized relative path
 }
 
 // PrepareKnowledgeGraphReusePlan loads unchanged per-file graph work from the
@@ -489,6 +508,7 @@ func PrepareKnowledgeGraphReusePlan(ctx context.Context, sessionDir, baseID stri
 		if strings.TrimSpace(base.ActiveSnapshotID) == "" {
 			return nil
 		}
+		plan.BaseConfigRevision = base.ConfigRevision
 		snapshot, err := store.FindSnapshot(ctx, base.ActiveSnapshotID)
 		if errors.Is(err, dao.ErrNoRows) {
 			return nil
@@ -750,7 +770,7 @@ func migrateLegacyKnowledgeBaseStorage(ctx context.Context, sessionDir string) e
 		if err != nil || !exists {
 			return err
 		}
-		bases, err = store.ListBases(ctx)
+		bases, err = store.ListLegacyBases(ctx)
 		return err
 	})
 	if err != nil || len(bases) == 0 {
@@ -918,6 +938,9 @@ func validateKnowledgeGraphSnapshot(graph *KnowledgeGraphSnapshot) error {
 	if graph.Snapshot.ID == "" || graph.Snapshot.KnowledgeBaseID == "" {
 		return fmt.Errorf("knowledge graph snapshot and base IDs are required")
 	}
+	if graph.BaseConfigRevision < 1 {
+		return fmt.Errorf("knowledge graph base configuration revision is required")
+	}
 	for _, file := range graph.Files {
 		if file.ID == "" || file.SnapshotID != graph.Snapshot.ID || file.RelativePath == "" {
 			return fmt.Errorf("invalid knowledge graph file")
@@ -949,7 +972,7 @@ func validateKnowledgeGraphSnapshot(graph *KnowledgeGraphSnapshot) error {
 func knowledgeBaseRecord(base KnowledgeBase) *dao.KnowledgeBaseRecord {
 	return &dao.KnowledgeBaseRecord{ID: base.ID, Name: base.Name, RootDir: base.RootDir, PreprocessProfile: base.PreprocessProfile,
 		Provider: base.Provider, Model: base.Model, Mode: base.Mode, ThinkingLevel: base.ThinkingLevel, Schedule: base.Schedule,
-		Enabled: boolToInt(base.Enabled), ActiveSnapshotID: base.ActiveSnapshotID,
+		Enabled: boolToInt(base.Enabled), ActiveSnapshotID: base.ActiveSnapshotID, ConfigRevision: max(base.ConfigRevision, 1),
 		CreatedAt: base.CreatedAt.Format(time.RFC3339Nano), UpdatedAt: base.UpdatedAt.Format(time.RFC3339Nano)}
 }
 
@@ -957,7 +980,7 @@ func knowledgeBaseFromRecord(record dao.KnowledgeBaseRecord) KnowledgeBase {
 	return KnowledgeBase{ID: record.ID, KnowledgeBaseSpec: KnowledgeBaseSpec{Name: record.Name, RootDir: record.RootDir,
 		PreprocessProfile: record.PreprocessProfile, Provider: record.Provider, Model: record.Model, Mode: record.Mode,
 		ThinkingLevel: record.ThinkingLevel, Schedule: record.Schedule, Enabled: record.Enabled != 0},
-		ActiveSnapshotID: record.ActiveSnapshotID, CreatedAt: parseProjectTime(record.CreatedAt), UpdatedAt: parseProjectTime(record.UpdatedAt)}
+		ActiveSnapshotID: record.ActiveSnapshotID, CreatedAt: parseProjectTime(record.CreatedAt), UpdatedAt: parseProjectTime(record.UpdatedAt), ConfigRevision: record.ConfigRevision}
 }
 
 func knowledgeSnapshotRecord(snapshot KnowledgeSnapshot) *dao.KnowledgeSnapshotRecord {

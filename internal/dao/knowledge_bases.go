@@ -24,6 +24,7 @@ type KnowledgeBaseRecord struct {
 	Schedule          string `bun:"schedule"`
 	Enabled           int    `bun:"enabled"`
 	ActiveSnapshotID  string `bun:"active_snapshot_id"`
+	ConfigRevision    int64  `bun:"config_revision"`
 	CreatedAt         string `bun:"created_at"`
 	UpdatedAt         string `bun:"updated_at"`
 }
@@ -130,9 +131,26 @@ func (d *KnowledgeBaseDAO) ListBases(ctx context.Context) ([]KnowledgeBaseRecord
 	return records, err
 }
 
+// ListLegacyBases reads the former shared-store shape, which predates the
+// per-database configuration revision column.
+func (d *KnowledgeBaseDAO) ListLegacyBases(ctx context.Context) ([]KnowledgeBaseRecord, error) {
+	var records []KnowledgeBaseRecord
+	err := d.db.NewSelect().Model(&records).
+		Column("id", "name", "root_dir", "preprocess_profile", "provider", "model", "mode", "thinking_level", "schedule", "enabled", "active_snapshot_id", "created_at", "updated_at").
+		OrderExpr("updated_at DESC, name COLLATE NOCASE").Scan(ctx)
+	for i := range records {
+		records[i].ConfigRevision = 1
+	}
+	return records, err
+}
+
 func (d *KnowledgeBaseDAO) FindBase(ctx context.Context, id string) (*KnowledgeBaseRecord, error) {
+	return d.FindBaseWith(ctx, d.db, id)
+}
+
+func (d *KnowledgeBaseDAO) FindBaseWith(ctx context.Context, executor bun.IDB, id string) (*KnowledgeBaseRecord, error) {
 	record := new(KnowledgeBaseRecord)
-	err := d.db.NewSelect().Model(record).Where("id = ?", id).Limit(1).Scan(ctx)
+	err := executor.NewSelect().Model(record).Where("id = ?", id).Limit(1).Scan(ctx)
 	return record, err
 }
 
@@ -150,10 +168,28 @@ func (d *KnowledgeBaseDAO) InsertBase(ctx context.Context, executor bun.IDB, rec
 	return err
 }
 
-func (d *KnowledgeBaseDAO) UpdateBase(ctx context.Context, executor bun.IDB, record *KnowledgeBaseRecord) (int64, error) {
-	result, err := executor.NewUpdate().Model(record).
-		Column("name", "root_dir", "preprocess_profile", "provider", "model", "mode", "thinking_level", "schedule", "enabled", "active_snapshot_id", "updated_at").
-		Where("id = ?", record.ID).Exec(ctx)
+func (d *KnowledgeBaseDAO) InsertLegacyBase(ctx context.Context, executor bun.IDB, record *KnowledgeBaseRecord) error {
+	_, err := executor.NewInsert().Model(record).
+		Column("id", "name", "root_dir", "preprocess_profile", "provider", "model", "mode", "thinking_level", "schedule", "enabled", "active_snapshot_id", "created_at", "updated_at").
+		Exec(ctx)
+	return err
+}
+
+func (d *KnowledgeBaseDAO) UpdateBase(ctx context.Context, executor bun.IDB, record *KnowledgeBaseRecord, expectedRevision int64) (int64, error) {
+	result, err := executor.NewUpdate().Model((*KnowledgeBaseRecord)(nil)).
+		Set("name = ?", record.Name).
+		Set("root_dir = ?", record.RootDir).
+		Set("preprocess_profile = ?", record.PreprocessProfile).
+		Set("provider = ?", record.Provider).
+		Set("model = ?", record.Model).
+		Set("mode = ?", record.Mode).
+		Set("thinking_level = ?", record.ThinkingLevel).
+		Set("schedule = ?", record.Schedule).
+		Set("enabled = ?", record.Enabled).
+		Set("active_snapshot_id = ?", record.ActiveSnapshotID).
+		Set("updated_at = ?", record.UpdatedAt).
+		Set("config_revision = ?", record.ConfigRevision).
+		Where("id = ? AND config_revision = ?", record.ID, expectedRevision).Exec(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -227,10 +263,10 @@ func (d *KnowledgeBaseDAO) InsertEvidence(ctx context.Context, executor bun.IDB,
 	return err
 }
 
-func (d *KnowledgeBaseDAO) ActivateSnapshot(ctx context.Context, executor bun.IDB, baseID, snapshotID, updatedAt string) (int64, error) {
+func (d *KnowledgeBaseDAO) ActivateSnapshot(ctx context.Context, executor bun.IDB, baseID, snapshotID, updatedAt string, expectedRevision int64) (int64, error) {
 	result, err := executor.NewUpdate().Model((*KnowledgeBaseRecord)(nil)).
 		Set("active_snapshot_id = ?", snapshotID).Set("updated_at = ?", updatedAt).
-		Where("id = ?", baseID).Exec(ctx)
+		Where("id = ? AND config_revision = ?", baseID, expectedRevision).Exec(ctx)
 	if err != nil {
 		return 0, err
 	}

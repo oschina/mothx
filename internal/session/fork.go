@@ -102,7 +102,7 @@ func ForkSession(ctx context.Context, sessionDir string, options ForkOptions) (F
 		if existingFingerprint != fingerprint {
 			return ForkResult{}, ErrForkIdempotencyConflict
 		}
-		return forkResultByDB(db, existingChild)
+		return forkResultByDB(ctx, db, existingChild)
 	}
 	if err != dao.ErrNoRows {
 		return ForkResult{}, err
@@ -126,7 +126,7 @@ func ForkSession(ctx context.Context, sessionDir string, options ForkOptions) (F
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := validateRuntimeLeaseTx(tx, sessionDir, options.SourceSessionID); err != nil {
+	if err := validateRuntimeLeaseTxContext(ctx, tx, sessionDir, options.SourceSessionID); err != nil {
 		return ForkResult{}, err
 	}
 	existingChild, existingFingerprint = "", ""
@@ -138,7 +138,7 @@ func ForkSession(ctx context.Context, sessionDir string, options ForkOptions) (F
 		if existingFingerprint != fingerprint {
 			return ForkResult{}, ErrForkIdempotencyConflict
 		}
-		return forkResultByIDTx(tx, existingChild)
+		return forkResultByIDTx(ctx, tx, existingChild)
 	}
 	if err != dao.ErrNoRows {
 		return ForkResult{}, err
@@ -164,7 +164,7 @@ func ForkSession(ctx context.Context, sessionDir string, options ForkOptions) (F
 	if openTurns != 0 {
 		return ForkResult{}, ErrForkSessionActive
 	}
-	pendingDecisions, err := pendingDecisionsTx(tx, options.SourceSessionID)
+	pendingDecisions, err := pendingDecisionsTx(ctx, tx, options.SourceSessionID)
 	if err != nil {
 		return ForkResult{}, err
 	}
@@ -172,15 +172,15 @@ func ForkSession(ctx context.Context, sessionDir string, options ForkOptions) (F
 		return ForkResult{}, ErrForkSessionActive
 	}
 
-	entries, err := loadForkEntriesTx(tx, options.SourceSessionID)
+	entries, err := loadForkEntriesTx(ctx, tx, options.SourceSessionID)
 	if err != nil {
 		return ForkResult{}, err
 	}
-	turns, err := loadForkTurnsTx(tx, options.SourceSessionID)
+	turns, err := loadForkTurnsTx(ctx, tx, options.SourceSessionID)
 	if err != nil {
 		return ForkResult{}, err
 	}
-	boundary, kind, err := resolveForkBoundaryTx(tx, options.SourceSessionID, entries, turns, options.AtSeq)
+	boundary, kind, err := resolveForkBoundaryTx(ctx, tx, options.SourceSessionID, entries, turns, options.AtSeq)
 	if err != nil {
 		return ForkResult{}, err
 	}
@@ -196,7 +196,7 @@ func ForkSession(ctx context.Context, sessionDir string, options ForkOptions) (F
 	if len(copyEntries) == 0 {
 		return ForkResult{}, ErrForkNoCompletedTurn
 	}
-	snapshot, err := forkSourceFingerprintTx(tx, options.SourceSessionID)
+	snapshot, err := forkSourceFingerprintTx(ctx, tx, options.SourceSessionID)
 	if err != nil {
 		return ForkResult{}, err
 	}
@@ -211,10 +211,10 @@ func ForkSession(ctx context.Context, sessionDir string, options ForkOptions) (F
 	if err != nil {
 		return ForkResult{}, err
 	}
-	if err := validateRuntimeLeaseTx(tx, sessionDir, options.SourceSessionID); err != nil {
+	if err := validateRuntimeLeaseTxContext(ctx, tx, sessionDir, options.SourceSessionID); err != nil {
 		return ForkResult{}, err
 	}
-	current, err := forkSourceFingerprintTx(tx, options.SourceSessionID)
+	current, err := forkSourceFingerprintTx(ctx, tx, options.SourceSessionID)
 	if err != nil {
 		return ForkResult{}, err
 	}
@@ -306,17 +306,17 @@ func ForkSession(ctx context.Context, sessionDir string, options ForkOptions) (F
 			return ForkResult{}, err
 		}
 	}
-	if err := copyForkCapabilitiesTx(tx, options.SourceSessionID, childID); err != nil {
+	if err := copyForkCapabilitiesTx(ctx, tx, options.SourceSessionID, childID); err != nil {
 		return ForkResult{}, err
 	}
-	if err := copyForkProjectTx(tx, options.SourceSessionID, childID); err != nil {
+	if err := copyForkProjectTx(ctx, tx, options.SourceSessionID, childID); err != nil {
 		return ForkResult{}, err
 	}
-	childLeaf, err := currentEntryIDTx(tx, childID)
+	childLeaf, err := currentEntryIDTx(ctx, tx, childID)
 	if err != nil {
 		return ForkResult{}, err
 	}
-	title, err := nextForkTitleTx(tx, options.SourceSessionID, childID, titleFromEntries(copyEntries))
+	title, err := nextForkTitleTx(ctx, tx, options.SourceSessionID, childID, titleFromEntries(copyEntries))
 	if err != nil {
 		return ForkResult{}, err
 	}
@@ -367,7 +367,16 @@ func forkFingerprint(options ForkOptions) string {
 	// SQLite text values must not contain embedded NUL bytes: the modernc
 	// driver truncates those parameters. Use a stable printable delimiter for
 	// the idempotency snapshot instead.
-	return fmt.Sprintf("%s|%s|%s", options.SourceSessionID, seq, options.TitleMode)
+	fingerprint := fmt.Sprintf("%s|%s|%s", options.SourceSessionID, seq, options.TitleMode)
+	if options.ExpertID != nil {
+		// A nil ExpertID preserves the source binding and keeps the historical
+		// fingerprint format. Any non-nil override — including an explicit empty
+		// unbind — must map to a distinct durable fingerprint, so hex-encode the
+		// value: the extension is stable, printable, and cannot be confused with
+		// a different expert value regardless of its content.
+		fingerprint = fmt.Sprintf("%s|expert:%s", fingerprint, hex.EncodeToString([]byte(*options.ExpertID)))
+	}
+	return fingerprint
 }
 
 func forkNullableString(value string) any {
@@ -384,8 +393,8 @@ func formatOptionalTime(value *time.Time) any {
 	return value.Format(time.RFC3339Nano)
 }
 
-func loadForkEntriesTx(tx *dao.Tx, sessionID string) ([]forkSourceEntry, error) {
-	records, err := dao.NewForkDAO(nil).ListEntries(context.Background(), tx, sessionID)
+func loadForkEntriesTx(ctx context.Context, tx *dao.Tx, sessionID string) ([]forkSourceEntry, error) {
+	records, err := dao.NewForkDAO(nil).ListEntries(ctx, tx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -396,16 +405,16 @@ func loadForkEntriesTx(tx *dao.Tx, sessionID string) ([]forkSourceEntry, error) 
 	return result, nil
 }
 
-func forkSourceFingerprintTx(tx *dao.Tx, sessionID string) (forkSourceFingerprint, error) {
-	record, err := dao.NewForkDAO(nil).Fingerprint(context.Background(), tx, sessionID, NonTerminalSessionRunStatuses())
+func forkSourceFingerprintTx(ctx context.Context, tx *dao.Tx, sessionID string) (forkSourceFingerprint, error) {
+	record, err := dao.NewForkDAO(nil).Fingerprint(ctx, tx, sessionID, NonTerminalSessionRunStatuses())
 	if err != nil {
 		return forkSourceFingerprint{}, err
 	}
 	return forkSourceFingerprint{maxSeq: record.MaxSeq, leaf: record.Leaf, openTurns: record.OpenTurns, activeRuns: record.ActiveRuns}, nil
 }
 
-func pendingDecisionsTx(tx *dao.Tx, sessionID string) (bool, error) {
-	records, err := dao.NewSessionDAO(nil).ListRunEventsFrom(context.Background(), tx, sessionID)
+func pendingDecisionsTx(ctx context.Context, tx *dao.Tx, sessionID string) (bool, error) {
+	records, err := dao.NewSessionDAO(nil).ListRunEventsFrom(ctx, tx, sessionID)
 	if err != nil {
 		return false, err
 	}
@@ -434,8 +443,8 @@ func pendingDecisionsTx(tx *dao.Tx, sessionID string) (bool, error) {
 	return len(pending) != 0, nil
 }
 
-func loadForkTurnsTx(tx *dao.Tx, sessionID string) ([]ConversationTurn, error) {
-	records, err := dao.NewConversationTurnDAO(nil).ListFrom(context.Background(), tx, sessionID)
+func loadForkTurnsTx(ctx context.Context, tx *dao.Tx, sessionID string) ([]ConversationTurn, error) {
+	records, err := dao.NewConversationTurnDAO(nil).ListFrom(ctx, tx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -446,9 +455,9 @@ func loadForkTurnsTx(tx *dao.Tx, sessionID string) ([]ConversationTurn, error) {
 	return turns, nil
 }
 
-func resolveForkBoundaryTx(tx *dao.Tx, sessionID string, entries []forkSourceEntry, turns []ConversationTurn, atSeq *int64) (int64, ForkKind, error) {
+func resolveForkBoundaryTx(ctx context.Context, tx *dao.Tx, sessionID string, entries []forkSourceEntry, turns []ConversationTurn, atSeq *int64) (int64, ForkKind, error) {
 	if len(turns) == 0 {
-		return resolveLegacyForkBoundaryTx(tx, sessionID, entries, atSeq)
+		return resolveLegacyForkBoundaryTx(ctx, tx, sessionID, entries, atSeq)
 	}
 	if atSeq == nil {
 		for i := len(turns) - 1; i >= 0; i-- {
@@ -461,7 +470,7 @@ func resolveForkBoundaryTx(tx *dao.Tx, sessionID string, entries []forkSourceEnt
 	if *atSeq <= 0 {
 		return 0, ForkKindUnknown, ErrForkInvalidBoundary
 	}
-	record, err := dao.NewForkDAO(nil).EntryAtSeq(context.Background(), tx, sessionID, *atSeq)
+	record, err := dao.NewForkDAO(nil).EntryAtSeq(ctx, tx, sessionID, *atSeq)
 	if err != nil {
 		if err == dao.ErrNoRows {
 			return 0, ForkKindUnknown, ErrForkInvalidBoundary
@@ -510,8 +519,8 @@ type legacyForkBoundary struct {
 // compatibility path. A completed durable Run is usable only when its time
 // interval maps to exactly one non-overlapping transcript message interval.
 // Ambiguous histories remain unavailable instead of being guessed into a fork.
-func resolveLegacyForkBoundaryTx(tx *dao.Tx, sessionID string, entries []forkSourceEntry, atSeq *int64) (int64, ForkKind, error) {
-	records, err := dao.NewForkDAO(nil).RunWindows(context.Background(), tx, sessionID, TerminalSessionRunStatuses())
+func resolveLegacyForkBoundaryTx(ctx context.Context, tx *dao.Tx, sessionID string, entries []forkSourceEntry, atSeq *int64) (int64, ForkKind, error) {
+	records, err := dao.NewForkDAO(nil).RunWindows(ctx, tx, sessionID, TerminalSessionRunStatuses())
 	if err != nil {
 		return 0, ForkKindUnknown, err
 	}
@@ -697,16 +706,16 @@ func remapForkData(sourceType, raw string, entryIDs, turnIDs map[string]string) 
 	}
 }
 
-func copyForkCapabilitiesTx(tx *dao.Tx, sourceID, childID string) error {
-	return dao.NewForkDAO(nil).CopyCapabilities(context.Background(), tx, sourceID, childID)
+func copyForkCapabilitiesTx(ctx context.Context, tx *dao.Tx, sourceID, childID string) error {
+	return dao.NewForkDAO(nil).CopyCapabilities(ctx, tx, sourceID, childID)
 }
 
-func copyForkProjectTx(tx *dao.Tx, sourceID, childID string) error {
-	return dao.NewForkDAO(nil).CopyProject(context.Background(), tx, sourceID, childID)
+func copyForkProjectTx(ctx context.Context, tx *dao.Tx, sourceID, childID string) error {
+	return dao.NewForkDAO(nil).CopyProject(ctx, tx, sourceID, childID)
 }
 
-func currentEntryIDTx(tx *dao.Tx, sessionID string) (string, error) {
-	id, err := dao.NewForkDAO(nil).CurrentEntryID(context.Background(), tx, sessionID)
+func currentEntryIDTx(ctx context.Context, tx *dao.Tx, sessionID string) (string, error) {
+	id, err := dao.NewForkDAO(nil).CurrentEntryID(ctx, tx, sessionID)
 	if err == dao.ErrNoRows {
 		return "", nil
 	}
@@ -726,13 +735,13 @@ func titleFromEntries(entries []forkSourceEntry) string {
 	return "Session"
 }
 
-func nextForkTitleTx(tx *dao.Tx, parentID, childID, base string) (string, error) {
+func nextForkTitleTx(ctx context.Context, tx *dao.Tx, parentID, childID, base string) (string, error) {
 	if strings.TrimSpace(base) == "" {
 		return "", nil
 	}
 	for index := 1; index < 10000; index++ {
 		candidate := fmt.Sprintf("%s (%d)", base, index)
-		exists, err := dao.NewForkDAO(nil).TitleExists(context.Background(), tx, parentID, string(EntrySessionInfo), candidate)
+		exists, err := dao.NewForkDAO(nil).TitleExists(ctx, tx, parentID, string(EntrySessionInfo), candidate)
 		if err != nil {
 			return "", err
 		}
@@ -743,16 +752,16 @@ func nextForkTitleTx(tx *dao.Tx, parentID, childID, base string) (string, error)
 	return "", fmt.Errorf("unable to allocate fork title")
 }
 
-func forkResultByIDTx(tx *dao.Tx, childID string) (ForkResult, error) {
-	record, err := dao.NewForkDAO(nil).Result(context.Background(), tx, childID)
+func forkResultByIDTx(ctx context.Context, tx *dao.Tx, childID string) (ForkResult, error) {
+	record, err := dao.NewForkDAO(nil).Result(ctx, tx, childID)
 	if err != nil {
 		return ForkResult{}, err
 	}
 	return forkResultFromRecord(record), nil
 }
 
-func forkResultByDB(db *dao.Database, childID string) (ForkResult, error) {
-	record, err := dao.NewForkDAO(db.Bun()).Result(context.Background(), db.Bun(), childID)
+func forkResultByDB(ctx context.Context, db *dao.Database, childID string) (ForkResult, error) {
+	record, err := dao.NewForkDAO(db.Bun()).Result(ctx, db.Bun(), childID)
 	if err != nil {
 		return ForkResult{}, err
 	}

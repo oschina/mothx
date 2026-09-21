@@ -216,7 +216,7 @@ func (s *KnowledgeBaseService) indexDurable(ctx context.Context, knowledgeBaseID
 	if scanErr != nil {
 		return session.KnowledgeSnapshot{}, scanErr
 	}
-	if reused, unchanged, reuseErr := session.ReuseKnowledgeSnapshotIfFilesMatch(ctx, s.sessionDir, base.ID, files); reuseErr != nil {
+	if reused, unchanged, reuseErr := session.ReuseKnowledgeSnapshotIfFilesMatch(ctx, s.sessionDir, base.ID, base.ConfigRevision, files); reuseErr != nil {
 		return session.KnowledgeSnapshot{}, fmt.Errorf("compare active knowledge snapshot: %w", reuseErr)
 	} else if unchanged {
 		reuseData, _ := json.Marshal(map[string]any{
@@ -276,7 +276,7 @@ func (s *KnowledgeBaseService) IndexWithRun(ctx context.Context, knowledgeBaseID
 	if err != nil {
 		return session.KnowledgeSnapshot{}, err
 	}
-	if reused, unchanged, err := session.ReuseKnowledgeSnapshotIfFilesMatch(ctx, s.sessionDir, base.ID, files); err != nil {
+	if reused, unchanged, err := session.ReuseKnowledgeSnapshotIfFilesMatch(ctx, s.sessionDir, base.ID, base.ConfigRevision, files); err != nil {
 		return session.KnowledgeSnapshot{}, err
 	} else if unchanged {
 		return reused, nil
@@ -376,7 +376,7 @@ func (s *KnowledgeBaseService) buildGraph(ctx context.Context, knowledgeBaseID, 
 		return session.KnowledgeBase{}, session.KnowledgeGraphSnapshot{}, err
 	}
 
-	graph := session.KnowledgeGraphSnapshot{Snapshot: session.KnowledgeSnapshot{
+	graph := session.KnowledgeGraphSnapshot{BaseConfigRevision: base.ConfigRevision, Snapshot: session.KnowledgeSnapshot{
 		ID: session.GenerateID(), KnowledgeBaseID: base.ID, RunID: strings.TrimSpace(runID), Status: "indexing",
 		SchemaVersion: session.KnowledgeGraphSchemaVersion,
 	}}
@@ -410,9 +410,13 @@ func (s *KnowledgeBaseService) buildGraph(ctx context.Context, knowledgeBaseID, 
 		if fileCount > s.policy.MaxFiles {
 			return fmt.Errorf("knowledge base exceeds %d indexable files", s.policy.MaxFiles)
 		}
-		if relativePath, err := knowledgeRelativePath(root, path); err != nil {
+		source, err := s.readIndexableKnowledgeFile(ctx, root, path, entry)
+		if err != nil || source == nil {
 			return err
-		} else if reusable, ok := reusePlan.Files[relativePath]; ok {
+		}
+		if reusable, ok := reusePlan.Files[source.relativePath]; ok &&
+			reusePlan.BaseConfigRevision == base.ConfigRevision &&
+			knowledgeSHA256(source.data) == reusable.File.ContentSHA256 {
 			session.AppendKnowledgeFileGraph(&graph, reusable)
 			job.update(func(p *KnowledgeIndexProgress) {
 				p.Phase = KnowledgeIndexPhaseIndexing
@@ -420,7 +424,7 @@ func (s *KnowledgeBaseService) buildGraph(ctx context.Context, knowledgeBaseID, 
 			})
 			return nil
 		}
-		if err := s.indexFile(ctx, root, path, entry, &graph); err != nil {
+		if err := s.indexSourceFile(source, &graph); err != nil {
 			return err
 		}
 		job.update(func(p *KnowledgeIndexProgress) {
@@ -435,24 +439,8 @@ func (s *KnowledgeBaseService) buildGraph(ctx context.Context, knowledgeBaseID, 
 	return base, graph, nil
 }
 
-func knowledgeRelativePath(root, path string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", err
-	}
-	relative, err := filepath.Rel(root, resolved)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("knowledge base path escaped root")
-	}
-	return filepath.ToSlash(relative), nil
-}
-
-func (s *KnowledgeBaseService) indexFile(ctx context.Context, root, path string, entry fs.DirEntry, graph *session.KnowledgeGraphSnapshot) error {
-	source, err := s.readIndexableKnowledgeFile(ctx, root, path, entry)
-	if err != nil || source == nil {
-		return err
-	}
-	if graph == nil {
+func (s *KnowledgeBaseService) indexSourceFile(source *knowledgeSourceFile, graph *session.KnowledgeGraphSnapshot) error {
+	if source == nil || graph == nil {
 		return nil
 	}
 	fileID := session.GenerateID()

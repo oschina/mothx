@@ -152,6 +152,24 @@ func TestDeleteProjectClearsSessionAssignments(t *testing.T) {
 	}
 }
 
+func TestSetSessionMetadataRejectsMissingReferences(t *testing.T) {
+	sessionDir := t.TempDir()
+	project, err := CreateProject(sessionDir, "Existing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSessionMetadata(sessionDir, "missing-session", SessionMetadata{ProjectID: project.ID}); err == nil || err.Error() != "session not found" {
+		t.Fatalf("missing session error = %v, want session not found", err)
+	}
+	mgr := New(t.TempDir(), sessionDir)
+	if err := mgr.InitWithID("metadata-reference-check"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSessionMetadata(sessionDir, "metadata-reference-check", SessionMetadata{ProjectID: "missing-project"}); err == nil || err.Error() != "project not found" {
+		t.Fatalf("missing project error = %v, want project not found", err)
+	}
+}
+
 func TestListSessionAttachmentsOptionalStatusFilter(t *testing.T) {
 	sessionDir := t.TempDir()
 	mgr := New(t.TempDir(), sessionDir)

@@ -938,7 +938,7 @@ CREATE TABLE knowledge_evidence (
 CREATE INDEX idx_knowledge_evidence_chunk ON knowledge_evidence(snapshot_id, chunk_id, node_id, edge_id);
 `
 
-const knowledgeStoreSchemaVersion = 2
+const knowledgeStoreSchemaVersion = 3
 
 // EnsureKnowledgeBaseSchema migrates one dedicated knowledge-base SQLite
 // database. It intentionally does not invoke EnsureCurrentSchema, which owns
@@ -979,6 +979,17 @@ func EnsureKnowledgeBaseSchema(db *sql.DB) error {
 			return fmt.Errorf("reindex knowledge chunk FTS: %w", err)
 		}
 		if _, err := tx.Exec(`INSERT INTO knowledge_store_schema(version) VALUES (?)`, 2); err != nil {
+			return fmt.Errorf("record knowledge store schema version: %w", err)
+		}
+	}
+	if version < 3 {
+		// Configuration revisions fence long-running index publications. An
+		// indexer may only activate a graph built from the exact configuration
+		// generation it originally loaded.
+		if _, err := tx.Exec(`ALTER TABLE knowledge_bases ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return fmt.Errorf("add knowledge base configuration revision: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO knowledge_store_schema(version) VALUES (?)`, 3); err != nil {
 			return fmt.Errorf("record knowledge store schema version: %w", err)
 		}
 	}

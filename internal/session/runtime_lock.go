@@ -135,6 +135,21 @@ func forgetRuntimeLease(lease *runtimeLease) {
 	activeRuntimeLeases.Unlock()
 }
 
+func hasLiveRuntimeLease(sessionDir string, record *dao.RuntimeLeaseRecord) bool {
+	if record == nil {
+		return false
+	}
+	activeRuntimeLeases.Lock()
+	lease := activeRuntimeLeases.leases[runtimeLockKey(sessionDir, record.SessionID)]
+	activeRuntimeLeases.Unlock()
+	if lease == nil {
+		return false
+	}
+	lease.bindingMu.RLock()
+	defer lease.bindingMu.RUnlock()
+	return !lease.released && lease.ownerID == record.OwnerID && lease.epoch == record.Epoch && lease.tokenHash == record.TokenHash
+}
+
 // RuntimeLeaseLost returns the loss signal for the current process lease. It
 // is intentionally read-only; callers use it to cancel work while every
 // durable write still performs its own epoch/token fence check.
@@ -227,12 +242,16 @@ func acquireRuntimeLeaseWithOptionsContext(ctx context.Context, sessionDir, sess
 	if err != nil && err != dao.ErrNoRows {
 		return nil, err
 	}
-	// A process-local runtime lock has already serialized this acquisition. If
-	// the persisted lease belongs to this same process, it can only be a
-	// stranded row from an earlier release whose tombstone write was interrupted.
-	// Fence it with a new epoch instead of reporting it as another process.
-	if err == nil && current.State == "active" && current.ExpiresAt > now && current.OwnerID != ownerID {
-		return nil, ErrRuntimeLeaseBusy
+	// A same-process row is reclaimable only when its exact fenced identity is
+	// no longer registered locally. Retained execution references can outlive a
+	// guard's process-local mutex, so owner_instance_id alone is not evidence
+	// that an active row is stranded.
+	allowSameOwnerReclaim := false
+	if err == nil && current.State == "active" && current.ExpiresAt > now {
+		if current.OwnerID != ownerID || hasLiveRuntimeLease(sessionDir, current) {
+			return nil, ErrRuntimeLeaseBusy
+		}
+		allowSameOwnerReclaim = true
 	}
 	if options.mode != runtimeLeaseAcquireLegacy {
 		activeRunIDs, activeErr := activeSessionRunIDsTxContext(ctx, tx, sessionID)
@@ -262,7 +281,7 @@ func acquireRuntimeLeaseWithOptionsContext(ctx context.Context, sessionDir, sess
 	} else {
 		lease.epoch = current.Epoch + 1
 		var count int64
-		count, err = dao.NewRuntimeLeaseDAO(nil).Acquire(ctx, tx, &dao.RuntimeLeaseRecord{SessionID: sessionID, OwnerID: ownerID, OwnerPID: os.Getpid(), OwnerKind: "process", TokenHash: tokenHash, Epoch: lease.epoch, RunID: options.runID, Purpose: purpose, ExpiresAt: expires}, current.Epoch, now)
+		count, err = dao.NewRuntimeLeaseDAO(nil).Acquire(ctx, tx, &dao.RuntimeLeaseRecord{SessionID: sessionID, OwnerID: ownerID, OwnerPID: os.Getpid(), OwnerKind: "process", TokenHash: tokenHash, Epoch: lease.epoch, RunID: options.runID, Purpose: purpose, ExpiresAt: expires}, current.Epoch, now, allowSameOwnerReclaim)
 		if err == nil && count != 1 {
 			err = ErrRuntimeLeaseBusy
 		}

@@ -30,11 +30,12 @@ func TestKnowledgeBaseUsesDedicatedSQLiteDatabase(t *testing.T) {
 
 	now := time.Now().UTC()
 	graph := KnowledgeGraphSnapshot{
-		Snapshot: KnowledgeSnapshot{ID: "snapshot", KnowledgeBaseID: base.ID, Status: "indexing", StartedAt: now},
-		Files:    []KnowledgeFile{{ID: "file", SnapshotID: "snapshot", RelativePath: "architecture.md", ContentSHA256: "hash", ByteSize: 12, Status: "indexed"}},
-		Chunks:   []KnowledgeChunk{{ID: "chunk", SnapshotID: "snapshot", FileID: "file", Ordinal: 0, Text: "Alpha owns the runtime.", StartLine: 1, EndLine: 1, ContentSHA256: "hash"}},
-		Nodes:    []KnowledgeNode{{ID: "node", SnapshotID: "snapshot", Kind: "section", Label: "Alpha", NormalizedLabel: "alpha"}},
-		Evidence: []KnowledgeEvidence{{ID: "evidence", SnapshotID: "snapshot", NodeID: "node", ChunkID: "chunk", StartLine: 1, EndLine: 1, Confidence: 1}},
+		BaseConfigRevision: base.ConfigRevision,
+		Snapshot:           KnowledgeSnapshot{ID: "snapshot", KnowledgeBaseID: base.ID, Status: "indexing", StartedAt: now},
+		Files:              []KnowledgeFile{{ID: "file", SnapshotID: "snapshot", RelativePath: "architecture.md", ContentSHA256: "hash", ByteSize: 12, Status: "indexed"}},
+		Chunks:             []KnowledgeChunk{{ID: "chunk", SnapshotID: "snapshot", FileID: "file", Ordinal: 0, Text: "Alpha owns the runtime.", StartLine: 1, EndLine: 1, ContentSHA256: "hash"}},
+		Nodes:              []KnowledgeNode{{ID: "node", SnapshotID: "snapshot", Kind: "section", Label: "Alpha", NormalizedLabel: "alpha"}},
+		Evidence:           []KnowledgeEvidence{{ID: "evidence", SnapshotID: "snapshot", NodeID: "node", ChunkID: "chunk", StartLine: 1, EndLine: 1, Confidence: 1}},
 	}
 	if _, err := StoreKnowledgeGraphSnapshot(t.Context(), sessionDir, graph); err != nil {
 		t.Fatal(err)
@@ -65,10 +66,10 @@ func TestKnowledgeSnapshotRetentionKeepsOnlyActiveGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := StoreKnowledgeGraphSnapshot(t.Context(), sessionDir, knowledgeGraphForRetention(base.ID, "first", "First indexed fact.")); err != nil {
+	if _, err := StoreKnowledgeGraphSnapshot(t.Context(), sessionDir, knowledgeGraphForRetention(base.ID, base.ConfigRevision, "first", "First indexed fact.")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := StoreKnowledgeGraphSnapshot(t.Context(), sessionDir, knowledgeGraphForRetention(base.ID, "second", "Second indexed fact.")); err != nil {
+	if _, err := StoreKnowledgeGraphSnapshot(t.Context(), sessionDir, knowledgeGraphForRetention(base.ID, base.ConfigRevision, "second", "Second indexed fact.")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,9 +95,10 @@ func TestKnowledgeBaseUpdateInvalidatesAndPrunesGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := StoreKnowledgeGraphSnapshot(t.Context(), sessionDir, knowledgeGraphForRetention(base.ID, "before-update", "Configuration-sensitive fact.")); err != nil {
+	if _, err := StoreKnowledgeGraphSnapshot(t.Context(), sessionDir, knowledgeGraphForRetention(base.ID, base.ConfigRevision, "before-update", "Configuration-sensitive fact.")); err != nil {
 		t.Fatal(err)
 	}
+	inFlight := knowledgeGraphForRetention(base.ID, base.ConfigRevision, "in-flight", "Stale in-flight fact.")
 	updatedSpec := base.KnowledgeBaseSpec
 	updatedSpec.Name = "Reconfigured"
 	updated, err := UpdateKnowledgeBase(t.Context(), sessionDir, base.ID, updatedSpec)
@@ -108,6 +110,14 @@ func TestKnowledgeBaseUpdateInvalidatesAndPrunesGraph(t *testing.T) {
 	}
 	if _, err := QueryKnowledgeGraph(t.Context(), sessionDir, base.ID, "Configuration", 4); !errors.Is(err, ErrKnowledgeBaseUnindexed) {
 		t.Fatalf("query after configuration update error = %v, want %v", err, ErrKnowledgeBaseUnindexed)
+	}
+	if _, err := StoreKnowledgeGraphSnapshot(t.Context(), sessionDir, inFlight); !errors.Is(err, ErrKnowledgeBaseConfigurationChanged) {
+		t.Fatalf("stale in-flight snapshot error = %v, want %v", err, ErrKnowledgeBaseConfigurationChanged)
+	}
+	if current, err := GetKnowledgeBase(t.Context(), sessionDir, base.ID); err != nil {
+		t.Fatal(err)
+	} else if current.ActiveSnapshotID != "" || current.ConfigRevision != updated.ConfigRevision {
+		t.Fatalf("stale snapshot changed base = %#v", current)
 	}
 	assertKnowledgeGraphRowCounts(t, sessionDir, base.ID, 0, 0, 0, 0)
 }
@@ -130,7 +140,7 @@ func TestKnowledgeBaseMigratesLegacySessionStoreIntoDedicatedDatabase(t *testing
 	}
 	if err := WriteRootDatabase(t.Context(), sessionDir, func(tx *dao.Tx) error {
 		store := dao.NewKnowledgeBaseDAO(nil)
-		if err := store.InsertBase(t.Context(), tx, knowledgeBaseRecord(base)); err != nil {
+		if err := store.InsertLegacyBase(t.Context(), tx, knowledgeBaseRecord(base)); err != nil {
 			return err
 		}
 		retired := KnowledgeSnapshot{ID: "legacy-retired", KnowledgeBaseID: base.ID, Status: "completed", SchemaVersion: KnowledgeGraphSchemaVersion,
@@ -198,8 +208,9 @@ func TestKnowledgeGraphReusePlanClonesOnlyUnchangedFileSubgraph(t *testing.T) {
 	stable := KnowledgeFile{ID: "stable-file", SnapshotID: "source", RelativePath: "stable.md", ContentSHA256: "stable-hash", ByteSize: 10, MediaType: "text/markdown", Status: "indexed"}
 	changed := KnowledgeFile{ID: "changed-file", SnapshotID: "source", RelativePath: "changed.md", ContentSHA256: "old-hash", ByteSize: 10, MediaType: "text/markdown", Status: "indexed"}
 	graph := KnowledgeGraphSnapshot{
-		Snapshot: KnowledgeSnapshot{ID: "source", KnowledgeBaseID: base.ID, Status: "indexing", StartedAt: now},
-		Files:    []KnowledgeFile{stable, changed},
+		BaseConfigRevision: base.ConfigRevision,
+		Snapshot:           KnowledgeSnapshot{ID: "source", KnowledgeBaseID: base.ID, Status: "indexing", StartedAt: now},
+		Files:              []KnowledgeFile{stable, changed},
 		Chunks: []KnowledgeChunk{
 			{ID: "stable-chunk", SnapshotID: "source", FileID: stable.ID, Ordinal: 0, Text: "stable evidence", StartLine: 1, EndLine: 1, ContentSHA256: "stable-chunk-hash"},
 			{ID: "changed-chunk", SnapshotID: "source", FileID: changed.ID, Ordinal: 0, Text: "old evidence", StartLine: 1, EndLine: 1, ContentSHA256: "changed-chunk-hash"},
@@ -256,17 +267,18 @@ func assertNoKnowledgeTablesInSessionDatabase(t *testing.T, sessionDir string) {
 	}
 }
 
-func knowledgeGraphForRetention(baseID, snapshotID, text string) KnowledgeGraphSnapshot {
+func knowledgeGraphForRetention(baseID string, revision int64, snapshotID, text string) KnowledgeGraphSnapshot {
 	now := time.Now().UTC()
 	fileID := "file-" + snapshotID
 	chunkID := "chunk-" + snapshotID
 	nodeID := "node-" + snapshotID
 	return KnowledgeGraphSnapshot{
-		Snapshot: KnowledgeSnapshot{ID: snapshotID, KnowledgeBaseID: baseID, Status: "indexing", StartedAt: now},
-		Files:    []KnowledgeFile{{ID: fileID, SnapshotID: snapshotID, RelativePath: snapshotID + ".md", ContentSHA256: "hash-" + snapshotID, ByteSize: int64(len(text)), Status: "indexed"}},
-		Chunks:   []KnowledgeChunk{{ID: chunkID, SnapshotID: snapshotID, FileID: fileID, Ordinal: 0, Text: text, StartLine: 1, EndLine: 1, ContentSHA256: "chunk-hash-" + snapshotID}},
-		Nodes:    []KnowledgeNode{{ID: nodeID, SnapshotID: snapshotID, Kind: "section", Label: snapshotID, NormalizedLabel: snapshotID}},
-		Evidence: []KnowledgeEvidence{{ID: "evidence-" + snapshotID, SnapshotID: snapshotID, NodeID: nodeID, ChunkID: chunkID, StartLine: 1, EndLine: 1, Confidence: 1}},
+		BaseConfigRevision: revision,
+		Snapshot:           KnowledgeSnapshot{ID: snapshotID, KnowledgeBaseID: baseID, Status: "indexing", StartedAt: now},
+		Files:              []KnowledgeFile{{ID: fileID, SnapshotID: snapshotID, RelativePath: snapshotID + ".md", ContentSHA256: "hash-" + snapshotID, ByteSize: int64(len(text)), Status: "indexed"}},
+		Chunks:             []KnowledgeChunk{{ID: chunkID, SnapshotID: snapshotID, FileID: fileID, Ordinal: 0, Text: text, StartLine: 1, EndLine: 1, ContentSHA256: "chunk-hash-" + snapshotID}},
+		Nodes:              []KnowledgeNode{{ID: nodeID, SnapshotID: snapshotID, Kind: "section", Label: snapshotID, NormalizedLabel: snapshotID}},
+		Evidence:           []KnowledgeEvidence{{ID: "evidence-" + snapshotID, SnapshotID: snapshotID, NodeID: nodeID, ChunkID: chunkID, StartLine: 1, EndLine: 1, Confidence: 1}},
 	}
 }
 

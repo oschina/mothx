@@ -211,23 +211,17 @@ func (m *Manager) SetSessionBinding(channelType, channelID string) error {
 // reloads restore the identity; callers rebuild the Agent afterwards (same
 // lifecycle as capability toggles such as /delegate).
 func (m *Manager) SetExpertBinding(expertID string) error {
-	m.mu.RLock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.header == nil {
-		m.mu.RUnlock()
 		return fmt.Errorf("session is not initialized")
 	}
 	sessionID := m.header.ID
 	table := m.sessionTable()
-	m.mu.RUnlock()
 	if err := m.withDB(func(db *dao.Database) error {
 		return dao.NewSessionDAO(db.Bun()).UpdateSessionExpertID(context.Background(), db.Bun(), table, sessionID, expertID)
 	}); err != nil {
 		return err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.header == nil || m.header.ID != sessionID {
-		return fmt.Errorf("session identity changed while updating expert binding")
 	}
 	m.header.ExpertID = expertID
 	return nil
@@ -244,37 +238,23 @@ func (m *Manager) SetWorkDir(cwd string) error {
 	cwd = filepath.Clean(cwd)
 
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.header == nil {
-		m.mu.Unlock()
 		return fmt.Errorf("session is not initialized")
 	}
 	if m.header.Cwd == cwd {
 		m.cwd = cwd
-		m.mu.Unlock()
 		return nil
 	}
-	sessionID, previousCwd := m.header.ID, m.header.Cwd
+	sessionID := m.header.ID
+	if err := m.withDB(func(db *dao.Database) error {
+		return dao.NewSessionDAO(db.Bun()).UpdateSessionCWD(context.Background(), db.Bun(), m.sessionTable(), sessionID, cwd)
+	}); err != nil {
+		return err
+	}
 	m.header.Cwd = cwd
 	m.cwd = cwd
-	m.mu.Unlock()
-
-	err := m.withDB(func(db *dao.Database) error {
-		return dao.NewSessionDAO(db.Bun()).UpdateSessionCWD(context.Background(), db.Bun(), m.sessionTable(), sessionID, cwd)
-	})
-	if err == nil {
-		return nil
-	}
-
-	// Keep the in-memory manager truthful when persistence failed. Do not
-	// overwrite a newer concurrent update if this manager was deliberately
-	// changed again while the DB operation was in flight.
-	m.mu.Lock()
-	if m.header != nil && m.header.ID == sessionID && m.header.Cwd == cwd {
-		m.header.Cwd = previousCwd
-		m.cwd = previousCwd
-	}
-	m.mu.Unlock()
-	return err
+	return nil
 }
 
 // GetExpertID returns the bound expert bundle name ("" when unbound).

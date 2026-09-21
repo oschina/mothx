@@ -93,44 +93,44 @@ func DeleteProject(sessionDir, id string) error {
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("project ID is required")
 	}
-	db, err := OpenRootDB(sessionDir)
-	if err != nil {
-		return err
-	}
 	// Realize the declared ON DELETE SET NULL reference semantics explicitly so
 	// session assignments never outlive their project, regardless of SQLite
-	// foreign-key enforcement.
-	if err := dao.NewProjectDAO(db.Bun()).ClearMetadataProject(context.Background(), id); err != nil {
-		return err
-	}
-	return dao.NewProjectDAO(db.Bun()).Delete(context.Background(), id)
+	// foreign-key enforcement. Both writes share one transaction so a failed
+	// delete cannot commit only the detach half.
+	return WriteRootDatabase(context.Background(), sessionDir, func(tx *dao.Tx) error {
+		return dao.NewProjectDAO(nil).DeleteWithMetadata(context.Background(), tx, id)
+	})
 }
 
 func SetSessionMetadata(sessionDir, sessionID string, metadata SessionMetadata) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("session ID is required")
 	}
-	db, err := OpenRootDB(sessionDir)
-	if err != nil {
-		return err
-	}
 	metadata.ProjectID = strings.TrimSpace(metadata.ProjectID)
-	if metadata.ProjectID != "" {
-		exists, err := dao.NewProjectDAO(db.Bun()).Exists(context.Background(), metadata.ProjectID)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			return fmt.Errorf("project not found")
-		}
-	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	var projectID *string
 	if metadata.ProjectID != "" {
 		projectID = &metadata.ProjectID
 	}
-	return dao.NewProjectDAO(db.Bun()).UpsertMetadata(context.Background(), &dao.SessionMetadataRecord{
-		SessionID: sessionID, ProjectID: projectID, Pinned: boolToInt(metadata.Pinned), UpdatedAt: now,
+	record := &dao.SessionMetadataRecord{SessionID: sessionID, ProjectID: projectID, Pinned: boolToInt(metadata.Pinned), UpdatedAt: now}
+	return WriteRootDatabase(context.Background(), sessionDir, func(tx *dao.Tx) error {
+		changed, err := dao.NewProjectDAO(nil).UpsertMetadataIfReferencesExist(context.Background(), tx, record)
+		if err != nil {
+			return err
+		}
+		if changed == 1 {
+			return nil
+		}
+		if metadata.ProjectID != "" {
+			exists, err := dao.NewProjectDAO(nil).ExistsWith(context.Background(), tx, metadata.ProjectID)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				return fmt.Errorf("project not found")
+			}
+		}
+		return fmt.Errorf("session not found")
 	})
 }
 

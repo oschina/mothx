@@ -181,7 +181,11 @@ func (m *MemoryStore) GetReplayState() ReplayState {
 func (m *MemoryStore) GetLeafID() *string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.leafID
+	if m.leafID == nil {
+		return nil
+	}
+	leafID := *m.leafID
+	return &leafID
 }
 
 func (m *MemoryStore) GetLatestCompaction() (CompactionEntry, bool) {
@@ -244,7 +248,11 @@ func (m *MemoryStore) GetFile() string {
 func (m *MemoryStore) GetHeader() *Header {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.header
+	if m.header == nil {
+		return nil
+	}
+	header := *m.header
+	return &header
 }
 
 // Compile-time check that MemoryStore implements Store.

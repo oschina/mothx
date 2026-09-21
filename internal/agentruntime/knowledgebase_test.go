@@ -298,6 +298,74 @@ func TestKnowledgeIndexerClonesUnchangedFileGraphWhenAnotherFileChanges(t *testi
 	}
 }
 
+func TestKnowledgeIndexerRevalidatesReusePlanAgainstCurrentContent(t *testing.T) {
+	sessionDir := t.TempDir()
+	source := t.TempDir()
+	path := filepath.Join(source, "changing.md")
+	if err := os.WriteFile(path, []byte("# First\n\nOld content.\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), sessionDir, session.KnowledgeBaseSpec{
+		Name: "TOCTOU docs", RootDir: source, PreprocessProfile: "documents", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(sessionDir, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := session.GetKnowledgeBase(t.Context(), sessionDir, base.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := service.scanFileManifest(t.Context(), current, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := session.PrepareKnowledgeGraphReusePlan(t.Context(), sessionDir, base.ID, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Files) != 1 {
+		t.Fatalf("reuse plan files = %d, want 1", len(plan.Files))
+	}
+	if err := os.WriteFile(path, []byte("# Second\n\nNew content after planning.\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, graph, err := service.buildGraph(t.Context(), base.ID, "run-revalidate", plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Chunks) == 0 || !strings.Contains(graph.Chunks[0].Text, "New content after planning") {
+		t.Fatalf("stale reuse plan was accepted: %#v", graph.Chunks)
+	}
+
+	// Even when the bytes still match, a plan from an older configuration
+	// generation must not contribute graph data to a newly configured base.
+	if err := os.WriteFile(path, []byte("# First\n\nOld content.\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stale := plan.Files["changing.md"]
+	stale.File.Title = "stale-plan-sentinel"
+	plan.Files["changing.md"] = stale
+	updatedSpec := current.KnowledgeBaseSpec
+	updatedSpec.Name = "TOCTOU docs updated"
+	if _, err := session.UpdateKnowledgeBase(t.Context(), sessionDir, base.ID, updatedSpec); err != nil {
+		t.Fatal(err)
+	}
+	_, graph, err = service.buildGraph(t.Context(), base.ID, "run-new-config", plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Files) != 1 || graph.Files[0].Title == "stale-plan-sentinel" {
+		t.Fatalf("old-configuration reuse plan was accepted: %#v", graph.Files)
+	}
+}
+
 type knowledgeIndexerTestProvider struct {
 	model     *provider.Model
 	calls     int

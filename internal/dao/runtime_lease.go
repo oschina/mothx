@@ -72,18 +72,16 @@ func (d *RuntimeLeaseDAO) Insert(ctx context.Context, executor bun.IDB, record *
 	return err
 }
 
-func (d *RuntimeLeaseDAO) Acquire(ctx context.Context, executor bun.IDB, record *RuntimeLeaseRecord, previousEpoch, now int64) (int64, error) {
+func (d *RuntimeLeaseDAO) Acquire(ctx context.Context, executor bun.IDB, record *RuntimeLeaseRecord, previousEpoch, now int64, allowSameOwner bool) (int64, error) {
 	result, err := executor.NewUpdate().Model((*RuntimeLeaseRecord)(nil)).
 		Set("owner_instance_id = ?", record.OwnerID).Set("owner_pid = ?", record.OwnerPID).Set("owner_kind = ?", record.OwnerKind).
 		Set("lease_token_hash = ?", record.TokenHash).Set("epoch = ?", record.Epoch).Set("run_id = ?", record.RunID).
 		Set("purpose = ?", record.Purpose).Set("state = ?", "active").Set("acquired_at = ?", now).
 		Set("heartbeat_at = ?", now).Set("expires_at = ?", record.ExpiresAt).Set("updated_at = ?", now).
-		// A process-local lock serializes callers in one process.  If an earlier
-		// release could not write its tombstone (for example, SQLite was briefly
-		// busy), that same process may fence and replace its own stranded active
-		// row. A distinct process must still wait for expiry, preserving the
-		// cross-process ownership boundary.
-		Where("session_id = ? AND epoch = ? AND (state != ? OR expires_at <= ? OR owner_instance_id = ?)", record.SessionID, previousEpoch, "active", now, record.OwnerID).Exec(ctx)
+		// The caller may explicitly authorize replacement of a same-process row
+		// only after proving that its exact fenced identity is no longer live in
+		// the local registry. A distinct process must still wait for expiry.
+		Where("session_id = ? AND epoch = ? AND (state != ? OR expires_at <= ? OR (? AND owner_instance_id = ?))", record.SessionID, previousEpoch, "active", now, allowSameOwner, record.OwnerID).Exec(ctx)
 	if err != nil {
 		return 0, err
 	}

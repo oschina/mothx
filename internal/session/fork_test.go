@@ -253,3 +253,98 @@ func messageSeq(t *testing.T, sessionDir, sessionID, entryID string) int64 {
 	}
 	return seq
 }
+
+func TestForkIdempotencyFingerprintIncludesExpertID(t *testing.T) {
+	sessionDir := t.TempDir()
+	mgr := New(t.TempDir(), sessionDir)
+	if err := mgr.InitWithID("expert-idem"); err != nil {
+		t.Fatal(err)
+	}
+	turnID := "expert-idem-turn"
+	if err := StartConversationTurn(sessionDir, ConversationTurn{ID: turnID, SessionID: "expert-idem", IntentID: "i-idem", RunID: "r-idem"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.AppendMessage(provider.NewUserMessage("hello expert idem")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.AppendMessage(provider.NewAssistantMessage([]provider.ContentBlock{{Type: "text", Text: "world expert idem"}})); err != nil {
+		t.Fatal(err)
+	}
+	if err := EndConversationTurn(sessionDir, "expert-idem", turnID, "completed", "stop", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.SetExpertBinding("studio"); err != nil {
+		t.Fatalf("bind studio: %v", err)
+	}
+
+	// A nil ExpertID preserves the source binding and has its own fingerprint.
+	preserve, err := ForkSession(context.Background(), sessionDir, ForkOptions{SourceSessionID: "expert-idem", RequestID: "expert-idem-key"})
+	if err != nil {
+		t.Fatalf("nil-expert fork: %v", err)
+	}
+	child, err := OpenByIDExact(sessionDir, preserve.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := child.GetExpertID(); got != "studio" {
+		t.Fatalf("nil-expert child binding = %q, want preserved studio", got)
+	}
+	// An identical retry returns the original child.
+	retry, err := ForkSession(context.Background(), sessionDir, ForkOptions{SourceSessionID: "expert-idem", RequestID: "expert-idem-key"})
+	if err != nil {
+		t.Fatalf("idempotent nil-expert retry: %v", err)
+	}
+	if retry.SessionID != preserve.SessionID {
+		t.Fatalf("idempotent retry session = %q, want %q", retry.SessionID, preserve.SessionID)
+	}
+	// nil and pointer-to-empty are distinct semantic values: the explicit empty
+	// override must not reuse the nil fingerprint.
+	explicit := ""
+	if _, err := ForkSession(context.Background(), sessionDir, ForkOptions{SourceSessionID: "expert-idem", RequestID: "expert-idem-key", ExpertID: &explicit}); !errors.Is(err, ErrForkIdempotencyConflict) {
+		t.Fatalf("explicit-empty on nil key error = %v, want conflict", err)
+	}
+	// A different explicit expert value also conflicts.
+	other := "software-company"
+	if _, err := ForkSession(context.Background(), sessionDir, ForkOptions{SourceSessionID: "expert-idem", RequestID: "expert-idem-key", ExpertID: &other}); !errors.Is(err, ErrForkIdempotencyConflict) {
+		t.Fatalf("different expert on nil key error = %v, want conflict", err)
+	}
+
+	// The explicit-empty override has its own fingerprint: it forks an unbound
+	// child and only identical retries are idempotent.
+	unbound, err := ForkSession(context.Background(), sessionDir, ForkOptions{SourceSessionID: "expert-idem", RequestID: "expert-idem-unbind", ExpertID: &explicit})
+	if err != nil {
+		t.Fatalf("explicit-empty fork: %v", err)
+	}
+	unboundChild, err := OpenByIDExact(sessionDir, unbound.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := unboundChild.GetExpertID(); got != "" {
+		t.Fatalf("explicit-empty child binding = %q, want empty", got)
+	}
+	retryUnbound, err := ForkSession(context.Background(), sessionDir, ForkOptions{SourceSessionID: "expert-idem", RequestID: "expert-idem-unbind", ExpertID: &explicit})
+	if err != nil {
+		t.Fatalf("idempotent explicit-empty retry: %v", err)
+	}
+	if retryUnbound.SessionID != unbound.SessionID {
+		t.Fatalf("explicit-empty retry session = %q, want %q", retryUnbound.SessionID, unbound.SessionID)
+	}
+	// nil must conflict with the explicit-empty fingerprint.
+	if _, err := ForkSession(context.Background(), sessionDir, ForkOptions{SourceSessionID: "expert-idem", RequestID: "expert-idem-unbind"}); !errors.Is(err, ErrForkIdempotencyConflict) {
+		t.Fatalf("nil on explicit-empty key error = %v, want conflict", err)
+	}
+	// A different explicit value must conflict with the explicit-empty fingerprint.
+	if _, err := ForkSession(context.Background(), sessionDir, ForkOptions{SourceSessionID: "expert-idem", RequestID: "expert-idem-unbind", ExpertID: &other}); !errors.Is(err, ErrForkIdempotencyConflict) {
+		t.Fatalf("different expert on explicit-empty key error = %v, want conflict", err)
+	}
+	// The source branch keeps its own binding throughout.
+	if got := mgr.GetExpertID(); got != "studio" {
+		t.Fatalf("source binding = %q, want studio", got)
+	}
+}
