@@ -218,6 +218,7 @@ func TestMoarkModelMaxTokens(t *testing.T) {
 		"qwen3.8-max":            0,
 		"qwen3.8-max-0902":       131072,
 		"qwen3.8-27b":            0,
+		"qwen3.8-omni-flash":     131072,
 		"glm-5.3":                131072,
 		"glm-5.3-flash":          131072,
 		"ernie-5.0-thinking":     65536,
@@ -283,6 +284,31 @@ func TestGiteeMoarkQwen3827BDefaults(t *testing.T) {
 		}
 		if model.MaxTokens != 0 || model.MaxTokensWasSet() {
 			t.Fatalf("%s qwen3.8-27b maxTokens = %d, explicitly set = %v; want 0, false", providerName, model.MaxTokens, model.MaxTokensWasSet())
+		}
+	}
+}
+
+func TestGiteeMoarkQwen38OmniFlashDefaults(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"gitee", "moark"} {
+		model := s.GetModelConfig(providerName, "qwen3.8-omni-flash")
+		if model == nil {
+			t.Fatalf("%s missing qwen3.8-omni-flash", providerName)
+		}
+		if !model.Reasoning || model.ContextWindow != 1000000 {
+			t.Fatalf("%s qwen3.8-omni-flash = %#v, want reasoning model with 1M context", providerName, model)
+		}
+		wantInput := []string{"text", "image", "audio", "video"}
+		if len(model.Input) != len(wantInput) {
+			t.Fatalf("%s qwen3.8-omni-flash input = %#v, want %#v", providerName, model.Input, wantInput)
+		}
+		for i := range wantInput {
+			if model.Input[i] != wantInput[i] {
+				t.Fatalf("%s qwen3.8-omni-flash input = %#v, want %#v", providerName, model.Input, wantInput)
+			}
+		}
+		if model.MaxTokens != 131072 {
+			t.Fatalf("%s qwen3.8-omni-flash maxTokens = %d, want 131072", providerName, model.MaxTokens)
 		}
 	}
 }
@@ -592,6 +618,7 @@ func TestRoutedProviderModelMaxTokensAreExplicit(t *testing.T) {
 			"qwen3.8-max":            0,
 			"qwen3.8-max-0902":       131072,
 			"qwen3.8-27b":            0,
+			"qwen3.8-omni-flash":     131072,
 			"glm-5.3":                131072,
 			"glm-5.3-flash":          131072,
 			"kimi-k2.7-code":         262144,

@@ -1553,6 +1553,12 @@ Source: https://mothx.net/zh/changelog.md
 - **Gitee/Moark 新增模型：`deepseek-v4.1-flash`**
   - `gitee` 和 `moark` 两个提供商均新增 `deepseek-v4.1-flash`，支持 1M 上下文窗口与文本/图片输入；默认不发送 max_tokens。
 
+- **小米 MiMo 新增模型：`mimo-v2.6-pro` 与 `mimo-v2.6-flash`**
+  - `xiaomi` 提供商及三个 MiMo Token Plan 渠道（`xiaomi-token-plan-ams`、`xiaomi-token-plan-cn`、`xiaomi-token-plan-sgp`）均新增 `mimo-v2.6-pro` 与 `mimo-v2.6-flash`。两者均声明 1M tokens 上下文窗口、128K tokens 最大输出、支持思考（reasoning）与多模态（`text,image`）输入。
+
+- **Gitee/Moark 新增模型：`qwen3.8-omni-flash`**
+  - `gitee` 和 `moark` 两个提供商均新增 `qwen3.8-omni-flash`，支持 1M 上下文窗口、128K 最大输出，以及多模态输入（`text,image,audio,video`）。
+
 - **火山引擎新增模型：`deepseek-v4.1-flash`**
   - `volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 三个火山引擎渠道均新增 `deepseek-v4.1-flash`，支持思考、1M 上下文窗口与文本/图片输入；标准版 MaxTokens 为 262K，两个套餐版为 100K。
 

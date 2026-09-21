@@ -17,6 +17,12 @@
 - **New Gitee/Moark Model: `deepseek-v4.1-flash`**
   - Added `deepseek-v4.1-flash` to the `gitee` and `moark` providers with a 1M context window and text+image input; no default max_tokens is sent.
 
+- **New Xiaomi MiMo Models: `mimo-v2.6-pro` and `mimo-v2.6-flash`**
+  - Added `mimo-v2.6-pro` and `mimo-v2.6-flash` to the `xiaomi` provider and all three MiMo token-plan channels (`xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`). Both declare a 1M-token context window, a 128K-token maximum output, reasoning support, and multimodal (`text,image`) input.
+
+- **New Gitee/Moark Model: `qwen3.8-omni-flash`**
+  - Added `qwen3.8-omni-flash` to the `gitee` and `moark` providers with a 1M context window, a 128K max output, and multimodal input (`text,image,audio,video`).
+
 - **New Volcengine Model: `deepseek-v4.1-flash`**
   - Added `deepseek-v4.1-flash` to all three Volcengine providers — `volcengine`, `volcengine-agentplan`, and `volcengine-codingplan` — with a 1M context window, reasoning support, and text+image input. The standard channel sends 262K max_tokens; the two plan channels send 100K.
 

@@ -224,6 +224,8 @@
 | mimo-v2.5 | 1M | 128K | **是** | text,image |
 | mimo-v2.5-pro | 1M | 128K | **是** | text |
 | mimo-v2.5-pro-ultraspeed | 1M | 128K | **是** | text |
+| mimo-v2.6-pro | 1M | 128K | **是** | text,image |
+| mimo-v2.6-flash | 1M | 128K | **是** | text,image |
 
 #### MiMo Token Plan（AMS/CN/SGP）
 
@@ -564,6 +566,7 @@
 | qwen3.8-max-0902 | 1M | 128K | **是** | text,image |
 | qwen3.8-flash | 1M | - | **是** | text,image |
 | qwen3.8-27b | 1M | - | **是** | text,image,video |
+| qwen3.8-omni-flash | 1M | 128K | **是** | text,image,audio,video |
 | deepseek-v4-flash | 1M | 384K | **是** | text |
 | deepseek-v4-flash-0731 | 1M | - | **是** | text |
 | deepseek-v4.1-flash | 1M | - | **是** | text,image |
