@@ -2,7 +2,7 @@
 
 本文件仅记录**当前版本**的变更。所有版本的完整历史见 [docs/zh/changelog.md](zh/changelog.md)。
 
-## v1.3.101
+## v1.3.102
 
 ### ✨ 新功能
 
@@ -18,6 +18,9 @@
 
 - **Gitee/Moark 新增模型：`deepseek-v4.1-flash`**
   - `gitee` 和 `moark` 两个提供商均新增 `deepseek-v4.1-flash`，支持 1M 上下文窗口与文本/图片输入；默认不发送 max_tokens。
+
+- **火山引擎新增模型：`deepseek-v4.1-flash`**
+  - `volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 三个火山引擎渠道均新增 `deepseek-v4.1-flash`，支持思考、1M 上下文窗口与文本/图片输入；标准版 MaxTokens 为 262K，两个套餐版为 100K。
 
 - **新增 Agnes AI 供应商（国际版 + 国内版）**
   - 通过新的 `agnes` OpenAI 兼容厂商适配器新增 `agnes`（`https://apihub.agnes-ai.com/v1`，`${AGNES_API_KEY}`）与 `agnes-cn`（`https://api.agnes-ai.cn/v1`，`${AGNES_CN_API_KEY}`）两个提供商，均提供 `agnes-2.5-flash`（200K 上下文）、`agnes-2.5-pro`（256K 上下文）和 `agnes-3.0-flash`（512K 上下文，最大输出 65535 tokens）。

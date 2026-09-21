@@ -251,6 +251,7 @@
 | doubao-seed-2-1-pro-260628 | 262K | 262K | 否 | text,image | minimal/low/medium/high |
 | glm-5.3 | 1M | 不传 | **是** | text |
 | glm-5.3-flash | 1M | 不传 | **是** | text,image |
+| deepseek-v4.1-flash | 1M | 262K | **是** | text,image |
 
 #### 7b. AgentPlan（规划模式）
 
@@ -269,6 +270,7 @@
 | kimi-k2.7-code | 262K | 100K | **是** | text |
 | deepseek-v4-pro | 1M | 100K | **是** | text |
 | deepseek-v4-flash | 1M | 100K | **是** | text,image |
+| deepseek-v4.1-flash | 1M | 100K | **是** | text,image |
 | minimax-m3 | 1M | 100K | **是** | text,image |
 | minimax-m2.7 | 262K | 100K | **是** | text |
 | kimi-k3 | 1M | 100K | **是** | text,image |
@@ -280,7 +282,7 @@
 - **BaseURL**: `https://ark.cn-beijing.volces.com/api/coding/v3`
 - **API**: `openai-chat`
 
-> 模型列表同 AgentPlan（不含 kimi-k2.6 和 minimax-m2.7）；除 `glm-5.3` 与 `glm-5.3-flash` 外，其余模型 MaxTokens 均为 100K，`glm-5.3`/`glm-5.3-flash` 不传 MaxTokens。
+> 模型列表同 AgentPlan（不含 kimi-k2.6 和 minimax-m2.7）；除 `glm-5.3` 与 `glm-5.3-flash` 外，其余模型 MaxTokens 均为 100K，`glm-5.3`/`glm-5.3-flash` 不传 MaxTokens。AgentPlan 与 CodingPlan 均提供 `deepseek-v4.1-flash`（1M 上下文、text+image 输入）。
 
 ---
 

@@ -387,6 +387,28 @@ func TestGiteeMoarkDeepSeekV41FlashDefaults(t *testing.T) {
 	}
 }
 
+func TestVolcengineChannelsDeepSeekV41FlashDefaults(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"volcengine", "volcengine-agentplan", "volcengine-codingplan"} {
+		model := s.GetModelConfig(providerName, "deepseek-v4.1-flash")
+		if model == nil {
+			t.Fatalf("%s missing deepseek-v4.1-flash", providerName)
+		}
+		if !model.Reasoning || model.ContextWindow != 1048576 {
+			t.Fatalf("%s deepseek-v4.1-flash = %#v, want reasoning model with 1M context", providerName, model)
+		}
+		wantInput := []string{"text", "image"}
+		if len(model.Input) != len(wantInput) {
+			t.Fatalf("%s deepseek-v4.1-flash input = %#v, want %#v", providerName, model.Input, wantInput)
+		}
+		for i := range wantInput {
+			if model.Input[i] != wantInput[i] {
+				t.Fatalf("%s deepseek-v4.1-flash input = %#v, want %#v", providerName, model.Input, wantInput)
+			}
+		}
+	}
+}
+
 func TestVolcenginePlanModelsUseSharedMaxTokens(t *testing.T) {
 	s := DefaultSettings()
 	for _, providerName := range []string{"volcengine-agentplan", "volcengine-codingplan"} {

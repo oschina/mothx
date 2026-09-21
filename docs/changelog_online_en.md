@@ -2,7 +2,7 @@
 
 This file contains the changes for the **current version only**. The full history of all versions lives in [docs/en/changelog.md](en/changelog.md).
 
-## v1.3.101
+## v1.3.102
 
 ### ✨ New Features
 
@@ -18,6 +18,9 @@ This file contains the changes for the **current version only**. The full histor
 
 - **New Gitee/Moark Model: `deepseek-v4.1-flash`**
   - Added `deepseek-v4.1-flash` to the `gitee` and `moark` providers with a 1M context window and text+image input; no default max_tokens is sent.
+
+- **New Volcengine Model: `deepseek-v4.1-flash`**
+  - Added `deepseek-v4.1-flash` to all three Volcengine providers — `volcengine`, `volcengine-agentplan`, and `volcengine-codingplan` — with a 1M context window, reasoning support, and text+image input. The standard channel sends 262K max_tokens; the two plan channels send 100K.
 
 - **New Agnes AI Providers (International + China)**
   - Added `agnes` (`https://apihub.agnes-ai.com/v1`, `${AGNES_API_KEY}`) and `agnes-cn` (`https://api.agnes-ai.cn/v1`, `${AGNES_CN_API_KEY}`) through a new OpenAI-compatible `agnes` vendor adapter. Both expose `agnes-2.5-flash` (200K context), `agnes-2.5-pro` (256K context), and `agnes-3.0-flash` (512K context, 65535 max output tokens).
