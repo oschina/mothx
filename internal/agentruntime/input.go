@@ -14,9 +14,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // AttachmentKind identifies the media classes supported by Runtime input and

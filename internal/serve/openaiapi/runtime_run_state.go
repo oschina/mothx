@@ -3,7 +3,7 @@ package openaiapi
 import (
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agentruntime"
 )
 
 func webUIActiveRunState(status string) agentruntime.RunState {

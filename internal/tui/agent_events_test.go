@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 func TestFormatTUIAttachmentSummary(t *testing.T) {

@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 	_ "modernc.org/sqlite"
 )
 

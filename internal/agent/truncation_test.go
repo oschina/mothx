@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // TestLoopReportsTruncatedOutputAsIncomplete guards the terminal semantics: a

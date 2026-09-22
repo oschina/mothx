@@ -4,7 +4,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agent"
 )
 
 // CommandRisk is the unattended-execution risk assigned to a bash command.

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // DurableRun is the adapter-neutral lifecycle row for one execution.

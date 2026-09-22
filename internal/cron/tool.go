@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/util"
+	"github.com/oschina/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/util"
 )
 
 // CronTool provides cron job management for the agent.

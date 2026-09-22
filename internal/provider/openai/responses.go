@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/ua"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/ua"
 )
 
 // responsesRequest represents the request body for OpenAI Responses API.
@@ -99,6 +99,12 @@ type responsesContentBlock struct {
 	FileURL  string `json:"file_url,omitempty"`
 	FileData string `json:"file_data,omitempty"`
 	Filename string `json:"filename,omitempty"`
+	// AudioURL/VideoURL follow the Responses media shape used by
+	// Qwen/DashScope-family gateways (input_audio.audio_url + format,
+	// input_video.video_url); both accept data URLs for inline payloads.
+	AudioURL string `json:"audio_url,omitempty"`
+	Format   string `json:"format,omitempty"`
+	VideoURL string `json:"video_url,omitempty"`
 }
 
 type responsesTool struct {
@@ -636,6 +642,14 @@ func (p *Provider) responsesMessageContent(msg provider.Message, textType string
 		case "file":
 			if c.File != nil {
 				blocks = append(blocks, responsesContentBlock{Type: "input_file", FileID: c.File.ID, FileURL: c.File.URL, FileData: c.File.Data, Filename: c.File.Filename})
+			}
+		case "audio":
+			if c.Audio != nil {
+				blocks = append(blocks, responsesContentBlock{Type: "input_audio", AudioURL: mediaSourceURL(c.Audio.MimeType, c.Audio.Data, c.Audio.URL), Format: audioInputFormat(c.Audio)})
+			}
+		case "video":
+			if c.Video != nil {
+				blocks = append(blocks, responsesContentBlock{Type: "input_video", VideoURL: mediaSourceURL(c.Video.MimeType, c.Video.Data, c.Video.URL)})
 			}
 		}
 	}

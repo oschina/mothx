@@ -6,7 +6,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 const (

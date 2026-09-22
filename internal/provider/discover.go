@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // defaultDiscoverTimeout bounds a single model-discovery request.

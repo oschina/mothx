@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // MaintenancePolicy is the resolved intent for Runtime-owned maintenance work.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 type compactRecordingProvider struct {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // Well-known context file names used by various AI coding tools.

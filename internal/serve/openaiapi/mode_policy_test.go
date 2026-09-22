@@ -3,7 +3,7 @@ package openaiapi
 import (
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestBoundChannelSessionAlwaysResolvesYolo(t *testing.T) {

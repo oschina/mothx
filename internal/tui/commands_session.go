@@ -11,12 +11,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/platform"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 type sessionsDialogState struct {

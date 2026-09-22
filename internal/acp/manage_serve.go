@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/serve"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/serve"
 )
 
 // Serve config management is a thin, secret-safe projection of internal/serve.

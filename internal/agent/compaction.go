@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"github.com/startvibecoding/mothx/internal/config"
-	ctxpkg "github.com/startvibecoding/mothx/internal/context"
+	"github.com/oschina/mothx/internal/config"
+	ctxpkg "github.com/oschina/mothx/internal/context"
 )
 
 // CompactionSettingsFromConfig converts the user-facing settings.json

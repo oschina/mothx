@@ -5,16 +5,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/contextfiles"
-	"github.com/startvibecoding/mothx/internal/provider"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/workflow"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/contextfiles"
+	"github.com/oschina/mothx/internal/provider"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/workflow"
 )
 
 // CommandResult holds the output of a slash command.
@@ -519,8 +518,11 @@ func (s *Server) agentForCommandCompaction(sess *APISession) (*agent.Agent, erro
 		return nil, fmt.Errorf("session is unavailable")
 	}
 	if sess.Registry == nil {
-		sess.Registry = tools.NewRegistry(sess.WorkDir, nil)
-		sess.Registry.RegisterDefaults()
+		registry, buildErr := agentruntime.BuildRegistry(sess.WorkDir, nil, s.settings, agentruntime.RegistryPolicy{RegisterDefaults: true})
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		sess.Registry = registry
 	}
 	if sess.Runtime == nil {
 		runtime, err := s.buildSessionRuntimeForCommand(sess)
@@ -565,15 +567,7 @@ func (s *Server) cmdRule(sess *APISession, parts []string) *CommandResult {
 	sess.RuleContent = content
 	if sess.AgentMgr != nil {
 		sess.AgentMgr = s.newAgentManagerForSession(sess)
-		if agentruntime.SubAgentToolsEnabled(sess.Runtime, sess.MultiAgent) && sess.AgentMgr != nil {
-			agent.RegisterSubAgentTools(sess.Registry, sess.AgentMgr)
-		}
-		if sess.DelegateMode && sess.AgentMgr != nil {
-			agent.RegisterDelegateSubAgentTool(sess.Registry, sess.AgentMgr)
-		}
-		if sess.Workflows && sess.AgentMgr != nil {
-			workflow.RegisterTools(sess.Registry, sess.AgentMgr, nil)
-		}
+		synchronizeSessionToolGroups(sess)
 	}
 
 	if written {

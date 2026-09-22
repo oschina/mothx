@@ -2,7 +2,7 @@
 // External Go developers can import this package to create custom Agent implementations
 // or use the Builder to instantiate the built-in Agent.
 //
-// Import path: github.com/startvibecoding/mothx/agent
+// Import path: github.com/oschina/mothx/agent
 package agent
 
 import "context"
@@ -108,12 +108,14 @@ type Message struct {
 
 // ContentBlock represents a typed block within a message.
 type ContentBlock struct {
-	Type         string // "text", "toolCall", "thinking", "image", "file"
+	Type         string // "text", "toolCall", "thinking", "image", "file", "audio", "video"
 	Text         string
 	ToolCall     *ToolCallBlock
 	Thinking     string
 	Signature    string
 	Image        *ImageContent
+	Audio        *AudioContent
+	Video        *VideoContent
 	File         *FileContent
 	CacheControl *CacheControl
 }
@@ -158,6 +160,25 @@ type ImageContent struct {
 	CropY          int
 	CropWidth      int
 	CropHeight     int
+}
+
+// AudioContent represents inline audio input in a content block. Audio input
+// is user-turn only: assistant messages never carry audio blocks.
+type AudioContent struct {
+	MimeType string
+	Format   string
+	Data     string // base64-encoded
+	URL      string
+	Bytes    int
+}
+
+// VideoContent represents inline video input in a content block. Video input
+// is user-turn only: assistant messages never carry video blocks.
+type VideoContent struct {
+	MimeType string
+	Data     string // base64-encoded
+	URL      string
+	Bytes    int
 }
 
 // CacheControl represents cache control metadata on a content block.

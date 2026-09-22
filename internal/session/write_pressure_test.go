@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	database "github.com/startvibecoding/mothx/internal/db"
-	"github.com/startvibecoding/mothx/internal/provider"
+	database "github.com/oschina/mothx/internal/db"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // This file implements the load shapes of

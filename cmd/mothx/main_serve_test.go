@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/startvibecoding/mothx/internal/serve"
+	"github.com/oschina/mothx/internal/serve"
 )
 
 func TestServeFlagsIncludeExtendedExecutionOptions(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/tools"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // TestMemberQuestionWakesLeadAndRendersSteering guards the "members ask the

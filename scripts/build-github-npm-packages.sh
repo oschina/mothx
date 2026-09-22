@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCOPE="${GITHUB_NPM_SCOPE:-}"
 if [[ ! "$SCOPE" =~ ^@[a-z0-9][a-z0-9-]*$ ]]; then
-  echo "GITHUB_NPM_SCOPE must be a GitHub Packages scope such as @startvibecoding" >&2
+  echo "GITHUB_NPM_SCOPE must be a GitHub Packages scope such as @oschina" >&2
   exit 1
 fi
 
@@ -109,7 +109,7 @@ for platform in "${!PLATFORMS[@]}"; do
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/${GITHUB_REPOSITORY:-startvibecoding/mothx}.git"
+    "url": "git+https://github.com/${GITHUB_REPOSITORY:-oschina/mothx}.git"
   }
 }
 EOF
@@ -135,7 +135,7 @@ fs.writeFileSync(packagePath, `${JSON.stringify({
   license: 'MIT',
   repository: {
     type: 'git',
-    url: `git+https://github.com/${process.env.GITHUB_REPOSITORY || 'startvibecoding/mothx'}.git`,
+    url: `git+https://github.com/${process.env.GITHUB_REPOSITORY || 'oschina/mothx'}.git`,
   },
   engines: { node: '>=14' },
 }, null, 2)}\n`);

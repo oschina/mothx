@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	database "github.com/startvibecoding/mothx/internal/db"
-	"github.com/startvibecoding/mothx/internal/platform"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/util"
+	"github.com/oschina/mothx/internal/dao"
+	database "github.com/oschina/mothx/internal/db"
+	"github.com/oschina/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/util"
 )
 
 const CurrentVersion = 3
@@ -1408,6 +1408,18 @@ func cloneContentBlock(block provider.ContentBlock) provider.ContentBlock {
 	if block.Image != nil {
 		image := *block.Image
 		cloned.Image = &image
+	}
+	if block.Audio != nil {
+		audio := *block.Audio
+		cloned.Audio = &audio
+	}
+	if block.Video != nil {
+		video := *block.Video
+		cloned.Video = &video
+	}
+	if block.File != nil {
+		file := *block.File
+		cloned.File = &file
 	}
 	if block.ToolCall != nil {
 		toolCall := *block.ToolCall

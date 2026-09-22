@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/browser"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/browser"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 func TestSessionRuntimeRefreshRejectsUnknownActiveSkillWithoutReplacingContext(t *testing.T) {

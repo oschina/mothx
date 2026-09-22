@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 func TestResolveOrphanedQuestions(t *testing.T) {

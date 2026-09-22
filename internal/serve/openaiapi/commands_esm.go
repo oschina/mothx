@@ -9,7 +9,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/esm"
+	"github.com/oschina/mothx/internal/esm"
 )
 
 // cmdESM implements the /esm slash command with TUI parity. input is the full

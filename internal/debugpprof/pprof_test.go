@@ -10,7 +10,7 @@ import (
 
 	// Register the mothx_sqlite contention metrics in the process expvar map
 	// so the /debug/vars contract can be asserted end to end.
-	_ "github.com/startvibecoding/mothx/internal/db"
+	_ "github.com/oschina/mothx/internal/db"
 )
 
 // TestMuxServesExpvarsWithSQLiteStats pins the observability endpoint: the

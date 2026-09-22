@@ -3,7 +3,7 @@ package serve
 import (
 	"sync"
 
-	"github.com/startvibecoding/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/messaging"
 )
 
 // PlatformSupervisor is the sole owner of live messaging platform instances.

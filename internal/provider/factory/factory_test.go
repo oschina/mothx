@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/provider/anthropic"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider/anthropic"
 )
 
 func TestParseQualifiedModel(t *testing.T) {

@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/session"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // This file hosts the Phase 1 additive extension methods and projections of

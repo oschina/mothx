@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/messaging"
-	"github.com/startvibecoding/mothx/internal/serve/webhook"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/serve/webhook"
 )
 
 // WebhookHandler implements webhook.Handler by spawning agent tasks.

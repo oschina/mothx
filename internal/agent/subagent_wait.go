@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // Bounded wait window for subagent_wait. These are tool ergonomics, not user

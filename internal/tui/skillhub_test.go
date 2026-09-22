@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/skillhub"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/skillhub"
 )
 
 func TestParseSkillHubID(t *testing.T) {

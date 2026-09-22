@@ -13,7 +13,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/startvibecoding/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/messaging"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

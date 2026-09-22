@@ -3,7 +3,7 @@ package channels
 import (
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agentruntime"
 )
 
 func TestChannelDecisionServiceLifecycle(t *testing.T) {

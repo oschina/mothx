@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/esm"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/esm"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestESMCoordinatorStopAllCancelsAndWaits(t *testing.T) {

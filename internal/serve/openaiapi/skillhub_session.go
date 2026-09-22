@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // SkillHubRuntime contains the serve settings needed by marketplace handlers.

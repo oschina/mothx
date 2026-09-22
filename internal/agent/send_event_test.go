@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // TestSendEventStopsWhenRunContextIsDone is the mechanism behind the

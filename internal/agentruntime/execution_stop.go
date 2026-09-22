@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // SessionStopCode is the adapter-neutral outcome of a stop request. Adapters

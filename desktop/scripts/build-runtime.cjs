@@ -60,7 +60,7 @@ const version = resolveVersion({ repoRoot });
 console.log(`Building MothX runtime from current source for ${goos}/${goarch}...`);
 run('go', [
   'build', '-trimpath',
-  '-ldflags', `-s -w -X main.version=${version} -X github.com/startvibecoding/mothx/internal/version.Version=${version} -X github.com/startvibecoding/mothx/internal/ua.Version=${version}`,
+  '-ldflags', `-s -w -X main.version=${version} -X github.com/oschina/mothx/internal/version.Version=${version} -X github.com/oschina/mothx/internal/ua.Version=${version}`,
   '-o', output,
   './cmd/mothx',
 ], repoRoot, { ...process.env, CGO_ENABLED: '0', GOOS: goos, GOARCH: goarch });

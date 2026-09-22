@@ -1,4 +1,4 @@
-module github.com/startvibecoding/mothx
+module github.com/oschina/mothx
 
 go 1.27.0
 

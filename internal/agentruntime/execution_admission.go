@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 var ErrDetachedRemoteExecution = errors.New("session has a recoverable detached remote execution")

@@ -21,7 +21,7 @@ import (
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 
-	"github.com/startvibecoding/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/messaging"
 )
 
 // Bot implements messaging.Platform for Feishu via official SDK WebSocket.

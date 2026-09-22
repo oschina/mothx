@@ -3,10 +3,10 @@ package agent
 import (
 	"context"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	ctxpkg "github.com/startvibecoding/mothx/internal/context"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/tools"
+	agentpkg "github.com/oschina/mothx/agent"
+	ctxpkg "github.com/oschina/mothx/internal/context"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // --- Type conversion helpers ---
@@ -97,6 +97,12 @@ func ContentBlockToPublic(cb provider.ContentBlock) agentpkg.ContentBlock {
 			CropHeight:     cb.Image.CropHeight,
 		}
 	}
+	if cb.Audio != nil {
+		pub.Audio = &agentpkg.AudioContent{MimeType: cb.Audio.MimeType, Format: cb.Audio.Format, Data: cb.Audio.Data, URL: cb.Audio.URL, Bytes: cb.Audio.Bytes}
+	}
+	if cb.Video != nil {
+		pub.Video = &agentpkg.VideoContent{MimeType: cb.Video.MimeType, Data: cb.Video.Data, URL: cb.Video.URL, Bytes: cb.Video.Bytes}
+	}
 	if cb.File != nil {
 		pub.File = &agentpkg.FileContent{ID: cb.File.ID, URL: cb.File.URL, Data: cb.File.Data, Filename: cb.File.Filename, MimeType: cb.File.MimeType, Title: cb.File.Title, Description: cb.File.Description, Size: cb.File.Size}
 	}
@@ -143,6 +149,12 @@ func ContentBlockFromPublic(cb agentpkg.ContentBlock) provider.ContentBlock {
 			CropWidth:      cb.Image.CropWidth,
 			CropHeight:     cb.Image.CropHeight,
 		}
+	}
+	if cb.Audio != nil {
+		internal.Audio = &provider.AudioContent{MimeType: cb.Audio.MimeType, Format: cb.Audio.Format, Data: cb.Audio.Data, URL: cb.Audio.URL, Bytes: cb.Audio.Bytes}
+	}
+	if cb.Video != nil {
+		internal.Video = &provider.VideoContent{MimeType: cb.Video.MimeType, Data: cb.Video.Data, URL: cb.Video.URL, Bytes: cb.Video.Bytes}
 	}
 	if cb.File != nil {
 		internal.File = &provider.FileContent{ID: cb.File.ID, URL: cb.File.URL, Data: cb.File.Data, Filename: cb.File.Filename, MimeType: cb.File.MimeType, Title: cb.File.Title, Description: cb.File.Description, Size: cb.File.Size}

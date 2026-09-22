@@ -13,10 +13,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/skillhub"
-	"github.com/startvibecoding/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/skillhub"
+	"github.com/oschina/mothx/internal/skills"
 )
 
 type manageSkillHubCatalogRequest struct {

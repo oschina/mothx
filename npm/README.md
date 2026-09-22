@@ -75,9 +75,9 @@ Or configure in `~/.mothx/settings.json`:
 
 ## More Information
 
-- **GitHub**: [github.com/startvibecoding/mothx](https://github.com/startvibecoding/mothx)
-- **Gitee (国内)**: [gitee.com/startvibecoding/mothx](https://gitee.com/startvibecoding/mothx)
-- **Documentation**: [docs](https://github.com/startvibecoding/mothx/tree/main/docs)
+- **GitHub**: [github.com/oschina/mothx](https://github.com/oschina/mothx)
+- **Gitee (国内)**: [gitee.com/oschina/mothx](https://gitee.com/oschina/mothx)
+- **Documentation**: [docs](https://github.com/oschina/mothx/tree/main/docs)
 
 ## Uninstall
 

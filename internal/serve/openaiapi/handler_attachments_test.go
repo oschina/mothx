@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	openaiprovider "github.com/startvibecoding/mothx/internal/provider/openai"
+	"github.com/oschina/mothx/internal/provider"
+	openaiprovider "github.com/oschina/mothx/internal/provider/openai"
 )
 
 type testAttachmentResolverProvider struct {

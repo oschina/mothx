@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/startvibecoding/mothx/internal/serve"
+	"github.com/oschina/mothx/internal/serve"
 )
 
 func newServeCommand(flags *cliFlags) *cobra.Command {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // GetDurableRun loads one canonical Run row for inspection by an adapter.

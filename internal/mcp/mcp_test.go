@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/imageproc"
+	"github.com/oschina/mothx/internal/imageproc"
 )
 
 func TestUniqueToolName(t *testing.T) {

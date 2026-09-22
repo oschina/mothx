@@ -11,11 +11,29 @@ import (
 	"sync"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	internalagent "github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/tools"
+	agentpkg "github.com/oschina/mothx/agent"
+	internalagent "github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/tools"
 )
+
+// ToolNames returns the canonical workflow toolset, in registration order.
+// Install and removal paths must derive their lists from here instead of
+// repeating the names.
+func ToolNames() []string {
+	return []string{"workflow_lint", "workflow_run", "workflow_status", "workflow_cancel"}
+}
+
+// RemoveTools removes the canonical workflow toolset from a registry. No-op
+// for tools that were never registered.
+func RemoveTools(registry *tools.Registry) {
+	if registry == nil {
+		return
+	}
+	for _, name := range ToolNames() {
+		registry.Remove(name)
+	}
+}
 
 // RegisterTools registers workflow tools.
 func RegisterTools(registry *tools.Registry, manager *internalagent.AgentManager, store Store) {

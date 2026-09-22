@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	channels "github.com/startvibecoding/mothx/internal/serve/channels"
-	"github.com/startvibecoding/mothx/internal/session"
+	channels "github.com/oschina/mothx/internal/serve/channels"
+	"github.com/oschina/mothx/internal/session"
 )
 
 type lifecycleTestSessions struct {

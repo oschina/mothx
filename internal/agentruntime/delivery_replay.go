@@ -3,7 +3,7 @@ package agentruntime
 import (
 	"encoding/json"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // DeliveryRecord is the protocol-neutral projection of a durable delivery

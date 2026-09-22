@@ -668,5 +668,5 @@ mothx --model deepseek-v4-pro  # 1M context
 
 <p align="center">
   <strong>还有问题？在 GitHub 上提问！</strong><br>
-  <a href="https://gitee.com/startvibecoding/mothx/issues">Gitee Issues</a> · <a href="https://gitee.com/startvibecoding/mothx">Gitee 仓库</a>
+  <a href="https://gitee.com/oschina/mothx/issues">Gitee Issues</a> · <a href="https://gitee.com/oschina/mothx">Gitee 仓库</a>
 </p>

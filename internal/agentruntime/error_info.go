@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // FailureClass identifies the stable, adapter-neutral category of a failed

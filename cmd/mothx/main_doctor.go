@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/startvibecoding/mothx/internal/doctor"
+	"github.com/oschina/mothx/internal/doctor"
 )
 
 func newDoctorCommand() *cobra.Command {

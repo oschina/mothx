@@ -9,19 +9,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/browser"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/contextfiles"
-	"github.com/startvibecoding/mothx/internal/expert"
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/provider"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/workflow"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/browser"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/contextfiles"
+	"github.com/oschina/mothx/internal/expert"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/provider"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/workflow"
 )
 
 // SessionRuntime is the front-end-neutral state required to construct and run
@@ -76,6 +76,10 @@ type SessionRuntime struct {
 	resourceSettings  *config.Settings
 	resourceWorkflows bool
 	resourceBrowser   bool
+	// imageGenerationTool records whether this entry's registry policy exposed
+	// the image-generation tool at build time, so refresh reconciles only its
+	// settings gate.
+	imageGenerationTool bool
 }
 
 // SetExecution attaches the session's canonical execution lifecycle.
@@ -479,7 +483,7 @@ func (r *SessionRuntime) ConfigureCapabilities(sandboxEnabled, browserEnabled, w
 		}
 		r.Registry.SetSandbox(active)
 	}
-	r.synchronizeCoreToolsLocked(browserEnabled)
+	r.synchronizeCoreToolsLocked(browserEnabled, r.resourceSettings)
 	r.LastUsed = time.Now()
 	r.mu.Unlock()
 	return nil
@@ -519,7 +523,7 @@ func (r *SessionRuntime) SetCapabilityOption(id string, enabled bool) error {
 		}
 		r.Registry.SetSandbox(active)
 	}
-	r.synchronizeCoreToolsLocked(browserEnabled)
+	r.synchronizeCoreToolsLocked(browserEnabled, r.resourceSettings)
 	r.LastUsed = time.Now()
 	r.mu.Unlock()
 	if manager != nil {
@@ -952,16 +956,15 @@ func (b Builder) Build(ctx context.Context, opts BuildOptions) (*SessionRuntime,
 	if err := sandboxMgr.SetLevel(b.SandboxLevel); err != nil {
 		return nil, fmt.Errorf("sandbox for work directory: %w", err)
 	}
-	registry := tools.NewRegistry(opts.WorkDir, sandboxMgr.GetActive())
-	registry.RegisterDefaultsWithPlanTool(b.Settings.IsPlanToolEnabled())
-	if b.Settings.IsImageGenerationEnabled() {
-		registry.Register(tools.NewImageGenerationTool(b.Settings))
-	}
-	if skillsMgr != nil {
-		registry.Register(tools.NewSkillRefTool(skillsMgr))
-	}
-	if opts.Browser {
-		browser.RegisterTool(registry)
+	registry, err := BuildRegistry(opts.WorkDir, sandboxMgr, b.Settings, RegistryPolicy{
+		RegisterDefaults: true,
+		EnablePlanTool:   DefaultPlanToolPolicy(b.Settings),
+		SkillsMgr:        skillsMgr,
+		Browser:          opts.Browser,
+		ImageGeneration:  true,
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	resolved, err := resolveManagerSource(opts.Manager, SourceResolutionInput{Requested: opts.Source})
@@ -981,24 +984,25 @@ func (b Builder) Build(ctx context.Context, opts BuildOptions) (*SessionRuntime,
 		}
 	}
 	runtime := &SessionRuntime{
-		ID:                opts.ID,
-		Source:            resolved.Source,
-		EntrySource:       opts.Source,
-		Policy:            PolicyForSource(resolved.Source, ""),
-		WorkDir:           opts.WorkDir,
-		Manager:           opts.Manager,
-		Inputs:            inputs,
-		Attachments:       attachments,
-		Registry:          registry,
-		SandboxMgr:        sandboxMgr,
-		SkillsMgr:         skillsMgr,
-		ExtraContext:      extraContext,
-		RuleContent:       resources.RuleContent,
-		LastUsed:          time.Now(),
-		ArtifactEnabled:   opts.ArtifactEnabled,
-		resourceSettings:  b.Settings,
-		resourceWorkflows: opts.Workflows,
-		resourceBrowser:   opts.Browser,
+		ID:                  opts.ID,
+		Source:              resolved.Source,
+		EntrySource:         opts.Source,
+		Policy:              PolicyForSource(resolved.Source, ""),
+		WorkDir:             opts.WorkDir,
+		Manager:             opts.Manager,
+		Inputs:              inputs,
+		Attachments:         attachments,
+		Registry:            registry,
+		SandboxMgr:          sandboxMgr,
+		SkillsMgr:           skillsMgr,
+		ExtraContext:        extraContext,
+		RuleContent:         resources.RuleContent,
+		LastUsed:            time.Now(),
+		ArtifactEnabled:     opts.ArtifactEnabled,
+		imageGenerationTool: registryExposesImageGeneration(registry),
+		resourceSettings:    b.Settings,
+		resourceWorkflows:   opts.Workflows,
+		resourceBrowser:     opts.Browser,
 	}
 	runtime.Mailbox = agent.NewMemberMailbox()
 	runtime.ExpertCenter = &expert.Center{ProjectDir: opts.WorkDir}
@@ -1106,7 +1110,7 @@ func (r *SessionRuntime) RefreshResources(settings *config.Settings, opts Refres
 	if r.Registry != nil {
 		r.Registry.Register(tools.NewSkillRefTool(skillsMgr))
 	}
-	r.synchronizeCoreToolsLocked(opts.Browser)
+	r.synchronizeCoreToolsLocked(opts.Browser, settings)
 	r.Expert = binding
 	r.SkillsMgr = skillsMgr
 	r.ExtraContext = extraContext + activeContext
@@ -1149,10 +1153,14 @@ func (r *SessionRuntime) SynchronizeCoreTools(browserEnabled bool) {
 	if r.closed {
 		return
 	}
-	r.synchronizeCoreToolsLocked(browserEnabled)
+	r.synchronizeCoreToolsLocked(browserEnabled, r.resourceSettings)
 }
 
-func (r *SessionRuntime) synchronizeCoreToolsLocked(browserEnabled bool) {
+// synchronizeCoreToolsLocked reconciles the conditional core tools whose
+// availability is capability/settings driven. It is the single refresh surface
+// for these tools so build, capability changes, and resource refresh cannot
+// drift apart.
+func (r *SessionRuntime) synchronizeCoreToolsLocked(browserEnabled bool, settings *config.Settings) {
 	if r.Registry == nil {
 		return
 	}
@@ -1160,6 +1168,13 @@ func (r *SessionRuntime) synchronizeCoreToolsLocked(browserEnabled bool) {
 		browser.RegisterTool(r.Registry)
 	} else {
 		browser.RemoveTool(r.Registry)
+	}
+	if r.imageGenerationTool {
+		if settings != nil && settings.IsImageGenerationEnabled() {
+			r.Registry.Register(tools.NewImageGenerationTool(settings))
+		} else {
+			r.Registry.Remove("image_generation")
+		}
 	}
 }
 

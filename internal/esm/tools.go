@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 type sessionIDFunc func() string

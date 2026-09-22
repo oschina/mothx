@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
-	serviceruntime "github.com/startvibecoding/mothx/internal/serve/runtime"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
+	serviceruntime "github.com/oschina/mothx/internal/serve/runtime"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 type backgroundRuntimeProvider struct{ *recordingRuntimeProvider }

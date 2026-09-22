@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -1047,5 +1047,30 @@ func TestAnthropicSamplingParamsPassThrough(t *testing.T) {
 	}
 	if req.TopP == nil || *req.TopP != topP {
 		t.Fatalf("top_p = %#v, want %v", req.TopP, topP)
+	}
+}
+
+func TestConvertMessagesReplacesAudioVideoWithPlaceholder(t *testing.T) {
+	p := &Provider{}
+	msgs := p.convertMessages(provider.ChatParams{Messages: []provider.Message{{
+		Role: "user",
+		Contents: []provider.ContentBlock{
+			{Type: "text", Text: "analyze"},
+			{Type: "audio", Audio: &provider.AudioContent{MimeType: "audio/wav", Data: "YXVkaW8="}},
+			{Type: "video", Video: &provider.VideoContent{MimeType: "video/mp4", Data: "dmlkZW8="}},
+		},
+	}}})
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %#v", msgs)
+	}
+	blocks, ok := msgs[0].Content.([]anthropicContentBlock)
+	if !ok || len(blocks) != 3 {
+		t.Fatalf("content = %#v", msgs[0].Content)
+	}
+	if blocks[1].Type != "text" || !strings.Contains(blocks[1].Text, "[audio unavailable:") {
+		t.Fatalf("audio placeholder = %#v", blocks[1])
+	}
+	if blocks[2].Type != "text" || !strings.Contains(blocks[2].Text, "[video unavailable:") {
+		t.Fatalf("video placeholder = %#v", blocks[2])
 	}
 }

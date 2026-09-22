@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	database "github.com/startvibecoding/mothx/internal/db"
+	"github.com/oschina/mothx/internal/dao"
+	database "github.com/oschina/mothx/internal/db"
 )
 
 const knowledgeBaseDatabaseDirectoryName = "knowledge-bases"

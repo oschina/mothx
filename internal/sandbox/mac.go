@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/startvibecoding/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/platform"
 )
 
 // macSandbox implements sandbox using macOS sandbox-exec (Seatbelt).

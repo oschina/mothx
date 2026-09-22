@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // FormatAttachmentSummary renders provider-neutral attachment references.

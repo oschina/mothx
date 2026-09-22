@@ -12,8 +12,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestStatsCLIPrintsUsageSummary(t *testing.T) {

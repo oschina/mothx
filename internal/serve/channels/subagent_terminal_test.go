@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/messaging"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/serve/hooks"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/serve/hooks"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // blockingChildChannelProvider makes the child agent's provider call block until

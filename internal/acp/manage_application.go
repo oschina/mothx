@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/mcp"
 )
 
 // Application settings are the safe, Runtime-owned subset of settings.json

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/expert"
-	"github.com/startvibecoding/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/expert"
+	"github.com/oschina/mothx/internal/mcp"
 )
 
 // Expert management is an additive ACP projection of internal/expert.Manager.

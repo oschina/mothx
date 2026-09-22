@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/util"
+	"github.com/oschina/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/util"
 )
 
 // toolCallInfo tracks a tool call through its lifecycle.

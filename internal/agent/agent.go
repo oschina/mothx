@@ -11,14 +11,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/config"
-	ctxpkg "github.com/startvibecoding/mothx/internal/context"
-	"github.com/startvibecoding/mothx/internal/imageproc"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/tools"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/config"
+	ctxpkg "github.com/oschina/mothx/internal/context"
+	"github.com/oschina/mothx/internal/imageproc"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // contextKey is an unexported type for context keys defined in this package.
@@ -369,6 +369,18 @@ func cloneContentBlock(block provider.ContentBlock) provider.ContentBlock {
 	if block.Image != nil {
 		image := *block.Image
 		cloned.Image = &image
+	}
+	if block.Audio != nil {
+		audio := *block.Audio
+		cloned.Audio = &audio
+	}
+	if block.Video != nil {
+		video := *block.Video
+		cloned.Video = &video
+	}
+	if block.File != nil {
+		file := *block.File
+		cloned.File = &file
 	}
 	if block.ToolCall != nil {
 		toolCall := *block.ToolCall
@@ -1513,6 +1525,7 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 			ch <- a.agentEndEvent()
 			return
 		}
+		allMessages = a.stripUnsupportedMedia(allMessages)
 
 		// Select cache markers (dual-marker rolling buffer, R3.1-R3.3)
 		markers := selectCacheMarkers(allMessages)
@@ -2819,14 +2832,27 @@ func (a *Agent) claimToolExecution(localTurnID string, tc provider.ToolCallBlock
 	return a.claimToolExecutionWithRecovery(localTurnID, tc, params, false)
 }
 
+// isLocalOnlyToolCall reports whether a tool's execution is a local UI or
+// budget state update that must not be recorded as a durable tool execution.
+func isLocalOnlyToolCall(name string) bool {
+	switch name {
+	case "plan", IterationBudgetToolName:
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *Agent) claimToolExecutionWithRecovery(localTurnID string, tc provider.ToolCallBlock, params map[string]any, allowReadOnlyRecovery bool) (*session.ToolExecutionRecord, *provider.Message, error) {
 	if a.config.Session == nil || localTurnID == "" || tc.ID == "" {
 		return nil, nil, nil
 	}
-	// The plan tool only emits a local UI state update. Persisting its execution
-	// can turn an interrupted Responses run into a permanently stale plan, even
-	// though replaying it has no external side effect.
-	if tc.Name == "plan" {
+	// Local-only tools (plan, extend_budget) record UI or budget state updates
+	// with no external side effect. Persisting their execution can turn an
+	// interrupted Responses run into a permanently stale record even though
+	// replaying them would be harmless, so they never consume a durable tool
+	// execution record.
+	if isLocalOnlyToolCall(tc.Name) {
 		return nil, nil, nil
 	}
 	header := a.config.Session.GetHeader()

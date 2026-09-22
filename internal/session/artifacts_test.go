@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/dao"
 )
 
 func TestListGeneratedArtifactsFiltersStatusAndSessionInCreationOrder(t *testing.T) {

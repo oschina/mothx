@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // RunState is the adapter-neutral lifecycle state of an active execution.

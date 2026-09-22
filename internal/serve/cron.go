@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/cron"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/util"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/cron"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/util"
 )
 
 // cronMaintenancePolicy resolves the Runtime maintenance policy from the current

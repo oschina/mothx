@@ -10,9 +10,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 
-	"github.com/startvibecoding/mothx/internal/esm"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
-	"github.com/startvibecoding/mothx/internal/tui/renderutil"
+	"github.com/oschina/mothx/internal/esm"
+	"github.com/oschina/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/tui/renderutil"
 )
 
 func (a *App) openESMPanel() {

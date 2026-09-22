@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // TestSubAgentToolNamesMatchRegisteredTools pins the canonical sub-agent tool

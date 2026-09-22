@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // deliveryManageFixture builds a fixture server whose negotiated settings point

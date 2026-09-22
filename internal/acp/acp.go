@@ -19,25 +19,24 @@ import (
 	"sync"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/cron"
-	"github.com/startvibecoding/mothx/internal/dao"
-	"github.com/startvibecoding/mothx/internal/debugpprof"
-	"github.com/startvibecoding/mothx/internal/doctor"
-	"github.com/startvibecoding/mothx/internal/esm"
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/provider"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/systeminit"
-	"github.com/startvibecoding/mothx/internal/tools"
-	appversion "github.com/startvibecoding/mothx/internal/version"
-	"github.com/startvibecoding/mothx/internal/workflow"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/cron"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/debugpprof"
+	"github.com/oschina/mothx/internal/doctor"
+	"github.com/oschina/mothx/internal/esm"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/provider"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/systeminit"
+	"github.com/oschina/mothx/internal/tools"
+	appversion "github.com/oschina/mothx/internal/version"
 )
 
 const protocolVersion = 1
@@ -1362,27 +1361,9 @@ func (s *server) newToolRegistry(cwd string, mgr *session.Manager) *tools.Regist
 		EnablePlanTool:   agentruntime.DefaultPlanToolPolicy(s.settings),
 		SkillsMgr:        s.skillsMgr,
 		Browser:          s.browser,
-		Mutators: []agentruntime.RegistryMutator{func(registry *tools.Registry) error {
-			// The interactive question tool is exposed in plan/agent modes (see
-			// Registry.ModeTools). ACP maps it to request_permission.
-			registry.Register(tools.NewQuestionTool(registry))
-			if s.agentMgr != nil {
-				// Team experts receive a session-scoped manager after their Runtime
-				// is attached below. Keep this legacy shared manager for explicit
-				// ACP multi-agent mode only; using it for a team would lose the
-				// session roster and mailbox.
-				if s.multiAgent {
-					agent.RegisterSubAgentTools(registry, s.agentMgr)
-				}
-				if s.delegate {
-					agent.RegisterDelegateSubAgentTool(registry, s.agentMgr)
-				}
-				if s.workflows {
-					workflow.RegisterTools(registry, s.agentMgr, nil)
-				}
-			}
-			return nil
-		}},
+		// The interactive question tool is exposed in plan/agent modes (see
+		// Registry.ModeTools). ACP maps it to request_permission.
+		Question: true,
 	})
 	if err != nil {
 		return nil
@@ -1390,27 +1371,51 @@ func (s *server) newToolRegistry(cwd string, mgr *session.Manager) *tools.Regist
 	return registry
 }
 
-// registerTeamExpertTools installs the team-only manager after the shared
-// SessionRuntime has resolved its persisted expert binding. A process-wide ACP
-// manager cannot own this state: member definitions and completion mailboxes
-// are session resources and must never be shared between ACP sessions.
+// registerTeamExpertTools creates the session-scoped team manager after the
+// shared SessionRuntime has resolved its persisted expert binding and
+// reconciles the manager-backed tool groups through the Runtime-owned
+// installer. It returns only the team manager: an unbound or single-expert
+// session keeps the legacy shared manager out of sessionRuntime.agentMgr.
+// A process-wide ACP manager cannot own team state: member definitions and
+// completion mailboxes are session resources and must never be shared between
+// ACP sessions.
 func (s *server) registerTeamExpertTools(runtime *agentruntime.SessionRuntime, registry *tools.Registry) (*agent.AgentManager, error) {
-	if runtime == nil || registry == nil || !runtime.TeamExpertActive() {
-		return nil, nil
+	if runtime == nil || registry == nil {
+		return nil, fmt.Errorf("session runtime is unavailable")
 	}
-	p, providerName, model, _, _ := runtime.ConfigSnapshot()
-	if p == nil || model == nil {
-		return nil, fmt.Errorf("team expert session provider and model are required")
+	// Team experts receive a session-scoped manager. Keep the legacy shared
+	// manager for explicit ACP multi-agent mode only; using it for a team would
+	// lose the session roster and mailbox.
+	manager := s.agentMgr
+	var teamManager *agent.AgentManager
+	if runtime.TeamExpertActive() {
+		p, providerName, model, _, _ := runtime.ConfigSnapshot()
+		if p == nil || model == nil {
+			return nil, fmt.Errorf("team expert session provider and model are required")
+		}
+		created, err := agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
+			Runtime: runtime, Provider: p, ProviderName: providerName, Model: model,
+			Settings: s.settings, Allow: s.allow, MultiAgentEnabled: true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		teamManager = created
+		manager = created
 	}
-	manager, err := agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
-		Runtime: runtime, Provider: p, ProviderName: providerName, Model: model,
-		Settings: s.settings, Allow: s.allow, MultiAgentEnabled: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	agent.RegisterSubAgentTools(registry, manager)
-	return manager, nil
+	s.syncSessionToolGroups(runtime, registry, manager)
+	return teamManager, nil
+}
+
+// syncSessionToolGroups reconciles the manager-backed tool groups through the
+// Runtime-owned installer. ACP supplies policy and the resolved manager only;
+// install, removal, and manager-swap re-installation semantics stay shared.
+func (s *server) syncSessionToolGroups(runtime *agentruntime.SessionRuntime, registry *tools.Registry, manager *agent.AgentManager) {
+	agentruntime.SynchronizeToolGroups(runtime, registry, agentruntime.ToolGroupPolicy{
+		MultiAgent: s.multiAgent,
+		Delegate:   s.delegate,
+		Workflows:  s.workflows,
+	}, manager)
 }
 
 // refreshSessionExpertTools updates only the adapter projection of the
@@ -1422,23 +1427,12 @@ func (s *server) refreshSessionExpertTools(rt *sessionRuntime) error {
 	if rt == nil || rt.runtime == nil || rt.registry == nil {
 		return fmt.Errorf("session runtime is unavailable")
 	}
-	for _, name := range agent.SubAgentToolNames() {
-		rt.registry.Remove(name)
-	}
 	rt.agentMgr = nil
-	if rt.runtime.TeamExpertActive() {
-		manager, err := s.registerTeamExpertTools(rt.runtime, rt.registry)
-		if err != nil {
-			return err
-		}
-		rt.agentMgr = manager
-		return nil
+	teamManager, err := s.registerTeamExpertTools(rt.runtime, rt.registry)
+	if err != nil {
+		return err
 	}
-	// Preserve the existing ACP --multi-agent behavior for an unbound or
-	// single-expert session after removing a former team manager.
-	if s != nil && s.multiAgent && s.agentMgr != nil {
-		agent.RegisterSubAgentTools(rt.registry, s.agentMgr)
-	}
+	rt.agentMgr = teamManager
 	return nil
 }
 

@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/messaging/wechat"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/messaging/wechat"
 	"golang.org/x/net/html"
 )
 

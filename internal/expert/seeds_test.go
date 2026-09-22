@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/experts"
+	"github.com/oschina/mothx/experts"
 )
 
 func loadSeed(t *testing.T, name string) *Bundle {

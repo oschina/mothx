@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/stats"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/stats"
 )
 
 func newStatsCommand() *cobra.Command {

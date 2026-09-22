@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/sandbox"
 )
 
 // TestToolMetadata tests PromptSnippet, PromptGuidelines, Description for all tools.

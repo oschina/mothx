@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // SteeringMessage injects current ESM instructions into a run without changing

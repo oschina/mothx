@@ -153,7 +153,7 @@ function findBinary() {
   console.error('  npm install -g mothx-installer');
   console.error('');
   console.error('If the problem persists, install via one-line script instead:');
-  console.error('  curl -fsSL https://raw.githubusercontent.com/startvibecoding/mothx/main/install.sh | bash');
+  console.error('  curl -fsSL https://raw.githubusercontent.com/oschina/mothx/main/install.sh | bash');
   process.exit(1);
 }
 

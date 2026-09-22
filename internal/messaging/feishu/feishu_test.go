@@ -8,7 +8,7 @@ import (
 
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 
-	"github.com/startvibecoding/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/messaging"
 )
 
 func feishuString(value string) *string {

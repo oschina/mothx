@@ -18,19 +18,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	browserfeature "github.com/startvibecoding/mothx/internal/browser"
-	"github.com/startvibecoding/mothx/internal/config"
-	ctxpkg "github.com/startvibecoding/mothx/internal/context"
-	"github.com/startvibecoding/mothx/internal/contextfiles"
-	"github.com/startvibecoding/mothx/internal/provider"
-	openaiprovider "github.com/startvibecoding/mothx/internal/provider/openai"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/workflow"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	browserfeature "github.com/oschina/mothx/internal/browser"
+	"github.com/oschina/mothx/internal/config"
+	ctxpkg "github.com/oschina/mothx/internal/context"
+	"github.com/oschina/mothx/internal/contextfiles"
+	"github.com/oschina/mothx/internal/provider"
+	openaiprovider "github.com/oschina/mothx/internal/provider/openai"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/workflow"
 )
 
 type recordingAPIProvider struct {
@@ -4308,5 +4308,38 @@ func TestRunManager_ActiveReturnsNilForNoActiveRun(t *testing.T) {
 	}
 	if run != nil {
 		t.Fatal("Active() should return nil for session with no runs")
+	}
+}
+
+func TestRequestRunInputAudioVideoContentParts(t *testing.T) {
+	var msg RequestMessage
+	body := `{"role":"user","content":[{"type":"text","text":"analyze"},{"type":"input_audio","input_audio":{"data":"data:;base64,YXVkaW8=","format":"wav"}},{"type":"input_audio","input_audio":{"data":"YnJhdy8=","format":"mp3"}},{"type":"video_url","video_url":{"url":"data:video/mp4;base64,dmlkZW8="}}]}`
+	if err := json.Unmarshal([]byte(body), &msg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	input, ingresses, err := requestRunInput(msg)
+	if err != nil {
+		t.Fatalf("requestRunInput: %v", err)
+	}
+	if input.Text != "analyze" || len(ingresses) != 3 {
+		t.Fatalf("input = %#v, ingresses = %#v", input, ingresses)
+	}
+	if ingresses[0].Kind != agentruntime.AttachmentAudio || ingresses[0].MediaTypeHint != "audio/wav" {
+		t.Fatalf("data URL audio ingress = %#v", ingresses[0])
+	}
+	if ingresses[1].Kind != agentruntime.AttachmentAudio || ingresses[1].MediaTypeHint != "audio/mpeg" {
+		t.Fatalf("raw base64 audio ingress = %#v", ingresses[1])
+	}
+	if ingresses[2].Kind != agentruntime.AttachmentVideo || ingresses[2].MediaTypeHint != "video/mp4" {
+		t.Fatalf("video ingress = %#v", ingresses[2])
+	}
+
+	var remote RequestMessage
+	remoteBody := `{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"https://example.com/a.wav","format":"wav"}}]}`
+	if err := json.Unmarshal([]byte(remoteBody), &remote); err != nil {
+		t.Fatalf("unmarshal remote: %v", err)
+	}
+	if _, _, err := requestRunInput(remote); err == nil {
+		t.Fatal("remote media references must be rejected")
 	}
 }

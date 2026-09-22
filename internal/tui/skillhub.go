@@ -12,11 +12,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/skillhub"
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/tui/renderutil"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/skillhub"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/tui/renderutil"
 )
 
 type skillHubView int

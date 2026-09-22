@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // HandleRunAPI exposes durable run inspection, cancellation, and linked retry.

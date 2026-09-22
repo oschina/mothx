@@ -9,11 +9,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	internalagent "github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/esm"
-	"github.com/startvibecoding/mothx/internal/provider"
+	agentpkg "github.com/oschina/mothx/agent"
+	internalagent "github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/esm"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 const (

@@ -13,13 +13,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/platform"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
-	"github.com/startvibecoding/mothx/internal/serve"
-	"github.com/startvibecoding/mothx/internal/skills"
-	appversion "github.com/startvibecoding/mothx/internal/version"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/platform"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/serve"
+	"github.com/oschina/mothx/internal/skills"
+	appversion "github.com/oschina/mothx/internal/version"
 )
 
 const (

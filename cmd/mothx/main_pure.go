@@ -11,10 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/platform"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // resetSessionsDatabase is the reset entry point. It is a variable only so the

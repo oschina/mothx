@@ -9,24 +9,77 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	ctxpkg "github.com/startvibecoding/mothx/internal/context"
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/config"
+	ctxpkg "github.com/oschina/mothx/internal/context"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 const defaultAutoCompactionThreshold = 0.80
 
 // supportsImages checks if the model supports image input.
 func (a *Agent) supportsImages() bool {
+	return a.supportsInput("image")
+}
+
+// supportsInput reports whether the selected model declares support for one
+// input modality ("image", "audio", "video"). Modality resolution goes through
+// provider.Model.SupportsInput so Agent Core and the Runtime input pipeline
+// share one capability resolver.
+func (a *Agent) supportsInput(kind string) bool {
 	if a.config.Model == nil {
 		return false
 	}
-	for _, input := range a.config.Model.Input {
-		if input == "image" {
-			return true
+	return a.config.Model.SupportsInput(kind)
+}
+
+// mediaBlockKind returns the input modality of an audio/video content block and
+// an empty string for every other block type.
+func mediaBlockKind(block provider.ContentBlock) string {
+	switch {
+	case block.Type == "audio" || block.Audio != nil:
+		return "audio"
+	case block.Type == "video" || block.Video != nil:
+		return "video"
+	}
+	return ""
+}
+
+const unsupportedMediaTemplate = "[%s unavailable: the selected model does not support %s input; the original file remains available in the project workspace]"
+
+// stripUnsupportedMedia rewrites audio/video content blocks the selected model
+// cannot accept into explicit placeholder text before the request crosses the
+// provider boundary, for example after a mid-session model switch. The rewrite
+// is request-local: persisted history keeps the original blocks so a capable
+// model restores them. Nothing is silently dropped — the placeholder names the
+// modality and the reason.
+func (a *Agent) stripUnsupportedMedia(messages []provider.Message) []provider.Message {
+	rewritten := false
+	out := make([]provider.Message, len(messages))
+	for i, msg := range messages {
+		out[i] = msg
+		if len(msg.Contents) == 0 {
+			continue
+		}
+		blocks := make([]provider.ContentBlock, 0, len(msg.Contents))
+		changed := false
+		for _, block := range msg.Contents {
+			kind := mediaBlockKind(block)
+			if kind == "" || a.supportsInput(kind) {
+				blocks = append(blocks, block)
+				continue
+			}
+			blocks = append(blocks, provider.ContentBlock{Type: "text", Text: fmt.Sprintf(unsupportedMediaTemplate, kind, kind)})
+			changed = true
+		}
+		if changed {
+			out[i].Contents = blocks
+			rewritten = true
 		}
 	}
-	return false
+	if !rewritten {
+		return messages
+	}
+	return out
 }
 
 const unsupportedImageToolResultMessage = "tool result contains image content, but the selected model does not support image input; select a vision-capable model to continue"

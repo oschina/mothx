@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/startvibecoding/mothx/internal/tui/i18n"
+import "github.com/oschina/mothx/internal/tui/i18n"
 
 func modelGroupMessageID(id string) i18n.MessageID {
 	switch id {

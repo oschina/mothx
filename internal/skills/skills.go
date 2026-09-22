@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // SkillReference represents a reference file within a skill.

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/startvibecoding/mothx/agent"
-	_ "github.com/startvibecoding/mothx/bootstrap" // Register internal agent builder and provider resolution
+	"github.com/oschina/mothx/agent"
+	_ "github.com/oschina/mothx/bootstrap" // Register internal agent builder and provider resolution
 )
 
 // CustomProvider implements the public agent.Provider interface.

@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/serve/channels"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/serve/channels"
+	"github.com/oschina/mothx/internal/session"
 )
 
 type lifecycleConflict struct {

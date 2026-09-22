@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/platform"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/util"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/util"
 )
 
 // limitedBuffer wraps bytes.Buffer with a max size limit.

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // ClientsForSettings constructs the enabled built-in market clients from settings.

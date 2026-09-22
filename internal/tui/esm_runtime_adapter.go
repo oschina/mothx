@@ -3,8 +3,8 @@ package tui
 import (
 	"context"
 
-	internalagent "github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/esm"
+	internalagent "github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/esm"
 )
 
 // esmRuntimeAdapter is the TUI host adapter for the ESM core. It owns only

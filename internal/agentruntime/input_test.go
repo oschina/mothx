@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 func TestInputMaterializerWritesProjectResourceAndManifest(t *testing.T) {
@@ -558,4 +558,197 @@ func onePixelPNG(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// wavPayload returns a minimal RIFF/WAVE header that content sniffing detects
+// as audio/wave.
+func wavPayload() []byte { return []byte("RIFF\x24\x00\x00\x00WAVEfmt ") }
+
+// mp4Payload returns a minimal MP4 signature for content sniffing.
+func mp4Payload() []byte { return []byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00") }
+
+func prepareTestMedia(t *testing.T, materializer *InputMaterializer, sessionID, runID, origin string, kind AttachmentKind, filename, hint string, payload []byte) InputResource {
+	t.Helper()
+	record, err := materializer.Prepare(t.Context(), sessionID, runID, InputIngress{
+		Origin: origin, ItemIndex: 0, Kind: kind, FilenameHint: filename, MediaTypeHint: hint,
+		Open: func(context.Context) (InputStream, error) {
+			return InputStream{Reader: io.NopCloser(bytes.NewReader(payload)), MediaType: hint}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Prepare %s: %v", kind, err)
+	}
+	return record
+}
+
+func TestBuildUserMessageInlinesAudioVideoForCapableModel(t *testing.T) {
+	root, workDir, mgr := inputTestSession(t)
+	materializer, err := NewInputMaterializer(root, workDir, DefaultInputPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := mgr.GetHeader().ID
+	audio := prepareTestMedia(t, materializer, sessionID, "run-media", "cli", AttachmentAudio, "clip.bin", "audio/wav", wavPayload())
+	video := prepareTestMedia(t, materializer, sessionID, "run-media", "cli", AttachmentVideo, "scene.bin", "video/mp4", mp4Payload())
+	runtime := &SessionRuntime{
+		ID: sessionID, WorkDir: workDir, Inputs: materializer,
+		Model: &provider.Model{ID: "omni", Input: []string{"text", "image", "audio", "video"}},
+	}
+	msg, err := runtime.BuildUserMessage(t.Context(), InputSubmission{Text: "analyze", Resources: []PreparedInput{audio.Prepared(), video.Prepared()}})
+	if err != nil {
+		t.Fatalf("BuildUserMessage: %v", err)
+	}
+	if len(msg.Contents) != 3 || msg.Contents[0].Type != "text" || msg.Contents[1].Type != "audio" || msg.Contents[2].Type != "video" {
+		t.Fatalf("message contents = %#v, want text+audio+video blocks", msg.Contents)
+	}
+	audioBlock := msg.Contents[1].Audio
+	if audioBlock == nil || audioBlock.MimeType != "audio/wave" || audioBlock.Format != "wav" {
+		t.Fatalf("audio block = %#v", audioBlock)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioBlock.Data)
+	if err != nil || !bytes.Equal(decoded, wavPayload()) {
+		t.Fatalf("audio payload = %q, %v", decoded, err)
+	}
+	videoBlock := msg.Contents[2].Video
+	if videoBlock == nil || videoBlock.MimeType != "video/mp4" {
+		t.Fatalf("video block = %#v", videoBlock)
+	}
+	if !strings.Contains(msg.Content, "delivered: inline audio content attached") ||
+		!strings.Contains(msg.Content, "delivered: inline video content attached") ||
+		!strings.Contains(msg.Content, audio.RelativePath) {
+		t.Fatalf("manifest = %q", msg.Content)
+	}
+}
+
+func TestBuildUserMessageKeepsMediaPathOnlyForIncapableModel(t *testing.T) {
+	root, workDir, mgr := inputTestSession(t)
+	materializer, err := NewInputMaterializer(root, workDir, DefaultInputPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := mgr.GetHeader().ID
+	audio := prepareTestMedia(t, materializer, sessionID, "run-media", "webui", AttachmentAudio, "clip.bin", "audio/wav", wavPayload())
+	for _, model := range []*provider.Model{{ID: "text-only", Input: []string{"text"}}, nil} {
+		runtime := &SessionRuntime{ID: sessionID, WorkDir: workDir, Inputs: materializer, Model: model}
+		msg, err := runtime.BuildUserMessage(t.Context(), InputSubmission{Resources: []PreparedInput{audio.Prepared()}})
+		if err != nil {
+			t.Fatalf("BuildUserMessage: %v", err)
+		}
+		if len(msg.Contents) != 0 {
+			t.Fatalf("message contents = %#v, want path-only manifest", msg.Contents)
+		}
+		if !strings.Contains(msg.Content, "the selected model does not support audio input") || !strings.Contains(msg.Content, audio.RelativePath) {
+			t.Fatalf("manifest = %q", msg.Content)
+		}
+	}
+}
+
+func TestBuildUserMessageSkipsInlineMediaOverLimit(t *testing.T) {
+	root, workDir, mgr := inputTestSession(t)
+	policy := DefaultInputPolicy()
+	policy.MaxInlineMediaBytes = 4
+	materializer, err := NewInputMaterializer(root, workDir, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := mgr.GetHeader().ID
+	audio := prepareTestMedia(t, materializer, sessionID, "run-media", "cli", AttachmentAudio, "clip.bin", "audio/wav", wavPayload())
+	runtime := &SessionRuntime{
+		ID: sessionID, WorkDir: workDir, Inputs: materializer,
+		Model: &provider.Model{ID: "omni", Input: []string{"text", "audio"}},
+	}
+	msg, err := runtime.BuildUserMessage(t.Context(), InputSubmission{Resources: []PreparedInput{audio.Prepared()}})
+	if err != nil {
+		t.Fatalf("BuildUserMessage: %v", err)
+	}
+	if len(msg.Contents) != 0 {
+		t.Fatalf("message contents = %#v, want path-only manifest above the inline limit", msg.Contents)
+	}
+	if !strings.Contains(msg.Content, "above the 4-byte inline limit") {
+		t.Fatalf("manifest = %q", msg.Content)
+	}
+}
+
+func TestInputKindNormalizationAndMediaValidation(t *testing.T) {
+	root, workDir, mgr := inputTestSession(t)
+	materializer, err := NewInputMaterializer(root, workDir, DefaultInputPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := mgr.GetHeader().ID
+
+	// A generic file input carrying an audio payload is normalized to the
+	// canonical media kind so every adapter shares one intake rule.
+	record := prepareTestMedia(t, materializer, sessionID, "run-kind", "webui", AttachmentFile, "voice-note.bin", "", wavPayload())
+	if record.Kind != AttachmentAudio || record.MediaType != "audio/wave" {
+		t.Fatalf("normalized record = %#v, want audio kind", record)
+	}
+
+	// Explicitly declared media kinds must carry a matching media type.
+	_, err = materializer.Prepare(t.Context(), sessionID, "run-kind", InputIngress{
+		Origin: "acp", Kind: AttachmentAudio, FilenameHint: "notes.txt",
+		Open: func(context.Context) (InputStream, error) {
+			return InputStream{Reader: io.NopCloser(strings.NewReader("plain text"))}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "audio input has detected media type") {
+		t.Fatalf("Prepare mismatched audio = %v, want media type rejection", err)
+	}
+}
+
+// TestInputMediaContractAcrossEntryPoints proves the five user-facing entries
+// (TUI, CLI, WebUI/API, ACP, Channel) converge on one canonical Runtime
+// outcome: adapters differ only in origin metadata and transport decoding,
+// while resource records and provider media blocks stay identical.
+func TestInputMediaContractAcrossEntryPoints(t *testing.T) {
+	entries := []struct{ name, origin string }{
+		{"tui", "tui"},
+		{"cli", "cli"},
+		{"webui-api", "api:chat-completions"},
+		{"acp", "acp"},
+		{"channel", "channel:wechat"},
+	}
+	type outcome struct {
+		kind      AttachmentKind
+		mediaType string
+		bytes     int64
+		blockType string
+		format    string
+		data      string
+	}
+	var want *outcome
+	for _, entry := range entries {
+		t.Run(entry.name, func(t *testing.T) {
+			root, workDir, mgr := inputTestSession(t)
+			materializer, err := NewInputMaterializer(root, workDir, DefaultInputPolicy())
+			if err != nil {
+				t.Fatal(err)
+			}
+			sessionID := mgr.GetHeader().ID
+			record := prepareTestMedia(t, materializer, sessionID, "run-contract", entry.origin, AttachmentAudio, "clip.bin", "audio/wav", wavPayload())
+			runtime := &SessionRuntime{
+				ID: sessionID, WorkDir: workDir, Inputs: materializer,
+				Model: &provider.Model{ID: "omni", Input: []string{"text", "audio"}},
+			}
+			msg, err := runtime.BuildUserMessage(t.Context(), InputSubmission{Text: "transcribe", Resources: []PreparedInput{record.Prepared()}})
+			if err != nil {
+				t.Fatalf("BuildUserMessage: %v", err)
+			}
+			if len(msg.Contents) != 2 || msg.Contents[1].Type != "audio" || msg.Contents[1].Audio == nil {
+				t.Fatalf("message contents = %#v, want text+audio blocks", msg.Contents)
+			}
+			block := msg.Contents[1].Audio
+			got := outcome{
+				kind: record.Kind, mediaType: record.MediaType, bytes: record.Bytes,
+				blockType: msg.Contents[1].Type, format: block.Format, data: block.Data,
+			}
+			if want == nil {
+				want = &got
+				return
+			}
+			if got != *want {
+				t.Fatalf("entry outcome = %#v, want %#v", got, *want)
+			}
+		})
+	}
 }

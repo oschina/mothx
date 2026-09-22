@@ -3,8 +3,8 @@ package session
 import (
 	"context"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	database "github.com/startvibecoding/mothx/internal/db"
+	"github.com/oschina/mothx/internal/dao"
+	database "github.com/oschina/mothx/internal/db"
 )
 
 // OpenBunDatabase returns the process-wide Bun connection for path. New data

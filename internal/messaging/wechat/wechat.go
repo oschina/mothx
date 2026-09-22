@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/startvibecoding/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/messaging"
 )
 
 // Bot implements messaging.Platform for WeChat via the iLink protocol.

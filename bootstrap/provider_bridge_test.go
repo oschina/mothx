@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/agent"
-	internalprovider "github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/agent"
+	internalprovider "github.com/oschina/mothx/internal/provider"
 )
 
 type modelCaptureInternalProvider struct {

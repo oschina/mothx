@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/ua"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/ua"
 	"golang.org/x/mod/semver"
 )
 

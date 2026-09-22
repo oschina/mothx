@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // SessionExecutionState is the adapter-neutral ownership state of a Session.

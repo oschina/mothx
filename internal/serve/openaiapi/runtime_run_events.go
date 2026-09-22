@@ -1,8 +1,8 @@
 package openaiapi
 
 import (
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // runtimeRunEventSink persists canonical events and mirrors them to WebUI

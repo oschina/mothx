@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // Process-level wire coverage of the Phase 3 management plane (§6.3): every

@@ -8,7 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 // --- Model group constants ---

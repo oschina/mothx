@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/dao"
 )
 
 const currentSchemaVersion = 43

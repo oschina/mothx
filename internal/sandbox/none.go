@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/platform"
 )
 
 // NoneSandbox executes commands without any sandbox restrictions.

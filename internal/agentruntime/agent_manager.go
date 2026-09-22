@@ -3,10 +3,10 @@ package agentruntime
 import (
 	"fmt"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // AgentManagerOptions binds provider-specific execution dependencies to a

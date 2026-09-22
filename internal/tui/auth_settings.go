@@ -3,8 +3,8 @@ package tui
 import (
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 // openSettingsDialog handles the /settings command.

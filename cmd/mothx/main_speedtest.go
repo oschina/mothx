@@ -17,9 +17,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
 )
 
 const defaultSpeedtestPrompt = "Reply with exactly 120 English words about terminal software performance. Do not use markdown, lists, or code."

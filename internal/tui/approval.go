@@ -8,11 +8,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
-	"github.com/startvibecoding/mothx/internal/tui/renderutil"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/tui/renderutil"
 )
 
 type approvalAction int

@@ -1,6 +1,6 @@
 package openaiapi
 
-import "github.com/startvibecoding/mothx/internal/agentruntime"
+import "github.com/oschina/mothx/internal/agentruntime"
 
 // pendingDecisionIDsForRun returns the Runtime-owned pending decision identity
 // for one run. Payload maps remain the compatibility source for protocol data;

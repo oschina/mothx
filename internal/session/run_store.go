@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // nonTerminalSessionRunStatusList is the single source of truth for durable

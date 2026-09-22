@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestFindIdempotentRunUsesCanonicalStartedEvent(t *testing.T) {

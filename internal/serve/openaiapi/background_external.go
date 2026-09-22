@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/provider"
-	serviceruntime "github.com/startvibecoding/mothx/internal/serve/runtime"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/provider"
+	serviceruntime "github.com/oschina/mothx/internal/serve/runtime"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // SubmitExternalResponsesBackground hands an external runtime message to the

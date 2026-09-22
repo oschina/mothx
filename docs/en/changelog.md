@@ -2,7 +2,18 @@
 
 ## v1.3.102
 
+### 💥 Breaking Changes
+
+- **Repository Moved to the `oschina` Organization**
+  - The project moved from `github.com/startvibecoding/mothx` to `github.com/oschina/mothx`. Go importers must update the module path and their imports (`github.com/oschina/mothx/...`); `go install github.com/oschina/mothx/cmd/mothx@latest` replaces the previous install path.
+  - Documentation, install snippets, the container image (`ghcr.io/oschina/mothx`), badges, the Gitee mirror (`gitee.com/oschina/mothx`), and installer metadata now point at the new organization. The `mothx`/`vibecoding` commands and the npm/PyPI package names are unchanged, so existing installs keep working.
+
 ### ✨ New Features
+
+- **Native Audio/Video Input for Multimodal Models**
+  - Models that declare `audio`/`video` input (for example `qwen3.8-omni-flash`) now receive attached audio and video files as native provider media content — OpenAI-compatible `input_audio`/`video_url` for chat (and `input_audio`/`input_video` for Responses), `inlineData` for Gemini — instead of workspace paths only. TUI, CLI, WebUI/API, ACP, and WeChat/Feishu share the same Runtime intake and conversion path; only transport decoding differs per adapter.
+  - Audio/video intake is normalized in the Runtime (generic file uploads carrying `audio/*` or `video/*` payloads become media inputs), validated against their declared kind, and inlined up to a 7MB per-file limit; larger recordings stay workspace files with an explicit manifest note. Models without audio/video support keep the path-only manifest, and a mid-session switch to a text-only model replaces unsupported media blocks with a visible placeholder instead of failing the request.
+  - The Serve chat-completions API accepts `input_audio` (raw base64 or data URL, with `format`) and `video_url` (data URL) content parts; remote media URLs are rejected and never fetched. Assistant messages remain text-only; audio output is not part of this change.
 
 - **Serve: Placeholder API Token Warnings**
   - `mothx serve init-config` ships a well-known template token, which is equivalent to publishing the API key once auth is enabled — and nothing said so. The token is now a single named constant (`serve.PlaceholderAuthToken`) with explicit detection (`IsPlaceholderAuthToken`/`UsesPlaceholderAuthToken`), and a replacement warning is printed wherever the template is created (`mothx serve init-config` and the `--init-serve` CLI path) and again on `mothx serve` startup while `api.auth.enabled` is true and the token is still in place.
@@ -51,6 +62,15 @@
   - The new optional `maintenance` section of `settings.json` controls it: `reclaimAttachmentStorage` (default `true`, so existing files keep the new behavior) and `storageReconcileSchedule` (default `@daily`, validated by the scheduler, falling back to the default with a log line when unparseable). Disabling removes the scheduled job at the next scheduler start and makes a stale job row refuse to delete anything; changing the cadence keeps the job's run counters and status.
 
 ### 🐛 Bug Fixes
+
+- **Runtime Lease Reclamation Requires a Live Reference Check**
+  - A same-process reclamation could take a lease away from a session that still held a live execution reference merely because the `owner_instance_id` matched, which could fence away an execution that was still running. Reclamation now proves that no live execution reference remains (`hasLiveRuntimeLease`) before it may reclaim, so a retained reference is never displaced.
+
+- **Knowledge-Base Snapshots Publish Only Against the Configuration They Indexed**
+  - A knowledge base could be reconfigured while an indexer was running, letting a graph built from the old configuration become the active snapshot. The knowledge database schema now carries a `config_revision`; base updates bump it and snapshot activation compares the revision the indexer loaded (`BaseConfigRevision`), so a stale indexer fails with `ErrKnowledgeBaseConfigurationChanged` instead of publishing a graph that no longer matches the base.
+
+- **Fork and Project Metadata Are Written Atomically**
+  - A fork's idempotency fingerprint now includes a non-nil expert override, so re-forking with a different expert is no longer deduplicated into the first request, and the fork transaction helpers propagate the caller's context. Project session metadata is upserted in one transaction guarded by reference `EXISTS` checks with `DeleteWithMetadata` realizing `ON DELETE SET NULL`, and session binding/cwd changes hold the write lock across the database operation instead of rolling back in memory.
 
 - **Provider Stream Timeouts Recover Consistently Across Runs**
   - A caller deadline, including one applied around an ESM role, could be surfaced as a provider response timeout and misleadingly claim that it had retried zero times. Caller cancellation and deadlines now remain cancelled runs, never provider transport failures.
@@ -131,6 +151,15 @@
   - A malformed call is no longer replayed as a guessed side effect: the Agent records it as a failed tool result and injects a transient recovery notice so the next provider request reconstructs valid JSON arguments instead of assuming any side effect occurred. `marshalSessionEntry` retries a failed marshal after the repair as a last line of defense.
 
 ### 🔧 Improvements
+
+- **Model Presets Seed New Models Consistently**
+  - `config.PresetModelConfig` is now the single source of draft defaults for a model ID: the current provider's configuration wins, then an exact match elsewhere in the built-in catalog, then safe generic defaults (256K context, reasoning on, text input). Model discovery, the provider factory, the TUI auth settings, the WebUI provider editor, the Serve model catalog, and the ACP provider catalog all seed a newly entered model the same way, and the generic defaults are projected to clients through `modelDefaults` so a client editor starts from the same values.
+
+- **Tool Registration Reconciled Through the Shared Runtime**
+  - Installing, removing, and re-pointing the manager-backed tool groups (sub-agent tools, `delegate_subagent`, workflow tools) is now owned by `agentruntime.SynchronizeToolGroups`: TUI, CLI/WebUI (serve), channels, and ACP only pass policy and the current AgentManager handle. Manager swaps re-install the groups so tool instances always reference the current manager, per-tool switches survive re-registration, and a bound expert team keeps forcing the full canonical sub-agent toolset.
+  - Registry assembly has one implementation: `agentruntime.BuildRegistry` now owns the plan/skill_ref/browser/image_generation/question tool policy, `Builder.Build` routes through it, and resource refresh reconciles the image-generation settings gate. ACP sessions therefore receive the `image_generation` tool when the setting is enabled (previously only TUI/WebUI/serve sessions had it).
+  - Canonical tool names stop being hand-copied: `workflow.ToolNames()`/`workflow.RemoveTools` and one shared built-in factory list replace the duplicated registration/removal lists. A new `internal/architecture` guard rejects direct `tools.NewRegistry`/`NewRegistryWithConfig` calls outside the construction owners and one documented TUI `/btw` bridge.
+  - `extend_budget` joins `plan` as a local-only tool: its calls no longer consume durable tool-execution records, matching their no-side-effect semantics. Content-block cloning now covers `FileContent` alongside image/audio/video everywhere.
 
 - **SQLite: Three-Phase Write-Pressure Reduction for the Session Database**
   - The connection durability policy moves from `synchronous(FULL)` to the WAL-recommended `synchronous(NORMAL)`: a commit no longer fsyncs while holding the single writer lock (the fsync moves to checkpoint time), so writer-lock occupancy across processes sharing one session directory shrinks from fsync scale to page-cache scale, largely eliminating the recorded "another process keeps committing until begin exceeds busy_timeout and reports database is locked" scenario. Process crashes still lose nothing; an OS crash or power loss can roll back the seconds of commits since the last checkpoint (the database stays consistent, and a missing run terminal state converges through the existing lease-expiry → orphan → bounded-recovery path). `MOTHX_SQLITE_SYNCHRONOUS=FULL` restores the legacy durability per process, and mixed old/new processes sharing one database file is safe.
@@ -1827,7 +1856,7 @@
   - Added `ExternalToolResult` (text/error + optional rich `Contents` blocks) and the optional `ExternalToolPromptInfo` interface for contributing system-prompt hints (`PromptSnippet`, `PromptGuidelines`).
   - Added `Builder.WithExternalTools(...)` to register custom tools and `Builder.WithoutBuiltinTools()` to disable all built-in tools, enabling an agent that may only use host-provided tools.
   - External tools are wired through the internal factory via an `externalToolAdapter`, and the internal package now builds from public `Builder` config through `CreateFromPublicOptions`.
-  - Added a `bootstrap` package: external modules blank-import `github.com/startvibecoding/mothx/bootstrap` once to register the internal builder and provider resolution hooks (since internal packages cannot be imported directly).
+  - Added a `bootstrap` package: external modules blank-import `github.com/oschina/mothx/bootstrap` once to register the internal builder and provider resolution hooks (since internal packages cannot be imported directly).
 
 ### 💅 Improvements
 
@@ -3651,7 +3680,7 @@
   - Platform-specific sandbox implementations selected automatically
 
 - **Repository Rename**
-  - Module path renamed to `github.com/startvibecoding/mothx`
+  - Module path renamed to `github.com/oschina/mothx`
   - All imports, documentation, and scripts updated accordingly
 
 ### 🛠 Improvements
@@ -3817,4 +3846,4 @@
 
 ---
 
-**Full Changelog**: https://github.com/startvibecoding/mothx/compare/v0.1.26...v0.1.27
+**Full Changelog**: https://github.com/oschina/mothx/compare/v0.1.26...v0.1.27

@@ -3,8 +3,8 @@ package tui
 import (
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/config"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
 )
 
 // factoryModelIDs returns the model IDs a factory-created provider exposes —

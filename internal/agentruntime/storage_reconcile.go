@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // artifactStorageDirectoryName is the Runtime-private subtree acceptArtifact

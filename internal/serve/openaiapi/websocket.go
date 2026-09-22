@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/session"
 	"golang.org/x/net/websocket"
 )
 

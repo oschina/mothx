@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // normalizeSessionEntry repairs provider messages at the persistence boundary.

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/messaging"
-	"github.com/startvibecoding/mothx/internal/serve/webhook"
+	"github.com/oschina/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/serve/webhook"
 )
 
 func TestWebhookHandlerRequiresMultiAgent(t *testing.T) {

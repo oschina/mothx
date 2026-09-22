@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // RunEvent is the front-end-neutral durable representation of a run event.

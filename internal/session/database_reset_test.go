@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 func TestResetDatabaseCreatesFreshDatabaseWhenAbsent(t *testing.T) {

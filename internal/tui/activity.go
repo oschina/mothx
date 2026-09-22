@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 const maxActivityLines = 200

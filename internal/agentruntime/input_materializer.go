@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -21,9 +22,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
 	_ "golang.org/x/image/webp"
 )
 
@@ -121,11 +122,16 @@ type InputPolicy struct {
 	MaxImageBytes  int64
 	MaxFileBytes   int64
 	MaxImagePixels int64
-	DraftMaxAge    time.Duration
+	// MaxInlineMediaBytes caps the audio/video payload BuildUserMessage may
+	// inline into a provider request. Larger media stay workspace files with a
+	// manifest note because OpenAI-compatible base64 media inputs are limited
+	// (Qwen-Omni accepts at most a 10MB base64 payload).
+	MaxInlineMediaBytes int64
+	DraftMaxAge         time.Duration
 }
 
 func DefaultInputPolicy() InputPolicy {
-	return InputPolicy{MaxImageBytes: 20 << 20, MaxFileBytes: 50 << 20, MaxImagePixels: 40_000_000, DraftMaxAge: 24 * time.Hour}
+	return InputPolicy{MaxImageBytes: 20 << 20, MaxFileBytes: 50 << 20, MaxImagePixels: 40_000_000, MaxInlineMediaBytes: 7 << 20, DraftMaxAge: 24 * time.Hour}
 }
 
 // InputMaterializer owns project-relative input files and their session-backed
@@ -147,6 +153,9 @@ func NewInputMaterializer(sessionDir, workDir string, policy InputPolicy) (*Inpu
 	}
 	if policy.MaxImageBytes <= 0 || policy.MaxFileBytes <= 0 || policy.MaxImagePixels <= 0 {
 		return nil, fmt.Errorf("input resource limits must be positive")
+	}
+	if policy.MaxInlineMediaBytes <= 0 {
+		policy.MaxInlineMediaBytes = DefaultInputPolicy().MaxInlineMediaBytes
 	}
 	if policy.DraftMaxAge <= 0 {
 		policy.DraftMaxAge = 24 * time.Hour
@@ -271,6 +280,14 @@ func (m *InputMaterializer) Prepare(ctx context.Context, sessionID, runID string
 		// identify the format (for example an AMR voice payload).
 		mediaType = strings.TrimSpace(ingress.MediaTypeHint)
 	}
+	kind := normalizedInputKind(ingress.Kind, mediaType)
+	if kind == AttachmentAudio || kind == AttachmentVideo {
+		prefix := string(kind) + "/"
+		if !strings.HasPrefix(strings.ToLower(mediaType), prefix) {
+			removeResource()
+			return InputResource{}, fmt.Errorf("%s input has detected media type %q", kind, mediaType)
+		}
+	}
 	filename := strings.TrimSpace(ingress.FilenameHint)
 	if filename == "" {
 		filename = strings.TrimSpace(stream.Filename)
@@ -295,7 +312,7 @@ func (m *InputMaterializer) Prepare(ctx context.Context, sessionID, runID string
 	record := InputResource{
 		ID: resourceID, SessionID: sessionID, RunID: "", Origin: strings.TrimSpace(ingress.Origin),
 		EventID: strings.TrimSpace(ingress.EventID), ItemIndex: ingress.ItemIndex, ItemKey: itemKey,
-		Kind: ingress.Kind, Filename: filename, MediaType: mediaType, Bytes: written,
+		Kind: kind, Filename: filename, MediaType: mediaType, Bytes: written,
 		SHA256: hex.EncodeToString(hash.Sum(nil)), RelativePath: filepath.ToSlash(relativePath),
 		Status: status, CreatedAt: now,
 	}
@@ -830,8 +847,12 @@ func (r *SessionRuntime) CleanupInputResources(ctx context.Context, now time.Tim
 	return inputs.Cleanup(ctx, sessionID, now)
 }
 
-// BuildUserMessage emits only text plus a deterministic project-path manifest.
-// It never reads input bytes or constructs provider image/file blocks.
+// BuildUserMessage emits text plus a deterministic project-path manifest and,
+// for models with native audio/video understanding, the inline media content
+// blocks of eligible audio/video inputs. It never reads image or document bytes
+// and never constructs provider image/file blocks: those stay workspace files
+// the model inspects with tools. Inline media is the only user-input content
+// conversion, so adapters never build provider media blocks.
 func (r *SessionRuntime) BuildUserMessage(ctx context.Context, input InputSubmission) (provider.Message, error) {
 	if err := r.ensureOpen(); err != nil {
 		return provider.Message{}, err
@@ -850,6 +871,7 @@ func (r *SessionRuntime) BuildUserMessage(ctx context.Context, input InputSubmis
 	r.mu.RLock()
 	inputs := r.Inputs
 	sessionID := r.ID
+	model := r.Model
 	r.mu.RUnlock()
 	if inputs == nil || sessionID == "" {
 		return provider.Message{}, fmt.Errorf("input materializer is not bound to a session")
@@ -862,8 +884,29 @@ func (r *SessionRuntime) BuildUserMessage(ctx context.Context, input InputSubmis
 		}
 		records = append(records, record)
 	}
+
+	var mediaBlocks []provider.ContentBlock
+	delivery := make(map[string]string, len(records))
+	for _, record := range records {
+		if record.Kind != AttachmentAudio && record.Kind != AttachmentVideo {
+			continue
+		}
+		kind := string(record.Kind)
+		if !model.SupportsInput(kind) {
+			delivery[record.ID] = "workspace file only: the selected model does not support " + kind + " input"
+			continue
+		}
+		data, err := inputs.readInlineData(record)
+		if err != nil {
+			delivery[record.ID] = "workspace file only: " + err.Error()
+			continue
+		}
+		mediaBlocks = append(mediaBlocks, mediaContentBlock(record, data))
+		delivery[record.ID] = "inline " + kind + " content attached to this message"
+	}
+
 	text := strings.TrimSpace(input.Text)
-	manifest := inputs.buildManifest(records)
+	manifest := inputs.buildManifest(records, delivery)
 	if text != "" {
 		text += "\n\n" + manifest
 	} else {
@@ -872,10 +915,90 @@ func (r *SessionRuntime) BuildUserMessage(ctx context.Context, input InputSubmis
 	if knowledge != "" {
 		text += "\n\n" + knowledge
 	}
-	return provider.NewUserMessage(text), nil
+	if len(mediaBlocks) == 0 {
+		return provider.NewUserMessage(text), nil
+	}
+	contents := make([]provider.ContentBlock, 0, 1+len(mediaBlocks))
+	contents = append(contents, provider.ContentBlock{Type: "text", Text: text})
+	contents = append(contents, mediaBlocks...)
+	return provider.Message{Role: "user", Content: text, Contents: contents, Timestamp: time.Now()}, nil
 }
 
-func (m *InputMaterializer) buildManifest(records []InputResource) string {
+// readInlineData reads an input resource payload for inline provider content.
+// The inline cap keeps oversized recordings out of requests and persisted
+// message entries; those stay workspace files with a manifest note.
+func (m *InputMaterializer) readInlineData(record InputResource) ([]byte, error) {
+	if record.Bytes > m.policy.MaxInlineMediaBytes {
+		return nil, fmt.Errorf("media is %d bytes, above the %d-byte inline limit", record.Bytes, m.policy.MaxInlineMediaBytes)
+	}
+	path, err := m.resourcePath(record.RelativePath)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read media file: %w", err)
+	}
+	if int64(len(data)) > m.policy.MaxInlineMediaBytes {
+		return nil, fmt.Errorf("media is %d bytes, above the %d-byte inline limit", len(data), m.policy.MaxInlineMediaBytes)
+	}
+	return data, nil
+}
+
+// mediaContentBlock converts one Runtime-owned input resource into the
+// provider-neutral media content block carried by the user message.
+func mediaContentBlock(record InputResource, data []byte) provider.ContentBlock {
+	encoded := base64.StdEncoding.EncodeToString(data)
+	switch record.Kind {
+	case AttachmentAudio:
+		return provider.ContentBlock{Type: "audio", Audio: &provider.AudioContent{
+			MimeType: record.MediaType, Format: audioWireFormat(record.MediaType),
+			Data: encoded, Bytes: len(data),
+		}}
+	default:
+		return provider.ContentBlock{Type: "video", Video: &provider.VideoContent{
+			MimeType: record.MediaType, Data: encoded, Bytes: len(data),
+		}}
+	}
+}
+
+// audioWireFormat maps an audio media type to the wire format name expected by
+// OpenAI-compatible input_audio parts.
+func audioWireFormat(mediaType string) string {
+	base := strings.ToLower(strings.TrimSpace(strings.Split(mediaType, ";")[0]))
+	switch base {
+	case "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave":
+		return "wav"
+	case "audio/mpeg", "audio/mp3":
+		return "mp3"
+	default:
+		format := strings.TrimPrefix(strings.TrimPrefix(base, "audio/"), "x-")
+		if format == "" {
+			return "wav"
+		}
+		return format
+	}
+}
+
+// normalizedInputKind derives the canonical input kind from the declared kind
+// and the sniffed media type. Generic file inputs carrying audio/* or video/*
+// payloads become media inputs so every adapter shares one normalization rule;
+// image and explicit media kinds are preserved.
+func normalizedInputKind(kind AttachmentKind, mediaType string) AttachmentKind {
+	lower := strings.ToLower(strings.TrimSpace(mediaType))
+	switch {
+	case kind == AttachmentAudio || kind == AttachmentVideo || kind == AttachmentImage:
+		return kind
+	case strings.HasPrefix(lower, "audio/"):
+		return AttachmentAudio
+	case strings.HasPrefix(lower, "video/"):
+		return AttachmentVideo
+	default:
+		return AttachmentFile
+	}
+}
+
+func (m *InputMaterializer) buildManifest(records []InputResource, delivery map[string]string) string {
 	var b strings.Builder
 	b.WriteString("[Runtime-managed input files for this request]\n")
 	for _, record := range records {
@@ -888,6 +1011,9 @@ func (m *InputMaterializer) buildManifest(records []InputResource) string {
 		}
 		fmt.Fprintf(&b, "- path: %s\n  name: %s\n  mediaType: %s\n  bytes: %d\n  status: %s\n",
 			record.RelativePath, record.Filename, record.MediaType, record.Bytes, status)
+		if note := delivery[record.ID]; note != "" {
+			fmt.Fprintf(&b, "  delivered: %s\n", note)
+		}
 	}
 	b.WriteString("\nDecide whether a file needs inspection. Use read for files you choose to read,\n")
 	b.WriteString("or use an appropriate available Skill/tool when specialized parsing is useful.\n")

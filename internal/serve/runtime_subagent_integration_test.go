@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/messaging"
-	channels "github.com/startvibecoding/mothx/internal/serve/channels"
-	openaiapi "github.com/startvibecoding/mothx/internal/serve/openaiapi"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/messaging"
+	channels "github.com/oschina/mothx/internal/serve/channels"
+	openaiapi "github.com/oschina/mothx/internal/serve/openaiapi"
 )
 
 func TestRunWiresSubAgentObserverThroughRealServeRuntime(t *testing.T) {

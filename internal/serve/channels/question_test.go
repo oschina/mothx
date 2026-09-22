@@ -3,8 +3,8 @@ package channels
 import (
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
 )
 
 func TestChannelQuestionObserverAndDecisionLifecycle(t *testing.T) {

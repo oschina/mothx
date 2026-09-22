@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestLifecycleHTTPRejectsBoundDeleteAndTransfersBinding(t *testing.T) {

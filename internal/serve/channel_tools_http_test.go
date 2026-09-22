@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	channels "github.com/startvibecoding/mothx/internal/serve/channels"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/config"
+	channels "github.com/oschina/mothx/internal/serve/channels"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestChannelToolsHTTPRoundTripUsesCatalogAndGeneration(t *testing.T) {

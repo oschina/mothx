@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 func TestRunReportsMissingProviderKeyWithoutLeakingConfiguredValue(t *testing.T) {

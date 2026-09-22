@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/config"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 func configuredTUILangScope() string {

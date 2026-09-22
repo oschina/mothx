@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/skills"
 )
 
 type Service struct {

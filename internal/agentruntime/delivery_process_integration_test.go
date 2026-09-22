@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // deliveryProviderFixture is deliberately outside SQLite. It models the

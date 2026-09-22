@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // providerEditState holds editable fields for a ProviderConfig.

@@ -1,6 +1,6 @@
 # SDK Integration Guide
 
-MothX exposes a public Go package (`github.com/startvibecoding/mothx/agent`) that lets you embed an AI coding agent into your own applications. This guide covers:
+MothX exposes a public Go package (`github.com/oschina/mothx/agent`) that lets you embed an AI coding agent into your own applications. This guide covers:
 
 1. [Public Agent Package](#public-agent-package) — types, interfaces, and Builder API
 2. [Implementing a Custom Provider](#implementing-a-custom-provider) — bring your own LLM backend
@@ -15,7 +15,7 @@ MothX exposes a public Go package (`github.com/startvibecoding/mothx/agent`) tha
 Import path:
 
 ```go
-import "github.com/startvibecoding/mothx/agent"
+import "github.com/oschina/mothx/agent"
 ```
 
 This package contains **only public types and interfaces** — no internal dependencies. It defines:
@@ -103,7 +103,7 @@ package mybackend
 import (
     "context"
 
-    "github.com/startvibecoding/mothx/agent"
+    "github.com/oschina/mothx/agent"
 )
 
 type MyProvider struct {
@@ -197,8 +197,8 @@ import (
     "fmt"
     "os"
 
-    "github.com/startvibecoding/mothx/agent"
-    _ "github.com/startvibecoding/mothx/internal/agent" // register internal builder
+    "github.com/oschina/mothx/agent"
+    _ "github.com/oschina/mothx/internal/agent" // register internal builder
 )
 
 func main() {
@@ -551,8 +551,8 @@ type ExternalToolResult struct {
 
 ```go
 import (
-    "github.com/startvibecoding/mothx/agent"
-    _ "github.com/startvibecoding/mothx/bootstrap" // required for embedding
+    "github.com/oschina/mothx/agent"
+    _ "github.com/oschina/mothx/bootstrap" // required for embedding
 )
 
 a, err := agent.NewBuilder().
@@ -589,7 +589,7 @@ type ExternalToolPromptInfo interface {
 External modules must blank-import the `bootstrap` package once to register the internal builder and provider resolution hooks (since internal packages cannot be imported directly):
 
 ```go
-import _ "github.com/startvibecoding/mothx/bootstrap"
+import _ "github.com/oschina/mothx/bootstrap"
 ```
 
 ### Approval Forwarding

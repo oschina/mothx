@@ -25,9 +25,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/startvibecoding/mothx"
-Repository = "https://github.com/startvibecoding/mothx"
-Documentation = "https://github.com/startvibecoding/mothx/tree/main/docs"
+Homepage = "https://github.com/oschina/mothx"
+Repository = "https://github.com/oschina/mothx"
+Documentation = "https://github.com/oschina/mothx/tree/main/docs"
 
 [project.scripts]
 mothx = "mothx_installer.cli:main"

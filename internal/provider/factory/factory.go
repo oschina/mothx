@@ -5,11 +5,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/provider/anthropic"
-	"github.com/startvibecoding/mothx/internal/provider/google"
-	"github.com/startvibecoding/mothx/internal/provider/openai"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider/anthropic"
+	"github.com/oschina/mothx/internal/provider/google"
+	"github.com/oschina/mothx/internal/provider/openai"
 )
 
 // Create creates a provider and model from settings without changing the config schema.

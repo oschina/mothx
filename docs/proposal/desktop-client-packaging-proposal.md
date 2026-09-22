@@ -2,7 +2,7 @@
 
 > Date: 2026-07-26
 > Status: 路线已确认（2026-07-26）
-> 参考: `/home/free/src/startvibecoding/mothxwork`（OpenWork fork，代号 Moark）
+> 参考: `/home/free/src/oschina/mothxwork`（OpenWork fork，代号 Moark）
 
 > **决议（2026-07-26 最终）**：自研 Electron 壳 + `mothx serve` 单通道，窗口直接加载内嵌 Web UI（零前端改动）。**桌面版放弃 ACP**——ACP 仅作为第三方客户端的兼容协议保留。mothxwork 仅作为打包方案参考（vendored 运行时机制、electron-builder 出包配置、自动更新），不共建、不 fork。
 

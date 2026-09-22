@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 func parseLastMessage(t *testing.T, output *syncedBuffer) map[string]any {

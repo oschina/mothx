@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/platform"
-	"github.com/startvibecoding/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/sandbox"
 )
 
 // Verbose controls whether config loading prints diagnostic messages to stderr.

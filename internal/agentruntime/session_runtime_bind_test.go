@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestBindSessionRehydratesBoundExpertResources(t *testing.T) {

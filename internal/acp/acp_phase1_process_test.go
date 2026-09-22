@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // --- shared Phase 1 wire-test infrastructure ----------------------------------

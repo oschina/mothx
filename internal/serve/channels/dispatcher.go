@@ -18,25 +18,25 @@ import (
 	"sync"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/a2a"
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/cron"
-	"github.com/startvibecoding/mothx/internal/esm"
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/memory"
-	"github.com/startvibecoding/mothx/internal/messaging"
-	"github.com/startvibecoding/mothx/internal/provider"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/serve/hooks"
-	serviceruntime "github.com/startvibecoding/mothx/internal/serve/runtime"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/util"
-	"github.com/startvibecoding/mothx/internal/workflow"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/a2a"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/cron"
+	"github.com/oschina/mothx/internal/esm"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/memory"
+	"github.com/oschina/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/provider"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/serve/hooks"
+	serviceruntime "github.com/oschina/mothx/internal/serve/runtime"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/util"
+	"github.com/oschina/mothx/internal/workflow"
 )
 
 // ToolCatalogItem describes a tool that may be configured for channel sessions.
@@ -54,10 +54,6 @@ type ChannelToolDefinition struct {
 	Default           bool
 	Available         bool
 	UnavailableReason string
-}
-
-func isMultiAgentToolName(name string) bool {
-	return name == "delegate_subagent" || strings.HasPrefix(name, "subagent_") || strings.HasPrefix(name, "workflow_")
 }
 
 // esmSteeringMessages provides one channel Agent run with the same persisted,
@@ -779,23 +775,6 @@ func (d *Dispatcher) ensureAgentManager() *agent.AgentManager {
 		d.forwardChildTerminalStatus(d.agentMgr, st)
 	})
 	return d.agentMgr
-}
-
-// selectedSubAgentTools returns the canonical sub-agent tools that this
-// session's tool selection actually registered. Re-registering the whole
-// canonical set must not resurrect a tool the user switched off, so the caller
-// re-applies this selection afterwards.
-func selectedSubAgentTools(reg *tools.Registry) map[string]bool {
-	selected := make(map[string]bool)
-	if reg == nil {
-		return selected
-	}
-	for _, name := range agent.SubAgentToolNames() {
-		if _, ok := reg.Get(name); ok {
-			selected[name] = true
-		}
-	}
-	return selected
 }
 
 // newSessionAgentManager creates the session-scoped manager that owns this
@@ -1888,19 +1867,10 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 			if toolEnabled("memory", true) {
 				reg.Register(memory.NewMemoryTool(memory.NewStore(cfg.Memory.Path, workDir)))
 			}
-			registerMultiAgent := false
-			for name := range definitions {
-				if isMultiAgentToolName(name) && toolEnabled(name, multiAgentEnabled) {
-					registerMultiAgent = true
-					break
-				}
-			}
-			if registerMultiAgent || agentruntime.SessionHasTeamExpert(workDir, mgr) {
-				manager := d.ensureAgentManager()
-				agent.RegisterSubAgentTools(reg, manager)
-				agent.RegisterDelegateSubAgentTool(reg, manager)
-				workflow.RegisterTools(reg, manager, nil)
-			}
+			// Manager-backed tool groups (sub-agent, delegate, workflow) are not
+			// installed here: this mutator runs before the session Runtime is
+			// attached. agentruntime.SynchronizeToolGroups reconciles them right
+			// after attachment against this session's manager and tool catalog.
 			if cronStore != nil && toolEnabled("cron", true) {
 				sessionID := ""
 				if header := mgr.GetHeader(); header != nil {
@@ -1947,29 +1917,49 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 			}
 		}
 	}
-	if sessionAgentMgr != nil {
-		// The session-scoped manager owns this session's member mailbox, so member
-		// questions and completions reach this session's lead (and subagent_wait
-		// observes the same mailbox). Re-register after channel-specific removals so
-		// the sub-agent tools never stay attached to the dispatcher-wide manager,
-		// which is shared across sessions and has no session mailbox.
-		//
-		// A team binding is a Runtime policy capability (not an adapter-local
-		// toggle), so its full toolset is authoritative. An ordinary multi-agent
-		// selection is re-pointed one by one instead: RegisterSubAgentTools replaces
-		// the whole canonical set, and resurrecting a tool the user switched off
-		// would override an explicit per-tool choice.
-		if sessionRuntime.TeamExpertActive() {
-			agent.RegisterSubAgentTools(reg, sessionAgentMgr)
-		} else if selected := selectedSubAgentTools(reg); len(selected) > 0 {
-			agent.RegisterSubAgentTools(reg, sessionAgentMgr)
-			for _, name := range agent.SubAgentToolNames() {
-				if !selected[name] {
-					reg.Remove(name)
-				}
-			}
+	// Reconcile the manager-backed tool groups against this session's channel
+	// tool catalog after the platform-specific removals, pointing every tool at
+	// the session-scoped manager that owns this session's member mailbox (and a
+	// bound team's roster). The Runtime installer owns the semantics: a team
+	// binding is a Runtime policy capability whose full sub-agent toolset is
+	// authoritative, while an ordinary multi-agent session keeps the per-tool
+	// choices resolved from its catalog above.
+	// The channel tool catalog governs the multi-agent family as one bundle:
+	// when any member is enabled (explicitly or by default) the full tool
+	// groups install together, and only explicitly disabled names are trimmed.
+	// A team binding is a Runtime policy capability whose full sub-agent set is
+	// authoritative; SynchronizeToolGroups owns those semantics.
+	registerFamily := false
+	for _, name := range append(append(agent.SubAgentToolNames(), "delegate_subagent"), workflow.ToolNames()...) {
+		if toolEnabled(name, multiAgentEnabled) {
+			registerFamily = true
+			break
 		}
 	}
+	explicitlyDisabled := func(name string) bool {
+		value, ok := enabled[name]
+		return ok && !value
+	}
+	keepSelection := func(names []string) map[string]bool {
+		if !hasToolConfig {
+			return nil
+		}
+		selection := make(map[string]bool, len(names))
+		for _, name := range names {
+			if !explicitlyDisabled(name) {
+				selection[name] = true
+			}
+		}
+		return selection
+	}
+	groupPolicy := agentruntime.ToolGroupPolicy{
+		MultiAgent:    registerFamily,
+		SubAgentTools: keepSelection(agent.SubAgentToolNames()),
+		Delegate:      registerFamily && !explicitlyDisabled("delegate_subagent"),
+		Workflows:     registerFamily,
+		WorkflowTools: keepSelection(workflow.ToolNames()),
+	}
+	agentruntime.SynchronizeToolGroups(sessionRuntime, reg, groupPolicy, sessionAgentMgr)
 	sess := &ChannelSession{
 		Execution:  &agentruntime.ExecutionRuntime{},
 		Decisions:  &agentruntime.DecisionService{},

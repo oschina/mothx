@@ -22,7 +22,7 @@ curl.exe -fsSL https://mothx.net/install.bat -o install.bat && install.bat
 
 ```bash
 # Option 5: Go install
-go install github.com/startvibecoding/mothx/cmd/mothx@latest
+go install github.com/oschina/mothx/cmd/mothx@latest
 ```
 
 **Uninstall:**

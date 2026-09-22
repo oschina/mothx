@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestBeforeToolExecuteFenceFollowsFencedOwnership(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/startvibecoding/GoStreamingMarkdown/gsm"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
-	"github.com/startvibecoding/mothx/internal/tui/renderutil"
+	"github.com/oschina/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/tui/renderutil"
 )
 
 func (a *App) updateViewportContent() {

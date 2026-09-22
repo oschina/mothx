@@ -7,7 +7,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	database "github.com/startvibecoding/mothx/internal/db"
+	database "github.com/oschina/mothx/internal/db"
 )
 
 // Database is the DAO-facing handle to a managed Bun connection. Managed

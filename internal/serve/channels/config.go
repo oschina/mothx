@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // Config holds messaging channel runtime configuration.

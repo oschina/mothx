@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agentruntime"
 )
 
 func (s *Server) decisionDeadline() time.Time {

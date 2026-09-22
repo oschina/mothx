@@ -149,7 +149,7 @@ for PLATFORM_KEY in "${!PLATFORMS[@]}"; do
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/startvibecoding/mothx.git",
+    "url": "https://github.com/oschina/mothx.git",
     "directory": "npm"
   }
 }
@@ -167,7 +167,7 @@ EOF
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/startvibecoding/mothx.git",
+    "url": "https://github.com/oschina/mothx.git",
     "directory": "npm"
   }
 }
@@ -184,7 +184,7 @@ EOF
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/startvibecoding/mothx.git",
+    "url": "https://github.com/oschina/mothx.git",
     "directory": "npm"
   }
 }

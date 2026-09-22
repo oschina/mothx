@@ -5,8 +5,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/startvibecoding/mothx/internal/tui/components/suggest"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/tui/components/suggest"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 func commandSuggestionItems(translators ...i18n.Translator) []suggest.Item {

@@ -2,7 +2,18 @@
 
 ## v1.3.102
 
+### 💥 破坏性变更
+
+- **仓库迁移至 `oschina` 组织**
+  - 项目从 `github.com/startvibecoding/mothx` 迁移至 `github.com/oschina/mothx`。Go 使用者需更新模块路径与导入（`github.com/oschina/mothx/...`），`go install github.com/oschina/mothx/cmd/mothx@latest` 取代此前的安装路径。
+  - 文档、安装片段、容器镜像（`ghcr.io/oschina/mothx`）、徽章、Gitee 镜像（`gitee.com/oschina/mothx`）与安装包元数据均已指向新组织。`mothx`/`vibecoding` 命令与 npm/PyPI 包名保持不变，已有安装不受影响。
+
 ### ✨ 新功能
+
+- **多模态模型原生音视频输入**
+  - 声明支持 `audio`/`video` 输入的模型（如 `qwen3.8-omni-flash`）现在可直接接收附件中的音频和视频文件作为原生媒体内容——Chat 走 OpenAI 兼容的 `input_audio`/`video_url`（Responses 走 `input_audio`/`input_video`），Gemini 走 `inlineData`——而不再只有工作区路径。TUI、CLI、WebUI/API、ACP、微信/飞书共享同一套 Runtime 摄入与转换路径，各适配器仅传输解码不同。
+  - 音视频摄入在 Runtime 层归一化（携带 `audio/*` 或 `video/*` 载荷的通用文件上传会归为媒体输入），按声明类型校验媒体类型，并在单文件 7MB 限额内内联发送；更大的录音/录像保留为工作区文件并在清单中明确说明。不支持音视频的模型继续使用路径清单；会话中切换到纯文本模型时，不支持的媒体块会替换为可见占位文本，而不是让请求失败。
+  - Serve chat-completions API 接受 `input_audio`（裸 base64 或 data URL，带 `format`）与 `video_url`（data URL）内容片段；远程媒体 URL 一律拒绝且不会被拉取。Assistant 消息仍仅限文本；音频输出不在本次变更范围内。
 
 - **Serve：模板 API Token 的替换警告**
   - `mothx serve init-config` 生成的模板 token 是公开值，一旦启用 auth 而未替换，等同于公开 API key —— 此前对此没有任何提示。该 token 现在是具名常量（`serve.PlaceholderAuthToken`）并配有显式判定（`IsPlaceholderAuthToken`/`UsesPlaceholderAuthToken`）：创建模板时（`mothx serve init-config` 与 CLI 的 `--init-serve` 路径）打印替换警告，`mothx serve` 启动时若 `api.auth.enabled` 为真且 token 仍未替换，会再次打印同一条警告。
@@ -51,6 +62,15 @@
   - 新增可选的 `settings.json` 子对象 `maintenance` 控制它：`reclaimAttachmentStorage`（默认 `true`，因此现有配置文件不会改变行为）与 `storageReconcileSchedule`（默认 `@daily`，由调度器校验，无法解析时回退默认值并输出日志）。关闭后会在下次调度器启动时移除该计划任务，即使旧进程留下的任务行被触发也不会删除任何东西；只改频率时保留任务的运行次数与状态。
 
 ### 🐛 问题修复
+
+- **Runtime 租约回收需先确认无存活执行引用**
+  - 同进程回收此前只要 `owner_instance_id` 匹配就可能从仍持有存活执行引用的会话手中夺走租约，从而把仍在运行的执行隔离掉。现在回收必须先确认不存在存活的执行引用（`hasLiveRuntimeLease`）才允许回收，因此被保留的引用不会被顶替。
+
+- **知识库快照只在其所索引的配置下发布**
+  - 索引器运行期间知识库可能被重新配置，导致基于旧配置构建的图谱成为活动快照。知识库数据库 schema 现在带有 `config_revision`：更新基础配置会递增该值，快照激活会比对索引器加载时的版本（`BaseConfigRevision`），因此过期的索引器会以 `ErrKnowledgeBaseConfigurationChanged` 失败，而不会发布与当前基础配置不再匹配的图谱。
+
+- **Fork 与项目元数据改为原子写入**
+  - Fork 的幂等指纹现在会纳入非空的专家覆盖项，因此换用不同专家重新 fork 不会再被去重进第一次请求，fork 事务辅助函数也会透传调用方 context。项目会话元数据在单个事务内以引用 `EXISTS` 校验做 upsert，`DeleteWithMetadata` 落实 `ON DELETE SET NULL` 语义，会话绑定/cwd 变更在整个数据库操作期间持有写锁，而不再走内存回滚。
 
 - **供应商流超时在各类运行中保持一致恢复**
   - 调用方 deadline（包括曾经包在 ESM 角色外层的 deadline）此前可能被显示成供应商响应超时，并误称“已重试 0 次”。现在调用方取消和 deadline 会保持为已取消的运行，不再被误归类为供应商传输故障。
@@ -131,6 +151,15 @@
   - 非法调用不再被当作「猜测的副作用」重放：Agent 会把它记录为失败的工具结果并注入一条瞬时恢复提示，使下一次请求重建合法的 JSON 参数，而不是假定已发生任何副作用。`marshalSessionEntry` 在修复后重试一次失败的 marshal，作为最后一道防线。
 
 ### 🔧 改进
+
+- **模型预设统一新模型的初始默认值**
+  - `config.PresetModelConfig` 现在是某个模型 ID 草稿默认值的唯一来源：优先采用当前提供商的配置，其次匹配内置目录中的同 ID 模型，最后回退到安全的通用默认值（256K 上下文、默认开启思考、文本输入）。模型发现、provider factory、TUI 认证设置、WebUI 提供商编辑器、Serve 模型目录与 ACP 提供商目录都会以相同方式为新录入的模型填充默认值，并通过 `modelDefaults` 把通用默认值投影给客户端，使客户端编辑器从同一组值起步。
+
+- **工具注册收敛到共享 Runtime**
+  - 管理器绑定的工具组（sub-agent 工具集、`delegate_subagent`、workflow 工具）的安装、卸载与换代重装现在由 `agentruntime.SynchronizeToolGroups` 统一负责：TUI、CLI/WebUI（serve）、channels、ACP 只提供策略和当前 AgentManager 句柄。管理器更换会重装工具组，确保工具实例始终指向当前管理器；逐工具开关在重注册后不丢失；绑定专家团队仍强制启用完整规范 sub-agent 工具集。
+  - Registry 装配只剩一套实现：`agentruntime.BuildRegistry` 统一负责 plan/skill_ref/browser/image_generation/question 工具策略，`Builder.Build` 直接复用，资源刷新会对账 image_generation 的设置开关。因此 ACP 会话在设置启用时也能获得 `image_generation` 工具（此前仅 TUI/WebUI/serve 会话有）。
+  - 规范工具名不再手抄：`workflow.ToolNames()`/`workflow.RemoveTools` 与统一的内置工厂清单取代了多处重复的注册/卸载名单。`internal/architecture` 新增守卫，禁止在构造所有者和一个已记录的 TUI `/btw` 桥接之外直接调用 `tools.NewRegistry`/`tools.NewRegistryWithConfig`。
+  - `extend_budget` 与 `plan` 同列为本地工具：其调用不再消耗持久化工具执行记录，与其无副作用语义一致。内容块克隆在各处补齐了 `FileContent`，与 image/audio/video 一致。
 
 - **SQLite：会话库写压力三阶段优化**
   - 连接持久化策略从 `synchronous(FULL)` 调整为 WAL 推荐的 `synchronous(NORMAL)`：提交不再在持有唯一写锁期间 fsync（fsync 集中到 checkpoint），多进程共享同一会话目录时的写锁占用从 fsync 级收缩到 page-cache 级，此前记录的「其他进程持续提交导致 begin 等待超过 busy_timeout 而报 database is locked」的场景基本消除。进程崩溃仍然零丢失；OS 崩溃/断电可能回退最近一次 checkpoint 之后的秒级提交（数据库不损坏，缺失的 run 终态由既有的租约过期 → orphan → 有界恢复路径收敛）。`MOTHX_SQLITE_SYNCHRONOUS=FULL` 可按进程一键恢复旧持久性，新旧版本进程混布共享同一库文件是安全的。
@@ -1832,7 +1861,7 @@
   - 新增 `ExternalToolResult`（文本/错误 + 可选的富 `Contents` 内容块）以及可选的 `ExternalToolPromptInfo` 接口，用于贡献系统提示词信息（`PromptSnippet`、`PromptGuidelines`）。
   - 新增 `Builder.WithExternalTools(...)` 用于注册自定义工具，`Builder.WithoutBuiltinTools()` 用于禁用全部内置工具，从而构建只能使用宿主工具的 agent。
   - 外部工具通过内部 factory 的 `externalToolAdapter` 接入，内部包现在通过 `CreateFromPublicOptions` 从公开 `Builder` 配置构建 agent。
-  - 新增 `bootstrap` 包：外部模块只需空白导入 `github.com/startvibecoding/mothx/bootstrap` 一次即可注册内部 builder 与 provider 解析 hook（因为内部包无法被直接导入）。
+  - 新增 `bootstrap` 包：外部模块只需空白导入 `github.com/oschina/mothx/bootstrap` 一次即可注册内部 builder 与 provider 解析 hook（因为内部包无法被直接导入）。
 
 ### 💅 优化
 
@@ -3655,7 +3684,7 @@
   - 自动选择平台特定的沙箱实现
 
 - **仓库重命名**
-  - 模块路径更名为 `github.com/startvibecoding/mothx`
+  - 模块路径更名为 `github.com/oschina/mothx`
   - 所有导入、文档和脚本已同步更新
 
 ### 🛠 改进
@@ -3821,4 +3850,4 @@
 
 ---
 
-**完整变更日志**: https://gitee.com/startvibecoding/mothx/compare/v0.1.26...v0.1.27
+**完整变更日志**: https://gitee.com/oschina/mothx/compare/v0.1.26...v0.1.27

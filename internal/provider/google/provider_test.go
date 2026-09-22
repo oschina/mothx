@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -726,5 +726,25 @@ func TestGoogleDisableSamplingParamsCompat(t *testing.T) {
 	}
 	if req.GenerationConfig.TopP != nil {
 		t.Fatalf("topP = %#v, want nil (DisableSamplingParams)", *req.GenerationConfig.TopP)
+	}
+}
+
+func TestConvertMessagesAudioVideoInlineData(t *testing.T) {
+	p := &Provider{}
+	contents := p.convertMessages(provider.ChatParams{Messages: []provider.Message{{
+		Role: "user",
+		Contents: []provider.ContentBlock{
+			{Type: "audio", Audio: &provider.AudioContent{MimeType: "audio/wav", Data: "YXVkaW8="}},
+			{Type: "video", Video: &provider.VideoContent{MimeType: "video/mp4", Data: "dmlkZW8="}},
+		},
+	}}})
+	if len(contents) != 1 || len(contents[0].Parts) != 2 {
+		t.Fatalf("contents = %#v", contents)
+	}
+	if first := contents[0].Parts[0].InlineData; first == nil || first.MimeType != "audio/wav" || first.Data != "YXVkaW8=" {
+		t.Fatalf("audio part = %#v", contents[0].Parts[0])
+	}
+	if second := contents[0].Parts[1].InlineData; second == nil || second.MimeType != "video/mp4" || second.Data != "dmlkZW8=" {
+		t.Fatalf("video part = %#v", contents[0].Parts[1])
 	}
 }

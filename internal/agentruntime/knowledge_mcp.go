@@ -8,8 +8,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/session"
 )
 
 const (

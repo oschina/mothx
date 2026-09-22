@@ -63,7 +63,7 @@ func publicSDKInternalImports(root, dir string) ([]string, error) {
 			}
 			// Any import of this module's internal packages breaks the
 			// boundary; external consumers cannot follow such imports.
-			if idx := strings.Index(importPath, "/internal/"); idx >= 0 && strings.HasPrefix(importPath, "github.com/startvibecoding/mothx/") {
+			if idx := strings.Index(importPath, "/internal/"); idx >= 0 && strings.HasPrefix(importPath, "github.com/oschina/mothx/") {
 				violations = append(violations, filepath.ToSlash(rel)+" imports "+importPath)
 			}
 		}

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // TestScheduleRenderTrailingRefreshStaysOnTeaLoop exercises the throttled

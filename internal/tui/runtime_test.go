@@ -3,11 +3,11 @@ package tui
 import (
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 func TestSetRuntimeSynchronizesTUIResourceAliases(t *testing.T) {

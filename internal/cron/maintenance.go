@@ -4,7 +4,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agentruntime"
 )
 
 // SetMaintenancePolicy installs the resolved Runtime maintenance policy this

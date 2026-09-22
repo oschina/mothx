@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/startvibecoding/mothx/internal/browser"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/browser"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // RegistryMutator is an adapter policy callback for tools that cannot yet be
@@ -23,7 +23,15 @@ type RegistryPolicy struct {
 	EnablePlanTool   *bool
 	SkillsMgr        *skills.Manager
 	Browser          bool
-	Mutators         []RegistryMutator
+	// ImageGeneration exposes the image-generation tool when settings enable
+	// it. Entries opt in; the settings gate remains the shared owner of the
+	// switch, so resource refresh can reconcile it.
+	ImageGeneration bool
+	// Question exposes the interactive question tool. Entries map it to their
+	// protocol surface (for example ACP request_permission); it is not part of
+	// the default tool surface.
+	Question bool
+	Mutators []RegistryMutator
 }
 
 // BuildRegistry creates the base registry and applies explicit adapter tool
@@ -49,6 +57,12 @@ func BuildRegistry(workDir string, sandboxMgr *sandbox.Manager, settings *config
 	}
 	if policy.Browser {
 		browser.RegisterTool(registry)
+	}
+	if policy.ImageGeneration && settings != nil && settings.IsImageGenerationEnabled() {
+		registry.Register(tools.NewImageGenerationTool(settings))
+	}
+	if policy.Question {
+		registry.Register(tools.NewQuestionTool(registry))
 	}
 	for _, mutate := range policy.Mutators {
 		if mutate == nil {
@@ -126,6 +140,19 @@ func (r *SessionRuntime) ConnectConfiguredMCP(ctx context.Context, policy MCPPol
 // CloseMCPClients releases clients held by legacy adapter aliases during migration.
 func CloseMCPClients(clients []*mcp.Client) {
 	mcp.CloseClients(clients)
+}
+
+// registryExposesImageGeneration reports whether the assembled registry
+// includes the image-generation tool. SessionRuntime keeps this build-time
+// capability so resource refresh reconciles only the settings gate of an entry
+// that actually exposes the tool, without flipping tool policy for entries
+// that never had it.
+func registryExposesImageGeneration(registry *tools.Registry) bool {
+	if registry == nil {
+		return false
+	}
+	_, ok := registry.Get("image_generation")
+	return ok
 }
 
 // DefaultPlanToolPolicy returns the configured plan-tool setting.

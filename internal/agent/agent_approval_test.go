@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 func TestRequestQuestionReturnsOnContextCancel(t *testing.T) {

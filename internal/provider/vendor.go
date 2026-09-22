@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // AdapterConfig is the provider configuration after vendor defaults are applied.

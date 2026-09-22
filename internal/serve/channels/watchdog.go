@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
 )
 
 // watchdogTick is how often the dispatcher scans channel runs for stalls.

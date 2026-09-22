@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agent"
 )
 
 // externalSubAgentHistory retains channel-owned sub-agent activity. Channel

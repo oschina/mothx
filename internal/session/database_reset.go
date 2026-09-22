@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	database "github.com/startvibecoding/mothx/internal/db"
-	"github.com/startvibecoding/mothx/internal/platform"
+	database "github.com/oschina/mothx/internal/db"
+	"github.com/oschina/mothx/internal/platform"
 )
 
 // databaseSidecarSuffixes lists the SQLite sidecar files that belong to a

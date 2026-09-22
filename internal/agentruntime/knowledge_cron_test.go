@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestRunKnowledgeBaseCronJobRoutesNamespacedJobsOnly(t *testing.T) {

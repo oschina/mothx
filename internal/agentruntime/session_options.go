@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/provider"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
 )
 
 // SessionConfigOption is the front-end-neutral representation of a mutable

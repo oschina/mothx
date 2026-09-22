@@ -15,11 +15,13 @@ type CacheControl struct {
 
 // ContentBlock represents a block of content in a message.
 type ContentBlock struct {
-	Type         string         `json:"type"` // "text", "image", "file", "thinking", "toolCall"
+	Type         string         `json:"type"` // "text", "image", "file", "audio", "video", "thinking", "toolCall"
 	Text         string         `json:"text,omitempty"`
 	Thinking     string         `json:"thinking,omitempty"`
 	Signature    string         `json:"signature,omitempty"` // required for thinking block replay
 	Image        *ImageContent  `json:"image,omitempty"`
+	Audio        *AudioContent  `json:"audio,omitempty"`
+	Video        *VideoContent  `json:"video,omitempty"`
 	File         *FileContent   `json:"file,omitempty"`
 	ToolCall     *ToolCallBlock `json:"toolCall,omitempty"`
 	CacheControl *CacheControl  `json:"cache_control,omitempty"` // cache breakpoint marker
@@ -55,6 +57,29 @@ type ImageContent struct {
 	CropY          int     `json:"cropY,omitempty"`
 	CropWidth      int     `json:"cropWidth,omitempty"`
 	CropHeight     int     `json:"cropHeight,omitempty"`
+}
+
+// AudioContent carries inline audio input for models with native audio
+// understanding. Data is the base64-encoded payload; URL is an alternative
+// transport for wire formats that accept a remote or data URL reference.
+// Audio input is user-turn only: assistant messages never carry audio blocks.
+type AudioContent struct {
+	MimeType string `json:"mimeType,omitempty"` // e.g. "audio/wav"
+	Format   string `json:"format,omitempty"`   // wire format hint: "wav", "mp3", ...
+	Data     string `json:"data,omitempty"`     // base64 encoded
+	URL      string `json:"url,omitempty"`
+	Bytes    int    `json:"bytes,omitempty"`
+}
+
+// VideoContent carries inline video input for models with native video
+// understanding. Data is the base64-encoded payload; URL is an alternative
+// transport for wire formats that accept a remote or data URL reference.
+// Video input is user-turn only: assistant messages never carry video blocks.
+type VideoContent struct {
+	MimeType string `json:"mimeType,omitempty"` // e.g. "video/mp4"
+	Data     string `json:"data,omitempty"`     // base64 encoded
+	URL      string `json:"url,omitempty"`
+	Bytes    int    `json:"bytes,omitempty"`
 }
 
 // ToolCallBlock represents a tool call in an assistant message.
@@ -122,6 +147,14 @@ func NormalizeMessage(msg Message) (normalized Message, notices []string) {
 		if block.File != nil {
 			file := *block.File
 			cloned.File = &file
+		}
+		if block.Audio != nil {
+			audio := *block.Audio
+			cloned.Audio = &audio
+		}
+		if block.Video != nil {
+			video := *block.Video
+			cloned.Video = &video
 		}
 		if block.CacheControl != nil {
 			cache := *block.CacheControl
@@ -430,7 +463,7 @@ type Model struct {
 	Name          string       `json:"name"`
 	Provider      string       `json:"provider"`
 	Reasoning     bool         `json:"reasoning"` // supports extended thinking
-	Input         []string     `json:"input"`     // "text", "image"
+	Input         []string     `json:"input"`     // "text", "image", "audio", "video"
 	Cost          ModelPricing `json:"cost"`
 	ContextWindow int          `json:"contextWindow"`         // max context tokens
 	MaxTokens     int          `json:"maxTokens"`             // max output tokens
@@ -438,6 +471,26 @@ type Model struct {
 	Temperature   *float64     `json:"temperature,omitempty"` // nil = use API default
 	TopP          *float64     `json:"topP,omitempty"`        // nil = use API default
 	Compat        *ModelCompat `json:"compat,omitempty"`
+}
+
+// SupportsInput reports whether the model declares support for one input
+// modality ("text", "image", "audio", "video"). It is the shared capability
+// resolver used by Agent Core and the Runtime input pipeline; adapters must not
+// re-implement modality checks against Model.Input.
+func (m *Model) SupportsInput(kind string) bool {
+	if m == nil {
+		return false
+	}
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" {
+		return false
+	}
+	for _, input := range m.Input {
+		if strings.EqualFold(strings.TrimSpace(input), kind) {
+			return true
+		}
+	}
+	return false
 }
 
 // ModelCompat captures vendor-specific behavior flags for otherwise compatible APIs.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agent"
 )
 
 type observationRunStore struct {

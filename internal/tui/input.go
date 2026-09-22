@@ -10,12 +10,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/provider"
-	serviceruntime "github.com/startvibecoding/mothx/internal/serve/runtime"
-	"github.com/startvibecoding/mothx/internal/session"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/provider"
+	serviceruntime "github.com/oschina/mothx/internal/serve/runtime"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func (a *App) addMessage(msg string) {

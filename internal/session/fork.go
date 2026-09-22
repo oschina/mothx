@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/startvibecoding/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/dao"
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 type ForkKind string

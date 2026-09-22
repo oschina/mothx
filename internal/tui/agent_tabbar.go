@@ -5,8 +5,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 // renderAgentTabBar renders a horizontal tab bar showing all active agents.

@@ -3,10 +3,10 @@ package channels
 import (
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/serve/hooks"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/serve/hooks"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // TestChannelSessionRespectsPartialSubAgentToolSelection guards the explicit

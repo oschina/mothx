@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/imageproc"
-	"github.com/startvibecoding/mothx/internal/platform"
-	"github.com/startvibecoding/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/imageproc"
+	"github.com/oschina/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/sandbox"
 )
 
 func TestOperationIDContext(t *testing.T) {

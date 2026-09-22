@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 func TestBoundedParallelPreservesOrderAndConcurrencyLimit(t *testing.T) {

@@ -3,8 +3,8 @@ package agent
 import (
 	"testing"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/provider"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 func TestChatParamsBridgePreservesModelID(t *testing.T) {
@@ -64,5 +64,24 @@ func TestToolResultImagesExtractionAndPublicProjection(t *testing.T) {
 	}
 	if empty := EventToPublic(Event{Type: EventToolExecutionEnd}); empty.ToolImages != nil {
 		t.Fatalf("public ToolImages without payloads = %#v, want nil", empty.ToolImages)
+	}
+}
+
+func TestContentBlockMediaRoundTrip(t *testing.T) {
+	audio := provider.ContentBlock{Type: "audio", Audio: &provider.AudioContent{MimeType: "audio/wav", Format: "wav", Data: "YQ==", Bytes: 1}}
+	pub := ContentBlockToPublic(audio)
+	if pub.Audio == nil || pub.Audio.Data != "YQ==" || pub.Audio.Format != "wav" {
+		t.Fatalf("public audio = %#v", pub.Audio)
+	}
+	if back := ContentBlockFromPublic(pub); back.Audio == nil || *back.Audio != *audio.Audio {
+		t.Fatalf("internal audio = %#v", back.Audio)
+	}
+	video := provider.ContentBlock{Type: "video", Video: &provider.VideoContent{MimeType: "video/mp4", Data: "Yg==", URL: "https://example.com/v.mp4", Bytes: 1}}
+	pubVideo := ContentBlockToPublic(video)
+	if pubVideo.Video == nil || pubVideo.Video.URL != "https://example.com/v.mp4" {
+		t.Fatalf("public video = %#v", pubVideo.Video)
+	}
+	if back := ContentBlockFromPublic(pubVideo); back.Video == nil || *back.Video != *video.Video {
+		t.Fatalf("internal video = %#v", back.Video)
 	}
 }

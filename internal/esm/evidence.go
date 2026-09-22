@@ -3,7 +3,7 @@ package esm
 import (
 	"strings"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
+	agentpkg "github.com/oschina/mothx/agent"
 )
 
 // EvidenceTracker accumulates tool-call evidence for one ESM role run. TUI and

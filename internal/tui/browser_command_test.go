@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	browserfeature "github.com/startvibecoding/mothx/internal/browser"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/tools"
+	browserfeature "github.com/oschina/mothx/internal/browser"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 func TestBrowserCommandOnUsesBuiltInSkillAndRegistersTool(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	openaiapi "github.com/startvibecoding/mothx/internal/serve/openaiapi"
+	"github.com/oschina/mothx/internal/agent"
+	openaiapi "github.com/oschina/mothx/internal/serve/openaiapi"
 )
 
 func TestExternalSubAgentHistoryIsAvailableThroughServeHTTPRoutes(t *testing.T) {

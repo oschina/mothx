@@ -15,11 +15,11 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/mothx-installer"><img src="https://img.shields.io/npm/dm/mothx-installer.svg" alt="npm downloads"></a>
   <a href="https://pypi.org/project/mothx-installer/"><img src="https://img.shields.io/pypi/v/mothx-installer.svg" alt="PyPI version"></a>
-  <a href="https://github.com/startvibecoding/mothx/releases/latest"><img src="https://img.shields.io/github/release/startvibecoding/mothx.svg" alt="GitHub release"></a>
+  <a href="https://github.com/oschina/mothx/releases/latest"><img src="https://img.shields.io/github/release/oschina/mothx.svg" alt="GitHub release"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="https://goreportcard.com/report/github.com/startvibecoding/mothx"><img src="https://goreportcard.com/badge/github.com/startvibecoding/mothx" alt="Go Report Card"></a>
-  <a href="https://pkg.go.dev/github.com/startvibecoding/mothx"><img src="https://pkg.go.dev/badge/github.com/startvibecoding/mothx?status.svg" alt="GoDoc"></a>
-  <a href="https://github.com/startvibecoding/mothx/network/dependencies"><img src="https://img.shields.io/librariesio/release/github/startvibecoding/mothx" alt="Dependencies"></a>
+  <a href="https://goreportcard.com/report/github.com/oschina/mothx"><img src="https://goreportcard.com/badge/github.com/oschina/mothx" alt="Go Report Card"></a>
+  <a href="https://pkg.go.dev/github.com/oschina/mothx"><img src="https://pkg.go.dev/badge/github.com/oschina/mothx?status.svg" alt="GoDoc"></a>
+  <a href="https://github.com/oschina/mothx/network/dependencies"><img src="https://img.shields.io/librariesio/release/github/oschina/mothx" alt="Dependencies"></a>
 </p>
 
 > **改名说明：** MothX 原名 VibeCoding。`vibecoding` 命令和旧安装包名仍作为兼容别名保留。配置只会从 `.mothx` 项目目录和 MothX 全局配置目录读取；不会读取或迁移旧目录。
@@ -70,10 +70,10 @@ curl.exe -fsSL https://mothx.net/install.bat -o install.bat && install.bat
 
 ```bash
 # 默认 Ubuntu 镜像，容器以 root 运行，适合直接扩展开发环境
-docker run --rm -it --entrypoint bash ghcr.io/startvibecoding/mothx:latest
+docker run --rm -it --entrypoint bash ghcr.io/oschina/mothx:latest
 
 # 在当前目录运行 MothX
-docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/startvibecoding/mothx:latest
+docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/oschina/mothx:latest
 ```
 
 可用标签：`latest` / `ubuntu`（默认）、`debian`、`fedora`、`alpine`
@@ -81,13 +81,13 @@ docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/startvibecoding/m
 **选项 5：Go 安装**
 
 ```bash
-go install github.com/startvibecoding/mothx/cmd/mothx@latest
+go install github.com/oschina/mothx/cmd/mothx@latest
 ```
 
 **选项 6：从源码构建**
 
 ```bash
-git clone https://github.com/startvibecoding/mothx.git
+git clone https://github.com/oschina/mothx.git
 cd mothx
 make build
 ```

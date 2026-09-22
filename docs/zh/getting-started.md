@@ -50,10 +50,10 @@ npm uninstall -g mothx-installer
 
 ```bash
 # 默认 Ubuntu 镜像，容器以 root 运行
-docker run --rm -it --entrypoint bash ghcr.io/startvibecoding/mothx:latest
+docker run --rm -it --entrypoint bash ghcr.io/oschina/mothx:latest
 
 # 在当前工作区运行 MothX
-docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/startvibecoding/mothx:latest
+docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/oschina/mothx:latest
 ```
 
 可用标签：
@@ -69,14 +69,14 @@ docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/startvibecoding/m
 ### 方法五: Go Install
 
 ```bash
-go install github.com/startvibecoding/mothx/cmd/mothx@latest
+go install github.com/oschina/mothx/cmd/mothx@latest
 ```
 
 ### 方法六: 从源码构建
 
 ```bash
 # 克隆仓库
-git clone https://gitee.com/startvibecoding/mothx.git
+git clone https://gitee.com/oschina/mothx.git
 cd mothx
 
 # 构建

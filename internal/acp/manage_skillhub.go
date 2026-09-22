@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/mcp"
 )
 
 // manageSkillHubMarketView is the safe, token-free projection of one SkillHub

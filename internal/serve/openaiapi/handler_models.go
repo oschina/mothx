@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/config"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
 )
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {

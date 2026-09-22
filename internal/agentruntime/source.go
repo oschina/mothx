@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // SourceResolutionInput contains all source candidates available at a runtime

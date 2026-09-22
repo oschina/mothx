@@ -7,10 +7,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/esm"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/esm"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 func newESMPanelTestApp() *App {

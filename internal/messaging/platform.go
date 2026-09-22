@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // Platform defines the interface that all messaging platform adapters must implement.

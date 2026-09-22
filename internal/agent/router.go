@@ -3,7 +3,7 @@ package agent
 import (
 	"sync"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
+	agentpkg "github.com/oschina/mothx/agent"
 )
 
 // RouterEventHandler receives agent events for routing purposes.

@@ -1,6 +1,6 @@
 # SDK 集成指南
 
-MothX 提供了一个公共 Go 包（`github.com/startvibecoding/mothx/agent`），允许你将 AI 编码 Agent 嵌入到自己的应用中。本指南涵盖：
+MothX 提供了一个公共 Go 包（`github.com/oschina/mothx/agent`），允许你将 AI 编码 Agent 嵌入到自己的应用中。本指南涵盖：
 
 1. [公共 Agent 包](#公共-agent-包) — 类型、接口和 Builder API
 2. [实现自定义 Provider](#实现自定义-provider) — 接入自有 LLM 后端
@@ -15,7 +15,7 @@ MothX 提供了一个公共 Go 包（`github.com/startvibecoding/mothx/agent`）
 导入路径：
 
 ```go
-import "github.com/startvibecoding/mothx/agent"
+import "github.com/oschina/mothx/agent"
 ```
 
 该包**仅包含公共类型和接口**，不依赖任何 internal 包。定义了以下核心类型：
@@ -103,7 +103,7 @@ package mybackend
 import (
     "context"
 
-    "github.com/startvibecoding/mothx/agent"
+    "github.com/oschina/mothx/agent"
 )
 
 type MyProvider struct {
@@ -197,8 +197,8 @@ import (
     "fmt"
     "os"
 
-    "github.com/startvibecoding/mothx/agent"
-    _ "github.com/startvibecoding/mothx/internal/agent" // 注册内部 builder
+    "github.com/oschina/mothx/agent"
+    _ "github.com/oschina/mothx/internal/agent" // 注册内部 builder
 )
 
 func main() {
@@ -550,8 +550,8 @@ type ExternalToolResult struct {
 
 ```go
 import (
-    "github.com/startvibecoding/mothx/agent"
-    _ "github.com/startvibecoding/mothx/bootstrap" // 嵌入时必须
+    "github.com/oschina/mothx/agent"
+    _ "github.com/oschina/mothx/bootstrap" // 嵌入时必须
 )
 
 a, err := agent.NewBuilder().
@@ -588,7 +588,7 @@ type ExternalToolPromptInfo interface {
 外部模块必须空白导入 `bootstrap` 包一次，以注册内部 builder 和 provider 解析 hook（因为 internal 包无法被直接导入）：
 
 ```go
-import _ "github.com/startvibecoding/mothx/bootstrap"
+import _ "github.com/oschina/mothx/bootstrap"
 ```
 
 ### 审批转发

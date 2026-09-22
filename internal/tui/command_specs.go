@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/startvibecoding/mothx/internal/tui/i18n"
+import "github.com/oschina/mothx/internal/tui/i18n"
 
 // CommandSpec keeps slash-command syntax stable while localizing user-facing
 // descriptions. Syntax is protocol text and must remain English.

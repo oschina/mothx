@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/dao"
 )
 
 // ActiveRuntimeLease is one session lease still recorded as active in a session

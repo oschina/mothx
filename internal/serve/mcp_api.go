@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	openaiapi "github.com/startvibecoding/mothx/internal/serve/openaiapi"
+	"github.com/oschina/mothx/internal/config"
+	openaiapi "github.com/oschina/mothx/internal/serve/openaiapi"
 )
 
 // handleMCPConfig manages the global MCP configuration shared by all runtimes.

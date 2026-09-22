@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	tuistatusline "github.com/startvibecoding/mothx/internal/tui/statusline"
+	"github.com/oschina/mothx/internal/config"
+	tuistatusline "github.com/oschina/mothx/internal/tui/statusline"
 )
 
 func (a *App) handleStatusLineCommand(parts []string) {

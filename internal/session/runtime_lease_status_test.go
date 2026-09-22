@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	database "github.com/startvibecoding/mothx/internal/db"
+	"github.com/oschina/mothx/internal/dao"
+	database "github.com/oschina/mothx/internal/db"
 )
 
 // TestActiveRuntimeLeasesReportsHeldHolders pins the preflight that guards

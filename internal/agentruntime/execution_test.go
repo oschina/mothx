@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	coreagent "github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/tools"
+	coreagent "github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 func TestExecutionRuntimeExclusiveBeginAndFinish(t *testing.T) {

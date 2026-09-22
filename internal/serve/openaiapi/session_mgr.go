@@ -10,17 +10,17 @@ import (
 	"sync"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/provider"
-	openaiprovider "github.com/startvibecoding/mothx/internal/provider/openai"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/util"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/provider"
+	openaiprovider "github.com/oschina/mothx/internal/provider/openai"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/util"
 )
 
 // APISession holds state for a single API session.
@@ -2278,6 +2278,12 @@ func sequencedMessagesToEntries(msgs []session.SequencedMessage) []SessionMessag
 	return entries
 }
 
+// providerMessageToSessionEntries projects one provider message into serve's
+// API history entries. The canonical transcript keeps tool calls inside the
+// single assistant entry (session.appendRunAssistantMessageTx); splitting them
+// into Role:"toolCall" entries here is a serve rendering projection only, and
+// replay consistency between the two shapes is repaired by the provider
+// codecs' tool-result sequencing.
 func providerMessageToSessionEntries(m provider.Message, seq int64, entryID string) []SessionMessageEntry {
 	var entries []SessionMessageEntry
 	if m.SystemInjected {
@@ -2455,6 +2461,18 @@ func cloneContentBlocks(blocks []provider.ContentBlock) []provider.ContentBlock 
 		if block.Image != nil {
 			image := *block.Image
 			cloned[i].Image = &image
+		}
+		if block.Audio != nil {
+			audio := *block.Audio
+			cloned[i].Audio = &audio
+		}
+		if block.Video != nil {
+			video := *block.Video
+			cloned[i].Video = &video
+		}
+		if block.File != nil {
+			file := *block.File
+			cloned[i].File = &file
 		}
 		if block.ToolCall != nil {
 			toolCall := *block.ToolCall

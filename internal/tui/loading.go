@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 // formatTokenCount formats a token count as a human-friendly string:

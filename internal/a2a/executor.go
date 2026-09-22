@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agent"
 )
 
 // DefaultExecutor implements AgentExecutor by running tasks through the agent loop.

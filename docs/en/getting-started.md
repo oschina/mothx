@@ -52,10 +52,10 @@ The online installers ultimately run `npm install -g mothx-installer`.
 
 ```bash
 # Default Ubuntu image, runs as root
-docker run --rm -it --entrypoint bash ghcr.io/startvibecoding/mothx:latest
+docker run --rm -it --entrypoint bash ghcr.io/oschina/mothx:latest
 
 # Run MothX in the current workspace
-docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/startvibecoding/mothx:latest
+docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/oschina/mothx:latest
 ```
 
 Available tags:
@@ -71,14 +71,14 @@ The container runs as `root` by default and includes `bash`, `git`, `curl`, `ca-
 ### Method 5: Go Install
 
 ```bash
-go install github.com/startvibecoding/mothx/cmd/mothx@latest
+go install github.com/oschina/mothx/cmd/mothx@latest
 ```
 
 ### Method 6: Build from Source
 
 ```bash
 # Clone repository
-git clone https://github.com/startvibecoding/mothx.git
+git clone https://github.com/oschina/mothx.git
 cd mothx
 
 # Build

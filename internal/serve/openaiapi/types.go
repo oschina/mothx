@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agentruntime"
 )
 
 // --- OpenAI-compatible request types ---
@@ -217,10 +217,12 @@ type RequestMessage struct {
 
 // RequestContentPart represents one OpenAI-compatible multimodal content part.
 type RequestContentPart struct {
-	Type     string            `json:"type"`
-	Text     string            `json:"text,omitempty"`
-	ImageURL *RequestImageURL  `json:"image_url,omitempty"`
-	Image    *RequestImageData `json:"image,omitempty"`
+	Type       string             `json:"type"`
+	Text       string             `json:"text,omitempty"`
+	ImageURL   *RequestImageURL   `json:"image_url,omitempty"`
+	Image      *RequestImageData  `json:"image,omitempty"`
+	InputAudio *RequestInputAudio `json:"input_audio,omitempty"`
+	VideoURL   *RequestVideoURL   `json:"video_url,omitempty"`
 }
 
 // RequestImageURL represents an OpenAI image_url content part.
@@ -234,6 +236,20 @@ type RequestImageData struct {
 	Data     string `json:"data"`
 	MimeType string `json:"mimeType"`
 	Detail   string `json:"detail,omitempty"`
+}
+
+// RequestInputAudio represents an OpenAI-compatible input_audio content part.
+// Data accepts raw base64 (OpenAI shape) or a data URL (Qwen/DashScope shape);
+// remote URLs are not fetched.
+type RequestInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format,omitempty"`
+}
+
+// RequestVideoURL represents an OpenAI-compatible video_url content part. URL
+// must be an inline base64 or data URL payload; remote URLs are not fetched.
+type RequestVideoURL struct {
+	URL string `json:"url"`
 }
 
 // UnmarshalJSON accepts both classic string content and OpenAI-style content arrays.

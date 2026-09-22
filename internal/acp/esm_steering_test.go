@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/esm"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/esm"
 )
 
 func TestACPSteeringMessagesInjectsChangedESMObjective(t *testing.T) {

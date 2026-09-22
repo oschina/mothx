@@ -14,7 +14,7 @@ This document describes how to contribute code to MothX.
 ### Get Source Code
 
 ```bash
-git clone https://github.com/startvibecoding/mothx.git
+git clone https://github.com/oschina/mothx.git
 cd mothx
 ```
 

@@ -5,10 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	coreagent "github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
+	coreagent "github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestServerExpertCatalogAndSessionBindingUseRuntime(t *testing.T) {

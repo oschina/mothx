@@ -3,7 +3,7 @@
 // internal imports, so external modules blank-import this package once to
 // enable agent.NewBuilder().Build() and Builder.WithProviderByName(...):
 //
-//	import _ "github.com/startvibecoding/mothx/bootstrap"
+//	import _ "github.com/oschina/mothx/bootstrap"
 //
 // Importing this package has no other side effects beyond registering the
 // builder hook (via internal/agent) and the provider resolution hook plus
@@ -14,13 +14,13 @@ package bootstrap
 import (
 	// Registers the internal agent builder (agent.SetBuilderFunc) and, transitively,
 	// the provider registry used by Builder.WithProviderByName.
-	_ "github.com/startvibecoding/mothx/internal/agent"
-	_ "github.com/startvibecoding/mothx/internal/provider"
+	_ "github.com/oschina/mothx/internal/agent"
+	_ "github.com/oschina/mothx/internal/provider"
 
 	// Register the concrete provider factories in the global provider registry
 	// so Builder.WithProviderByName can resolve openai/anthropic/google
 	// providers (each subpackage self-registers via its init()).
-	_ "github.com/startvibecoding/mothx/internal/provider/anthropic"
-	_ "github.com/startvibecoding/mothx/internal/provider/google"
-	_ "github.com/startvibecoding/mothx/internal/provider/openai"
+	_ "github.com/oschina/mothx/internal/provider/anthropic"
+	_ "github.com/oschina/mothx/internal/provider/google"
+	_ "github.com/oschina/mothx/internal/provider/openai"
 )

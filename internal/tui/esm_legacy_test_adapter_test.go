@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	internalagent "github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/esm"
+	internalagent "github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/esm"
 )
 
 // These compatibility helpers keep the historical TUI tests focused on the

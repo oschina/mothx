@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // Store manages reading and writing of memory.md files.

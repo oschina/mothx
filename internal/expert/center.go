@@ -11,9 +11,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/startvibecoding/mothx/experts"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/platform"
+	"github.com/oschina/mothx/experts"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/platform"
 )
 
 // Center resolves expert bundles from three layered sources with name

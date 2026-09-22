@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // SessionTrajectoryResponse is the read-only, front-end-neutral trajectory

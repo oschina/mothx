@@ -3,8 +3,8 @@ package channels
 import (
 	"fmt"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/util"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/util"
 )
 
 // Security provides user whitelist validation and smart approval logic for messaging channel mode.

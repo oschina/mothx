@@ -5,9 +5,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/platform"
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 func init() {

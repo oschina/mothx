@@ -1,6 +1,6 @@
 package context
 
-import "github.com/startvibecoding/mothx/internal/provider"
+import "github.com/oschina/mothx/internal/provider"
 
 // ContextUsage holds the current request-input footprint. TotalTokens is the
 // context-window total and is deliberately input-only; output tokens from a

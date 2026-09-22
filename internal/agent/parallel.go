@@ -3,7 +3,7 @@ package agent
 import (
 	"sync"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // BoundedParallel applies fn to every item with at most max concurrent

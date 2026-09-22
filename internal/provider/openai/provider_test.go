@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -2884,5 +2884,51 @@ func TestOpenAIResponsesReasoningDropsSamplingParams(t *testing.T) {
 	}
 	if req.TopP != nil {
 		t.Fatalf("top_p = %#v, want nil (dropped for Responses reasoning models)", *req.TopP)
+	}
+}
+
+func TestConvertMessagesAudioVideoBlocks(t *testing.T) {
+	p := &Provider{}
+	messages := p.convertMessages(provider.ChatParams{Messages: []provider.Message{{
+		Role: "user",
+		Contents: []provider.ContentBlock{
+			{Type: "text", Text: "listen and watch"},
+			{Type: "audio", Audio: &provider.AudioContent{MimeType: "audio/wav", Format: "wav", Data: "YXVkaW8="}},
+			{Type: "video", Video: &provider.VideoContent{MimeType: "video/mp4", Data: "dmlkZW8="}},
+		},
+	}}}, false)
+	if len(messages) != 1 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	blocks, ok := messages[0].Content.([]openAIContentBlock)
+	if !ok || len(blocks) != 3 {
+		t.Fatalf("content = %#v, want three content blocks", messages[0].Content)
+	}
+	if blocks[1].Type != "input_audio" || blocks[1].InputAudio == nil ||
+		blocks[1].InputAudio.Data != "data:audio/wav;base64,YXVkaW8=" || blocks[1].InputAudio.Format != "wav" {
+		t.Fatalf("audio block = %#v", blocks[1])
+	}
+	if blocks[2].Type != "video_url" || blocks[2].VideoURL == nil ||
+		blocks[2].VideoURL.URL != "data:video/mp4;base64,dmlkZW8=" {
+		t.Fatalf("video block = %#v", blocks[2])
+	}
+}
+
+func TestResponsesMessageContentAudioVideoBlocks(t *testing.T) {
+	p := &Provider{}
+	content := p.responsesMessageContent(provider.Message{Role: "user", Contents: []provider.ContentBlock{
+		{Type: "text", Text: "analyze"},
+		{Type: "audio", Audio: &provider.AudioContent{MimeType: "audio/mpeg", Data: "YXVkaW8="}},
+		{Type: "video", Video: &provider.VideoContent{MimeType: "video/mp4", URL: "https://example.com/clip.mp4"}},
+	}}, "input_text")
+	blocks, ok := content.([]responsesContentBlock)
+	if !ok || len(blocks) != 3 {
+		t.Fatalf("content = %#v", content)
+	}
+	if blocks[1].Type != "input_audio" || blocks[1].AudioURL != "data:audio/mpeg;base64,YXVkaW8=" || blocks[1].Format != "mp3" {
+		t.Fatalf("audio block = %#v", blocks[1])
+	}
+	if blocks[2].Type != "input_video" || blocks[2].VideoURL != "https://example.com/clip.mp4" {
+		t.Fatalf("video block = %#v", blocks[2])
 	}
 }

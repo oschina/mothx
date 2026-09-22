@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	"github.com/startvibecoding/mothx/internal/platform"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // StatsEntry represents a single recorded LLM request.

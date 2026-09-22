@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestDeliveryCoordinatorReconcilesDueOperationAndBoundsRetries(t *testing.T) {

@@ -669,5 +669,5 @@ Choose based on:
 
 <p align="center">
   <strong>Still have questions? Ask on GitHub!</strong><br>
-  <a href="https://github.com/startvibecoding/mothx/issues">GitHub Issues</a> · <a href="https://github.com/startvibecoding/mothx/discussions">GitHub Discussions</a>
+  <a href="https://github.com/oschina/mothx/issues">GitHub Issues</a> · <a href="https://github.com/oschina/mothx/discussions">GitHub Discussions</a>
 </p>

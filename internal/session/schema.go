@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	database "github.com/startvibecoding/mothx/internal/db"
+	database "github.com/oschina/mothx/internal/db"
 )
 
 const currentSchemaTemplate = `

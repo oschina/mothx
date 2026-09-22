@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/startvibecoding/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/skills"
 )
 
 // SkillRefTool loads on-demand reference files from skills.

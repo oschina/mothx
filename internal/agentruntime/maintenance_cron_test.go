@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // TestRunMaintenanceCronJobClaimsTheWholeNamespace proves the two properties that

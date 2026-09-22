@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // AddGuidance queues user guidance for the session's objective. The guidance

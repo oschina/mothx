@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // MemoryStore is an in-memory implementation of Store for testing.

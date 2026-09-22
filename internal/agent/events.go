@@ -1,10 +1,10 @@
 package agent
 
 import (
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	ctxpkg "github.com/startvibecoding/mothx/internal/context"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/tools"
+	agentpkg "github.com/oschina/mothx/agent"
+	ctxpkg "github.com/oschina/mothx/internal/context"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // EventType identifies the type of agent event.

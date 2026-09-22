@@ -221,7 +221,7 @@ Client                                    Server (mothx acp)
 ```bash
 npm install -g mothx-installer
 # or
-go install github.com/startvibecoding/mothx/cmd/mothx@latest
+go install github.com/oschina/mothx/cmd/mothx@latest
 ```
 
 ### Step 2: Configure VS Code

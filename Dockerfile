@@ -22,12 +22,12 @@ COPY . .
 COPY --from=ui-builder /src/ui/dist ./ui/dist
 RUN GOOS=linux GOARCH="${TARGETARCH}" \
 	go build -buildvcs=false -trimpath \
-	-ldflags "-s -w -X main.version=${VERSION} -X github.com/startvibecoding/mothx/internal/version.Version=${VERSION} -X github.com/startvibecoding/mothx/internal/ua.Version=${VERSION}" \
+	-ldflags "-s -w -X main.version=${VERSION} -X github.com/oschina/mothx/internal/version.Version=${VERSION} -X github.com/oschina/mothx/internal/ua.Version=${VERSION}" \
 	-o /out/mothx ./cmd/mothx
 
 FROM ubuntu:24.04 AS runtime-ubuntu
 ARG VERSION=unknown
-LABEL org.opencontainers.image.source="https://github.com/startvibecoding/mothx" \
+LABEL org.opencontainers.image.source="https://github.com/oschina/mothx" \
 	org.opencontainers.image.title="MothX" \
 	org.opencontainers.image.description="MothX terminal AI coding assistant" \
 	org.opencontainers.image.licenses="MIT" \
@@ -43,7 +43,7 @@ ENTRYPOINT ["mothx"]
 
 FROM debian:bookworm-slim AS runtime-debian
 ARG VERSION=unknown
-LABEL org.opencontainers.image.source="https://github.com/startvibecoding/mothx" \
+LABEL org.opencontainers.image.source="https://github.com/oschina/mothx" \
 	org.opencontainers.image.title="MothX" \
 	org.opencontainers.image.description="MothX terminal AI coding assistant" \
 	org.opencontainers.image.licenses="MIT" \
@@ -59,7 +59,7 @@ ENTRYPOINT ["mothx"]
 
 FROM fedora:42 AS runtime-fedora
 ARG VERSION=unknown
-LABEL org.opencontainers.image.source="https://github.com/startvibecoding/mothx" \
+LABEL org.opencontainers.image.source="https://github.com/oschina/mothx" \
 	org.opencontainers.image.title="MothX" \
 	org.opencontainers.image.description="MothX terminal AI coding assistant" \
 	org.opencontainers.image.licenses="MIT" \
@@ -75,7 +75,7 @@ ENTRYPOINT ["mothx"]
 
 FROM alpine:3.22 AS runtime-alpine
 ARG VERSION=unknown
-LABEL org.opencontainers.image.source="https://github.com/startvibecoding/mothx" \
+LABEL org.opencontainers.image.source="https://github.com/oschina/mothx" \
 	org.opencontainers.image.title="MothX" \
 	org.opencontainers.image.description="MothX terminal AI coding assistant" \
 	org.opencontainers.image.licenses="MIT" \

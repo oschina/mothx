@@ -14,7 +14,7 @@
 ### 获取源码
 
 ```bash
-git clone https://gitee.com/startvibecoding/mothx.git
+git clone https://gitee.com/oschina/mothx.git
 cd mothx
 ```
 

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/cron"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/cron"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestKnowledgeBaseHandlersManageRuntimeOwnedIndexes(t *testing.T) {

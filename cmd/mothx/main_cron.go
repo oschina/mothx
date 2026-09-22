@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/cron"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/cron"
 )
 
 // openCronStore opens the shared SQLite cron store.

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 func TestTUILangCommandPersistsDefaultGlobalAndExplicitProject(t *testing.T) {

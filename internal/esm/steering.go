@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // SteeringSource projects the latest active ESM objective into an already

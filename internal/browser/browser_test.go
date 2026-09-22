@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/tools"
 	vbprotocol "github.com/startvibecoding/vibe-browser/pkg/protocol"
 )
 

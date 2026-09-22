@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 func TestCreateSessionRunRejectsDuplicateAndStatusRollback(t *testing.T) {

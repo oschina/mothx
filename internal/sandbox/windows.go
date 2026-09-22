@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/platform"
 )
 
 // winSandbox implements a basic sandbox for Windows.

@@ -3,8 +3,8 @@ package agentruntime
 import (
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 func TestClassifyBashCommandHighRiskVariants(t *testing.T) {

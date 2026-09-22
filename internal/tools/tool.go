@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/imageproc"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/imageproc"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/skills"
 )
 
 type operationIDContextKey struct{}
@@ -465,35 +465,16 @@ func (r *Registry) SetSandbox(sb sandbox.Sandbox) {
 	r.sandbox = sb
 }
 
-// RegisterDefaults registers all default tools.
-func (r *Registry) RegisterDefaults() {
-	r.RegisterDefaultsWithPlanTool(true)
-}
+// builtinToolOrder lists the built-in tools in registration order. Full and
+// filtered registration both derive from builtinToolFactories so adding a
+// built-in tool changes exactly one list (ModeTools keeps its own mode policy).
+var builtinToolOrder = []string{"read", "ls", "grep", "find", "plan", "write", "edit", "insert", "bash", "jobs", "kill", "skill_ref"}
 
-// RegisterDefaultsWithPlanTool registers all default tools, optionally including the plan tool.
-func (r *Registry) RegisterDefaultsWithPlanTool(enablePlanTool bool) {
-	r.Register(NewReadTool(r))
-	r.Register(NewLsTool(r))
-	r.Register(NewGrepTool(r))
-	r.Register(NewFindTool(r))
-	if enablePlanTool {
-		r.Register(NewPlanTool(r))
-	}
-	r.Register(NewWriteTool(r))
-	r.Register(NewEditTool(r))
-	r.Register(NewInsertTool(r))
+// builtinToolFactories maps canonical built-in names to constructors. bash,
+// jobs, and kill share one bash tool instance per registry.
+func (r *Registry) builtinToolFactories() map[string]func() Tool {
 	bashTool := NewBashToolWithJM(r, r.jobManager)
-	r.Register(bashTool)
-	r.Register(NewJobsTool(r, bashTool))
-	r.Register(NewKillTool(r, bashTool))
-	if r.skillsMgr != nil {
-		r.Register(NewSkillRefTool(r.skillsMgr))
-	}
-}
-
-// RegisterFiltered registers only the specified tools by name.
-func (r *Registry) RegisterFiltered(toolNames []string) {
-	allTools := map[string]func() Tool{
+	factories := map[string]func() Tool{
 		"read":   func() Tool { return NewReadTool(r) },
 		"ls":     func() Tool { return NewLsTool(r) },
 		"grep":   func() Tool { return NewGrepTool(r) },
@@ -502,17 +483,39 @@ func (r *Registry) RegisterFiltered(toolNames []string) {
 		"write":  func() Tool { return NewWriteTool(r) },
 		"edit":   func() Tool { return NewEditTool(r) },
 		"insert": func() Tool { return NewInsertTool(r) },
+		"bash":   func() Tool { return bashTool },
+		"jobs":   func() Tool { return NewJobsTool(r, bashTool) },
+		"kill":   func() Tool { return NewKillTool(r, bashTool) },
 	}
-	bashTool := NewBashToolWithJM(r, r.jobManager)
-	allTools["bash"] = func() Tool { return bashTool }
-	allTools["jobs"] = func() Tool { return NewJobsTool(r, bashTool) }
-	allTools["kill"] = func() Tool { return NewKillTool(r, bashTool) }
 	if r.skillsMgr != nil {
-		allTools["skill_ref"] = func() Tool { return NewSkillRefTool(r.skillsMgr) }
+		factories["skill_ref"] = func() Tool { return NewSkillRefTool(r.skillsMgr) }
 	}
+	return factories
+}
 
+// RegisterDefaults registers all default tools.
+func (r *Registry) RegisterDefaults() {
+	r.RegisterDefaultsWithPlanTool(true)
+}
+
+// RegisterDefaultsWithPlanTool registers all default tools, optionally including the plan tool.
+func (r *Registry) RegisterDefaultsWithPlanTool(enablePlanTool bool) {
+	factories := r.builtinToolFactories()
+	for _, name := range builtinToolOrder {
+		if name == "plan" && !enablePlanTool {
+			continue
+		}
+		if factory, ok := factories[name]; ok {
+			r.Register(factory())
+		}
+	}
+}
+
+// RegisterFiltered registers only the specified tools by name.
+func (r *Registry) RegisterFiltered(toolNames []string) {
+	factories := r.builtinToolFactories()
 	for _, name := range toolNames {
-		if factory, ok := allTools[name]; ok {
+		if factory, ok := factories[name]; ok {
 			r.Register(factory())
 		}
 	}

@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/startvibecoding/mothx/internal/tools"
+import "github.com/oschina/mothx/internal/tools"
 
 // SubAgentToolNames returns the canonical async sub-agent toolset, in
 // registration order. Every adapter that installs or uninstalls these tools

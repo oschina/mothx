@@ -3,7 +3,7 @@ package agentruntime
 import (
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestSessionRunEventSinkPreservesInsertionOrder(t *testing.T) {

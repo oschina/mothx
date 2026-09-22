@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/messaging"
 )
 
 func TestClientLifecycleAndGetUpdatesProtocolContract(t *testing.T) {

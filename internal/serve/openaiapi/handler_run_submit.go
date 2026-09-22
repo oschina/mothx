@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/ai/title"
-	"github.com/startvibecoding/mothx/internal/provider"
-	providerfactory "github.com/startvibecoding/mothx/internal/provider/factory"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/ai/title"
+	"github.com/oschina/mothx/internal/provider"
+	providerfactory "github.com/oschina/mothx/internal/provider/factory"
+	"github.com/oschina/mothx/internal/session"
 )
 
 type submitRunRequest struct {
@@ -1090,6 +1090,18 @@ func (s *Server) generateSessionTitle(sess *APISession, model *provider.Model) {
 	}
 }
 
+// isSubmitAttachmentKind reports whether a WebUI attachment kind is a valid
+// Runtime input kind. Audio/video uploads share the same intake path; the
+// Runtime normalizes generic file kinds carrying media payloads.
+func isSubmitAttachmentKind(kind agentruntime.AttachmentKind) bool {
+	switch kind {
+	case agentruntime.AttachmentImage, agentruntime.AttachmentFile, agentruntime.AttachmentAudio, agentruntime.AttachmentVideo:
+		return true
+	default:
+		return false
+	}
+}
+
 func submitRunAttachmentIngresses(req submitRunRequest) ([]agentruntime.InputIngress, error) {
 	items := append([]submitRunAttachmentRequest(nil), req.Attachments...)
 	for index, dataURL := range req.Images {
@@ -1100,7 +1112,7 @@ func submitRunAttachmentIngresses(req submitRunRequest) ([]agentruntime.InputIng
 	ingresses := make([]agentruntime.InputIngress, 0, len(items))
 	for index, item := range items {
 		kind := agentruntime.AttachmentKind(strings.ToLower(strings.TrimSpace(item.Kind)))
-		if kind != agentruntime.AttachmentImage && kind != agentruntime.AttachmentFile {
+		if !isSubmitAttachmentKind(kind) {
 			return nil, fmt.Errorf("unsupported attachment kind %q", item.Kind)
 		}
 		data, mediaType, err := decodeSubmitRunDataURL(item.DataURL)
@@ -1160,7 +1172,7 @@ func storedSubmitRunInput(req submitRunRequest) agentruntime.RunInput {
 	input := agentruntime.RunInput{Text: req.Message, Resources: make([]agentruntime.PreparedInput, 0, len(req.Attachments))}
 	for _, item := range req.Attachments {
 		kind := agentruntime.AttachmentKind(strings.ToLower(strings.TrimSpace(item.Kind)))
-		if item.AttachmentID == "" || (kind != agentruntime.AttachmentImage && kind != agentruntime.AttachmentFile) {
+		if item.AttachmentID == "" || !isSubmitAttachmentKind(kind) {
 			continue
 		}
 		input.Resources = append(input.Resources, agentruntime.PreparedInput{

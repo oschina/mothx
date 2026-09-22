@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
+	agentpkg "github.com/oschina/mothx/agent"
 )
 
 func TestFinalAssistantResponsePrefersContentAndFallsBackToBlocks(t *testing.T) {

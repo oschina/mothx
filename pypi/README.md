@@ -138,7 +138,7 @@ Compatible with [SkillHub](https://github.com/startvibecoding/skillhub) for disc
 
 ## IDE Integration
 
-MothX speaks [Agent Client Protocol (ACP)](https://github.com/startvibecoding/mothx/blob/main/docs/en/acp.md), integrating with VS Code, Zed, and JetBrains IDEs.
+MothX speaks [Agent Client Protocol (ACP)](https://github.com/oschina/mothx/blob/main/docs/en/acp.md), integrating with VS Code, Zed, and JetBrains IDEs.
 
 ### VS Code
 
@@ -238,8 +238,8 @@ pipx uninstall mothx-installer
 
 ## Links
 
-- **Homepage** — <https://github.com/startvibecoding/mothx>
-- **Documentation** — <https://github.com/startvibecoding/mothx/tree/main/docs>
-- **Changelog** — <https://github.com/startvibecoding/mothx/blob/main/docs/en/changelog.md>
-- **Issues** — <https://github.com/startvibecoding/mothx/issues>
+- **Homepage** — <https://github.com/oschina/mothx>
+- **Documentation** — <https://github.com/oschina/mothx/tree/main/docs>
+- **Changelog** — <https://github.com/oschina/mothx/blob/main/docs/en/changelog.md>
+- **Issues** — <https://github.com/oschina/mothx/issues>
 - **License** — MIT

@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	channels "github.com/startvibecoding/mothx/internal/serve/channels"
-	openaiapi "github.com/startvibecoding/mothx/internal/serve/openaiapi"
+	"github.com/oschina/mothx/internal/config"
+	channels "github.com/oschina/mothx/internal/serve/channels"
+	openaiapi "github.com/oschina/mothx/internal/serve/openaiapi"
 )
 
 type Config struct {

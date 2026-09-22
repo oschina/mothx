@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/tools"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // TestLoopInjectsFollowUpMessagesInsteadOfStopping guards the team-lead wake

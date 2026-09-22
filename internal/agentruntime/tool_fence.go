@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // beforeToolExecuteForRuntime is installed by SessionRuntime for every Agent

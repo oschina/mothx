@@ -11,7 +11,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/messaging"
+	"github.com/oschina/mothx/internal/messaging"
 )
 
 // The Runtime artifact store performs the authoritative policy check. This

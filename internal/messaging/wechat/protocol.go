@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	appversion "github.com/startvibecoding/mothx/internal/version"
+	appversion "github.com/oschina/mothx/internal/version"
 )
 
 const (

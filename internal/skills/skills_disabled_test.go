@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/config"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // writeDisabledSkillFile persists a sparse global settings file carrying the

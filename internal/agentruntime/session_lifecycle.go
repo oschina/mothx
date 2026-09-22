@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // CreateSessionOptions describes persisted session identity without coupling it

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // ArtifactCollector owns the generated artifacts registered during one

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 func TestForkSessionAndMessageBoundary(t *testing.T) {

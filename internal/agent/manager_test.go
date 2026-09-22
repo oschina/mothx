@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // --- AgentManager tests ---

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // SQLiteCronStore persists cron jobs in the shared sessions.db database.

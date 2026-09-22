@@ -3,9 +3,9 @@ package bootstrap
 import (
 	"context"
 
-	"github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/config"
-	internalprovider "github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/config"
+	internalprovider "github.com/oschina/mothx/internal/provider"
 )
 
 // providerAdapter exposes an internal provider through the public agent.Provider
@@ -63,6 +63,12 @@ func (a *providerAdapter) Chat(ctx context.Context, params agent.ChatParams) <-c
 					CropWidth:      cb.Image.CropWidth,
 					CropHeight:     cb.Image.CropHeight,
 				}
+			}
+			if cb.Audio != nil {
+				internalParams.Messages[i].Contents[j].Audio = &internalprovider.AudioContent{MimeType: cb.Audio.MimeType, Format: cb.Audio.Format, Data: cb.Audio.Data, URL: cb.Audio.URL, Bytes: cb.Audio.Bytes}
+			}
+			if cb.Video != nil {
+				internalParams.Messages[i].Contents[j].Video = &internalprovider.VideoContent{MimeType: cb.Video.MimeType, Data: cb.Video.Data, URL: cb.Video.URL, Bytes: cb.Video.Bytes}
 			}
 			if cb.File != nil {
 				internalParams.Messages[i].Contents[j].File = &internalprovider.FileContent{ID: cb.File.ID, URL: cb.File.URL, Data: cb.File.Data, Filename: cb.File.Filename, MimeType: cb.File.MimeType, Title: cb.File.Title, Description: cb.File.Description, Size: cb.File.Size}

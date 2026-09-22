@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/mcp"
 )
 
 // Env management is a thin, secret-safe projection of internal/config/env.go.

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
 )
 
 // syncedBuffer is a thread-safe output sink for fixture servers. Decision

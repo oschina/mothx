@@ -1,8 +1,8 @@
 package anthropic
 
 import (
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 func resolveAnthropicModels(cfg *config.ProviderConfig) []*provider.Model {

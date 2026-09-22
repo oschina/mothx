@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/expert"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/expert"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // ErrSessionExpertMutationBusy means that a session has an active or

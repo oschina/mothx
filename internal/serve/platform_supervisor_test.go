@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/messaging"
-	channels "github.com/startvibecoding/mothx/internal/serve/channels"
+	"github.com/oschina/mothx/internal/messaging"
+	channels "github.com/oschina/mothx/internal/serve/channels"
 )
 
 type supervisorTestPlatform struct {

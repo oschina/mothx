@@ -10,8 +10,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 func formatToolArgs(toolName string, args map[string]any) string {

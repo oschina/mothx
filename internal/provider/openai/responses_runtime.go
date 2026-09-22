@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/ua"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/ua"
 )
 
 // ResponsesRunManager owns background Responses runs. It is intentionally

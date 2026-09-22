@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/acp"
+	"github.com/oschina/mothx/internal/acp"
 )
 
 func TestResolveACPTimeoutPrefersFlagThenEnvAndIgnoresInvalid(t *testing.T) {

@@ -56,5 +56,5 @@ linux:
 
 publish:
   provider: github
-  owner: startvibecoding
+  owner: oschina
   repo: mothx

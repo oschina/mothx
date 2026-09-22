@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agent"
 )
 
 // TestRetireEventStreamKeepsDrainingProducer guards the abort path: the Agent

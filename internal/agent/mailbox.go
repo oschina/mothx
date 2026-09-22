@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // Member completion statuses carried by MemberCompletion.Status. They match

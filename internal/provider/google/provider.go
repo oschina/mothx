@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/ua"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/ua"
 )
 
 type APIKind string
@@ -520,6 +520,14 @@ func (p *Provider) convertMessages(params provider.ChatParams) []googleContent {
 			case "image":
 				if block.Image != nil {
 					content.Parts = append(content.Parts, googlePart{InlineData: &googleInlineData{MimeType: block.Image.MimeType, Data: block.Image.Data}})
+				}
+			case "audio":
+				if block.Audio != nil {
+					content.Parts = append(content.Parts, googlePart{InlineData: &googleInlineData{MimeType: block.Audio.MimeType, Data: block.Audio.Data}})
+				}
+			case "video":
+				if block.Video != nil {
+					content.Parts = append(content.Parts, googlePart{InlineData: &googleInlineData{MimeType: block.Video.MimeType, Data: block.Video.Data}})
 				}
 			case "toolCall":
 				if block.ToolCall != nil {

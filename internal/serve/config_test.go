@@ -15,15 +15,15 @@ import (
 	"testing"
 	"time"
 
-	configpkg "github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/cron"
-	"github.com/startvibecoding/mothx/internal/messaging/wechat"
-	channels "github.com/startvibecoding/mothx/internal/serve/channels"
-	openaiapi "github.com/startvibecoding/mothx/internal/serve/openaiapi"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/skillhub"
-	"github.com/startvibecoding/mothx/internal/stats"
-	webui "github.com/startvibecoding/mothx/ui"
+	configpkg "github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/cron"
+	"github.com/oschina/mothx/internal/messaging/wechat"
+	channels "github.com/oschina/mothx/internal/serve/channels"
+	openaiapi "github.com/oschina/mothx/internal/serve/openaiapi"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/skillhub"
+	"github.com/oschina/mothx/internal/stats"
+	webui "github.com/oschina/mothx/ui"
 )
 
 type fakeActiveSessionManager struct {

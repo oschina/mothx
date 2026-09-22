@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
-	"github.com/startvibecoding/mothx/internal/tui/renderutil"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/tui/renderutil"
 )
 
 type toolModalTarget struct {

@@ -5,8 +5,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 const backgroundRunPollInterval = time.Second

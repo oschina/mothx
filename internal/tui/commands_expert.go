@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/expert"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/workflow"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/expert"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // handleExpertCommand is a thin TUI projection of Runtime-owned expert
@@ -290,29 +288,20 @@ func (a *App) refreshExpertAwareAgentManager() error {
 	if a.registry == nil {
 		return nil
 	}
-	if agentruntime.SubAgentToolsEnabled(a.runtime, a.multiAgent) {
-		agent.RegisterSubAgentTools(a.registry, manager)
-	} else {
-		removeTUISubAgentTools(a.registry)
-	}
-	if a.delegateMode {
-		agent.RegisterDelegateSubAgentTool(a.registry, manager)
-	} else {
-		a.registry.Remove("delegate_subagent")
-	}
-	if a.workflows {
-		workflow.RegisterTools(a.registry, manager, nil)
-	}
+	a.syncToolGroups()
 	return nil
 }
 
-func removeTUISubAgentTools(registry interface{ Remove(string) }) {
-	if registry == nil {
-		return
-	}
-	for _, name := range agent.SubAgentToolNames() {
-		registry.Remove(name)
-	}
+// syncToolGroups reconciles the manager-backed tool groups through the
+// Runtime-owned installer. The TUI supplies policy and the current manager
+// handle only; install, removal, and manager-swap re-installation semantics
+// stay shared across entry points.
+func (a *App) syncToolGroups() {
+	agentruntime.SynchronizeToolGroups(a.runtime, a.registry, agentruntime.ToolGroupPolicy{
+		MultiAgent: a.multiAgent,
+		Delegate:   a.delegateMode,
+		Workflows:  a.workflows,
+	}, a.agentMgr)
 }
 
 func (a *App) localizedExpertText(text expert.LocalizedText) string {

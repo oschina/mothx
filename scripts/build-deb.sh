@@ -9,7 +9,7 @@ BINARY_NAME="mothx"
 PACKAGE_NAME="mothx"
 MAINTAINER="MothX Team <admin@pkold.com>"
 DESCRIPTION="AI-powered terminal coding assistant"
-HOMEPAGE="https://github.com/startvibecoding/mothx"
+HOMEPAGE="https://github.com/oschina/mothx"
 
 # Parse arguments
 ARCH="${1:-amd64}"

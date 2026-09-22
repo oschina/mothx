@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/sandbox"
 )
 
 func TestInsertToolPositions(t *testing.T) {

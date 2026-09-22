@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/util"
+	"github.com/oschina/mothx/internal/util"
 )
 
 // Config holds the OpenAI-compatible API configuration used by serve.

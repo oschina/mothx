@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // Provider is the interface that all LLM providers must implement.

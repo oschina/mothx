@@ -20,14 +20,14 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/mothx-installer"><img src="https://img.shields.io/npm/dm/mothx-installer.svg" alt="npm downloads"></a>
   <a href="https://pypi.org/project/mothx-installer/"><img src="https://img.shields.io/pypi/v/mothx-installer.svg" alt="PyPI version"></a>
-  <a href="https://gitee.com/startvibecoding/mothx/releases/latest"><img src="https://img.shields.io/badge/Gitee-release-blue" alt="Gitee release"></a>
+  <a href="https://gitee.com/oschina/mothx/releases/latest"><img src="https://img.shields.io/badge/Gitee-release-blue" alt="Gitee release"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="https://goreportcard.com/report/github.com/startvibecoding/mothx"><img src="https://goreportcard.com/badge/github.com/startvibecoding/mothx" alt="Go Report Card"></a>
-  <a href="https://pkg.go.dev/github.com/startvibecoding/mothx"><img src="https://pkg.go.dev/badge/github.com/startvibecoding/mothx?status.svg" alt="GoDoc"></a>
+  <a href="https://goreportcard.com/report/github.com/oschina/mothx"><img src="https://goreportcard.com/badge/github.com/oschina/mothx" alt="Go Report Card"></a>
+  <a href="https://pkg.go.dev/github.com/oschina/mothx"><img src="https://pkg.go.dev/badge/github.com/oschina/mothx?status.svg" alt="GoDoc"></a>
 </p>
 
 <p align="center">
-  <strong>GitHub: <a href="https://github.com/startvibecoding/mothx">海外用户</a></strong>
+  <strong>GitHub: <a href="https://github.com/oschina/mothx">海外用户</a></strong>
 </p>
 
 > **改名说明：** MothX 原名 VibeCoding。`vibecoding` 命令和旧安装包名仍作为兼容别名保留。配置只会从 `.mothx` 项目目录和 MothX 全局配置目录读取；不会读取或迁移旧目录。
@@ -82,8 +82,8 @@ curl.exe -fsSL https://mothx.net/install.bat -o install.bat && install.bat
 
 ```bash
 # Docker（GHCR，Linux amd64/arm64）
-docker run --rm -it --entrypoint bash ghcr.io/startvibecoding/mothx:latest
-docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/startvibecoding/mothx:latest
+docker run --rm -it --entrypoint bash ghcr.io/oschina/mothx:latest
+docker run --rm -it -v "$PWD:/workspace" -w /workspace ghcr.io/oschina/mothx:latest
 
 # 设置 API 密钥
 export DEEPSEEK_API_KEY=sk-...
@@ -271,7 +271,7 @@ mothx serve   # 部署为微信/飞书机器人
 我们欢迎贡献！详见 [开发指南](development.md)。
 
 ```bash
-git clone https://gitee.com/startvibecoding/mothx.git
+git clone https://gitee.com/oschina/mothx.git
 cd mothx
 make build
 make test

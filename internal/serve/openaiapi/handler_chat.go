@@ -15,20 +15,19 @@ import (
 	"strings"
 	"time"
 
-	agentpkg "github.com/startvibecoding/mothx/agent"
-	"github.com/startvibecoding/mothx/internal/a2a"
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/cron"
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/tools"
-	"github.com/startvibecoding/mothx/internal/util"
-	"github.com/startvibecoding/mothx/internal/workflow"
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/a2a"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/cron"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/util"
 )
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -1673,25 +1672,21 @@ func (s *Server) syncSessionTools(sess *APISession, refreshContext bool) error {
 	} else {
 		sess.AgentMgr = nil
 	}
-
-	if agentruntime.SubAgentToolsEnabled(sess.Runtime, sess.MultiAgent) && sess.AgentMgr != nil {
-		agent.RegisterSubAgentTools(sess.Registry, sess.AgentMgr)
-	} else {
-		removeSubAgentTools(sess.Registry)
-	}
-
-	if sess.DelegateMode && sess.AgentMgr != nil {
-		agent.RegisterDelegateSubAgentTool(sess.Registry, sess.AgentMgr)
-	} else {
-		sess.Registry.Remove("delegate_subagent")
-	}
-	if sess.Workflows && sess.AgentMgr != nil {
-		workflow.RegisterTools(sess.Registry, sess.AgentMgr, nil)
-	} else {
-		removeWorkflowTools(sess.Registry)
-	}
+	synchronizeSessionToolGroups(sess)
 
 	return nil
+}
+
+// synchronizeSessionToolGroups reconciles the manager-backed tool groups
+// through the Runtime-owned installer. Adapters supply policy and the current
+// manager handle only; install, removal, and manager-swap re-installation are
+// Runtime-owned so every entry point shares one behavior.
+func synchronizeSessionToolGroups(sess *APISession) {
+	agentruntime.SynchronizeToolGroups(sess.Runtime, sess.Registry, agentruntime.ToolGroupPolicy{
+		MultiAgent: sess.MultiAgent,
+		Delegate:   sess.DelegateMode,
+		Workflows:  sess.Workflows,
+	}, sess.AgentMgr)
 }
 
 func (s *Server) registerCronTool(sess *APISession) {
@@ -1703,24 +1698,6 @@ func (s *Server) registerCronTool(sess *APISession) {
 		return
 	}
 	sess.Registry.Register(cron.NewCronTool(cron.NewSessionScopedStoreWithWorkDir(s.cronStore, sess.ID, sess.WorkDir), s.cronScheduler))
-}
-
-func removeSubAgentTools(registry *tools.Registry) {
-	if registry == nil {
-		return
-	}
-	for _, name := range agent.SubAgentToolNames() {
-		registry.Remove(name)
-	}
-}
-
-func removeWorkflowTools(registry *tools.Registry) {
-	if registry == nil {
-		return
-	}
-	for _, name := range []string{"workflow_lint", "workflow_run", "workflow_status", "workflow_cancel"} {
-		registry.Remove(name)
-	}
 }
 
 func (s *Server) refreshSessionContext(sess *APISession) error {
@@ -1753,20 +1730,12 @@ func (s *Server) refreshSessionContext(sess *APISession) error {
 	sess.RuleContent = sess.Runtime.RuleContent
 	if sess.AgentMgr != nil {
 		sess.AgentMgr = s.newAgentManagerForSession(sess)
-		// Re-register sub-agent/delegate/workflow tools with the new manager so
-		// tool instances reference the current AgentMgr. Without this, tools
-		// created by syncSessionTools keep pointing at the old manager while the
-		// parent agent is registered into the new one, causing "parent agent not
-		// found" errors when sub-agents are spawned.
-		if agentruntime.SubAgentToolsEnabled(sess.Runtime, sess.MultiAgent) && sess.AgentMgr != nil {
-			agent.RegisterSubAgentTools(sess.Registry, sess.AgentMgr)
-		}
-		if sess.DelegateMode && sess.AgentMgr != nil {
-			agent.RegisterDelegateSubAgentTool(sess.Registry, sess.AgentMgr)
-		}
-		if sess.Workflows && sess.AgentMgr != nil {
-			workflow.RegisterTools(sess.Registry, sess.AgentMgr, nil)
-		}
+		// Re-point the manager-backed tool groups at the new manager so tool
+		// instances reference the current AgentMgr. Without this, tools created
+		// by syncSessionTools keep pointing at the old manager while the parent
+		// agent is registered into the new one, causing "parent agent not found"
+		// errors when sub-agents are spawned.
+		synchronizeSessionToolGroups(sess)
 	}
 	return nil
 }
@@ -1908,7 +1877,7 @@ func requestRunInput(m RequestMessage) (agentruntime.RunInput, []agentruntime.In
 			if err != nil {
 				return agentruntime.RunInput{}, nil, err
 			}
-			ingresses = append(ingresses, requestImageIngress(index, mediaType, data))
+			ingresses = append(ingresses, requestMediaIngress(index, agentruntime.AttachmentImage, mediaType, data))
 		case "image":
 			if part.Image == nil || part.Image.Data == "" || part.Image.MimeType == "" {
 				return agentruntime.RunInput{}, nil, fmt.Errorf("image content part is missing data or mimeType")
@@ -1920,7 +1889,25 @@ func requestRunInput(m RequestMessage) (agentruntime.RunInput, []agentruntime.In
 			if err != nil {
 				return agentruntime.RunInput{}, nil, fmt.Errorf("decode image content: %w", err)
 			}
-			ingresses = append(ingresses, requestImageIngress(index, part.Image.MimeType, data))
+			ingresses = append(ingresses, requestMediaIngress(index, agentruntime.AttachmentImage, part.Image.MimeType, data))
+		case "input_audio":
+			if part.InputAudio == nil || strings.TrimSpace(part.InputAudio.Data) == "" {
+				return agentruntime.RunInput{}, nil, fmt.Errorf("input_audio content part is missing data")
+			}
+			mediaType, data, err := decodeRequestMediaPayload(part.InputAudio.Data, "audio", audioFormatMimeType(part.InputAudio.Format))
+			if err != nil {
+				return agentruntime.RunInput{}, nil, err
+			}
+			ingresses = append(ingresses, requestMediaIngress(index, agentruntime.AttachmentAudio, mediaType, data))
+		case "video_url":
+			if part.VideoURL == nil || strings.TrimSpace(part.VideoURL.URL) == "" {
+				return agentruntime.RunInput{}, nil, fmt.Errorf("video_url content part is missing url")
+			}
+			mediaType, data, err := decodeRequestMediaPayload(part.VideoURL.URL, "video", "")
+			if err != nil {
+				return agentruntime.RunInput{}, nil, err
+			}
+			ingresses = append(ingresses, requestMediaIngress(index, agentruntime.AttachmentVideo, mediaType, data))
 		default:
 			return agentruntime.RunInput{}, nil, fmt.Errorf("unsupported content part type %q", part.Type)
 		}
@@ -1931,19 +1918,86 @@ func requestRunInput(m RequestMessage) (agentruntime.RunInput, []agentruntime.In
 	return agentruntime.RunInput{Text: text}, ingresses, nil
 }
 
-func requestImageIngress(index int, mediaType string, data []byte) agentruntime.InputIngress {
-	filename := fmt.Sprintf("image-%d", index+1)
+// requestMediaIngress wraps decoded inline media as an authenticated one-shot
+// Runtime input stream. The adapter only decodes its transport envelope;
+// SessionRuntime owns materialization and provider content conversion.
+func requestMediaIngress(index int, kind agentruntime.AttachmentKind, mediaType string, data []byte) agentruntime.InputIngress {
+	filename := fmt.Sprintf("%s-%d", kind, index+1)
 	if strings.EqualFold(mediaType, "image/jpeg") {
 		filename += ".jpg"
-	} else if suffix := strings.TrimPrefix(strings.ToLower(mediaType), "image/"); suffix != "" {
+	} else if suffix := strings.TrimPrefix(strings.ToLower(mediaType), strings.ToLower(string(kind))+"/"); suffix != "" && suffix != strings.ToLower(mediaType) {
 		filename += "." + suffix
 	}
 	return agentruntime.InputIngress{
-		Origin: "api:chat-completions", ItemIndex: index, Reference: "inline-image", Kind: agentruntime.AttachmentImage,
+		Origin: "api:chat-completions", ItemIndex: index, Reference: "inline-" + string(kind), Kind: kind,
 		FilenameHint: filename, MediaTypeHint: mediaType, SizeHint: int64(len(data)),
 		Open: func(context.Context) (agentruntime.InputStream, error) {
 			return agentruntime.InputStream{Reader: io.NopCloser(bytes.NewReader(data)), Filename: filename, MediaType: mediaType, ContentSize: int64(len(data))}, nil
 		},
+	}
+}
+
+// decodeRequestMediaPayload decodes an inline audio/video payload. It accepts
+// raw base64 (OpenAI input_audio.data) and data URLs (Qwen/DashScope
+// input_audio.data and video_url.url); remote URLs are rejected because the
+// adapter must not fetch unauthenticated media.
+func decodeRequestMediaPayload(value, kind, fallbackMime string) (string, []byte, error) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "data:") {
+		comma := strings.Index(value, ",")
+		if comma < 0 || !strings.Contains(strings.ToLower(value[:comma]), ";base64") {
+			return "", nil, fmt.Errorf("%s content part must carry a base64 data URL", kind)
+		}
+		mediaType := strings.TrimSpace(strings.Split(value[len("data:"):comma], ";")[0])
+		if mediaType == "" {
+			mediaType = fallbackMime
+		}
+		if err := validateMediaPayload(kind, mediaType); err != nil {
+			return "", nil, err
+		}
+		data, err := base64.StdEncoding.DecodeString(value[comma+1:])
+		if err != nil {
+			return "", nil, fmt.Errorf("decode %s data URL: %w", kind, err)
+		}
+		return mediaType, data, nil
+	}
+	if strings.Contains(value, "://") {
+		return "", nil, fmt.Errorf("%s content part must be inline base64 or a data URL", kind)
+	}
+	if err := validateMediaPayload(kind, fallbackMime); err != nil {
+		return "", nil, err
+	}
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return "", nil, fmt.Errorf("decode %s base64 data: %w", kind, err)
+	}
+	return fallbackMime, data, nil
+}
+
+// validateMediaPayload checks that an inline media part carries a media type of
+// the expected class. This is a transport-shape check; the Runtime input
+// contract owns format policy.
+func validateMediaPayload(kind, mimeType string) error {
+	base := strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+	if !strings.HasPrefix(base, kind+"/") {
+		return fmt.Errorf("%s content part requires a %s/* media type, got %q", kind, kind, mimeType)
+	}
+	return nil
+}
+
+// audioFormatMimeType maps an input_audio format name to a media type.
+func audioFormatMimeType(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "":
+		return ""
+	case "wav":
+		return "audio/wav"
+	case "mp3":
+		return "audio/mpeg"
+	case "m4a", "mp4a":
+		return "audio/mp4"
+	default:
+		return "audio/" + strings.ToLower(strings.TrimSpace(format))
 	}
 }
 

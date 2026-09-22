@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/util"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/util"
 )
 
 const defaultMaxCompactionSummaryTokens = 4096

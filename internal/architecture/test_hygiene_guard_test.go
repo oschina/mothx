@@ -168,13 +168,13 @@ func legacyTestBoundaryViolations(root string) (map[string]string, error) {
 			}
 			pkgPath := imports[ident.Name]
 			switch {
-			case pkgPath == "github.com/startvibecoding/mothx/internal/session" && isCanonicalRunPersistence(selector.Sel.Name):
+			case pkgPath == "github.com/oschina/mothx/internal/session" && isCanonicalRunPersistence(selector.Sel.Name):
 				addLegacyTestViolation(violations, rel, fmt.Sprintf("session.%s; use agentruntime.RunStore/SessionRunEventSink", selector.Sel.Name))
-			case pkgPath == "github.com/startvibecoding/mothx/internal/session" && isCanonicalRunQuery(selector.Sel.Name):
+			case pkgPath == "github.com/oschina/mothx/internal/session" && isCanonicalRunQuery(selector.Sel.Name):
 				addLegacyTestViolation(violations, rel, fmt.Sprintf("session.%s; use agentruntime.GetDurableRun", selector.Sel.Name))
-			case pkgPath == "github.com/startvibecoding/mothx/internal/session" && isLegacyRuntimeLeaseAPI(selector.Sel.Name):
+			case pkgPath == "github.com/oschina/mothx/internal/session" && isLegacyRuntimeLeaseAPI(selector.Sel.Name):
 				addLegacyTestViolation(violations, rel, fmt.Sprintf("session.%s; use agentruntime.AcquireExecutionAdmission", selector.Sel.Name))
-			case pkgPath == "github.com/startvibecoding/mothx/internal/agent" && (selector.Sel.Name == "New" || selector.Sel.Name == "NewWithLoopConfig"):
+			case pkgPath == "github.com/oschina/mothx/internal/agent" && (selector.Sel.Name == "New" || selector.Sel.Name == "NewWithLoopConfig"):
 				addLegacyTestViolation(violations, rel, fmt.Sprintf("agent.%s; use SessionRuntime.BuildAgent/BuildTransientAgent/NewAgentManager", selector.Sel.Name))
 			}
 			return true

@@ -3,7 +3,7 @@ package agentruntime
 import (
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agent"
 )
 
 // TestExtendBudgetToolIsLeadOnly pins the registration boundary: the model-facing

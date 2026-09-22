@@ -5,8 +5,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/platform"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/platform"
 )
 
 // BuildSystemPrompt constructs the system prompt based on mode and context.

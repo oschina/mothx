@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 const (

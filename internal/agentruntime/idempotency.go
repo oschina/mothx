@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // ErrIdempotencyKeyConflict means a submission key was reused for a different

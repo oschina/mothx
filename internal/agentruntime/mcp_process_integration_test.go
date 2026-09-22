@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/mcp"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 func TestSessionRuntimeShutdownTerminatesMCPProcess(t *testing.T) {

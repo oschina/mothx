@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/dao"
 )
 
 var ErrConversationTurnNotOpen = errors.New("conversation turn is not open")

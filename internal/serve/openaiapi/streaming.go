@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // SSEWriter helps write Server-Sent Events to an HTTP response.

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/esm"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/esm"
 	"golang.org/x/net/websocket"
 )
 

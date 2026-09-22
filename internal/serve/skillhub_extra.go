@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/serve/openaiapi"
-	"github.com/startvibecoding/mothx/internal/skillhub"
+	"github.com/oschina/mothx/internal/serve/openaiapi"
+	"github.com/oschina/mothx/internal/skillhub"
 )
 
 func (rt *channelRuntime) handleSkillHubUninstall(w http.ResponseWriter, r *http.Request, server *openaiapi.Server) {

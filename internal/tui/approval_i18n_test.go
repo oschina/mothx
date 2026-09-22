@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/tui/i18n"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 func TestApprovalArgumentLabelsFollowTranslator(t *testing.T) {

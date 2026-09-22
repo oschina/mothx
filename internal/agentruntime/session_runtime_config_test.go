@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestSessionRuntimeExpertConfigOptionUsesRuntimeBindingRules(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agentruntime"
 )
 
 func (d *Dispatcher) persistChannelDecision(sess *ChannelSession, id string, kind agentruntime.DecisionKind, status, value string, payload map[string]any) error {

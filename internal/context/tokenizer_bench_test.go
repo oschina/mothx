@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 // BenchmarkEstimateTokens benchmarks token estimation for different text types.

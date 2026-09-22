@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/provider"
-	openaiprovider "github.com/startvibecoding/mothx/internal/provider/openai"
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
+	openaiprovider "github.com/oschina/mothx/internal/provider/openai"
+	"github.com/oschina/mothx/internal/session"
 )
 
 type recoveryRunDriver struct {

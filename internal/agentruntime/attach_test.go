@@ -3,9 +3,9 @@ package agentruntime
 import (
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/sandbox"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/sandbox"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 func TestAttachSessionResourcesUsesManagerIdentity(t *testing.T) {

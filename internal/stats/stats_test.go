@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/session"
+	"github.com/oschina/mothx/internal/session"
 	_ "modernc.org/sqlite"
 )
 

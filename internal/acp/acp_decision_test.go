@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agentruntime"
 )
 
 func TestACPDecisionServiceLifecycle(t *testing.T) {

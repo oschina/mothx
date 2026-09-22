@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/provider"
-	serviceruntime "github.com/startvibecoding/mothx/internal/serve/runtime"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/provider"
+	serviceruntime "github.com/oschina/mothx/internal/serve/runtime"
 )
 
 func (s *Server) submitChatCompletionBackground(w http.ResponseWriter, r *http.Request, req ChatCompletionRequest, workDir string, model *provider.Model, inputSpec agentruntime.RunInput, ingresses []agentruntime.InputIngress, systemMsgs []string, history []RequestMessage) {

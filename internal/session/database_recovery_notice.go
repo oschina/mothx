@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	database "github.com/startvibecoding/mothx/internal/db"
+	database "github.com/oschina/mothx/internal/db"
 )
 
 // A database that internal/db had to back up and rebuild after a schema

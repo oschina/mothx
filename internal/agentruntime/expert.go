@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/agent"
-	"github.com/startvibecoding/mothx/internal/expert"
-	"github.com/startvibecoding/mothx/internal/provider"
-	"github.com/startvibecoding/mothx/internal/session"
-	"github.com/startvibecoding/mothx/internal/skills"
-	"github.com/startvibecoding/mothx/internal/tools"
+	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/expert"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // ErrExpertSwitchRequiresFork preserves identity/history boundaries: replacing
@@ -381,7 +381,7 @@ func (r *SessionRuntime) publishPreparedExpertResourcesLocked(prepared *prepared
 		if r.Registry != nil {
 			r.Registry.Register(tools.NewSkillRefTool(prepared.skillsMgr))
 		}
-		r.synchronizeCoreToolsLocked(r.resourceBrowser)
+		r.synchronizeCoreToolsLocked(r.resourceBrowser, r.resourceSettings)
 		r.SkillsMgr = prepared.skillsMgr
 		r.ExtraContext = prepared.extraContext
 		r.RuleContent = prepared.ruleContent

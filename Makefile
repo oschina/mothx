@@ -16,7 +16,7 @@ BINARY_NAME=mothx
 VERSION=$(or $(GITEE_BRANCH),$(shell git describe --tags --always --dirty 2>/dev/null),unknown)
 FUZZTIME ?= 10s
 PRE_VERSION=$(if $(filter %-pre,$(VERSION)),$(VERSION),$(VERSION)-pre)
-LDFLAGS=-ldflags "-s -w -X main.version=$(VERSION) -X github.com/startvibecoding/mothx/internal/version.Version=$(VERSION) -X github.com/startvibecoding/mothx/internal/ua.Version=$(VERSION)"
+LDFLAGS=-ldflags "-s -w -X main.version=$(VERSION) -X github.com/oschina/mothx/internal/version.Version=$(VERSION) -X github.com/oschina/mothx/internal/ua.Version=$(VERSION)"
 GOBUILD_FLAGS=-trimpath
 DIST_DIR=dist
 CHECKSUM_FILE=$(DIST_DIR)/checksums.txt

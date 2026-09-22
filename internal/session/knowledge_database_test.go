@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/dao"
 )
 
 func TestKnowledgeBaseUsesDedicatedSQLiteDatabase(t *testing.T) {

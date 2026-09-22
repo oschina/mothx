@@ -221,7 +221,7 @@ MCP 服务器由 IDE 客户端配置，并在创建或加载会话时传递给 M
 ```bash
 npm install -g mothx-installer
 # 或
-go install github.com/startvibecoding/mothx/cmd/mothx@latest
+go install github.com/oschina/mothx/cmd/mothx@latest
 ```
 
 ### 步骤 2：配置 VS Code

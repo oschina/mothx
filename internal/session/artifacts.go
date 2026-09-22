@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/dao"
 )
 
 // GeneratedArtifact is the canonical read-only projection of one persisted

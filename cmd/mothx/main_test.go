@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/startvibecoding/mothx/internal/acp"
-	"github.com/startvibecoding/mothx/internal/agentruntime"
-	"github.com/startvibecoding/mothx/internal/config"
-	"github.com/startvibecoding/mothx/internal/contextfiles"
-	"github.com/startvibecoding/mothx/internal/debugpprof"
-	"github.com/startvibecoding/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/acp"
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/contextfiles"
+	"github.com/oschina/mothx/internal/debugpprof"
+	"github.com/oschina/mothx/internal/provider"
 )
 
 func TestRootPrintAcceptsMessageArgument(t *testing.T) {
