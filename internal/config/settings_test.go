@@ -208,6 +208,7 @@ func TestGetModelConfig(t *testing.T) {
 func TestMoarkModelMaxTokens(t *testing.T) {
 	s := DefaultSettings()
 	want := map[string]int{
+		"auto":                   0,
 		"glm-5.1":                131072,
 		"qwen3.5-flash":          65536,
 		"qwen3.6-flash":          65536,

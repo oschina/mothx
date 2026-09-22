@@ -551,6 +551,7 @@
 
 | 模型 | Context | MaxTokens | 推理 | 输入 |
 |------|---------|-----------|------|------|
+| auto | 1M | - | **是** | text,image |
 | glm-5 | 200K | 32K | **是** | text |
 | glm-5.1 | 200K | 128K | **是** | text |
 | glm-5.3 | 1M | 128K | **是** | text |
@@ -1086,6 +1087,69 @@
 
 ---
 
+### 41. B.AI（`bai`）
+
+- **Vendor**: `bai`
+- **BaseURL**: `https://api.b.ai/v1`
+- **API**: `openai-chat`
+- **API Key**: `${BAI_API_KEY}`
+
+> 模型列表来自 `https://api.b.ai/v1/models` 实时接口(共 49 个 chat 模型,已排除仅用于图像生成的 `gpt-image-2`);上下文窗口 / MaxTokens / 输入能力字段参考各模型公开规格填写,可通过 TUI/WebUI 的模型发现功能校正。
+
+| 模型 | Context | MaxTokens | 推理 | 输入 |
+|------|---------|-----------|------|------|
+| minimax-m3 | 1M | 128K | **是** | text,image,video |
+| minimax-m2.7 | 256K | 128K | **是** | text |
+| glm-5.1 | 200K | 128K | **是** | text |
+| glm-5.2 | 1M | 128K | **是** | text |
+| gpt-5.6-sol | 未设置（默认） | 未设置（默认） | **是** | text,image |
+| gpt-5.6-terra | 未设置（默认） | 未设置（默认） | **是** | text,image |
+| gpt-5.6-luna | 未设置（默认） | 未设置（默认） | **是** | text,image |
+| gpt-5.5 | 1050K | 128K | **是** | text,image |
+| gpt-5.5-instant | 128K | 16K | **是** | text,image |
+| gpt-5.4 | 1050K | 128K | **是** | text,image |
+| gpt-5.2 | 400K | 128K | **是** | text,image |
+| gpt-5.4-pro | 1050K | 128K | **是** | text,image |
+| gpt-5.4-mini | 400K | 128K | **是** | text,image |
+| gpt-5-mini | 400K | 128K | **是** | text,image |
+| gpt-5.4-nano | 400K | 128K | **是** | text,image |
+| gpt-5-nano | 400K | 128K | **是** | text,image |
+| claude-fable-5.1 | 1M | 128K | **是** | text,image |
+| claude-fable-5 | 1M | 128K | **是** | text,image |
+| claude-opus-5 | 1M | 128K | **是** | text,image |
+| claude-opus-4.8 | 1M | 128K | **是** | text,image |
+| claude-opus-4.7 | 1M | 128K | **是** | text,image |
+| claude-opus-4.6 | 1M | 128K | **是** | text,image |
+| claude-opus-4.5 | 200K | 64K | **是** | text,image |
+| claude-sonnet-5 | 1M | 64K | **是** | text,image |
+| claude-sonnet-4.6 | 1M | 64K | **是** | text,image |
+| claude-sonnet-4.5 | 1M | 64K | **是** | text,image |
+| claude-haiku-4.5 | 200K | 64K | **是** | text,image |
+| gemini-3.1-pro | 1M | 64K | **是** | text,image |
+| gemini-3-flash | 1M | 64K | **是** | text,image |
+| gemini-3.5-flash-lite | 1M | 64K | **是** | text,image |
+| gemini-3.6-flash | 1M | 64K | **是** | text,image |
+| hy3 | 256K | 64K | **是** | text |
+| mimo-v2.5-pro | 1M | 128K | **是** | text |
+| glm-5.3-flash | 1M | 128K | **是** | text,image |
+| glm-5.3-flashx | 1M | 128K | **是** | text,image |
+| kimi-k3 | 1M | 256K | **是** | text,image |
+| glm-5.3 | 1M | 128K | **是** | text |
+| kimi-k2.8-preview | 256K | 256K | **是** | text,image |
+| kimi-k2.6 | 256K | 256K | **是** | text,image,video |
+| mimo-v2.5 | 1M | 128K | **是** | text,image |
+| hy4-preview | 256K | 64K | **是** | text |
+| qwen3.8-flash | 1M | 未设置（默认） | **是** | text,image |
+| qwen3.8-max | 1M | 未设置（默认） | **是** | text,image |
+| qwen3.8-27b | 1M | 未设置（默认） | **是** | text,image,video |
+| deepseek-v4.1-flash | 1M | 未设置（默认） | **是** | text,image |
+| gpt-6-astra | 400K | 128K | **是** | text,image |
+| gemini-3.8-flash | 1M | 64K | **是** | text,image |
+| deepseek-v4-pro | 1M | 384K | **是** | text |
+| gemini-3.5-flash | 1M | 64K | **是** | text,image |
+
+---
+
 ## 按供应商分类的 Quick Reference
 
 | 供应商 | Vendor 名 | API 协议 | Thinking 格式 | 模型数 |
@@ -1105,7 +1169,7 @@
 | ModelScope | - | openai-chat | - | 45 |
 | 阿里云百炼 | `bailian`×3 | openai-chat | - | 6~14 |
 | 华为云 | `huawei`/`huawei-plan` | openai-chat | - | 8/5 |
-| Gitee/Moark | `gitee` | openai-chat | - | 28 |
+| Gitee/Moark | `gitee` | openai-chat | - | 30 |
 | 摩尔线程 | `mthreads-plan` | openai-chat | - | 1 |
 | 天翼云 | `ctyun-plan` | openai-chat | - | 3 |
 | 京东智联云 | `jd-plan` | openai-chat | - | 10 |
@@ -1131,6 +1195,7 @@
 | 阶跃星辰 | `stepfun` | openai-chat | - | 1 |
 | AMD Radeon | `amd-radeon` | openai-chat | - | 2 |
 | Agnes AI | `agnes`/`agnes-cn` | openai-chat | - | 3 |
+| B.AI | `bai` | openai-chat | - | 49 |
 
 ---
 

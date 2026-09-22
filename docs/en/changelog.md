@@ -25,6 +25,9 @@
 - **Bound Teams Keep the Full Sub-Agent Tool Set**
   - A bound expert team always exposes the complete canonical sub-agent tool set (`subagent_spawn`, `subagent_status`, `subagent_send`, `subagent_wait`, `subagent_answer`, `subagent_destroy`). Per-tool toggles that disable individual sub-agent tools apply only to non-team multi-agent sessions; the team capability is authoritative and never drops tools.
 
+- **New Gitee/Moark Model: `auto`**
+  - Added `auto` to the `gitee` and `moark` providers: an auto-routing model with a 1M context window, reasoning support, and text+image input; no default max_tokens is sent.
+
 - **New Gitee/Moark Model: `deepseek-v4.1-flash`**
   - Added `deepseek-v4.1-flash` to the `gitee` and `moark` providers with a 1M context window and text+image input; no default max_tokens is sent.
 
@@ -36,6 +39,9 @@
 
 - **New Volcengine Model: `deepseek-v4.1-flash`**
   - Added `deepseek-v4.1-flash` to all three Volcengine providers — `volcengine`, `volcengine-agentplan`, and `volcengine-codingplan` — with a 1M context window, reasoning support, and text+image input. The standard channel sends 262K max_tokens; the two plan channels send 100K.
+
+- **New Provider Channel: B.AI (`bai`)**
+  - Added a built-in `bai` provider preset for the OpenAI-compatible B.AI aggregator at `https://api.b.ai/v1` (API key `${BAI_API_KEY}`) with automatic base-URL vendor detection. The model catalog mirrors the live `https://api.b.ai/v1/models` listing — 49 chat models across OpenAI, Claude, Gemini, DeepSeek, Kimi, GLM, Qwen, MiniMax, Hunyuan, and MiMo families (the image-generation-only `gpt-image-2` is excluded) — with capability fields (context window, max output, input modalities) filled from known model specs.
 
 - **New Agnes AI Providers (International + China)**
   - Added `agnes` (`https://apihub.agnes-ai.com/v1`, `${AGNES_API_KEY}`) and `agnes-cn` (`https://api.agnes-ai.cn/v1`, `${AGNES_CN_API_KEY}`) through a new OpenAI-compatible `agnes` vendor adapter. Both expose `agnes-2.5-flash` (200K context), `agnes-2.5-pro` (256K context), and `agnes-3.0-flash` (512K context, 65535 max output tokens).

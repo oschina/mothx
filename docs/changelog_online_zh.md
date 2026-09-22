@@ -27,6 +27,9 @@
 - **绑定团队始终保留完整 sub-agent 工具集**
   - 绑定专家团后始终暴露完整的规范 sub-agent 工具集（`subagent_spawn`、`subagent_status`、`subagent_send`、`subagent_wait`、`subagent_answer`、`subagent_destroy`）。逐工具关闭只对非团队的多 Agent 会话生效；团队能力是权威的，不会因关闭单个工具而从团队会话移除工具。
 
+- **Gitee/Moark 新增模型：`auto`**
+  - `gitee` 和 `moark` 两个提供商均新增 `auto` 自动路由模型，支持 1M 上下文窗口、思考（reasoning）与多模态（`text,image`）输入；默认不发送 max_tokens。
+
 - **Gitee/Moark 新增模型：`deepseek-v4.1-flash`**
   - `gitee` 和 `moark` 两个提供商均新增 `deepseek-v4.1-flash`，支持 1M 上下文窗口与文本/图片输入；默认不发送 max_tokens。
 
@@ -38,6 +41,9 @@
 
 - **火山引擎新增模型：`deepseek-v4.1-flash`**
   - `volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 三个火山引擎渠道均新增 `deepseek-v4.1-flash`，支持思考、1M 上下文窗口与文本/图片输入；标准版 MaxTokens 为 262K，两个套餐版为 100K。
+
+- **新增渠道：B.AI（`bai`）**
+  - 新增内置 `bai` 供应商预设，指向 OpenAI 兼容的 B.AI 聚合平台 `https://api.b.ai/v1`（API Key `${BAI_API_KEY}`），并支持按 baseUrl 自动识别厂商。模型清单与 `https://api.b.ai/v1/models` 实时接口一致——涵盖 OpenAI、Claude、Gemini、DeepSeek、Kimi、GLM、Qwen、MiniMax、混元与 MiMo 系列共 49 个聊天模型（已排除仅用于图像生成的 `gpt-image-2`），上下文窗口 / MaxTokens / 输入能力字段参考各模型公开规格填写。
 
 - **新增 Agnes AI 供应商（国际版 + 国内版）**
   - 通过新的 `agnes` OpenAI 兼容厂商适配器新增 `agnes`（`https://apihub.agnes-ai.com/v1`，`${AGNES_API_KEY}`）与 `agnes-cn`（`https://api.agnes-ai.cn/v1`，`${AGNES_CN_API_KEY}`）两个提供商，均提供 `agnes-2.5-flash`（200K 上下文）、`agnes-2.5-pro`（256K 上下文）和 `agnes-3.0-flash`（512K 上下文，最大输出 65535 tokens）。
