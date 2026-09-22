@@ -157,7 +157,7 @@ Release and publishing targets (`make dist*`, `make build-all`, npm/PyPI publish
 - In Go, return errors instead of panicking for normal control flow, pass contexts, keep interfaces stable, and format with `gofmt`/`goimports`.
 - Add or update tests when changing behavior. Keep tests deterministic and scoped to the affected package.
 - Preserve meaningful trailing spaces in approval command prefixes such as `go `; do not normalize them as comma-separated values.
-- When adding a provider/model, update `internal/config/settings.go` defaults and `docs/provider-model-list.md`.
+- When adding a provider/model, update the `internal/config/settings.go` defaults, then regenerate the catalog with `make docs-models` (which writes `docs/provider-model-list.md`); do not hand-edit that file.
 - When adding a Web UI view, register it in `ui/src/App.svelte` and add navigation in `ui/src/components/Sidebar.svelte` as appropriate.
 - When changing Desktop UI, keep the renderer independent of `ui/`: build screens from the shadcn/ui primitives in `renderer/src/components/ui/` plus Tailwind utilities and the design tokens in `renderer/src/index.css`, keep DOM-free state/ACP actions in `renderer/src/core/`, use the `core/i18n` dictionaries for both Chinese and English strings, and make optional controls unavailable until their ACP feature key is advertised. Put privileged local operations behind a narrow, typed preload IPC method; do not expose Electron/Node primitives to the renderer.
 - When changing ACP behavior used by Desktop, keep each extension additive and feature-discoverable, update the ACP wire/process tests and Desktop projection tests together, and preserve standard ACP event/run semantics. The main process remains the single ACP client.

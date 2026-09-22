@@ -160,6 +160,15 @@ This file contains the changes for the **current version only**. The full histor
 
 ### 🔧 Improvements
 
+- **Unified Provider/Model Catalog in `docs/provider-model-list.md`**
+  - `docs/provider-model-list.md` is now the single provider/model reference: the former OpenRouter-snapshot `docs/models.md` was removed and merged into the built-in catalog. It is generated from `internal/config/settings.go` by `docs/scripts/generate-models.py` (`make docs-models`) and covers every built-in provider (API type, vendor, thinking format, base URL, API key env) plus per-model context window, max output, reasoning, input modalities, and pricing, alongside the Quick Reference and configuration-field guides.
+
+- **Xiaomi MiMo Channels Trimmed to V2.6**
+  - The `xiaomi` provider and the three MiMo token-plan channels (`xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`) now list only `mimo-v2.6-flash` and `mimo-v2.6-pro`, with `mimo-v2.6-flash` first. The `mimo-v2.5`, `mimo-v2.5-pro`, and `mimo-v2.5-pro-ultraspeed` entries were removed, so an unconfigured Xiaomi session defaults to `mimo-v2.6-flash`.
+
+- **Gitee/Moark Model Presets Reordered Around Flagships**
+  - The `gitee` and `moark` built-in model lists now lead with the flagship models (`deepseek-v4.1-flash`, `qwen3.8-flash`, `glm-5.3-flash`, `qwen3.8-max-0902`, `glm-5.3`, `kimi-k3`, `minimax-m3`), followed by the remaining models ordered by context window (then max output) descending. Because the preset order is also the fallback when no default model is configured, an unconfigured `gitee`/`moark` session now defaults to `deepseek-v4.1-flash` instead of `auto`.
+
 - **Model Presets Seed New Models Consistently**
   - `config.PresetModelConfig` is now the single source of draft defaults for a model ID: the current provider's configuration wins, then an exact match elsewhere in the built-in catalog, then safe generic defaults (256K context, reasoning on, text input). Model discovery, the provider factory, the TUI auth settings, the WebUI provider editor, the Serve model catalog, and the ACP provider catalog all seed a newly entered model the same way, and the generic defaults are projected to clients through `modelDefaults` so a client editor starts from the same values.
 

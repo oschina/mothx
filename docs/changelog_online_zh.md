@@ -160,6 +160,15 @@
 
 ### 🔧 改进
 
+- **统一供应商/模型目录到 `docs/provider-model-list.md`**
+  - `docs/provider-model-list.md` 现在是唯一的供应商/模型参考：原先基于 OpenRouter 快照的 `docs/models.md` 已删除并合并进内置目录。该文件由 `docs/scripts/generate-models.py`（`make docs-models`）从 `internal/config/settings.go` 生成，覆盖全部内置供应商（API 协议、vendor、thinking 格式、BaseURL、API Key 环境变量）以及每个模型的上下文窗口、最大输出、推理、输入模态与价格，并保留 Quick Reference 与配置字段说明。
+
+- **小米 MiMo 渠道精简为 V2.6 模型**
+  - `xiaomi` 提供商及三个 MiMo Token Plan 渠道（`xiaomi-token-plan-ams`、`xiaomi-token-plan-cn`、`xiaomi-token-plan-sgp`）现在仅保留 `mimo-v2.6-flash` 与 `mimo-v2.6-pro`，并将 `mimo-v2.6-flash` 放在首位。已移除 `mimo-v2.5`、`mimo-v2.5-pro` 与 `mimo-v2.5-pro-ultraspeed`，因此未配置的小米会话默认使用 `mimo-v2.6-flash`。
+
+- **Gitee/Moark 模型预设改为旗舰优先排序**
+  - `gitee` 与 `moark` 的内置模型列表改为旗舰模型优先（`deepseek-v4.1-flash`、`qwen3.8-flash`、`glm-5.3-flash`、`qwen3.8-max-0902`、`glm-5.3`、`kimi-k3`、`minimax-m3`），其余模型按上下文窗口（其次按最大输出）从大到小排列。由于预设顺序同时是未配置默认模型时的回退顺序，未配置的 `gitee`/`moark` 会话现在默认使用 `deepseek-v4.1-flash`，而非此前的 `auto`。
+
 - **模型预设统一新模型的初始默认值**
   - `config.PresetModelConfig` 现在是某个模型 ID 草稿默认值的唯一来源：优先采用当前提供商的配置，其次匹配内置目录中的同 ID 模型，最后回退到安全的通用默认值（256K 上下文、默认开启思考、文本输入）。模型发现、provider factory、TUI 认证设置、WebUI 提供商编辑器、Serve 模型目录与 ACP 提供商目录都会以相同方式为新录入的模型填充默认值，并通过 `modelDefaults` 把通用默认值投影给客户端，使客户端编辑器从同一组值起步。
 
