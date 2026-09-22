@@ -263,3 +263,29 @@ func TestResolveAdapterConfigBaseURLDetectAMDRadeon(t *testing.T) {
 		t.Fatalf("API = %q, want openai-chat", resolved.API)
 	}
 }
+
+func TestResolveAdapterConfigBaseURLDetectBai(t *testing.T) {
+	resolved := ResolveAdapterConfig(&config.ProviderConfig{
+		BaseURL: "https://api.b.ai/v1",
+	})
+	if resolved.Vendor != "bai" {
+		t.Fatalf("ResolveAdapterConfig(api.b.ai).Vendor = %q, want bai", resolved.Vendor)
+	}
+	if resolved.API != "openai-chat" {
+		t.Fatalf("ResolveAdapterConfig(api.b.ai).API = %q, want openai-chat", resolved.API)
+	}
+}
+
+func TestResolveAdapterConfigExplicitVendorBai(t *testing.T) {
+	resolved := ResolveAdapterConfig(&config.ProviderConfig{
+		Vendor:  "Bai",
+		BaseURL: "https://api.b.ai/v1",
+		API:     "openai-chat",
+	})
+	if resolved.Vendor != "bai" {
+		t.Fatalf("Vendor = %q, want bai", resolved.Vendor)
+	}
+	if resolved.API != "openai-chat" {
+		t.Fatalf("API = %q, want openai-chat", resolved.API)
+	}
+}
