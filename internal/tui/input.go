@@ -51,6 +51,13 @@ func (a *App) printMessageOnce(idx int) {
 	if idx < 0 || a.printedMessageIdx[idx] {
 		return
 	}
+	// A parallel tool batch commits as one tree block: it is only released to
+	// scrollback once every member reached a terminal state, so the tree never
+	// flickers apart into independent rows mid-flight.
+	if gid := a.toolGroupIDAt(idx); gid > 0 && a.isMultiToolGroup(gid) {
+		a.printToolGroupOnce(gid)
+		return
+	}
 	rendered := strings.TrimRight(a.renderMessageAt(idx), "\n")
 	if strings.TrimSpace(rendered) == "" {
 		return
@@ -67,6 +74,40 @@ func (a *App) printMessageOnce(idx int) {
 	a.printCond.Signal()
 	a.printMu.Unlock()
 	a.printedMessageIdx[idx] = true
+	a.updateViewportContent()
+}
+
+// printToolGroupOnce commits a fully terminal parallel tool batch to scrollback
+// as a single tree block. While any member is still running the group stays in
+// the managed viewport, so a partial batch is never printed.
+func (a *App) printToolGroupOnce(groupID int) {
+	members := a.toolGroupMembers(groupID)
+	if len(members) < minToolGroupSize {
+		return
+	}
+	for _, member := range members {
+		if member.status == toolResultStatusRunning || a.printedMessageIdx[member.msgIndex] {
+			return
+		}
+	}
+	rendered := strings.TrimRight(a.renderToolGroupBlock(groupID), "\n")
+	if strings.TrimSpace(rendered) == "" {
+		return
+	}
+	if a.program == nil {
+		a.updateViewportContent()
+		return
+	}
+	if a.printCond == nil {
+		a.printCond = sync.NewCond(&a.printMu)
+	}
+	a.printMu.Lock()
+	a.printQueue = append(a.printQueue, rendered)
+	a.printCond.Signal()
+	a.printMu.Unlock()
+	for _, member := range members {
+		a.printedMessageIdx[member.msgIndex] = true
+	}
 	a.updateViewportContent()
 }
 

@@ -14,6 +14,7 @@ func (a *App) resetTranscriptState() {
 	a.messages = nil
 	a.hiddenEventIdx = make(map[int]bool)
 	a.toolResults = nil
+	a.toolGroupSeq = 0
 	a.liveContent = ""
 	a.currentPlan = nil
 	a.assistantRaw = make(map[int]string)

@@ -4,9 +4,9 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/startvibecoding/GoStreamingMarkdown/gsm"
 	"github.com/oschina/mothx/internal/tui/i18n"
 	"github.com/oschina/mothx/internal/tui/renderutil"
+	"github.com/startvibecoding/GoStreamingMarkdown/gsm"
 )
 
 func (a *App) updateViewportContent() {
@@ -26,15 +26,11 @@ func (a *App) renderTranscriptContent() string {
 	if a.currentAssistantIdx >= count {
 		count = a.currentAssistantIdx + 1
 	}
-	blocks := make([]string, 0, count)
+	indices := make([]int, 0, count)
 	for idx := 0; idx < count; idx++ {
-		rendered := strings.TrimRight(a.renderMessageAt(idx), "\n")
-		if strings.TrimSpace(rendered) == "" {
-			continue
-		}
-		blocks = append(blocks, rendered)
+		indices = append(indices, idx)
 	}
-	return strings.Join(blocks, "\n\n")
+	return a.joinTranscriptBlocks(indices)
 }
 
 func (a *App) renderLiveTranscriptContent() string {
@@ -49,7 +45,7 @@ func (a *App) renderLiveTranscriptContent() string {
 	if a.currentAssistantIdx >= count {
 		count = a.currentAssistantIdx + 1
 	}
-	blocks := make([]string, 0, 2)
+	indices := make([]int, 0, 2)
 	for idx := 0; idx < count; idx++ {
 		if a.printedMessageIdx[idx] {
 			continue
@@ -62,13 +58,135 @@ func (a *App) renderLiveTranscriptContent() string {
 		if idx != a.currentThinkIdx && idx != a.currentAssistantIdx && !isCurrentApproval && !isRunningTool {
 			continue
 		}
-		rendered := strings.TrimRight(a.renderMessageAt(idx), "\n")
-		if strings.TrimSpace(rendered) == "" {
+		indices = append(indices, idx)
+	}
+	return a.joinTranscriptBlocks(indices)
+}
+
+// minToolGroupSize is the number of tool calls that ran in parallel at which
+// the transcript collapses them into one tree block with a count title instead
+// of rendering one independent row per call.
+const minToolGroupSize = 2
+
+// joinTranscriptBlocks renders the given message indices in order, joining the
+// non-empty blocks with a blank line. Tool calls that ran in parallel are
+// coalesced into a single tree block so the batch reads as one unit for its
+// whole lifetime, from "running" through its committed terminal state.
+func (a *App) joinTranscriptBlocks(indices []int) string {
+	blocks := make([]string, 0, len(indices))
+	emitted := make(map[int]bool)
+	for _, idx := range indices {
+		if gid := a.toolGroupIDAt(idx); gid > 0 && a.isMultiToolGroup(gid) {
+			if emitted[gid] {
+				continue
+			}
+			emitted[gid] = true
+			if block := a.renderToolGroupBlock(gid); block != "" {
+				blocks = append(blocks, block)
+			}
 			continue
 		}
-		blocks = append(blocks, rendered)
+		if rendered := a.renderTranscriptBlock(idx); rendered != "" {
+			blocks = append(blocks, rendered)
+		}
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+func (a *App) renderTranscriptBlock(idx int) string {
+	rendered := strings.TrimRight(a.renderMessageAt(idx), "\n")
+	if strings.TrimSpace(rendered) == "" {
+		return ""
+	}
+	return rendered
+}
+
+// renderToolGroupBlock renders a parallel tool-call batch as a tree: a title
+// carrying the live count followed by one indented branch per call. The title
+// switches from the running form to the completed form once every call has
+// reached a terminal state, so the group keeps its shape in scrollback.
+func (a *App) renderToolGroupBlock(groupID int) string {
+	members := a.toolGroupMembers(groupID)
+	if len(members) < minToolGroupSize {
+		return ""
+	}
+	running := 0
+	for _, member := range members {
+		if member.status == toolResultStatusRunning {
+			running++
+		}
+	}
+	title := i18n.MsgToolGroupDone
+	if running > 0 {
+		title = i18n.MsgToolGroupRunning
+	}
+	lines := make([]string, 0, len(members)+1)
+	lines = append(lines, toolStyle.Render(a.translator.Text(title, len(members))))
+	for i, member := range members {
+		branch := "├─ "
+		if i == len(members)-1 {
+			branch = "└─ "
+		}
+		body := strings.TrimRight(a.renderToolResult(*member), "\n")
+		if strings.TrimSpace(body) == "" {
+			continue
+		}
+		lines = append(lines, treeIndentBlock(toolStyle.Render(branch), body))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// treeIndentBlock prefixes the first line of body with the (styled) tree branch
+// and aligns every continuation line under it.
+func treeIndentBlock(branch, body string) string {
+	lines := strings.Split(body, "\n")
+	if len(lines) == 1 {
+		return branch + lines[0]
+	}
+	var b strings.Builder
+	b.WriteString(branch)
+	b.WriteString(lines[0])
+	for _, line := range lines[1:] {
+		b.WriteString("\n   ")
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// toolGroupIDAt reports the parallel-group id of the tool row at a message
+// index, or 0 when the index is not a tool row.
+func (a *App) toolGroupIDAt(idx int) int {
+	if result := a.toolResultAt(idx); result != nil {
+		return result.groupID
+	}
+	return 0
+}
+
+// toolGroupMembers returns the rows of a parallel group in message order.
+func (a *App) toolGroupMembers(groupID int) []*toolResult {
+	if groupID <= 0 {
+		return nil
+	}
+	var members []*toolResult
+	for i := range a.toolResults {
+		if a.toolResults[i].groupID == groupID {
+			members = append(members, &a.toolResults[i])
+		}
+	}
+	return members
+}
+
+func (a *App) isMultiToolGroup(groupID int) bool {
+	return groupID > 0 && len(a.toolGroupMembers(groupID)) >= minToolGroupSize
+}
+
+func (a *App) toolResultAt(idx int) *toolResult {
+	for i := range a.toolResults {
+		if a.toolResults[i].msgIndex == idx {
+			return &a.toolResults[i]
+		}
+	}
+	return nil
 }
 
 func (a *App) toolResultRunningAt(idx int) bool {

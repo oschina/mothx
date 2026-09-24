@@ -119,6 +119,10 @@ type toolResult struct {
 	executionState string
 	msgIndex       int // Index in a.messages where this tool message lives
 	expanded       string
+	// groupID groups tool calls that ran in parallel (started while a sibling was
+	// still running). Rows sharing a non-zero groupID render and commit as one
+	// tree block; a lone row keeps its groupID but is rendered on its own.
+	groupID int
 }
 
 // App is the main TUI application.
@@ -167,6 +171,7 @@ type App struct {
 	defaultModelDialog     defaultModelDialogState
 	sessionsDialog         sessionsDialogState
 	toolResults            []toolResult // Store tool results for expansion
+	toolGroupSeq           int          // monotonic id source for parallel tool-call groups
 	isThinking             bool
 	manualCompactionActive bool
 	pendingAbortReason     string

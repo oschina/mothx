@@ -625,6 +625,7 @@ func (a *App) appendToolExecutionStart(toolCallID, toolName string, toolArgs map
 		toolArgs:   toolArgs,
 		status:     toolResultStatusRunning,
 		msgIndex:   msgIdx,
+		groupID:    a.assignToolGroup(),
 	}
 	a.toolResults = append(a.toolResults, runningEntry)
 	a.messages = append(a.messages, "")
@@ -770,6 +771,25 @@ func (a *App) hasToolEntry(toolCallID string, status toolResultStatus) bool {
 		}
 	}
 	return false
+}
+
+// assignToolGroup returns the group id for a tool call that is about to start.
+// A call that starts while a sibling is still running joins that sibling's
+// group (parallel execution); otherwise it opens a new group. A group only
+// renders as a tree once it holds at least minToolGroupSize rows.
+func (a *App) assignToolGroup() int {
+	if n := len(a.toolResults); n > 0 {
+		last := &a.toolResults[n-1]
+		if last.status == toolResultStatusRunning {
+			if last.groupID == 0 {
+				a.toolGroupSeq++
+				last.groupID = a.toolGroupSeq
+			}
+			return last.groupID
+		}
+	}
+	a.toolGroupSeq++
+	return a.toolGroupSeq
 }
 
 func (a *App) summarizeToolResult(toolName, result string, diff *tools.FileDiff) string {
