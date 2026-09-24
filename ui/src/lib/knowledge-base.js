@@ -5,7 +5,7 @@
 import { request, postJSON, patchJSON, del } from './api.js';
 
 export const DEFAULT_MODE = 'yolo';
-export const DEFAULT_THINKING_LEVEL = 'none';
+export const DEFAULT_THINKING_LEVEL = 'off';
 export const DEFAULT_PREPROCESS_PROFILE = 'documents';
 export const DEFAULT_SCHEDULE = 'manual';
 
@@ -19,7 +19,8 @@ export function defaultKnowledgeBase() {
     mode: DEFAULT_MODE,
     thinkingLevel: DEFAULT_THINKING_LEVEL,
     schedule: DEFAULT_SCHEDULE,
-    enabled: true
+    enabled: true,
+    ignoreGlobs: []
   };
 }
 
@@ -76,6 +77,57 @@ export async function queryKnowledgeBase(id, query, limit = 10) {
   return postJSON(`/api/knowledge-bases/${encodeURIComponent(id)}/query`, { query, limit });
 }
 
+export async function listKnowledgeBaseRuns(id, limit = 20) {
+  const data = await request(`/api/knowledge-bases/${encodeURIComponent(id)}/runs?limit=${encodeURIComponent(limit)}`);
+  return Array.isArray(data?.runs) ? data.runs.map(normalizeKnowledgeIndexRun) : [];
+}
+
+export async function getKnowledgeBaseRun(id, runId) {
+  return normalizeKnowledgeIndexRun(await request(`/api/knowledge-bases/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`));
+}
+
+export async function listKnowledgeBaseSources(id) {
+  const data = await request(`/api/knowledge-bases/${encodeURIComponent(id)}/sources`);
+  return Array.isArray(data?.sources) ? data.sources.map(normalizeKnowledgeSource) : [];
+}
+
+export async function clearKnowledgeBase(id) {
+  return postJSON(`/api/knowledge-bases/${encodeURIComponent(id)}/clear`, {});
+}
+
+// normalizeKnowledgeIndexRun keeps the run-history projection renderable even if
+// a future field is added: the view only reads the bounded, known keys.
+export function normalizeKnowledgeIndexRun(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    runId: String(value.runId || ''),
+    snapshotId: String(value.snapshotId || ''),
+    status: String(value.status || 'unknown'),
+    startedAt: value.startedAt || '',
+    finishedAt: value.finishedAt || '',
+    errorSummary: String(value.errorSummary || ''),
+    fileCount: Number(value.fileCount || 0),
+    chunkCount: Number(value.chunkCount || 0),
+    nodeCount: Number(value.nodeCount || 0),
+    edgeCount: Number(value.edgeCount || 0),
+    active: Boolean(value.active)
+  };
+}
+
+// normalizeKnowledgeSource mirrors the file-level provenance projection. It
+// never carries file contents, only path/size/status/hit metadata.
+export function normalizeKnowledgeSource(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    path: String(value.path || value.relativePath || ''),
+    mediaType: String(value.mediaType || ''),
+    status: String(value.status || ''),
+    byteSize: Number(value.byteSize || 0),
+    chunkCount: Number(value.chunkCount || 0),
+    title: String(value.title || '')
+  };
+}
+
 export function normalizeKnowledgeBaseView(value) {
   if (!value || typeof value !== 'object') return emptyKnowledgeBaseView();
   const base = value.knowledgeBase && typeof value.knowledgeBase === 'object'
@@ -87,7 +139,10 @@ export function normalizeKnowledgeBaseView(value) {
     knowledgeBase: {
       ...defaultKnowledgeBase(),
       ...base,
-      schedule: DEFAULT_SCHEDULE
+      // The WebUI does not own a scheduler: reflect the real persisted cadence
+      // instead of silently downgrading a Desktop schedule to manual.
+      schedule: String(base.schedule || DEFAULT_SCHEDULE),
+      ignoreGlobs: Array.isArray(base.ignoreGlobs) ? base.ignoreGlobs : []
     },
     snapshot: value.snapshot && typeof value.snapshot === 'object' ? value.snapshot : null,
     indexing: value.indexing && value.indexing.running ? { ...value.indexing } : null,
@@ -104,8 +159,13 @@ export function knowledgeBasePayload(draft) {
     model: String(draft.model || '').trim(),
     mode: draft.mode || DEFAULT_MODE,
     thinkingLevel: draft.thinkingLevel || DEFAULT_THINKING_LEVEL,
-    schedule: DEFAULT_SCHEDULE,
-    enabled: draft.enabled !== false
+    // Send the real draft cadence; the backend preserves an existing schedule
+    // when this is empty so a WebUI save cannot downgrade a Desktop plan.
+    schedule: String(draft.schedule || DEFAULT_SCHEDULE).trim(),
+    enabled: draft.enabled !== false,
+    ignoreGlobs: Array.isArray(draft.ignoreGlobs)
+      ? draft.ignoreGlobs.map((glob) => String(glob).trim()).filter(Boolean)
+      : []
   };
 }
 

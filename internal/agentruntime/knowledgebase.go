@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"mime"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -46,9 +48,12 @@ type KnowledgeBaseService struct {
 	settings        *config.Settings
 	providerFactory KnowledgeBaseProviderFactory
 	// indexJobs tracks background scans so management RPCs can start a scan
-	// without blocking and poll its progress afterwards.
-	indexJobsMu sync.Mutex
-	indexJobs   map[string]*KnowledgeIndexJob
+	// without blocking and poll its progress afterwards. indexPending coalesces
+	// triggers that arrive while a scan is in flight into a single follow-up pass
+	// so a burst of requests never queues one full run per trigger.
+	indexJobsMu  sync.Mutex
+	indexJobs    map[string]*KnowledgeIndexJob
+	indexPending map[string]RuntimeSource
 }
 
 // KnowledgeBaseProviderFactory creates the configured provider/model for an
@@ -151,7 +156,7 @@ func (s *KnowledgeBaseService) indexDurable(ctx context.Context, knowledgeBaseID
 		return session.KnowledgeSnapshot{}, err
 	}
 	if !base.Enabled {
-		return session.KnowledgeSnapshot{}, fmt.Errorf("knowledge base %s is disabled", base.ID)
+		return session.KnowledgeSnapshot{}, fmt.Errorf("%w: %s", session.ErrKnowledgeBaseDisabled, base.ID)
 	}
 	if source == SourceUnknown {
 		source = SourceACP
@@ -203,6 +208,19 @@ func (s *KnowledgeBaseService) indexDurable(ctx context.Context, knowledgeBaseID
 		if err != nil {
 			state = RunStateFailed
 			message = err.Error()
+			if errors.Is(err, ErrKnowledgeIndexerModelUnavailable) {
+				// Persist a stable, machine-readable code so management surfaces
+				// report knowledge_base_model_unavailable instead of the raw provider
+				// error. Best-effort: a persistence failure must not mask the original
+				// index error.
+				_, _ = execution.RecordErrorInfo(ErrorInfo{
+					Code:    knowledgeIndexModelUnavailableCode,
+					Type:    "configuration_error",
+					Message: "knowledge base indexer model is unavailable",
+					Detail:  message,
+					RunID:   runID,
+				})
+			}
 		}
 		finishErr := execution.FinishDurableWithRetry(context.Background(), runID, state, message, RunEvent{
 			SessionID: manager.GetHeader().ID, RunID: runID, EventType: "finished", Source: string(source),
@@ -212,9 +230,13 @@ func (s *KnowledgeBaseService) indexDurable(ctx context.Context, knowledgeBaseID
 			err = fmt.Errorf("finish knowledge indexing run: %w", finishErr)
 		}
 	}()
-	files, scanErr := s.scanFileManifest(ctx, base, job)
+	files, discovery, scanErr := s.scanFileManifest(ctx, base, job)
 	if scanErr != nil {
 		return session.KnowledgeSnapshot{}, scanErr
+	}
+	diff, diffErr := session.DiffKnowledgeManifest(ctx, s.sessionDir, base.ID, files)
+	if diffErr != nil {
+		return session.KnowledgeSnapshot{}, fmt.Errorf("compute knowledge diff summary: %w", diffErr)
 	}
 	if reused, unchanged, reuseErr := session.ReuseKnowledgeSnapshotIfFilesMatch(ctx, s.sessionDir, base.ID, base.ConfigRevision, files); reuseErr != nil {
 		return session.KnowledgeSnapshot{}, fmt.Errorf("compare active knowledge snapshot: %w", reuseErr)
@@ -223,6 +245,8 @@ func (s *KnowledgeBaseService) indexDurable(ctx context.Context, knowledgeBaseID
 			"knowledgeBaseId": base.ID,
 			"snapshotId":      reused.ID,
 			"operation":       "index_reused",
+			"diff":            diff,
+			"discovery":       discovery,
 		})
 		if _, eventErr := execution.RecordEvent(RunEvent{
 			SessionID: manager.GetHeader().ID, RunID: runID, EventType: "knowledge_snapshot_reused", Source: string(source),
@@ -257,6 +281,8 @@ func (s *KnowledgeBaseService) indexDurable(ctx context.Context, knowledgeBaseID
 		return session.KnowledgeSnapshot{}, err
 	}
 	job.update(func(p *KnowledgeIndexProgress) { p.Phase = KnowledgeIndexPhaseCommitting })
+	graph.DiffSummary = &diff
+	graph.DiscoverySummary = &discovery
 	snapshot, err = session.StoreKnowledgeGraphSnapshot(ctx, s.sessionDir, graph)
 	if err != nil {
 		return session.KnowledgeSnapshot{}, err
@@ -272,7 +298,7 @@ func (s *KnowledgeBaseService) IndexWithRun(ctx context.Context, knowledgeBaseID
 	if err != nil {
 		return session.KnowledgeSnapshot{}, err
 	}
-	files, err := s.scanFileManifest(ctx, base, nil)
+	files, _, err := s.scanFileManifest(ctx, base, nil)
 	if err != nil {
 		return session.KnowledgeSnapshot{}, err
 	}
@@ -296,22 +322,26 @@ func (s *KnowledgeBaseService) IndexWithRun(ctx context.Context, knowledgeBaseID
 // every eligible source file and calculates its content hash, but deliberately
 // avoids chunk construction, marker extraction, graph allocation, provider
 // calls and SQLite writes. Scheduled scans of an unchanged large directory
-// therefore return the active immutable snapshot early.
-func (s *KnowledgeBaseService) scanFileManifest(ctx context.Context, base session.KnowledgeBase, job *KnowledgeIndexJob) ([]session.KnowledgeFile, error) {
+// therefore return the active immutable snapshot early. It also returns the
+// bounded discovery projection (indexed/ignored/skipped) so management
+// surfaces can explain what was not indexed.
+func (s *KnowledgeBaseService) scanFileManifest(ctx context.Context, base session.KnowledgeBase, job *KnowledgeIndexJob) ([]session.KnowledgeFile, session.KnowledgeDiscoverySummary, error) {
 	if s == nil {
-		return nil, fmt.Errorf("knowledge base service is nil")
+		return nil, session.KnowledgeDiscoverySummary{}, fmt.Errorf("knowledge base service is nil")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if !base.Enabled {
-		return nil, fmt.Errorf("knowledge base %s is disabled", base.ID)
+		return nil, session.KnowledgeDiscoverySummary{}, fmt.Errorf("%w: %s", session.ErrKnowledgeBaseDisabled, base.ID)
 	}
 	root, err := resolveKnowledgeBaseRoot(base)
 	if err != nil {
-		return nil, err
+		return nil, session.KnowledgeDiscoverySummary{}, err
 	}
+	rules := newKnowledgeIgnoreRules(base, root)
 	files := make([]session.KnowledgeFile, 0)
+	discovery := session.KnowledgeDiscoverySummary{}
 	fileCount := 0
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -320,6 +350,10 @@ func (s *KnowledgeBaseService) scanFileManifest(ctx context.Context, base sessio
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		rel, relErr := knowledgeRelativePath(root, path)
+		if relErr != nil {
+			return relErr
+		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			if entry.IsDir() {
 				return filepath.SkipDir
@@ -327,24 +361,47 @@ func (s *KnowledgeBaseService) scanFileManifest(ctx context.Context, base sessio
 			return nil
 		}
 		if entry.IsDir() {
-			if path != root && knowledgeBaseIgnoredDirectory(entry.Name()) {
+			if path == root {
+				return nil
+			}
+			if knowledgeBaseIgnoredDirectory(entry.Name()) {
+				discovery.RecordIgnored(rel, "ignored_directory")
+				return filepath.SkipDir
+			}
+			if ignored, reason := rules.ignored(rel, true); ignored {
+				discovery.RecordIgnored(rel, reason)
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !entry.Type().IsRegular() || !knowledgeBaseAllowedFile(base.PreprocessProfile, path) {
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		if ignored, reason := rules.ignored(rel, false); ignored {
+			discovery.RecordIgnored(rel, reason)
+			return nil
+		}
+		if !knowledgeBaseAllowedFile(base.PreprocessProfile, path) {
 			return nil
 		}
 		fileCount++
 		if fileCount > s.policy.MaxFiles {
 			return fmt.Errorf("knowledge base exceeds %d indexable files", s.policy.MaxFiles)
 		}
-		source, err := s.readIndexableKnowledgeFile(ctx, root, path, entry)
-		if err != nil || source == nil {
+		source, skipReason, err := s.readIndexableKnowledgeFile(ctx, root, path, entry)
+		if err != nil {
 			return err
+		}
+		if source == nil {
+			if skipReason == "" {
+				skipReason = "unreadable"
+			}
+			discovery.RecordSkipped(rel, skipReason)
+			return nil
 		}
 		files = append(files, session.KnowledgeFile{RelativePath: source.relativePath, ContentSHA256: knowledgeSHA256(source.data),
 			ByteSize: int64(len(source.data)), MediaType: source.mediaType, Status: "indexed"})
+		discovery.Discovered++
 		job.update(func(p *KnowledgeIndexProgress) {
 			p.Phase = KnowledgeIndexPhaseScanning
 			p.FilesDone++
@@ -352,9 +409,9 @@ func (s *KnowledgeBaseService) scanFileManifest(ctx context.Context, base sessio
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("scan knowledge base manifest: %w", err)
+		return nil, session.KnowledgeDiscoverySummary{}, fmt.Errorf("scan knowledge base manifest: %w", err)
 	}
-	return files, nil
+	return files, discovery, nil
 }
 
 func (s *KnowledgeBaseService) buildGraph(ctx context.Context, knowledgeBaseID, runID string, reusePlan session.KnowledgeGraphReusePlan, job *KnowledgeIndexJob) (session.KnowledgeBase, session.KnowledgeGraphSnapshot, error) {
@@ -369,7 +426,7 @@ func (s *KnowledgeBaseService) buildGraph(ctx context.Context, knowledgeBaseID, 
 		return session.KnowledgeBase{}, session.KnowledgeGraphSnapshot{}, err
 	}
 	if !base.Enabled {
-		return session.KnowledgeBase{}, session.KnowledgeGraphSnapshot{}, fmt.Errorf("knowledge base %s is disabled", base.ID)
+		return session.KnowledgeBase{}, session.KnowledgeGraphSnapshot{}, fmt.Errorf("%w: %s", session.ErrKnowledgeBaseDisabled, base.ID)
 	}
 	root, err := resolveKnowledgeBaseRoot(base)
 	if err != nil {
@@ -381,12 +438,17 @@ func (s *KnowledgeBaseService) buildGraph(ctx context.Context, knowledgeBaseID, 
 		SchemaVersion: session.KnowledgeGraphSchemaVersion,
 	}}
 	fileCount := 0
+	rules := newKnowledgeIgnoreRules(base, root)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		rel, relErr := knowledgeRelativePath(root, path)
+		if relErr != nil {
+			return relErr
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			if entry.IsDir() {
@@ -395,12 +457,21 @@ func (s *KnowledgeBaseService) buildGraph(ctx context.Context, knowledgeBaseID, 
 			return nil
 		}
 		if entry.IsDir() {
-			if path != root && knowledgeBaseIgnoredDirectory(entry.Name()) {
+			if path == root {
+				return nil
+			}
+			if knowledgeBaseIgnoredDirectory(entry.Name()) {
+				return filepath.SkipDir
+			}
+			if ignored, _ := rules.ignored(rel, true); ignored {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if !entry.Type().IsRegular() {
+			return nil
+		}
+		if ignored, _ := rules.ignored(rel, false); ignored {
 			return nil
 		}
 		if !knowledgeBaseAllowedFile(base.PreprocessProfile, path) {
@@ -410,9 +481,12 @@ func (s *KnowledgeBaseService) buildGraph(ctx context.Context, knowledgeBaseID, 
 		if fileCount > s.policy.MaxFiles {
 			return fmt.Errorf("knowledge base exceeds %d indexable files", s.policy.MaxFiles)
 		}
-		source, err := s.readIndexableKnowledgeFile(ctx, root, path, entry)
-		if err != nil || source == nil {
+		source, _, err := s.readIndexableKnowledgeFile(ctx, root, path, entry)
+		if err != nil {
 			return err
+		}
+		if source == nil {
+			return nil
 		}
 		if reusable, ok := reusePlan.Files[source.relativePath]; ok &&
 			reusePlan.BaseConfigRevision == base.ConfigRevision &&
@@ -436,7 +510,239 @@ func (s *KnowledgeBaseService) buildGraph(ctx context.Context, knowledgeBaseID, 
 	if err != nil {
 		return session.KnowledgeBase{}, session.KnowledgeGraphSnapshot{}, fmt.Errorf("scan knowledge base: %w", err)
 	}
+	appendKnowledgeReferenceEdges(&graph)
+	appendKnowledgeTestedByEdges(&graph, base.PreprocessProfile)
+	appendKnowledgeImportEdges(&graph, base.PreprocessProfile)
+	appendKnowledgeConfiguredByEdges(&graph, base.PreprocessProfile)
+	appendKnowledgeCallEdges(&graph, base.PreprocessProfile)
+	appendKnowledgeDocumentEdges(&graph, base.PreprocessProfile)
+	appendKnowledgeSupersedesEdges(&graph, base.PreprocessProfile)
+	graph.Aliases = buildKnowledgeEntityAliases(&graph)
 	return base, graph, nil
+}
+
+// knowledgeMarkdownLink matches a Markdown inline link target.
+var knowledgeMarkdownLink = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)\)`)
+
+// appendKnowledgeReferenceEdges adds deterministic, locally verifiable
+// "references" edges from a section node to the file node it links to. The link
+// target is parsed from the section's own chunk text, so no model assertion is
+// involved and the relation survives incremental reuse because it is rebuilt
+// over the whole assembled graph on every index.
+func appendKnowledgeReferenceEdges(graph *session.KnowledgeGraphSnapshot) {
+	if graph == nil {
+		return
+	}
+	nodeByID := make(map[string]session.KnowledgeNode, len(graph.Nodes))
+	fileByPath := make(map[string]string)
+	fileByBase := make(map[string]string)
+	for _, node := range graph.Nodes {
+		nodeByID[node.ID] = node
+		if node.Kind == "file" {
+			fileByPath[node.NormalizedLabel] = node.ID
+			base := normalizeKnowledgeLabel(filepath.Base(node.Label))
+			if _, exists := fileByBase[base]; !exists {
+				fileByBase[base] = node.ID
+			}
+		}
+	}
+	if len(fileByPath) == 0 && len(fileByBase) == 0 {
+		return
+	}
+	sectionByChunk := make(map[string]string)
+	for _, evidence := range graph.Evidence {
+		if evidence.NodeID == "" {
+			continue
+		}
+		if node, ok := nodeByID[evidence.NodeID]; ok && node.Kind == "section" {
+			if _, exists := sectionByChunk[evidence.ChunkID]; !exists {
+				sectionByChunk[evidence.ChunkID] = node.ID
+			}
+		}
+	}
+	if len(sectionByChunk) == 0 {
+		return
+	}
+	existing := make(map[string]struct{}, len(graph.Edges))
+	for _, edge := range graph.Edges {
+		existing[knowledgeEdgeKey(edge.FromNodeID, edge.ToNodeID, edge.RelationType)] = struct{}{}
+	}
+	for _, chunk := range graph.Chunks {
+		fromID, ok := sectionByChunk[chunk.ID]
+		if !ok {
+			continue
+		}
+		for _, match := range knowledgeMarkdownLink.FindAllStringSubmatch(chunk.Text, -1) {
+			toID := resolveKnowledgeLinkTarget(match[1], fileByPath, fileByBase)
+			if toID == "" || toID == fromID {
+				continue
+			}
+			key := knowledgeEdgeKey(fromID, toID, "references")
+			if _, duplicate := existing[key]; duplicate {
+				continue
+			}
+			edge := session.KnowledgeEdge{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID, FromNodeID: fromID,
+				ToNodeID: toID, RelationType: "references", Confidence: 1}
+			graph.Edges = append(graph.Edges, edge)
+			graph.Evidence = append(graph.Evidence, session.KnowledgeEvidence{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID,
+				EdgeID: edge.ID, ChunkID: chunk.ID, StartLine: chunk.StartLine, EndLine: chunk.EndLine, Confidence: 1})
+			existing[key] = struct{}{}
+		}
+	}
+}
+
+func resolveKnowledgeLinkTarget(target string, fileByPath, fileByBase map[string]string) string {
+	target = strings.TrimSpace(target)
+	if target == "" || strings.HasPrefix(target, "/") || strings.Contains(target, "://") || strings.HasPrefix(target, "#") {
+		return ""
+	}
+	if index := strings.IndexAny(target, "#?"); index >= 0 {
+		target = target[:index]
+	}
+	target = strings.TrimPrefix(strings.TrimSpace(target), "./")
+	if target == "" {
+		return ""
+	}
+	if id, ok := fileByPath[normalizeKnowledgeLabel(target)]; ok {
+		return id
+	}
+	return fileByBase[normalizeKnowledgeLabel(filepath.Base(target))]
+}
+
+// appendKnowledgeTestedByEdges adds deterministic "tested_by" edges between a
+// source file node and its conventional test file node (foo.go -> foo_test.go,
+// foo.ts -> foo.test.ts, foo.py -> test_foo.py, ...). The relation is proven by
+// the filename convention, so no model assertion is involved; because it is
+// rebuilt over the whole assembled graph on every index it also survives
+// incremental reuse even though its two endpoints live in different files.
+func appendKnowledgeTestedByEdges(graph *session.KnowledgeGraphSnapshot, profile string) {
+	if graph == nil {
+		return
+	}
+	switch profile {
+	case "code", "mixed":
+	default:
+		return
+	}
+	fileByPath := make(map[string]session.KnowledgeNode)
+	for _, node := range graph.Nodes {
+		if node.Kind == "file" {
+			fileByPath[node.Label] = node
+		}
+	}
+	if len(fileByPath) == 0 {
+		return
+	}
+	chunkByID := make(map[string]session.KnowledgeChunk, len(graph.Chunks))
+	for _, chunk := range graph.Chunks {
+		chunkByID[chunk.ID] = chunk
+	}
+	// The test file's own file-node evidence anchors the edge; a file node always
+	// carries evidence at its first chunk.
+	testChunkByNode := make(map[string]session.KnowledgeChunk)
+	for _, evidence := range graph.Evidence {
+		if evidence.NodeID == "" {
+			continue
+		}
+		if _, exists := testChunkByNode[evidence.NodeID]; exists {
+			continue
+		}
+		if chunk, ok := chunkByID[evidence.ChunkID]; ok {
+			testChunkByNode[evidence.NodeID] = chunk
+		}
+	}
+	existing := make(map[string]struct{}, len(graph.Edges))
+	for _, edge := range graph.Edges {
+		existing[knowledgeEdgeKey(edge.FromNodeID, edge.ToNodeID, edge.RelationType)] = struct{}{}
+	}
+	for relPath, sourceNode := range fileByPath {
+		for _, testPath := range knowledgeTestFilePaths(relPath) {
+			testNode, ok := fileByPath[testPath]
+			if !ok || testNode.ID == sourceNode.ID {
+				continue
+			}
+			key := knowledgeEdgeKey(sourceNode.ID, testNode.ID, "tested_by")
+			if _, duplicate := existing[key]; duplicate {
+				continue
+			}
+			chunk, ok := testChunkByNode[testNode.ID]
+			if !ok {
+				continue
+			}
+			edge := session.KnowledgeEdge{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID, FromNodeID: sourceNode.ID,
+				ToNodeID: testNode.ID, RelationType: "tested_by", Confidence: 1}
+			graph.Edges = append(graph.Edges, edge)
+			graph.Evidence = append(graph.Evidence, session.KnowledgeEvidence{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID,
+				EdgeID: edge.ID, ChunkID: chunk.ID, StartLine: chunk.StartLine, EndLine: chunk.EndLine, Confidence: 1})
+			existing[key] = struct{}{}
+		}
+	}
+}
+
+// knowledgeTestFilePaths returns the conventional test file paths for a source
+// path. A path that is already a test file has no test counterpart, and only the
+// unambiguous per-language conventions are listed.
+func knowledgeTestFilePaths(relPath string) []string {
+	dir, base := path.Split(relPath)
+	ext := path.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	if name == "" || ext == "" {
+		return nil
+	}
+	if strings.HasSuffix(name, "_test") || strings.HasSuffix(name, ".test") || strings.HasSuffix(name, ".spec") || strings.HasPrefix(name, "test_") {
+		return nil
+	}
+	switch ext {
+	case ".go":
+		return []string{dir + name + "_test.go"}
+	case ".py":
+		return []string{dir + "test_" + name + ".py", dir + name + "_test.py"}
+	case ".ts":
+		return []string{dir + name + ".test.ts", dir + name + ".spec.ts"}
+	case ".tsx":
+		return []string{dir + name + ".test.tsx", dir + name + ".spec.tsx"}
+	case ".js":
+		return []string{dir + name + ".test.js", dir + name + ".spec.js"}
+	case ".jsx":
+		return []string{dir + name + ".test.jsx", dir + name + ".spec.jsx"}
+	default:
+		return nil
+	}
+}
+
+// buildKnowledgeEntityAliases registers the deterministic synonym that a file
+// node's basename is the same entity as its relative-path label. Aliases that
+// would collide with an existing node label or another alias are dropped so the
+// snapshot stays unambiguous.
+func buildKnowledgeEntityAliases(graph *session.KnowledgeGraphSnapshot) []session.KnowledgeEntityAlias {
+	if graph == nil {
+		return nil
+	}
+	labels := make(map[string]struct{}, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		labels[node.NormalizedLabel] = struct{}{}
+	}
+	used := make(map[string]struct{})
+	aliases := make([]session.KnowledgeEntityAlias, 0)
+	for _, node := range graph.Nodes {
+		if node.Kind != "file" {
+			continue
+		}
+		base := normalizeKnowledgeLabel(filepath.Base(node.Label))
+		if base == "" || base == node.NormalizedLabel {
+			continue
+		}
+		if _, isNode := labels[base]; isNode {
+			continue
+		}
+		if _, duplicate := used[base]; duplicate {
+			continue
+		}
+		used[base] = struct{}{}
+		aliases = append(aliases, session.KnowledgeEntityAlias{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID,
+			NormalizedAlias: base, NodeID: node.ID})
+	}
+	return aliases
 }
 
 func (s *KnowledgeBaseService) indexSourceFile(source *knowledgeSourceFile, graph *session.KnowledgeGraphSnapshot) error {
@@ -460,21 +766,47 @@ func (s *KnowledgeBaseService) indexSourceFile(source *knowledgeSourceFile, grap
 	graph.Evidence = append(graph.Evidence, session.KnowledgeEvidence{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID,
 		NodeID: fileNode.ID, ChunkID: chunks[0].ID, StartLine: chunks[0].StartLine, EndLine: chunks[0].EndLine, Confidence: 1})
 
+	// A single source file may repeat a heading or a code-comment label (for
+	// example two "## Example" sections, or repeated "# TODO" comments in a
+	// shell/YAML file). knowledge_nodes is unique on
+	// (snapshot_id, kind, normalized_label), so identical labels must collapse
+	// into one node; every occurrence still contributes its own evidence and the
+	// file's single edge to that node is created once. A code declaration is a
+	// "declares" edge (a symbol declaration), while a heading stays "contains".
+	nodeIDs := make(map[string]string)
+	edgeIDs := make(map[string]string)
 	for _, marker := range knowledgeMarkers(source.relativePath, source.text) {
 		chunk, ok := knowledgeChunkForLine(chunks, marker.line)
 		if !ok {
 			continue
 		}
-		node := session.KnowledgeNode{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID, Kind: marker.kind, Label: marker.label,
-			NormalizedLabel: normalizeKnowledgeLabel(source.relativePath + "\x00" + marker.label), Summary: marker.label}
-		edge := session.KnowledgeEdge{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID, FromNodeID: fileNode.ID,
-			ToNodeID: node.ID, RelationType: "contains", Confidence: 1}
-		graph.Nodes = append(graph.Nodes, node)
-		graph.Edges = append(graph.Edges, edge)
+		normalized := normalizeKnowledgeLabel(source.relativePath + "\x00" + marker.label)
+		nodeID, exists := nodeIDs[marker.kind+"\x00"+normalized]
+		if !exists {
+			node := session.KnowledgeNode{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID, Kind: marker.kind, Label: marker.label,
+				NormalizedLabel: normalized, Summary: marker.label}
+			graph.Nodes = append(graph.Nodes, node)
+			nodeID = node.ID
+			nodeIDs[marker.kind+"\x00"+normalized] = nodeID
+		}
 		graph.Evidence = append(graph.Evidence,
-			session.KnowledgeEvidence{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID, NodeID: node.ID, ChunkID: chunk.ID, StartLine: marker.line, EndLine: marker.line, Confidence: 1},
-			session.KnowledgeEvidence{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID, EdgeID: edge.ID, ChunkID: chunk.ID, StartLine: marker.line, EndLine: marker.line, Confidence: 1},
-		)
+			session.KnowledgeEvidence{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID, NodeID: nodeID, ChunkID: chunk.ID, StartLine: marker.line, EndLine: marker.line, Confidence: 1})
+
+		relation := "contains"
+		if marker.kind == "symbol" {
+			relation = "declares"
+		}
+		edgeKey := fileNode.ID + "\x00" + nodeID + "\x00" + relation
+		edgeID, exists := edgeIDs[edgeKey]
+		if !exists {
+			edge := session.KnowledgeEdge{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID, FromNodeID: fileNode.ID,
+				ToNodeID: nodeID, RelationType: relation, Confidence: 1}
+			graph.Edges = append(graph.Edges, edge)
+			edgeID = edge.ID
+			edgeIDs[edgeKey] = edgeID
+		}
+		graph.Evidence = append(graph.Evidence,
+			session.KnowledgeEvidence{ID: session.GenerateID(), SnapshotID: graph.Snapshot.ID, EdgeID: edgeID, ChunkID: chunk.ID, StartLine: marker.line, EndLine: marker.line, Confidence: 1})
 	}
 	return nil
 }
@@ -489,49 +821,49 @@ type knowledgeSourceFile struct {
 func resolveKnowledgeBaseRoot(base session.KnowledgeBase) (string, error) {
 	root, err := filepath.EvalSymlinks(base.RootDir)
 	if err != nil {
-		return "", fmt.Errorf("resolve knowledge base root: %w", err)
+		return "", fmt.Errorf("%w: %v", session.ErrKnowledgeBaseRootUnavailable, err)
 	}
 	info, err := os.Stat(root)
 	if err != nil {
-		return "", fmt.Errorf("stat knowledge base root: %w", err)
+		return "", fmt.Errorf("%w: %v", session.ErrKnowledgeBaseRootUnavailable, err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("knowledge base root is not a directory")
+		return "", fmt.Errorf("%w: not a directory", session.ErrKnowledgeBaseRootUnavailable)
 	}
 	return root, nil
 }
 
-func (s *KnowledgeBaseService) readIndexableKnowledgeFile(ctx context.Context, root, path string, entry fs.DirEntry) (*knowledgeSourceFile, error) {
+func (s *KnowledgeBaseService) readIndexableKnowledgeFile(ctx context.Context, root, path string, entry fs.DirEntry) (*knowledgeSourceFile, string, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	info, err := entry.Info()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if info.Size() > s.policy.MaxFileBytes {
-		return nil, nil
+		return nil, "too_large", nil
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return nil, err
+		return nil, "unreadable", nil
 	}
 	rel, err := filepath.Rel(root, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return nil, fmt.Errorf("knowledge base path escaped root")
+		return nil, "path_escaped_root", fmt.Errorf("%w: path escaped root", session.ErrKnowledgeBaseRootUnavailable)
 	}
 	data, err := os.ReadFile(resolved)
 	if err != nil {
-		return nil, err
+		return nil, "unreadable", nil
 	}
 	if !utf8.Valid(data) || strings.IndexByte(string(data), 0) >= 0 {
-		return nil, nil
+		return nil, "binary_or_non_utf8", nil
 	}
 	text := strings.TrimPrefix(strings.ReplaceAll(string(data), "\r\n", "\n"), "\ufeff")
 	if strings.TrimSpace(text) == "" {
-		return nil, nil
+		return nil, "empty", nil
 	}
-	return &knowledgeSourceFile{relativePath: filepath.ToSlash(rel), data: data, text: text, mediaType: knowledgeMediaType(path)}, nil
+	return &knowledgeSourceFile{relativePath: filepath.ToSlash(rel), data: data, text: text, mediaType: knowledgeMediaType(path)}, "", nil
 }
 
 func (s *KnowledgeBaseService) Query(ctx context.Context, knowledgeBaseID, query string, limit int) (session.KnowledgeGraphQuery, error) {
@@ -548,6 +880,132 @@ func knowledgeBaseIgnoredDirectory(name string) bool {
 	default:
 		return false
 	}
+}
+
+func knowledgeRelativePath(root, path string) (string, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// knowledgeIgnoreRules merges the knowledge-base's explicit ignoreGlobs with
+// the suggested patterns read from the root .gitignore/.mothxignore files. The
+// suggestion files are read-only inputs: they are never rewritten.
+type knowledgeIgnoreRules struct {
+	globs        []string
+	filePatterns []knowledgeIgnorePattern
+}
+
+type knowledgeIgnorePattern struct {
+	pattern string
+	negated bool
+	source  string
+}
+
+func newKnowledgeIgnoreRules(base session.KnowledgeBase, root string) knowledgeIgnoreRules {
+	rules := knowledgeIgnoreRules{globs: append([]string(nil), base.IgnoreGlobs...)}
+	rules.filePatterns = append(rules.filePatterns, readKnowledgeIgnoreFile(root, ".gitignore", "gitignore")...)
+	rules.filePatterns = append(rules.filePatterns, readKnowledgeIgnoreFile(root, ".mothxignore", "mothxignore")...)
+	return rules
+}
+
+func readKnowledgeIgnoreFile(root, name, source string) []knowledgeIgnorePattern {
+	data, err := os.ReadFile(filepath.Join(root, name))
+	if err != nil {
+		return nil
+	}
+	patterns := make([]knowledgeIgnorePattern, 0)
+	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		negated := false
+		if strings.HasPrefix(line, "!") {
+			negated = true
+			line = strings.TrimSpace(strings.TrimPrefix(line, "!"))
+		}
+		if line == "" {
+			continue
+		}
+		patterns = append(patterns, knowledgeIgnorePattern{pattern: line, negated: negated, source: source})
+	}
+	return patterns
+}
+
+// ignored reports whether rel is ignored and, if so, the diagnostic reason.
+func (r knowledgeIgnoreRules) ignored(rel string, _ bool) (bool, string) {
+	rel = strings.TrimPrefix(filepath.ToSlash(rel), "./")
+	if rel == "" {
+		return false, ""
+	}
+	for _, glob := range r.globs {
+		if knowledgeMatchGlob(glob, rel) {
+			return true, "ignore_glob:" + glob
+		}
+	}
+	matched, reason := false, ""
+	for _, pattern := range r.filePatterns {
+		if !knowledgeMatchGlob(pattern.pattern, rel) {
+			continue
+		}
+		if pattern.negated {
+			matched, reason = false, ""
+			continue
+		}
+		matched, reason = true, pattern.source+":"+pattern.pattern
+	}
+	return matched, reason
+}
+
+// knowledgeMatchGlob matches a gitignore-style pattern against a slash-separated
+// relative path. It supports "*", "?", and "**" (any number of segments). A
+// pattern without a slash matches at any path depth.
+func knowledgeMatchGlob(pattern, target string) bool {
+	pattern = strings.TrimSpace(strings.ReplaceAll(pattern, "\\", "/"))
+	pattern = strings.TrimPrefix(pattern, "./")
+	pattern = strings.TrimPrefix(pattern, "/")
+	pattern = strings.TrimSuffix(pattern, "/")
+	if pattern == "" || target == "" {
+		return false
+	}
+	target = strings.TrimPrefix(target, "./")
+	segments := strings.Split(target, "/")
+	if !strings.Contains(pattern, "/") {
+		for _, segment := range segments {
+			if ok, _ := path.Match(pattern, segment); ok {
+				return true
+			}
+		}
+		return false
+	}
+	return knowledgeMatchGlobSegments(strings.Split(pattern, "/"), segments)
+}
+
+func knowledgeMatchGlobSegments(pattern, segments []string) bool {
+	for len(pattern) > 0 {
+		if pattern[0] == "**" {
+			if len(pattern) == 1 {
+				return true
+			}
+			for i := 0; i <= len(segments); i++ {
+				if knowledgeMatchGlobSegments(pattern[1:], segments[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(segments) == 0 {
+			return false
+		}
+		if ok, _ := path.Match(pattern[0], segments[0]); !ok {
+			return false
+		}
+		pattern, segments = pattern[1:], segments[1:]
+	}
+	return len(segments) == 0
 }
 
 func knowledgeBaseAllowedFile(profile, path string) bool {

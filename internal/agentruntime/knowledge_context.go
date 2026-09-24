@@ -83,7 +83,7 @@ func PrepareKnowledgeContext(ctx context.Context, sessionDir, query string, refs
 		}
 		if !base.Enabled {
 			if reference.Required {
-				return nil, fmt.Errorf("knowledge base %q is disabled", base.Name)
+				return nil, fmt.Errorf("%w: %s", session.ErrKnowledgeBaseDisabled, base.Name)
 			}
 			continue
 		}
@@ -173,7 +173,7 @@ func prepareKnowledgeContextWithLibrarian(ctx context.Context, service *Knowledg
 		}
 		if !base.Enabled {
 			if reference.Required {
-				return nil, fmt.Errorf("knowledge base %q is disabled", base.Name)
+				return nil, fmt.Errorf("%w: %s", session.ErrKnowledgeBaseDisabled, base.Name)
 			}
 			continue
 		}

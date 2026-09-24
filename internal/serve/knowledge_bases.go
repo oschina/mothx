@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,15 +21,16 @@ import (
 // knowledgeBaseMutation is the WebUI projection of the Runtime-owned
 // configuration. It never carries source files or graph rows.
 type knowledgeBaseMutation struct {
-	Name              string `json:"name"`
-	RootDir           string `json:"rootDir"`
-	PreprocessProfile string `json:"preprocessProfile"`
-	Provider          string `json:"provider"`
-	Model             string `json:"model"`
-	Mode              string `json:"mode"`
-	ThinkingLevel     string `json:"thinkingLevel,omitempty"`
-	Schedule          string `json:"schedule"`
-	Enabled           *bool  `json:"enabled,omitempty"`
+	Name              string   `json:"name"`
+	RootDir           string   `json:"rootDir"`
+	PreprocessProfile string   `json:"preprocessProfile"`
+	Provider          string   `json:"provider"`
+	Model             string   `json:"model"`
+	Mode              string   `json:"mode"`
+	ThinkingLevel     string   `json:"thinkingLevel,omitempty"`
+	Schedule          string   `json:"schedule"`
+	Enabled           *bool    `json:"enabled,omitempty"`
+	IgnoreGlobs       []string `json:"ignoreGlobs,omitempty"`
 }
 
 func (m knowledgeBaseMutation) spec() session.KnowledgeBaseSpec {
@@ -39,23 +41,33 @@ func (m knowledgeBaseMutation) spec() session.KnowledgeBaseSpec {
 	return session.KnowledgeBaseSpec{
 		Name: m.Name, RootDir: m.RootDir, PreprocessProfile: m.PreprocessProfile,
 		Provider: m.Provider, Model: m.Model, Mode: m.Mode, ThinkingLevel: m.ThinkingLevel,
-		Schedule: m.Schedule, Enabled: enabled,
+		Schedule: m.Schedule, Enabled: enabled, IgnoreGlobs: m.IgnoreGlobs,
 	}
 }
 
 // validateWebKnowledgeBaseSpec keeps this thin HTTP projection honest about
 // the capabilities it actually exposes. Provider-backed enrichment remains
 // optional, but its two identifiers are one Runtime configuration unit. WebUI
-// does not own a scheduler yet, so accepting a non-manual cadence here would
-// create persisted configuration with no corresponding Serve lifecycle.
-func validateWebKnowledgeBaseSpec(spec session.KnowledgeBaseSpec) error {
+// does not own a scheduler, so it may only keep an already-persisted cadence or
+// fall back to manual; it must never introduce a new non-manual schedule.
+func validateWebKnowledgeBaseSpec(spec session.KnowledgeBaseSpec, existingSchedule string) error {
 	providerID := strings.TrimSpace(spec.Provider)
 	modelID := strings.TrimSpace(spec.Model)
 	if (providerID == "") != (modelID == "") {
 		return errors.New("provider and model must be configured together")
 	}
+	// Front-load the execution-option validation the indexer would otherwise
+	// only hit during a scan, so a bad mode/thinking level can never be
+	// persisted. Empty values stay valid and resolve to the Runtime defaults.
+	if mode := strings.TrimSpace(spec.Mode); mode != "" && !agentruntime.IsValidMode(mode) {
+		return fmt.Errorf("unsupported knowledge base mode %q", mode)
+	}
+	if _, err := agentruntime.ValidateThinkingLevel(spec.ThinkingLevel); err != nil {
+		return err
+	}
 	schedule := strings.TrimSpace(strings.ToLower(spec.Schedule))
-	if schedule != "" && schedule != "manual" {
+	existing := strings.TrimSpace(strings.ToLower(existingSchedule))
+	if schedule != "" && schedule != "manual" && schedule != existing {
 		return errors.New("scheduled knowledge base indexing is not available in WebUI")
 	}
 	return nil
@@ -200,13 +212,21 @@ func (rt *channelRuntime) handleKnowledgeBases(w http.ResponseWriter, r *http.Re
 		return
 	}
 	parts := strings.Split(relative, "/")
-	if len(parts) > 2 || parts[0] == "" {
+	if len(parts) > 3 || parts[0] == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid knowledge base path"})
 		return
 	}
 	id, err := url.PathUnescape(parts[0])
 	if err != nil || id == "" || strings.Contains(id, "/") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid knowledge base ID"})
+		return
+	}
+	if len(parts) == 3 {
+		if parts[1] == "runs" && r.Method == http.MethodGet {
+			rt.getKnowledgeBaseRun(w, r, id, parts[2])
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	if len(parts) == 2 {
@@ -219,6 +239,21 @@ func (rt *channelRuntime) handleKnowledgeBases(w http.ResponseWriter, r *http.Re
 		case "query":
 			if r.Method == http.MethodPost {
 				rt.queryKnowledgeBase(w, r, id)
+				return
+			}
+		case "clear":
+			if r.Method == http.MethodPost {
+				rt.clearKnowledgeBase(w, r, id)
+				return
+			}
+		case "runs":
+			if r.Method == http.MethodGet {
+				rt.listKnowledgeBaseRuns(w, r, id)
+				return
+			}
+		case "sources":
+			if r.Method == http.MethodGet {
+				rt.listKnowledgeBaseSources(w, r, id)
 				return
 			}
 		}
@@ -278,7 +313,7 @@ func (rt *channelRuntime) createKnowledgeBase(w http.ResponseWriter, r *http.Req
 		return
 	}
 	spec := body.KnowledgeBase.spec()
-	if err := validateWebKnowledgeBaseSpec(spec); err != nil {
+	if err := validateWebKnowledgeBaseSpec(spec, ""); err != nil {
 		writeKnowledgeBaseError(w, err)
 		return
 	}
@@ -304,7 +339,17 @@ func (rt *channelRuntime) updateKnowledgeBase(w http.ResponseWriter, r *http.Req
 		return
 	}
 	spec := body.KnowledgeBase.spec()
-	if err := validateWebKnowledgeBaseSpec(spec); err != nil {
+	existing, err := session.GetKnowledgeBase(r.Context(), rt.sessionDir, id)
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	// Preserve the persisted cadence when the WebUI submits none, so saving an
+	// unrelated field never downgrades a Desktop-owned schedule.
+	if strings.TrimSpace(spec.Schedule) == "" {
+		spec.Schedule = existing.Schedule
+	}
+	if err := validateWebKnowledgeBaseSpec(spec, existing.Schedule); err != nil {
 		writeKnowledgeBaseError(w, err)
 		return
 	}
@@ -396,8 +441,71 @@ func writeKnowledgeBaseError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, session.ErrKnowledgeBaseNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, session.ErrKnowledgeBaseUnindexed), strings.Contains(err.Error(), "is disabled"):
+	case errors.Is(err, session.ErrKnowledgeBaseUnindexed), errors.Is(err, session.ErrKnowledgeBaseDisabled), errors.Is(err, agentruntime.ErrKnowledgeIndexerModelUnavailable):
 		status = http.StatusConflict
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+// clearKnowledgeBase removes the active index while keeping configuration and
+// the source directory.
+func (rt *channelRuntime) clearKnowledgeBase(w http.ResponseWriter, r *http.Request, id string) {
+	service, err := rt.knowledgeBaseService()
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	if err := service.ClearIndex(r.Context(), id); err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cleared": true, "id": id})
+}
+
+func (rt *channelRuntime) listKnowledgeBaseRuns(w http.ResponseWriter, r *http.Request, id string) {
+	service, err := rt.knowledgeBaseService()
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	limit := 0
+	if value := strings.TrimSpace(r.URL.Query().Get("limit")); value != "" {
+		if parsed, convErr := strconv.Atoi(value); convErr == nil {
+			limit = parsed
+		}
+	}
+	runs, err := service.IndexRuns(r.Context(), id, limit)
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+func (rt *channelRuntime) getKnowledgeBaseRun(w http.ResponseWriter, r *http.Request, id, runID string) {
+	service, err := rt.knowledgeBaseService()
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	run, err := service.IndexRun(r.Context(), id, runID)
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run": run})
+}
+
+func (rt *channelRuntime) listKnowledgeBaseSources(w http.ResponseWriter, r *http.Request, id string) {
+	service, err := rt.knowledgeBaseService()
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	sources, err := service.Sources(r.Context(), id)
+	if err != nil {
+		writeKnowledgeBaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sources": sources})
 }

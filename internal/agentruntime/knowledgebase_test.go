@@ -70,6 +70,93 @@ func TestKnowledgeBaseIndexerStoresQueryableGraphSnapshot(t *testing.T) {
 	}
 }
 
+// TestKnowledgeBaseIndexDeduplicatesRepeatedLabels pins the constraint that one
+// source file may repeat a heading or a code-comment label without violating
+// knowledge_nodes' (snapshot_id, kind, normalized_label) uniqueness. Repeated
+// labels collapse into one node, every occurrence keeps its own evidence, the
+// file's contains edge is created once, and the graph projection returns each
+// node exactly once.
+func TestKnowledgeBaseIndexDeduplicatesRepeatedLabels(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	content := "# Guide\n\n## Example\n\nFirst example body.\n\n## Example\n\nSecond example body.\n"
+	if err := os.WriteFile(filepath.Join(source, "guide.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(context.Background(), root, session.KnowledgeBaseSpec{
+		Name: "Docs", RootDir: source, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := service.Index(context.Background(), base.ID)
+	if err != nil {
+		t.Fatalf("index with repeated labels failed: %v", err)
+	}
+	if snapshot.Status != "completed" || snapshot.FileCount != 1 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	result, err := service.Query(context.Background(), base.ID, "example body", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	for _, node := range result.Nodes {
+		seen[node.ID]++
+	}
+	if len(seen) == 0 {
+		t.Fatalf("query returned no nodes: %#v", result)
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Fatalf("node %s projected %d times, want once", id, count)
+		}
+	}
+	// The repeated heading is a single entity, not two nodes.
+	examples := 0
+	for _, node := range result.Nodes {
+		if node.Kind == "section" && node.Label == "Example" {
+			examples++
+		}
+	}
+	if examples != 1 {
+		t.Fatalf("Example section projected %d times, want 1", examples)
+	}
+}
+
+// TestKnowledgeBaseIndexDeduplicatesCodeCommentLabels covers the code profile,
+// where repeated "# TODO"-style comments would otherwise collide on the node
+// uniqueness index and fail the whole scan.
+func TestKnowledgeBaseIndexDeduplicatesCodeCommentLabels(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	content := "#!/bin/sh\n\n# TODO\n\necho one\n\n# TODO\n\necho two\n"
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(context.Background(), root, session.KnowledgeBaseSpec{
+		Name: "Scripts", RootDir: source, PreprocessProfile: "code", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := service.Index(context.Background(), base.ID)
+	if err != nil {
+		t.Fatalf("index with repeated code-comment labels failed: %v", err)
+	}
+	if snapshot.Status != "completed" || snapshot.FileCount != 1 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
 func TestPrepareKnowledgeContextBuildsBoundedCitedReference(t *testing.T) {
 	sessionDir := t.TempDir()
 	source := t.TempDir()
@@ -256,6 +343,134 @@ func TestKnowledgeIndexerRejectsUnsupportedModelLinks(t *testing.T) {
 	}
 }
 
+// TestKnowledgeIndexerAddsOnlyGroundedCandidateNodes pins that a model-proposed
+// entity is stored as a candidate, never a fact: a label that literally occurs in
+// the cited chunk gets node evidence and can surface in a query, while an
+// ungrounded label is persisted evidence-free (so default queries never return
+// it). Unsupported kinds, fact-label shadows, and duplicates are dropped.
+func TestKnowledgeIndexerAddsOnlyGroundedCandidateNodes(t *testing.T) {
+	graph := &session.KnowledgeGraphSnapshot{
+		Snapshot: session.KnowledgeSnapshot{ID: "snapshot"},
+		Chunks: []session.KnowledgeChunk{{ID: "chunk", SnapshotID: "snapshot", StartLine: 4, EndLine: 8,
+			Text: "Retrieval augmented generation improves answer grounding."}},
+		Nodes: []session.KnowledgeNode{{ID: "alpha", SnapshotID: "snapshot", Kind: "section", Label: "Alpha", NormalizedLabel: "alpha"}},
+	}
+	appendVerifiedCandidateNodes(graph, []indexerEntity{
+		{Label: "Retrieval augmented generation", Kind: "concept", Confidence: 0.7, ChunkID: "chunk", StartLine: 4, EndLine: 4},
+		{Label: "Hallucination", Kind: "concept", Confidence: 0.4, ChunkID: "chunk", StartLine: 4, EndLine: 4},
+		{Label: "Unsupported", Kind: "unknown-kind", Confidence: 0.9, ChunkID: "chunk", StartLine: 4, EndLine: 4},
+		{Label: "Alpha", Kind: "concept", Confidence: 0.9, ChunkID: "chunk", StartLine: 4, EndLine: 4},
+		{Label: "Retrieval augmented generation", Kind: "concept", Confidence: 0.7, ChunkID: "chunk", StartLine: 4, EndLine: 4},
+		{Label: "X", Kind: "concept", Confidence: 0.5, ChunkID: "chunk", StartLine: 4, EndLine: 4},
+	})
+	candidates := make(map[string]session.KnowledgeNode)
+	for _, node := range graph.Nodes {
+		if node.Status == session.KnowledgeNodeStatusCandidate {
+			candidates[node.Label] = node
+		}
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("candidate nodes = %#v, want exactly the grounded and the ungrounded entity", candidates)
+	}
+	grounded, ok := candidates["Retrieval augmented generation"]
+	if !ok || grounded.Confidence != 0.7 {
+		t.Fatalf("grounded candidate = %#v, want confidence 0.7", grounded)
+	}
+	ungrounded, ok := candidates["Hallucination"]
+	if !ok || ungrounded.Confidence != 0.4 {
+		t.Fatalf("ungrounded candidate = %#v, want confidence 0.4", ungrounded)
+	}
+	groundedEvidence, ungroundedEvidence := 0, 0
+	for _, item := range graph.Evidence {
+		switch item.NodeID {
+		case grounded.ID:
+			groundedEvidence++
+		case ungrounded.ID:
+			ungroundedEvidence++
+		}
+	}
+	if groundedEvidence == 0 {
+		t.Fatalf("grounded candidate has no evidence: %#v", graph.Evidence)
+	}
+	if ungroundedEvidence != 0 {
+		t.Fatalf("ungrounded candidate gained evidence: %#v", graph.Evidence)
+	}
+	if _, exists := candidates["Unsupported"]; exists {
+		t.Fatal("unsupported entity kind was stored")
+	}
+	if _, exists := candidates["Alpha"]; exists {
+		t.Fatal("candidate shadowed a deterministic node label")
+	}
+	if graph.Nodes[0].Status != "" {
+		t.Fatalf("deterministic node was mutated: %#v", graph.Nodes[0])
+	}
+}
+
+func TestParseIndexerResponseBoundsEntities(t *testing.T) {
+	entities := make([]indexerEntity, maxKnowledgeIndexerEntities+1)
+	for i := range entities {
+		entities[i] = indexerEntity{Label: "label", Kind: "concept"}
+	}
+	payload, _ := json.Marshal(indexerResponse{Entities: entities})
+	if _, err := parseIndexerResponse(string(payload)); err == nil {
+		t.Fatal("parseIndexerResponse accepted too many entities")
+	}
+	if _, err := parseIndexerResponse(`{"links":[],"entities":[{"label":"Retrieval","kind":"concept","confidence":0.5,"chunkId":"c1","startLine":1,"endLine":1}]}`); err != nil {
+		t.Fatalf("parseIndexerResponse rejected a valid entity: %v", err)
+	}
+}
+
+func TestKnowledgeIndexerStoresGroundedCandidateNodes(t *testing.T) {
+	sessionDir := t.TempDir()
+	source := t.TempDir()
+	content := "# Retrieval\n\nRetrieval augmented generation improves answer grounding.\n\n## Pipeline\n\nA pipeline retrieves then generates an answer.\n"
+	if err := os.WriteFile(filepath.Join(source, "retrieval.md"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	model := &provider.Model{ID: "indexer-model", Name: "Indexer model"}
+	indexer := &knowledgeIndexerTestProvider{model: model, entityLabel: "Retrieval augmented generation"}
+	base, err := session.CreateKnowledgeBase(t.Context(), sessionDir, session.KnowledgeBaseSpec{
+		Name: "Retrieval", RootDir: source, PreprocessProfile: "documents",
+		Provider: "indexer", Model: model.ID, Mode: ModeYolo, Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := &config.Settings{SessionDir: sessionDir}
+	service, err := NewKnowledgeBaseServiceWithProviderFactory(sessionDir, DefaultKnowledgeBaseIndexPolicy(), settings,
+		func(*config.Settings, string, string) (provider.Provider, *provider.Model, error) {
+			return indexer, model, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := service.Query(t.Context(), base.ID, "retrieval augmented generation", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidate *session.KnowledgeNode
+	for i := range graph.Nodes {
+		if graph.Nodes[i].Label == "Retrieval augmented generation" {
+			candidate = &graph.Nodes[i]
+		}
+	}
+	if candidate == nil || candidate.Status != session.KnowledgeNodeStatusCandidate || candidate.Confidence >= 1 {
+		t.Fatalf("grounded candidate not projected: %#v", graph.Nodes)
+	}
+	var noted bool
+	for _, uncertainty := range graph.Uncertainties {
+		if uncertainty.Kind == "candidate_node" {
+			noted = true
+		}
+	}
+	if !noted {
+		t.Fatalf("query did not flag the included candidate: %#v", graph.Uncertainties)
+	}
+}
+
 func TestKnowledgeIndexerClonesUnchangedFileGraphWhenAnotherFileChanges(t *testing.T) {
 	sessionDir := t.TempDir()
 	source := t.TempDir()
@@ -322,7 +537,7 @@ func TestKnowledgeIndexerRevalidatesReusePlanAgainstCurrentContent(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := service.scanFileManifest(t.Context(), current, nil)
+	manifest, _, err := service.scanFileManifest(t.Context(), current, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,9 +582,11 @@ func TestKnowledgeIndexerRevalidatesReusePlanAgainstCurrentContent(t *testing.T)
 }
 
 type knowledgeIndexerTestProvider struct {
-	model     *provider.Model
-	calls     int
-	toolNames []string
+	model       *provider.Model
+	calls       int
+	toolNames   []string
+	entityLabel string
+	entityKind  string
 }
 
 func (p *knowledgeIndexerTestProvider) Chat(ctx context.Context, params provider.ChatParams) <-chan provider.StreamEvent {
@@ -400,10 +617,19 @@ func (p *knowledgeIndexerTestProvider) Chat(ctx context.Context, params provider
 	response := `{"links":[]}`
 	if len(input.Nodes) >= 2 && len(input.Chunks) > 0 {
 		chunk := input.Chunks[0]
-		responseBytes, _ := json.Marshal(indexerLinkResponse{Links: []indexerLink{{
+		parsed := indexerResponse{Links: []indexerLink{{
 			FromNodeID: input.Nodes[0].ID, ToNodeID: input.Nodes[1].ID, ChunkID: chunk.ID,
 			StartLine: chunk.StartLine, EndLine: chunk.EndLine,
-		}}})
+		}}}
+		if p.entityLabel != "" {
+			kind := p.entityKind
+			if kind == "" {
+				kind = "concept"
+			}
+			parsed.Entities = []indexerEntity{{Label: p.entityLabel, Kind: kind, Confidence: 0.6,
+				ChunkID: chunk.ID, StartLine: chunk.StartLine, EndLine: chunk.EndLine}}
+		}
+		responseBytes, _ := json.Marshal(parsed)
 		response = string(responseBytes)
 	}
 	events := make(chan provider.StreamEvent, 3)
@@ -612,5 +838,768 @@ func TestKnowledgeBaseServiceSetSettings(t *testing.T) {
 
 	if len(seen) != 2 || seen[0] != "first" || seen[1] != "second" {
 		t.Fatalf("factory settings = %#v, want the refreshed snapshot on the second resolution", seen)
+	}
+}
+
+// writeKnowledgeTestFile creates one file (and its parents) under dir.
+func writeKnowledgeTestFile(t *testing.T, dir, rel string, content []byte) {
+	t.Helper()
+	path := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestKnowledgeBaseIndexHonorsIgnoreRulesAndReportsDiscovery pins that user
+// ignoreGlobs and the root .gitignore suggestions exclude files, that the
+// bounded discovery projection explains what was ignored or skipped, and that
+// only the remaining files are indexed.
+func TestKnowledgeBaseIndexHonorsIgnoreRulesAndReportsDiscovery(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	writeKnowledgeTestFile(t, source, "guide.md", []byte("# Guide\n\nUseful body.\n"))
+	writeKnowledgeTestFile(t, source, "draft.md", []byte("# Draft\n\nUnpublished.\n"))
+	writeKnowledgeTestFile(t, source, "secret.md", []byte("# Secret\n\nPrivate.\n"))
+	writeKnowledgeTestFile(t, source, "ignored/notes.md", []byte("# Notes\n\nHidden dir.\n"))
+	writeKnowledgeTestFile(t, source, "blob.md", []byte{0x00, 0x01, 0x02, 0xff})
+	writeKnowledgeTestFile(t, source, ".gitignore", []byte("secret.md\n"))
+
+	base, err := session.CreateKnowledgeBase(context.Background(), root, session.KnowledgeBaseSpec{
+		Name: "Docs", RootDir: source, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+		IgnoreGlobs: []string{"draft.md", "ignored/"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := service.Index(context.Background(), base.ID)
+	if err != nil {
+		t.Fatalf("index failed: %v", err)
+	}
+	if snapshot.FileCount != 1 {
+		t.Fatalf("file count = %d, want 1 (only guide.md)", snapshot.FileCount)
+	}
+	if snapshot.DiscoverySummary == nil {
+		t.Fatalf("snapshot has no discovery summary: %#v", snapshot)
+	}
+	discovery := snapshot.DiscoverySummary
+	if discovery.Discovered != 1 {
+		t.Fatalf("discovered = %d, want 1", discovery.Discovered)
+	}
+	if discovery.Ignored < 2 {
+		t.Fatalf("ignored = %d, want at least 2", discovery.Ignored)
+	}
+	if discovery.Skipped != 1 {
+		t.Fatalf("skipped = %d, want 1 (binary blob.md)", discovery.Skipped)
+	}
+	reasons := map[string]string{}
+	for _, entry := range discovery.IgnoredEntries {
+		reasons[entry.Path] = entry.Reason
+	}
+	if !strings.Contains(reasons["draft.md"], "ignore_glob") {
+		t.Fatalf("draft.md reason = %q, want ignore_glob", reasons["draft.md"])
+	}
+	if !strings.Contains(reasons["secret.md"], "gitignore") {
+		t.Fatalf("secret.md reason = %q, want gitignore", reasons["secret.md"])
+	}
+	if len(discovery.SkippedEntries) != 1 || discovery.SkippedEntries[0].Path != "blob.md" {
+		t.Fatalf("skipped entries = %#v", discovery.SkippedEntries)
+	}
+}
+
+// TestKnowledgeBaseIndexRecordsIncrementalDiffSummary pins the added/modified/
+// removed/unchanged projection persisted with a rebuilt snapshot.
+func TestKnowledgeBaseIndexRecordsIncrementalDiffSummary(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	writeKnowledgeTestFile(t, source, "a.md", []byte("# Alpha\n\nFirst body.\n"))
+	writeKnowledgeTestFile(t, source, "b.md", []byte("# Beta\n\nSecond body.\n"))
+
+	base, err := session.CreateKnowledgeBase(context.Background(), root, session.KnowledgeBaseSpec{
+		Name: "Diff", RootDir: source, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(context.Background(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	writeKnowledgeTestFile(t, source, "a.md", []byte("# Alpha\n\nFirst body changed.\n"))
+	if _, err := service.Index(context.Background(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := session.GetKnowledgeBase(context.Background(), root, base.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := session.GetKnowledgeSnapshot(context.Background(), root, current.ActiveSnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.DiffSummary == nil {
+		t.Fatalf("snapshot has no diff summary: %#v", snapshot)
+	}
+	diff := snapshot.DiffSummary
+	if diff.Added != 0 || diff.Modified != 1 || diff.Removed != 0 || diff.Unchanged != 1 {
+		t.Fatalf("diff summary = %#v, want 0 added / 1 modified / 0 removed / 1 unchanged", diff)
+	}
+}
+
+// TestKnowledgeBaseQueryTraversesReferencesAndAliases pins the two-hop bounded
+// traversal: a query that hits a section reaches the file it links to through a
+// deterministic "references" edge, and a basename query seeds the file node via
+// its entity alias even when the FTS chunks do not match.
+func TestKnowledgeBaseQueryTraversesReferencesAndAliases(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	writeKnowledgeTestFile(t, source, "index.md", []byte("# Index\n\nSee [details](docs/details.md) for the deep content.\n"))
+	writeKnowledgeTestFile(t, source, "docs/details.md", []byte("# Details\n\nDeep content lives here.\n"))
+
+	base, err := session.CreateKnowledgeBase(context.Background(), root, session.KnowledgeBaseSpec{
+		Name: "Links", RootDir: source, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(context.Background(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.Query(context.Background(), base.ID, "Index", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	references := 0
+	for _, edge := range result.Edges {
+		if edge.RelationType == "references" {
+			references++
+		}
+	}
+	if references == 0 {
+		t.Fatalf("query result has no references edge: %#v", result.Edges)
+	}
+	foundDetails := false
+	for _, node := range result.Nodes {
+		if node.Kind == "file" && node.Label == "docs/details.md" {
+			foundDetails = true
+		}
+	}
+	if !foundDetails {
+		t.Fatalf("two-hop traversal did not reach docs/details.md: %#v", result.Nodes)
+	}
+
+	alias, err := service.Query(context.Background(), base.ID, "details.md", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundAlias := false
+	for _, node := range alias.Nodes {
+		if node.Kind == "file" && node.Label == "docs/details.md" {
+			foundAlias = true
+		}
+	}
+	if !foundAlias {
+		t.Fatalf("basename alias query did not seed the file node: %#v", alias.Nodes)
+	}
+}
+
+// TestKnowledgeIndexModelUnavailableSurfacesStableCode pins that an index pass
+// which cannot build the configured Indexer provider fails with the sentinel
+// error and records the stable knowledge_base_model_unavailable code on the
+// canonical Run, instead of leaking the raw provider error to management
+// surfaces.
+func TestKnowledgeIndexModelUnavailableSurfacesStableCode(t *testing.T) {
+	sessionDir := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "a.md"), []byte("# A\n\nbody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), sessionDir, session.KnowledgeBaseSpec{
+		Name: "Docs", RootDir: source, PreprocessProfile: "documents",
+		Provider: "broken", Model: "broken-model", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := &config.Settings{SessionDir: sessionDir}
+	service, err := NewKnowledgeBaseServiceWithProviderFactory(sessionDir, DefaultKnowledgeBaseIndexPolicy(), settings,
+		func(*config.Settings, string, string) (provider.Provider, *provider.Model, error) {
+			return nil, nil, errors.New("provider unavailable")
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); !errors.Is(err, ErrKnowledgeIndexerModelUnavailable) {
+		t.Fatalf("index error = %v, want ErrKnowledgeIndexerModelUnavailable", err)
+	}
+	runs, err := service.IndexRuns(t.Context(), base.ID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) == 0 || runs[0].Status != string(RunStateFailed) {
+		t.Fatalf("index runs = %#v, want one failed run", runs)
+	}
+	if runs[0].ErrorCode != knowledgeIndexModelUnavailableCode {
+		t.Fatalf("run error code = %q, want %q", runs[0].ErrorCode, knowledgeIndexModelUnavailableCode)
+	}
+}
+
+// TestKnowledgeBaseIndexAddsTestedByRelation pins the deterministic "tested_by"
+// relation: a code knowledge base links a source file node to its conventional
+// test file node by filename convention, with no model assertion involved.
+func TestKnowledgeBaseIndexAddsTestedByRelation(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "calc.go"), []byte("package calc\n\nfunc Add(a, b int) int { return a + b }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "calc_test.go"), []byte("package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"add\")\n\t}\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), root, session.KnowledgeBaseSpec{
+		Name: "Code", RootDir: source, PreprocessProfile: "code", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := service.Query(t.Context(), base.ID, "add", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var testedBy bool
+	for _, edge := range graph.Edges {
+		if edge.RelationType == "tested_by" {
+			testedBy = true
+		}
+	}
+	if !testedBy {
+		t.Fatalf("graph edges = %#v, want a tested_by relation", graph.Edges)
+	}
+
+	// The relation is rebuilt on an unchanged rescan, not dropped by reuse.
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	graph, err = service.Query(t.Context(), base.ID, "add", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testedBy = false
+	for _, edge := range graph.Edges {
+		if edge.RelationType == "tested_by" {
+			testedBy = true
+		}
+	}
+	if !testedBy {
+		t.Fatalf("reused graph edges = %#v, want the tested_by relation rebuilt", graph.Edges)
+	}
+}
+
+// TestKnowledgeBaseTestedByRelationIsCodeOnly pins that the code filename
+// convention is not applied to a documents knowledge base (which does not index
+// code files at all).
+func TestKnowledgeBaseTestedByRelationIsCodeOnly(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	for name, body := range map[string]string{
+		"calc.go":      "package calc\n\nfunc Add(a, b int) int { return a + b }\n",
+		"calc_test.go": "package calc\n\nfunc TestAdd(t *testing.T) {}\n",
+		"guide.md":     "# Guide\n\nAddition is documented here.\n",
+	} {
+		if err := os.WriteFile(filepath.Join(source, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), root, session.KnowledgeBaseSpec{
+		Name: "Docs", RootDir: source, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := service.Index(t.Context(), base.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.FileCount != 1 {
+		t.Fatalf("documents profile must not index code files: %#v", snapshot)
+	}
+	graph, err := service.Query(t.Context(), base.ID, "addition", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, edge := range graph.Edges {
+		if edge.RelationType == "tested_by" {
+			t.Fatalf("documents profile produced a tested_by edge: %#v", graph.Edges)
+		}
+	}
+}
+
+func knowledgeTestHitTargets(hits []knowledgeImportHit) string {
+	targets := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		targets = append(targets, hit.target)
+	}
+	return strings.Join(targets, ",")
+}
+
+// TestKnowledgeImportHitsParseGoPythonAndJS pins the deterministic import
+// scanners that back the "imports" relation.
+func TestKnowledgeImportHitsParseGoPythonAndJS(t *testing.T) {
+	goHits := knowledgeImportHits(".go", "package main\n\nimport (\n\t\"fmt\"\n\tf \"os\"\n\t_ \"net/http\"\n)\n\nimport \"strings\"\n")
+	if got := knowledgeTestHitTargets(goHits); got != "fmt,os,net/http,strings" {
+		t.Fatalf("go imports = %q", got)
+	}
+	pyHits := knowledgeImportHits(".py", "import os\nimport sys, json\nfrom a.b import c\nimport numpy as np\n")
+	if got := knowledgeTestHitTargets(pyHits); got != "os,sys,json,a.b,numpy" {
+		t.Fatalf("python imports = %q", got)
+	}
+	jsHits := knowledgeImportHits(".ts", "import x from \"react\"\nimport \"./side\"\nconst y = require(\"lodash\")\nexport { z } from \"mod\"\n")
+	if got := knowledgeTestHitTargets(jsHits); got != "react,./side,lodash,mod" {
+		t.Fatalf("js imports = %q", got)
+	}
+}
+
+// TestKnowledgeBaseIndexAddsImportsRelation pins the deterministic "imports"
+// relation end to end, including that it is rebuilt after an unchanged rescan.
+func TestKnowledgeBaseIndexAddsImportsRelation(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "main.go"), []byte("package main\n\nimport (\n\t\"fmt\"\n\t\"strings\"\n)\n\nfunc main() { fmt.Println(strings.ToUpper(\"x\")) }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), root, session.KnowledgeBaseSpec{
+		Name: "Code", RootDir: source, PreprocessProfile: "code", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertKnowledgeImportsRelation(t, service, base.ID)
+	// An unchanged rescan reuses the snapshot but must still rebuild the relation.
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertKnowledgeImportsRelation(t, service, base.ID)
+}
+
+func assertKnowledgeImportsRelation(t *testing.T, service *KnowledgeBaseService, baseID string) {
+	t.Helper()
+	graph, err := service.Query(t.Context(), baseID, "Println", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var moduleFound, edgeFound bool
+	for _, node := range graph.Nodes {
+		if node.Kind == knowledgeImportNodeKind && node.Label == "fmt" {
+			moduleFound = true
+		}
+	}
+	for _, edge := range graph.Edges {
+		if edge.RelationType == "imports" {
+			edgeFound = true
+		}
+	}
+	if !moduleFound || !edgeFound {
+		t.Fatalf("graph nodes=%#v edges=%#v, want a module node and an imports edge", graph.Nodes, graph.Edges)
+	}
+}
+
+// TestKnowledgeBaseIndexUsesDeclaresForCodeSymbols pins that a code declaration
+// is linked with an explicit "declares" edge (a symbol declaration), not the
+// generic "contains" relation.
+func TestKnowledgeBaseIndexUsesDeclaresForCodeSymbols(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "util.go"), []byte("package util\n\n// Helper does work.\nfunc Helper() int { return 1 }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), root, session.KnowledgeBaseSpec{
+		Name: "Code", RootDir: source, PreprocessProfile: "code", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := service.Query(t.Context(), base.ID, "Helper", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var helperID string
+	for _, node := range graph.Nodes {
+		if node.Kind == "symbol" && node.Label == "Helper" {
+			helperID = node.ID
+		}
+	}
+	if helperID == "" {
+		t.Fatalf("symbol node Helper not found in %#v", graph.Nodes)
+	}
+	var declares, contains bool
+	for _, edge := range graph.Edges {
+		if edge.ToNodeID != helperID {
+			continue
+		}
+		switch edge.RelationType {
+		case "declares":
+			declares = true
+		case "contains":
+			contains = true
+		}
+	}
+	if !declares || contains {
+		t.Fatalf("edges = %#v, want a declares edge and no contains edge for the symbol", graph.Edges)
+	}
+}
+
+// TestKnowledgeBaseIndexKeepsContainsForSections pins that a document heading
+// remains a "contains" relation.
+func TestKnowledgeBaseIndexKeepsContainsForSections(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "guide.md"), []byte("# Guide\n\nBody text.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), root, session.KnowledgeBaseSpec{
+		Name: "Docs", RootDir: source, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := service.Query(t.Context(), base.ID, "Guide", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sectionID string
+	for _, node := range graph.Nodes {
+		if node.Kind == "section" && node.Label == "Guide" {
+			sectionID = node.ID
+		}
+	}
+	if sectionID == "" {
+		t.Fatalf("section node Guide not found in %#v", graph.Nodes)
+	}
+	var contains bool
+	for _, edge := range graph.Edges {
+		if edge.ToNodeID == sectionID && edge.RelationType == "contains" {
+			contains = true
+		}
+	}
+	if !contains {
+		t.Fatalf("edges = %#v, want a contains edge for the section", graph.Edges)
+	}
+}
+
+// TestKnowledgeConfigFilePatternMatchesWholeComponents pins the boundary rule
+// that keeps the config-name scan from matching inside a longer filename.
+func TestKnowledgeConfigFilePatternMatchesWholeComponents(t *testing.T) {
+	cases := map[string]bool{
+		"package.json":          true,
+		"see package.json here": true,
+		"path/to/package.json":  true,
+		"mypackage.json":        false,
+		"tsconfig.jsonc":        false,
+	}
+	for line, want := range cases {
+		got := len(knowledgeConfigFilePattern.FindAllStringSubmatch(line, -1)) > 0
+		if got != want {
+			t.Fatalf("match(%q) = %v, want %v", line, got, want)
+		}
+	}
+}
+
+// TestKnowledgeBaseIndexAddsConfiguredByRelation pins the deterministic
+// "configured_by" relation: a code file that references a present config file is
+// linked to it, and a reference to an absent or similarly named file is not.
+func TestKnowledgeBaseIndexAddsConfiguredByRelation(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "package.json"), []byte("{\"name\":\"x\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mainSrc := "// This file reads package.json and tsconfig.json but not mypackage.json.\npackage main\n\nfunc main() {}\n"
+	if err := os.WriteFile(filepath.Join(source, "main.go"), []byte(mainSrc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), root, session.KnowledgeBaseSpec{
+		Name: "Code", RootDir: source, PreprocessProfile: "code", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := service.Query(t.Context(), base.ID, "reads", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configID := ""
+	for _, node := range graph.Nodes {
+		if node.Kind == "file" && node.Label == "package.json" {
+			configID = node.ID
+		}
+	}
+	if configID == "" {
+		t.Fatalf("config file node package.json not found in %#v", graph.Nodes)
+	}
+	var configuredBy int
+	for _, edge := range graph.Edges {
+		if edge.RelationType == "configured_by" {
+			configuredBy++
+			if edge.ToNodeID != configID {
+				t.Fatalf("configured_by target = %q, want %q", edge.ToNodeID, configID)
+			}
+		}
+	}
+	if configuredBy != 1 {
+		t.Fatalf("configured_by edge count = %d, want exactly 1 (%#v)", configuredBy, graph.Edges)
+	}
+}
+
+// TestKnowledgeLineCallsSymbolBoundaries pins the call-site detector's boundary
+// and spacing rules.
+func TestKnowledgeLineCallsSymbolBoundaries(t *testing.T) {
+	cases := []struct {
+		line  string
+		label string
+		want  bool
+	}{
+		{"\treturn Helper()", "Helper", true},
+		{"x := Helper (a)", "Helper", true},
+		{"Helper", "Helper", false},
+		{"myHelper()", "Helper", false},
+		{"HelperFunc()", "Helper", false},
+		{"y := Helper() + Helper()", "Helper", true},
+	}
+	for _, testCase := range cases {
+		if got := knowledgeLineCallsSymbol(testCase.line, testCase.label); got != testCase.want {
+			t.Fatalf("knowledgeLineCallsSymbol(%q, %q) = %v, want %v", testCase.line, testCase.label, got, testCase.want)
+		}
+	}
+}
+
+// TestKnowledgeBaseIndexAddsCallsRelation pins the within-file "calls" relation:
+// a symbol that invokes another symbol declared in the same file is linked to
+// it, and a comment mention is not mistaken for a call.
+func TestKnowledgeBaseIndexAddsCallsRelation(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	content := "package util\n\nfunc Helper() int { return 1 }\n\n// Use calls Helper twice.\nfunc Use() int {\n\treturn Helper() + Helper()\n}\n"
+	if err := os.WriteFile(filepath.Join(source, "util.go"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), root, session.KnowledgeBaseSpec{
+		Name: "Code", RootDir: source, PreprocessProfile: "code", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := service.Query(t.Context(), base.ID, "Helper", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labelByID := make(map[string]string, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		labelByID[node.ID] = node.Label
+	}
+	var calls int
+	for _, edge := range graph.Edges {
+		if edge.RelationType != "calls" {
+			continue
+		}
+		calls++
+		if labelByID[edge.FromNodeID] != "Use" || labelByID[edge.ToNodeID] != "Helper" {
+			t.Fatalf("calls edge %s -> %s, want Use -> Helper", labelByID[edge.FromNodeID], labelByID[edge.ToNodeID])
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("calls edge count = %d, want exactly 1 (%#v)", calls, graph.Edges)
+	}
+}
+
+// TestKnowledgeDocumentRelationPatterns pins the deterministic document scanners
+// for definitions and RFC 2119 requirements.
+func TestKnowledgeDocumentRelationPatterns(t *testing.T) {
+	match := knowledgeDefinitionLine.FindStringSubmatch("**Idempotency** — repeating a request has no additional effect.")
+	if len(match) != 3 || match[1] != "Idempotency" {
+		t.Fatalf("definition match = %#v", match)
+	}
+	if knowledgeDefinitionLine.MatchString("just a plain sentence") {
+		t.Fatal("a plain sentence must not be a definition")
+	}
+	if !knowledgeRequirementLine.MatchString("The server MUST reject unauthenticated requests.") {
+		t.Fatal("uppercase MUST must be a requirement")
+	}
+	if knowledgeRequirementLine.MatchString("the server must reject requests") {
+		t.Fatal("lowercase prose must not be a requirement")
+	}
+}
+
+// TestKnowledgeBaseIndexAddsDocumentRelations pins the deterministic "defines"
+// and "requires" relations end to end.
+func TestKnowledgeBaseIndexAddsDocumentRelations(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	content := "# Terms\n\n**Idempotency** — repeating a request has no additional effect.\n\n# Requirements\n\nThe server MUST reject unauthenticated requests.\n"
+	if err := os.WriteFile(filepath.Join(source, "spec.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), root, session.KnowledgeBaseSpec{
+		Name: "Docs", RootDir: source, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := service.Query(t.Context(), base.ID, "Idempotency", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labelByID := make(map[string]string, len(graph.Nodes))
+	kindByID := make(map[string]string, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		labelByID[node.ID] = node.Label
+		kindByID[node.ID] = node.Kind
+	}
+	var defines, requires bool
+	for _, edge := range graph.Edges {
+		switch edge.RelationType {
+		case "defines":
+			defines = true
+			if labelByID[edge.FromNodeID] != "Terms" || kindByID[edge.ToNodeID] != knowledgeDefinedTermKind {
+				t.Fatalf("defines edge %s(%s) -> %s(%s)", labelByID[edge.FromNodeID], kindByID[edge.FromNodeID], labelByID[edge.ToNodeID], kindByID[edge.ToNodeID])
+			}
+		case "requires":
+			requires = true
+			if kindByID[edge.ToNodeID] != knowledgeRequirementKind {
+				t.Fatalf("requires target kind = %q, want %q", kindByID[edge.ToNodeID], knowledgeRequirementKind)
+			}
+		}
+	}
+	if !defines || !requires {
+		t.Fatalf("edges = %#v, want both defines and requires relations", graph.Edges)
+	}
+}
+
+// TestKnowledgeSupersedeReferencesExtraction pins reference extraction from a
+// supersession line: quoted names and filename-like tokens are captured, and
+// plain prose produces nothing.
+func TestKnowledgeSupersedeReferencesExtraction(t *testing.T) {
+	refs := knowledgeSupersedeReferences("This supersedes `v1.md` and old.md, not the old one.")
+	joined := strings.Join(refs, ",")
+	if !strings.Contains(joined, "v1.md") || !strings.Contains(joined, "old.md") {
+		t.Fatalf("refs = %#v, want v1.md and old.md", refs)
+	}
+	if got := knowledgeSupersedeReferences("The new API supersedes the old implementation."); len(got) != 0 {
+		t.Fatalf("prose refs = %#v, want none", got)
+	}
+}
+
+// TestKnowledgeBaseIndexAddsSupersedesRelation pins the deterministic
+// "supersedes" relation: a document that references another present document as
+// superseded is linked to it, and a prose sentence is not.
+func TestKnowledgeBaseIndexAddsSupersedesRelation(t *testing.T) {
+	root := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "v1.md"), []byte("# Spec v1\n\nOriginal specification.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	content := "# Spec v2\n\nThis document supersedes `v1.md`. The new API supersedes the old one.\n"
+	if err := os.WriteFile(filepath.Join(source, "v2.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(t.Context(), root, session.KnowledgeBaseSpec{
+		Name: "Docs", RootDir: source, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(root, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), base.ID); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := service.Query(t.Context(), base.ID, "supersedes", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labelByID := make(map[string]string, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		labelByID[node.ID] = node.Label
+	}
+	var supersedes int
+	for _, edge := range graph.Edges {
+		if edge.RelationType != "supersedes" {
+			continue
+		}
+		supersedes++
+		if labelByID[edge.FromNodeID] != "v2.md" || labelByID[edge.ToNodeID] != "v1.md" {
+			t.Fatalf("supersedes edge %s -> %s, want v2.md -> v1.md", labelByID[edge.FromNodeID], labelByID[edge.ToNodeID])
+		}
+	}
+	if supersedes != 1 {
+		t.Fatalf("supersedes edge count = %d, want exactly 1 (%#v)", supersedes, graph.Edges)
 	}
 }

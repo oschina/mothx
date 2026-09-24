@@ -269,6 +269,37 @@ test('knowledge-base MCP configuration translations remain bilingual', () => {
   ]);
 });
 
+test('knowledge-base run history, sources, and clear are additive ACP projections', () => {
+  assertAcpMethods(manageApi, [
+    'mothx/manage/knowledge-bases/runs/list',
+    'mothx/manage/knowledge-bases/runs/get',
+    'mothx/manage/knowledge-bases/sources/list',
+    'mothx/manage/knowledge-bases/clear',
+    'mothx/manage/knowledge-bases/schedule',
+  ]);
+  assert.match(manageApi, /hasFeature\('knowledgeRuns'\)/, 'run history must gate on the knowledgeRuns capability');
+  assert.match(manageApi, /hasFeature\('knowledgeSources'\)/, 'sources must gate on the knowledgeSources capability');
+  assert.match(knowledgePanel, /KnowledgeBaseInsights/, 'panel must render the run/source insights projection');
+  assert.match(knowledgePanel, /loadKnowledgeBaseRuns\(baseId\)/, 'insights must load runs through ACP');
+  assert.match(knowledgePanel, /loadKnowledgeBaseSources\(baseId\)/, 'insights must load sources through ACP');
+  assert.match(knowledgePanel, /clearKnowledgeBase\(baseId\)/, 'clear must call the Runtime-owned ACP method');
+  assert.match(knowledgePanel, /KnowledgeBaseScheduleStatus/, 'panel must project the schedule state');
+  assert.match(knowledgePanel, /setKnowledgeBaseScheduleEnabled\(baseId, !schedule\.enabled\)/, 'pause/resume must go through the ACP schedule method');
+  // The panel projects provenance only; it must never read the source directory
+  // or persist run/source facts in Desktop storage.
+  assert.doesNotMatch(knowledgePanel, /readFileBase64\([^)]*(source|runs|knowledge)/i, 'Desktop must not read knowledge source files');
+  assert.doesNotMatch(knowledgePanel, /desktop\.storeSet\([^)]*(run|source|knowledge)/i, 'run/source projections must not enter the Desktop store');
+  assertBilingual([
+    'settings.knowledgeRuns', 'settings.knowledgeSources', 'settings.knowledgeRunsEmpty',
+    'settings.knowledgeSourcesEmpty', 'settings.knowledgeRunActive', 'settings.knowledgeRunStats',
+    'settings.knowledgeRunError', 'settings.knowledgeSourceMeta', 'settings.knowledgeClear',
+    'settings.knowledgeClearConfirm', 'settings.knowledgeCleared',
+    'settings.knowledgeScheduleNext', 'settings.knowledgeScheduleLast', 'settings.knowledgeScheduleManual',
+    'settings.knowledgeSchedulePause', 'settings.knowledgeScheduleResume', 'settings.knowledgeScheduleSaved',
+    'settings.knowledgeScheduleRootUnavailable',
+  ]);
+});
+
 test('composer no longer projects knowledge-base references through the prompt payload', () => {
   for (const marker of ['knowledgeBaseRefs', 'knowledgeBaseContext', 'mothx/manage/knowledge-bases/list']) {
     assert.doesNotMatch(composerCore, new RegExp(marker.replaceAll('/', '\\/')), `${marker} must be removed from the composer prompt path`);

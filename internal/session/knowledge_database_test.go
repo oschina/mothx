@@ -138,6 +138,20 @@ func TestKnowledgeBaseMigratesLegacySessionStoreIntoDedicatedDatabase(t *testing
 	if _, err := root.Bun().Exec(knowledgeStoreSchema); err != nil {
 		t.Fatalf("create legacy shared knowledge tables: %v", err)
 	}
+	// The shared-store layout that predates the per-base database may already
+	// carry the current additive columns; simulate that so the migration test
+	// exercises the row move rather than an outdated column set.
+	for _, stmt := range []string{
+		`ALTER TABLE knowledge_bases ADD COLUMN ignore_globs TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE knowledge_index_snapshots ADD COLUMN diff_summary TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE knowledge_index_snapshots ADD COLUMN discovery_summary TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE knowledge_nodes ADD COLUMN status TEXT NOT NULL DEFAULT 'fact'`,
+		`ALTER TABLE knowledge_nodes ADD COLUMN confidence REAL NOT NULL DEFAULT 1`,
+	} {
+		if _, err := root.Bun().Exec(stmt); err != nil {
+			t.Fatalf("extend legacy shared knowledge tables: %v", err)
+		}
+	}
 	if err := WriteRootDatabase(t.Context(), sessionDir, func(tx *dao.Tx) error {
 		store := dao.NewKnowledgeBaseDAO(nil)
 		if err := store.InsertLegacyBase(t.Context(), tx, knowledgeBaseRecord(base)); err != nil {
@@ -302,5 +316,49 @@ func assertKnowledgeGraphRowCounts(t *testing.T, sessionDir, baseID string, snap
 	}
 	if gotSnapshots != snapshots || gotChunks != chunks || gotFTS != fts || gotEvidence != evidence {
 		t.Fatalf("knowledge graph row counts = snapshots:%d chunks:%d fts:%d evidence:%d, want snapshots:%d chunks:%d fts:%d evidence:%d", gotSnapshots, gotChunks, gotFTS, gotEvidence, snapshots, chunks, fts, evidence)
+	}
+}
+
+// TestClearKnowledgeBaseIndexPreservesConfigurationAndSource pins that clearing
+// removes the active snapshot and every graph row while keeping the base
+// configuration and the source directory untouched.
+func TestClearKnowledgeBaseIndexPreservesConfigurationAndSource(t *testing.T) {
+	sessionDir := t.TempDir()
+	rootDir := t.TempDir()
+	base, err := CreateKnowledgeBase(t.Context(), sessionDir, KnowledgeBaseSpec{
+		Name: "Clearable", RootDir: rootDir, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: true,
+		IgnoreGlobs: []string{"*.tmp"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := knowledgeGraphForRetention(base.ID, base.ConfigRevision, "clear-snap", "Alpha evidence body.")
+	if _, err := StoreKnowledgeGraphSnapshot(t.Context(), sessionDir, graph); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := ListKnowledgeSources(t.Context(), sessionDir, base.ID)
+	if err != nil || len(sources) != 1 || sources[0].RelativePath != "clear-snap.md" {
+		t.Fatalf("sources before clear = %#v, err=%v", sources, err)
+	}
+	if err := ClearKnowledgeBaseIndex(t.Context(), sessionDir, base.ID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := ListKnowledgeSources(t.Context(), sessionDir, base.ID)
+	if err != nil || len(after) != 0 {
+		t.Fatalf("sources after clear = %#v, err=%v", after, err)
+	}
+	current, err := GetKnowledgeBase(t.Context(), sessionDir, base.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ActiveSnapshotID != "" || len(current.IgnoreGlobs) != 1 || current.IgnoreGlobs[0] != "*.tmp" {
+		t.Fatalf("clear changed configuration: %#v", current)
+	}
+	if _, err := QueryKnowledgeGraph(t.Context(), sessionDir, base.ID, "Alpha", 4); !errors.Is(err, ErrKnowledgeBaseUnindexed) {
+		t.Fatalf("query after clear error = %v, want ErrKnowledgeBaseUnindexed", err)
+	}
+	assertKnowledgeGraphRowCounts(t, sessionDir, base.ID, 0, 0, 0, 0)
+	if _, err := os.Stat(rootDir); err != nil {
+		t.Fatalf("clear must preserve the source directory: %v", err)
 	}
 }

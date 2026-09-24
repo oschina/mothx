@@ -7,20 +7,29 @@ import { Folder, Plus } from 'lucide-react';
 import { Field, FieldGrid, ManageCard, ManageHeader, ManageWorkspace, OptionSelect, ToggleField, UnsupportedRow } from '@/components/manage-primitives';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { t } from '@/core/i18n';
 import {
   applyKnowledgeBaseMcp,
+  clearKnowledgeBase,
   createKnowledgeBase,
   deleteKnowledgeBase,
   knowledgeBaseDefaults,
   knowledgeBaseModels,
+  loadKnowledgeBaseRuns,
+  loadKnowledgeBaseSchedule,
+  loadKnowledgeBaseSources,
   loadKnowledgeBases,
   loadMcp,
   scanKnowledgeBase,
+  setKnowledgeBaseScheduleEnabled,
   updateKnowledgeBase,
   type KnowledgeBaseDefaults,
+  type KnowledgeBaseScheduleView,
   type KnowledgeBaseSpec,
   type KnowledgeBaseView,
+  type KnowledgeIndexRunView,
+  type KnowledgeSourceView,
   type McpServerView,
   knowledgeBaseMcpName,
 } from '@/core/manage-api';
@@ -37,6 +46,120 @@ function knowledgeBaseStatus(view: KnowledgeBaseView): string {
   return t('settings.knowledgeStatus', { s: status || t('settings.knowledgeUnindexed') });
 }
 
+function formatKnowledgeDate(value?: string): string {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatKnowledgeSize(bytes: number): string {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// KnowledgeBaseInsights projects the additive run-history and source-browsing
+// ACP methods for one knowledge base. It never reads the source directory and
+// gates each tab on its own capability so an older runtime degrades cleanly.
+function KnowledgeBaseInsights({ baseId }: { baseId: string }) {
+  const runsSupported = hasFeature('knowledgeRuns');
+  const sourcesSupported = hasFeature('knowledgeSources');
+  const [runs, setRuns] = useState<KnowledgeIndexRunView[]>([]);
+  const [sources, setSources] = useState<KnowledgeSourceView[]>([]);
+  const [tab, setTab] = useState('runs');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const [nextRuns, nextSources] = await Promise.all([
+      runsSupported ? loadKnowledgeBaseRuns(baseId) : Promise.resolve([]),
+      sourcesSupported ? loadKnowledgeBaseSources(baseId) : Promise.resolve([]),
+    ]);
+    setRuns(nextRuns);
+    setSources(nextSources);
+  }, [baseId, runsSupported, sourcesSupported]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const clear = async () => {
+    if (!await confirmDanger(t('settings.knowledgeClearConfirm'))) return;
+    setBusy(true);
+    try {
+      await clearKnowledgeBase(baseId);
+      toast(t('settings.knowledgeCleared'));
+      await load();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!runsSupported && !sourcesSupported) return null;
+
+  return (
+    <div className="mt-3 rounded-[14px] border border-border bg-background p-3">
+      <Tabs value={tab} onValueChange={setTab} className="gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <TabsList>
+            {runsSupported ? <TabsTrigger value="runs">{t('settings.knowledgeRuns')}</TabsTrigger> : null}
+            {sourcesSupported ? <TabsTrigger value="sources">{t('settings.knowledgeSources')}</TabsTrigger> : null}
+          </TabsList>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => void clear()}>
+            {t('settings.knowledgeClear')}
+          </Button>
+        </div>
+        {runsSupported ? (
+          <TabsContent value="runs" className="flex flex-col gap-2">
+            {runs.length === 0 ? (
+              <div className="text-[11.5px] text-muted-foreground">{t('settings.knowledgeRunsEmpty')}</div>
+            ) : runs.map((run) => (
+              <div key={run.runId} className="flex flex-col gap-0.5 border-b border-border pb-2 last:border-0 last:pb-0">
+                <div className="flex items-center gap-2 text-[12.5px] font-semibold text-strong">
+                  <span>{run.status}</span>
+                  {run.active ? (
+                    <span className="rounded-full border border-border px-1.5 text-[10.5px] font-medium text-muted-foreground">
+                      {t('settings.knowledgeRunActive')}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="text-[11.5px] text-muted-foreground">
+                  {formatKnowledgeDate(run.startedAt)}{run.finishedAt ? ` → ${formatKnowledgeDate(run.finishedAt)}` : ''}
+                </div>
+                <div className="text-[11.5px] text-muted-foreground">
+                  {t('settings.knowledgeRunStats', { f: run.fileCount, c: run.chunkCount, n: run.nodeCount, e: run.edgeCount })}
+                </div>
+                {run.errorSummary ? (
+                  <div className="text-[11.5px] text-[color:var(--destructive)]">
+                    {t('settings.knowledgeRunError', { s: run.errorSummary })}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </TabsContent>
+        ) : null}
+        {sourcesSupported ? (
+          <TabsContent value="sources" className="flex flex-col gap-2">
+            {sources.length === 0 ? (
+              <div className="text-[11.5px] text-muted-foreground">{t('settings.knowledgeSourcesEmpty')}</div>
+            ) : sources.map((source) => (
+              <div key={source.relativePath} className="flex flex-col gap-0.5 border-b border-border pb-2 last:border-0 last:pb-0">
+                <div className="text-[12.5px] font-semibold text-strong">{source.title || source.relativePath}</div>
+                <div className="break-all text-[11.5px] text-muted-foreground">{source.relativePath}</div>
+                <div className="text-[11.5px] text-muted-foreground">
+                  {t('settings.knowledgeSourceMeta', { status: source.status, size: formatKnowledgeSize(source.byteSize), chunks: source.chunkCount })}
+                </div>
+              </div>
+            ))}
+          </TabsContent>
+        ) : null}
+      </Tabs>
+    </div>
+  );
+}
+
 // 后台扫描进行中时显示周期轮询拿到的进度,而不是阻塞等待扫描结束。
 function knowledgeStatusText(view: KnowledgeBaseView): string {
   const indexing = view.indexing;
@@ -45,6 +168,62 @@ function knowledgeStatusText(view: KnowledgeBaseView): string {
     return indexing.filesTotal > 0 ? `${label} · ${indexing.filesDone}/${indexing.filesTotal}` : label;
   }
   return knowledgeBaseStatus(view);
+}
+
+// KnowledgeBaseScheduleStatus projects the Runtime-owned schedule state: the
+// persisted cadence, next run, last result, and a pause/resume action that
+// persists through ACP. Desktop owns no scheduler state.
+function KnowledgeBaseScheduleStatus({ baseId, onChanged }: { baseId: string; onChanged: () => void }) {
+  const [schedule, setSchedule] = useState<KnowledgeBaseScheduleView | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const loaded = await loadKnowledgeBaseSchedule(baseId);
+      if (!cancelled) setSchedule(loaded);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [baseId]);
+
+  if (!schedule) return null;
+
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      const updated = await setKnowledgeBaseScheduleEnabled(baseId, !schedule.enabled);
+      setSchedule(updated);
+      toast(t('settings.knowledgeScheduleSaved'));
+      onChanged();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-[11.5px] text-muted-foreground">
+      <span>
+        {schedule.schedule
+          ? schedule.configured && schedule.nextRun
+            ? t('settings.knowledgeScheduleNext', { s: formatKnowledgeDate(schedule.nextRun) })
+            : t('settings.knowledgeScheduleManual')
+          : t('settings.knowledgeScheduleManual')}
+      </span>
+      {schedule.lastStatus ? (
+        <span>{t('settings.knowledgeScheduleLast', { s: schedule.lastStatus })}</span>
+      ) : null}
+      {!schedule.rootAvailable ? (
+        <span className="text-[color:var(--destructive)]">{t('settings.knowledgeScheduleRootUnavailable')}</span>
+      ) : null}
+      <Button variant="outline" size="sm" disabled={busy} onClick={() => void toggle()}>
+        {schedule.enabled ? t('settings.knowledgeSchedulePause') : t('settings.knowledgeScheduleResume')}
+      </Button>
+    </div>
+  );
 }
 
 function KnowledgeBaseEditor({
@@ -193,6 +372,8 @@ function KnowledgeBaseEditor({
         </div>
       ) : null}
 
+      {base ? <KnowledgeBaseScheduleStatus baseId={base.id} onChanged={onDone} /> : null}
+
       {base && hasFeature('manageMcp') ? (
         <div className="mt-3 rounded-[14px] border border-border bg-background p-3">
           <div className="text-[14px] font-bold leading-snug text-strong">{t('settings.knowledgeMcpTitle')}</div>
@@ -215,6 +396,10 @@ function KnowledgeBaseEditor({
           </div>
           <div className="mt-2 text-[11.5px] text-muted-foreground">{t('settings.knowledgeMcpHint')}</div>
         </div>
+      ) : null}
+
+      {base && (hasFeature('knowledgeRuns') || hasFeature('knowledgeSources')) ? (
+        <KnowledgeBaseInsights baseId={base.id} />
       ) : null}
 
       <div className="mt-3 flex flex-wrap items-center justify-end gap-[7px]">

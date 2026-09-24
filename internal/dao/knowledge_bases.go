@@ -23,6 +23,7 @@ type KnowledgeBaseRecord struct {
 	ThinkingLevel     string `bun:"thinking_level"`
 	Schedule          string `bun:"schedule"`
 	Enabled           int    `bun:"enabled"`
+	IgnoreGlobs       string `bun:"ignore_globs"`
 	ActiveSnapshotID  string `bun:"active_snapshot_id"`
 	ConfigRevision    int64  `bun:"config_revision"`
 	CreatedAt         string `bun:"created_at"`
@@ -34,19 +35,21 @@ type KnowledgeBaseRecord struct {
 // agent-backed index execution is wired; it is deliberately not a second run
 // state machine.
 type KnowledgeSnapshotRecord struct {
-	bun.BaseModel   `bun:"table:knowledge_index_snapshots"`
-	ID              string `bun:"id,pk"`
-	KnowledgeBaseID string `bun:"knowledge_base_id"`
-	RunID           string `bun:"run_id"`
-	Status          string `bun:"status"`
-	SchemaVersion   int    `bun:"schema_version"`
-	FileCount       int    `bun:"file_count"`
-	ChunkCount      int    `bun:"chunk_count"`
-	NodeCount       int    `bun:"node_count"`
-	EdgeCount       int    `bun:"edge_count"`
-	StartedAt       string `bun:"started_at"`
-	FinishedAt      string `bun:"finished_at"`
-	ErrorSummary    string `bun:"error_summary"`
+	bun.BaseModel    `bun:"table:knowledge_index_snapshots"`
+	ID               string `bun:"id,pk"`
+	KnowledgeBaseID  string `bun:"knowledge_base_id"`
+	RunID            string `bun:"run_id"`
+	Status           string `bun:"status"`
+	SchemaVersion    int    `bun:"schema_version"`
+	FileCount        int    `bun:"file_count"`
+	ChunkCount       int    `bun:"chunk_count"`
+	NodeCount        int    `bun:"node_count"`
+	EdgeCount        int    `bun:"edge_count"`
+	StartedAt        string `bun:"started_at"`
+	FinishedAt       string `bun:"finished_at"`
+	ErrorSummary     string `bun:"error_summary"`
+	DiffSummary      string `bun:"diff_summary"`
+	DiscoverySummary string `bun:"discovery_summary"`
 }
 
 type KnowledgeFileRecord struct {
@@ -76,13 +79,25 @@ type KnowledgeChunkRecord struct {
 
 type KnowledgeNodeRecord struct {
 	bun.BaseModel   `bun:"table:knowledge_nodes"`
+	ID              string  `bun:"id,pk"`
+	SnapshotID      string  `bun:"snapshot_id"`
+	Kind            string  `bun:"kind"`
+	Label           string  `bun:"label"`
+	NormalizedLabel string  `bun:"normalized_label"`
+	Summary         string  `bun:"summary"`
+	Attributes      string  `bun:"attributes"`
+	Status          string  `bun:"status"`
+	Confidence      float64 `bun:"confidence"`
+}
+
+// KnowledgeEntityAliasRecord maps one normalized synonym label onto the single
+// entity node that owns it inside a snapshot.
+type KnowledgeEntityAliasRecord struct {
+	bun.BaseModel   `bun:"table:knowledge_entity_aliases"`
 	ID              string `bun:"id,pk"`
 	SnapshotID      string `bun:"snapshot_id"`
-	Kind            string `bun:"kind"`
-	Label           string `bun:"label"`
-	NormalizedLabel string `bun:"normalized_label"`
-	Summary         string `bun:"summary"`
-	Attributes      string `bun:"attributes"`
+	NormalizedAlias string `bun:"normalized_alias"`
+	NodeID          string `bun:"node_id"`
 }
 
 type KnowledgeEdgeRecord struct {
@@ -112,12 +127,22 @@ type KnowledgeEvidenceRecord struct {
 // transaction so a caller never combines an old active snapshot ID with rows
 // that a successor publication has already pruned.
 type KnowledgeGraphProjection struct {
-	Base     KnowledgeBaseRecord
-	Snapshot KnowledgeSnapshotRecord
-	Chunks   []KnowledgeChunkRecord
-	Nodes    []KnowledgeNodeRecord
-	Edges    []KnowledgeEdgeRecord
+	Base      KnowledgeBaseRecord
+	Snapshot  KnowledgeSnapshotRecord
+	Chunks    []KnowledgeChunkRecord
+	Nodes     []KnowledgeNodeRecord
+	Edges     []KnowledgeEdgeRecord
+	Evidence  []KnowledgeEvidenceRecord
+	Truncated bool
 }
+
+// Bounded two-hop traversal limits. They cap a query result so a broad match
+// cannot pull the whole graph into memory or a model's context.
+const (
+	KnowledgeGraphMaxHops  = 2
+	KnowledgeGraphMaxNodes = 64
+	KnowledgeGraphMaxEdges = 96
+)
 
 // KnowledgeBaseDAO is the only owner of SQL/Bun for the Desktop knowledge
 // base configuration, graph snapshots and their read projections.
@@ -186,6 +211,7 @@ func (d *KnowledgeBaseDAO) UpdateBase(ctx context.Context, executor bun.IDB, rec
 		Set("thinking_level = ?", record.ThinkingLevel).
 		Set("schedule = ?", record.Schedule).
 		Set("enabled = ?", record.Enabled).
+		Set("ignore_globs = ?", record.IgnoreGlobs).
 		Set("active_snapshot_id = ?", record.ActiveSnapshotID).
 		Set("updated_at = ?", record.UpdatedAt).
 		Set("config_revision = ?", record.ConfigRevision).
@@ -263,6 +289,14 @@ func (d *KnowledgeBaseDAO) InsertEvidence(ctx context.Context, executor bun.IDB,
 	return err
 }
 
+func (d *KnowledgeBaseDAO) InsertAliases(ctx context.Context, executor bun.IDB, records []KnowledgeEntityAliasRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	_, err := executor.NewInsert().Model(&records).Exec(ctx)
+	return err
+}
+
 func (d *KnowledgeBaseDAO) ActivateSnapshot(ctx context.Context, executor bun.IDB, baseID, snapshotID, updatedAt string, expectedRevision int64) (int64, error) {
 	result, err := executor.NewUpdate().Model((*KnowledgeBaseRecord)(nil)).
 		Set("active_snapshot_id = ?", snapshotID).Set("updated_at = ?", updatedAt).
@@ -330,6 +364,29 @@ func (d *KnowledgeBaseDAO) ListChunksForSnapshot(ctx context.Context, snapshotID
 	return records, err
 }
 
+// CountChunksPerFile returns how many chunks each file contributed to one
+// snapshot. It backs the bounded source-provenance projection without loading
+// chunk text, so a large directory cannot bloat a sources listing.
+func (d *KnowledgeBaseDAO) CountChunksPerFile(ctx context.Context, snapshotID string) (map[string]int, error) {
+	var rows []struct {
+		FileID string `bun:"file_id"`
+		Total  int    `bun:"total"`
+	}
+	err := d.db.NewSelect().Table("knowledge_chunks").
+		Column("file_id").ColumnExpr("COUNT(*) AS total").
+		Where("snapshot_id = ?", snapshotID).
+		Group("file_id").
+		Scan(ctx, &rows)
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int, len(rows))
+	for _, row := range rows {
+		counts[row.FileID] = row.Total
+	}
+	return counts, nil
+}
+
 func (d *KnowledgeBaseDAO) ListNodesForSnapshot(ctx context.Context, snapshotID string) ([]KnowledgeNodeRecord, error) {
 	var records []KnowledgeNodeRecord
 	err := d.db.NewSelect().Model(&records).Where("snapshot_id = ?", snapshotID).OrderExpr("kind, normalized_label, id").Scan(ctx)
@@ -346,6 +403,48 @@ func (d *KnowledgeBaseDAO) ListEvidenceForSnapshot(ctx context.Context, snapshot
 	var records []KnowledgeEvidenceRecord
 	err := d.db.NewSelect().Model(&records).Where("snapshot_id = ?", snapshotID).OrderExpr("id").Scan(ctx)
 	return records, err
+}
+
+func (d *KnowledgeBaseDAO) ListAliasesForSnapshot(ctx context.Context, snapshotID string) ([]KnowledgeEntityAliasRecord, error) {
+	var records []KnowledgeEntityAliasRecord
+	err := d.db.NewSelect().Model(&records).Where("snapshot_id = ?", snapshotID).OrderExpr("normalized_alias, id").Scan(ctx)
+	return records, err
+}
+
+// ListRunsForBase projects recent index attempts from the canonical snapshot
+// rows, newest first. It backs the management run-history surface without a
+// second run store.
+func (d *KnowledgeBaseDAO) ListRunsForBase(ctx context.Context, baseID string, limit int) ([]KnowledgeSnapshotRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var records []KnowledgeSnapshotRecord
+	err := d.db.NewSelect().Model(&records).Where("knowledge_base_id = ?", baseID).
+		OrderExpr("started_at DESC, id DESC").Limit(limit).Scan(ctx)
+	return records, err
+}
+
+// FindSnapshotForBase reads one snapshot only when it belongs to the base, so
+// a management lookup cannot cross knowledge-base boundaries.
+func (d *KnowledgeBaseDAO) FindSnapshotForBase(ctx context.Context, baseID, snapshotID string) (*KnowledgeSnapshotRecord, error) {
+	record := new(KnowledgeSnapshotRecord)
+	err := d.db.NewSelect().Model(record).
+		Where("id = ? AND knowledge_base_id = ?", snapshotID, baseID).Limit(1).Scan(ctx)
+	return record, err
+}
+
+// ClearActiveSnapshot deactivates the base's active snapshot under the same
+// configuration-revision fence used by publication. It clears only the active
+// pointer; the caller prunes graph rows in the same transaction so a reader
+// never observes an active snapshot whose rows were already removed.
+func (d *KnowledgeBaseDAO) ClearActiveSnapshot(ctx context.Context, executor bun.IDB, baseID, updatedAt string, expectedRevision int64) (int64, error) {
+	result, err := executor.NewUpdate().Model((*KnowledgeBaseRecord)(nil)).
+		Set("active_snapshot_id = ?", "").Set("updated_at = ?", updatedAt).
+		Where("id = ? AND config_revision = ?", baseID, expectedRevision).Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (d *KnowledgeBaseDAO) SearchChunks(ctx context.Context, snapshotID, query string, limit int) ([]KnowledgeChunkRecord, error) {
@@ -367,26 +466,25 @@ func (d *KnowledgeBaseDAO) SearchChunks(ctx context.Context, snapshotID, query s
 	return records, err
 }
 
-func (d *KnowledgeBaseDAO) NodesForChunks(ctx context.Context, snapshotID string, chunkIDs []string) ([]KnowledgeNodeRecord, error) {
+func (d *KnowledgeBaseDAO) NodesForChunks(ctx context.Context, executor bun.IDB, snapshotID string, chunkIDs []string) ([]KnowledgeNodeRecord, error) {
 	if len(chunkIDs) == 0 {
 		return []KnowledgeNodeRecord{}, nil
 	}
 	var records []KnowledgeNodeRecord
-	err := d.db.NewSelect().Model(&records).
-		Join("JOIN knowledge_evidence AS e ON e.node_id = knowledge_node_record.id").
+	err := executor.NewSelect().Model(&records).
 		Where("knowledge_node_record.snapshot_id = ?", snapshotID).
-		Where("e.chunk_id IN (?)", bun.In(chunkIDs)).
+		Where("knowledge_node_record.id IN (SELECT e.node_id FROM knowledge_evidence AS e WHERE e.chunk_id IN (?))", bun.In(chunkIDs)).
 		OrderExpr("knowledge_node_record.kind, knowledge_node_record.label COLLATE NOCASE").
 		Scan(ctx)
 	return records, err
 }
 
-func (d *KnowledgeBaseDAO) EdgesForNodes(ctx context.Context, snapshotID string, nodeIDs []string) ([]KnowledgeEdgeRecord, error) {
+func (d *KnowledgeBaseDAO) EdgesForNodes(ctx context.Context, executor bun.IDB, snapshotID string, nodeIDs []string) ([]KnowledgeEdgeRecord, error) {
 	if len(nodeIDs) == 0 {
 		return []KnowledgeEdgeRecord{}, nil
 	}
 	var records []KnowledgeEdgeRecord
-	err := d.db.NewSelect().Model(&records).
+	err := executor.NewSelect().Model(&records).
 		Where("snapshot_id = ?", snapshotID).
 		Where("from_node_id IN (?) OR to_node_id IN (?)", bun.In(nodeIDs), bun.In(nodeIDs)).
 		OrderExpr("relation_type, id").Scan(ctx)
@@ -437,31 +535,171 @@ func (d *KnowledgeBaseDAO) ActiveGraphProjection(ctx context.Context, executor b
 	for _, chunk := range projection.Chunks {
 		chunkIDs = append(chunkIDs, chunk.ID)
 	}
-	if len(chunkIDs) == 0 {
+	var seedNodes []KnowledgeNodeRecord
+	if len(chunkIDs) > 0 {
+		seedNodes, err = d.NodesForChunks(ctx, executor, snapshot.ID, chunkIDs)
+		if err != nil {
+			return KnowledgeGraphProjection{}, false, err
+		}
+	}
+	// Entity aliases widen recall: a query that names a file by its basename
+	// should seed that file node even when the FTS chunks did not surface it.
+	aliasIDs, err := d.AliasNodeIDs(ctx, executor, snapshot.ID, knowledgeAliasTerms(query))
+	if err != nil {
+		return KnowledgeGraphProjection{}, false, err
+	}
+	if len(aliasIDs) > 0 {
+		seenSeed := make(map[string]struct{}, len(seedNodes))
+		for _, node := range seedNodes {
+			seenSeed[node.ID] = struct{}{}
+		}
+		missing := make([]string, 0, len(aliasIDs))
+		for _, id := range aliasIDs {
+			if _, ok := seenSeed[id]; !ok {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) > 0 {
+			aliasNodes, err := d.NodesByIDs(ctx, executor, snapshot.ID, missing)
+			if err != nil {
+				return KnowledgeGraphProjection{}, false, err
+			}
+			seedNodes = append(seedNodes, aliasNodes...)
+		}
+	}
+	if len(seedNodes) == 0 {
 		return projection, true, nil
 	}
-	if err := executor.NewSelect().Model(&projection.Nodes).
-		Join("JOIN knowledge_evidence AS e ON e.node_id = knowledge_node_record.id").
-		Where("knowledge_node_record.snapshot_id = ?", snapshot.ID).
-		Where("e.chunk_id IN (?)", bun.In(chunkIDs)).
-		OrderExpr("knowledge_node_record.kind, knowledge_node_record.label COLLATE NOCASE").
-		Scan(ctx); err != nil {
-		return KnowledgeGraphProjection{}, false, err
+	projection.Nodes = append(projection.Nodes, seedNodes...)
+	known := make(map[string]struct{}, len(seedNodes))
+	frontier := make([]string, 0, len(seedNodes))
+	for _, node := range seedNodes {
+		known[node.ID] = struct{}{}
+		frontier = append(frontier, node.ID)
+	}
+	// Bounded breadth-first traversal: from the FTS seed nodes follow at most
+	// KnowledgeGraphMaxHops hops of adjacency, stopping once the node or edge cap
+	// is reached. The frontier shrinks to the newly discovered nodes each hop.
+	knownEdges := make(map[string]struct{})
+	for hop := 0; hop < KnowledgeGraphMaxHops && len(frontier) > 0; hop++ {
+		edges, err := d.EdgesForNodes(ctx, executor, snapshot.ID, frontier)
+		if err != nil {
+			return KnowledgeGraphProjection{}, false, err
+		}
+		nextFrontier := make([]string, 0)
+		for _, edge := range edges {
+			if _, ok := knownEdges[edge.ID]; ok {
+				continue
+			}
+			if len(projection.Edges) >= KnowledgeGraphMaxEdges {
+				projection.Truncated = true
+				break
+			}
+			projection.Edges = append(projection.Edges, edge)
+			knownEdges[edge.ID] = struct{}{}
+			for _, endpoint := range []string{edge.FromNodeID, edge.ToNodeID} {
+				if _, ok := known[endpoint]; ok {
+					continue
+				}
+				known[endpoint] = struct{}{}
+				nextFrontier = append(nextFrontier, endpoint)
+			}
+		}
+		if len(nextFrontier) == 0 {
+			break
+		}
+		if len(projection.Nodes) >= KnowledgeGraphMaxNodes {
+			projection.Truncated = true
+			break
+		}
+		remaining := KnowledgeGraphMaxNodes - len(projection.Nodes)
+		if len(nextFrontier) > remaining {
+			nextFrontier = nextFrontier[:remaining]
+			projection.Truncated = true
+		}
+		neighbors, err := d.NodesByIDs(ctx, executor, snapshot.ID, nextFrontier)
+		if err != nil {
+			return KnowledgeGraphProjection{}, false, err
+		}
+		projection.Nodes = append(projection.Nodes, neighbors...)
+		frontier = nextFrontier
 	}
 	nodeIDs := make([]string, 0, len(projection.Nodes))
 	for _, node := range projection.Nodes {
 		nodeIDs = append(nodeIDs, node.ID)
 	}
-	if len(nodeIDs) == 0 {
-		return projection, true, nil
+	edgeIDs := make([]string, 0, len(projection.Edges))
+	for _, edge := range projection.Edges {
+		edgeIDs = append(edgeIDs, edge.ID)
 	}
-	if err := executor.NewSelect().Model(&projection.Edges).
-		Where("snapshot_id = ?", snapshot.ID).
-		Where("from_node_id IN (?) OR to_node_id IN (?)", bun.In(nodeIDs), bun.In(nodeIDs)).
-		OrderExpr("relation_type, id").Scan(ctx); err != nil {
+	evidence, err := d.EvidenceForNodesAndEdges(ctx, executor, snapshot.ID, nodeIDs, edgeIDs)
+	if err != nil {
 		return KnowledgeGraphProjection{}, false, err
 	}
+	projection.Evidence = evidence
 	return projection, true, nil
+}
+
+// AliasNodeIDs resolves query terms that exactly match an entity alias to the
+// node that owns the alias inside one snapshot.
+func (d *KnowledgeBaseDAO) AliasNodeIDs(ctx context.Context, executor bun.IDB, snapshotID string, terms []string) ([]string, error) {
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	var ids []string
+	err := executor.NewSelect().Model((*KnowledgeEntityAliasRecord)(nil)).
+		Column("node_id").
+		Where("snapshot_id = ?", snapshotID).
+		Where("normalized_alias IN (?)", bun.In(terms)).
+		Scan(ctx, &ids)
+	return ids, err
+}
+
+func knowledgeAliasTerms(query string) []string {
+	fields := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
+		return !(r == '_' || r == '-' || r == '.' || r == '/' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || knowledgeIsFTSCJK(r))
+	})
+	terms := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field = strings.TrimSpace(field); field != "" {
+			terms = append(terms, field)
+		}
+	}
+	return terms
+}
+
+// NodesByIDs loads the nodes named by ids inside one snapshot. The caller
+// bounds len(ids).
+func (d *KnowledgeBaseDAO) NodesByIDs(ctx context.Context, executor bun.IDB, snapshotID string, ids []string) ([]KnowledgeNodeRecord, error) {
+	if len(ids) == 0 {
+		return []KnowledgeNodeRecord{}, nil
+	}
+	var records []KnowledgeNodeRecord
+	err := executor.NewSelect().Model(&records).
+		Where("snapshot_id = ?", snapshotID).
+		Where("id IN (?)", bun.In(ids)).
+		OrderExpr("kind, label COLLATE NOCASE").Scan(ctx)
+	return records, err
+}
+
+// EvidenceForNodesAndEdges returns the minimal evidence rows that cite any of
+// the given nodes or edges. It never reads chunk text.
+func (d *KnowledgeBaseDAO) EvidenceForNodesAndEdges(ctx context.Context, executor bun.IDB, snapshotID string, nodeIDs, edgeIDs []string) ([]KnowledgeEvidenceRecord, error) {
+	if len(nodeIDs) == 0 && len(edgeIDs) == 0 {
+		return []KnowledgeEvidenceRecord{}, nil
+	}
+	var records []KnowledgeEvidenceRecord
+	query := executor.NewSelect().Model(&records).Where("snapshot_id = ?", snapshotID)
+	switch {
+	case len(nodeIDs) > 0 && len(edgeIDs) > 0:
+		query = query.Where("(node_id IN (?) OR edge_id IN (?))", bun.In(nodeIDs), bun.In(edgeIDs))
+	case len(nodeIDs) > 0:
+		query = query.Where("node_id IN (?)", bun.In(nodeIDs))
+	default:
+		query = query.Where("edge_id IN (?)", bun.In(edgeIDs))
+	}
+	err := query.OrderExpr("chunk_id, id").Scan(ctx)
+	return records, err
 }
 
 func knowledgeFTSQuery(query string) string {

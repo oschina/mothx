@@ -1667,6 +1667,10 @@ func (s *server) handleInitialize(req rpcRequest) {
 				"manageDeliveries",
 				"knowledgeGraphIndex",
 				"knowledgeBaseContext",
+				// Additive knowledge management projections: index Run history and
+				// file-level source browsing. Desktop gates their panels on these keys.
+				"knowledgeRuns",
+				"knowledgeSources",
 			},
 		},
 	}

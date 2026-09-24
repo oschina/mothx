@@ -1354,6 +1354,50 @@ func TestManageKnowledgeBasesCreateScanQueryAndDelete(t *testing.T) {
 	}
 }
 
+// TestManageKnowledgeBasesRejectInvalidExecutionOptions pins that the ACP
+// management surface rejects a bad mode/thinking level at create time instead
+// of persisting configuration that only fails later during a scan.
+func TestManageKnowledgeBasesRejectInvalidExecutionOptions(t *testing.T) {
+	configDir := t.TempDir()
+	settings := writeManageSettings(t, configDir, nil)
+	source := t.TempDir()
+	output := &syncedBuffer{}
+	srv := newManageFixtureServer(output, configDir)
+	srv.settings = settings
+
+	code, _ := manageFixtureError(t, callManageFixture(t, srv, output, 1, "mothx/manage/knowledge-bases/create", map[string]any{
+		"knowledgeBase": map[string]any{
+			"name": "Bad thinking", "rootDir": source, "preprocessProfile": "documents",
+			"mode": "yolo", "thinkingLevel": "none", "schedule": "manual", "enabled": true,
+		},
+	}))
+	if code != "knowledge_base_thinking_invalid" {
+		t.Fatalf("thinking error code = %q, want knowledge_base_thinking_invalid", code)
+	}
+	code, _ = manageFixtureError(t, callManageFixture(t, srv, output, 2, "mothx/manage/knowledge-bases/create", map[string]any{
+		"knowledgeBase": map[string]any{
+			"name": "Bad mode", "rootDir": source, "preprocessProfile": "documents",
+			"mode": "turbo", "schedule": "manual", "enabled": true,
+		},
+	}))
+	if code != "knowledge_base_mode_invalid" {
+		t.Fatalf("mode error code = %q, want knowledge_base_mode_invalid", code)
+	}
+
+	// A disabled base must surface the shared sentinel as knowledge_base_disabled
+	// rather than an opaque operation failure.
+	base, err := session.CreateKnowledgeBase(t.Context(), settings.GetSessionDir(), session.KnowledgeBaseSpec{
+		Name: "Disabled", RootDir: source, PreprocessProfile: "documents", Mode: "yolo", Schedule: "manual", Enabled: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _ = manageFixtureError(t, callManageFixture(t, srv, output, 3, "mothx/manage/knowledge-bases/scan", map[string]any{"id": base.ID}))
+	if code != "knowledge_base_disabled" {
+		t.Fatalf("disabled scan error code = %q, want knowledge_base_disabled", code)
+	}
+}
+
 func TestKnowledgeBaseScheduleUsesSharedCronAndDurableIndexRun(t *testing.T) {
 	sessionDir := t.TempDir()
 	source := t.TempDir()
@@ -1575,5 +1619,144 @@ func TestManageKnowledgeBasesScanProjectsBackgroundProgress(t *testing.T) {
 	}
 	if !completed {
 		t.Fatal("background scan did not reach a terminal projection after the admission lease was released")
+	}
+}
+
+// TestManageKnowledgeBasesRunsSourcesAndClear pins the additive management
+// projections: canonical index Run history, file-level source browsing, and
+// clearing the active index without touching configuration or the source.
+func TestManageKnowledgeBasesRunsSourcesAndClear(t *testing.T) {
+	configDir := t.TempDir()
+	settings := writeManageSettings(t, configDir, nil)
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "guide.md"), []byte("# Guide\n\nDurable evidence body.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output := &syncedBuffer{}
+	srv := newManageFixtureServer(output, configDir)
+	srv.settings = settings
+
+	created := manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/knowledge-bases/create", map[string]any{
+		"knowledgeBase": map[string]any{
+			"name": "Docs", "rootDir": source, "preprocessProfile": "documents",
+			"mode": "yolo", "schedule": "manual", "enabled": true,
+		},
+	}))
+	base, _ := created["knowledgeBase"].(map[string]any)
+	baseID, _ := base["id"].(string)
+	if baseID == "" {
+		t.Fatalf("create result = %#v", created)
+	}
+	manageFixtureResult(t, callManageFixture(t, srv, output, 2, "mothx/manage/knowledge-bases/scan", map[string]any{"id": baseID}))
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		listed := manageFixtureResult(t, callManageFixture(t, srv, output, 20, "mothx/manage/knowledge-bases/list", map[string]any{}))
+		if items, _ := listed["knowledgeBases"].([]any); len(items) == 1 {
+			if view, _ := items[0].(map[string]any); view["status"] == "completed" {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	runs := manageFixtureResult(t, callManageFixture(t, srv, output, 3, "mothx/manage/knowledge-bases/runs/list", map[string]any{"id": baseID}))
+	runItems, _ := runs["runs"].([]any)
+	if len(runItems) == 0 {
+		t.Fatalf("runs/list returned no runs: %#v", runs)
+	}
+	firstRun, _ := runItems[0].(map[string]any)
+	runID, _ := firstRun["runId"].(string)
+	if runID == "" || firstRun["status"] != "completed" {
+		t.Fatalf("first run = %#v", firstRun)
+	}
+	if firstRun["fileCount"] != float64(1) || firstRun["active"] != true {
+		t.Fatalf("first run stats = %#v", firstRun)
+	}
+
+	got := manageFixtureResult(t, callManageFixture(t, srv, output, 4, "mothx/manage/knowledge-bases/runs/get", map[string]any{"id": baseID, "runId": runID}))
+	gotRun, _ := got["run"].(map[string]any)
+	if gotRun["runId"] != runID {
+		t.Fatalf("runs/get = %#v", got)
+	}
+
+	sources := manageFixtureResult(t, callManageFixture(t, srv, output, 5, "mothx/manage/knowledge-bases/sources/list", map[string]any{"id": baseID}))
+	sourceItems, _ := sources["sources"].([]any)
+	if len(sourceItems) != 1 {
+		t.Fatalf("sources/list = %#v, want one source", sources)
+	}
+	firstSource, _ := sourceItems[0].(map[string]any)
+	if firstSource["relativePath"] != "guide.md" {
+		t.Fatalf("source projection = %#v", firstSource)
+	}
+
+	cleared := manageFixtureResult(t, callManageFixture(t, srv, output, 6, "mothx/manage/knowledge-bases/clear", map[string]any{"id": baseID}))
+	if cleared["cleared"] != true {
+		t.Fatalf("clear = %#v", cleared)
+	}
+	after := manageFixtureResult(t, callManageFixture(t, srv, output, 7, "mothx/manage/knowledge-bases/sources/list", map[string]any{"id": baseID}))
+	if items, _ := after["sources"].([]any); len(items) != 0 {
+		t.Fatalf("sources after clear = %#v, want empty", after)
+	}
+	if _, err := os.Stat(filepath.Join(source, "guide.md")); err != nil {
+		t.Fatalf("clear must preserve the knowledge source: %v", err)
+	}
+}
+
+// TestManageKnowledgeBasesScheduleProjectsCronState pins the additive schedule
+// projection: it reports the persisted cadence and root availability from
+// configuration and the namespaced Cron job from the shared store, and pause /
+// resume persists the enabled flag and resyncs the Cron projection.
+func TestManageKnowledgeBasesScheduleProjectsCronState(t *testing.T) {
+	configDir := t.TempDir()
+	settings := writeManageSettings(t, configDir, nil)
+	source := t.TempDir()
+	base, err := session.CreateKnowledgeBase(t.Context(), settings.GetSessionDir(), session.KnowledgeBaseSpec{
+		Name: "Scheduled", RootDir: source, PreprocessProfile: "documents",
+		Mode: "yolo", Schedule: "daily", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := &syncedBuffer{}
+	srv := newManageFixtureServer(output, configDir)
+	srv.settings = settings
+
+	read := manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/knowledge-bases/schedule", map[string]any{"id": base.ID}))
+	if read["schedule"] != "@daily" || read["enabled"] != true || read["rootAvailable"] != true {
+		t.Fatalf("schedule read = %#v", read)
+	}
+	if read["configured"] != false {
+		t.Fatalf("unsynced schedule must not be configured: %#v", read)
+	}
+
+	paused := manageFixtureResult(t, callManageFixture(t, srv, output, 2, "mothx/manage/knowledge-bases/schedule", map[string]any{"id": base.ID, "enabled": false}))
+	if paused["enabled"] != false {
+		t.Fatalf("pause = %#v", paused)
+	}
+	resumed := manageFixtureResult(t, callManageFixture(t, srv, output, 3, "mothx/manage/knowledge-bases/schedule", map[string]any{"id": base.ID, "enabled": true}))
+	if resumed["enabled"] != true {
+		t.Fatalf("resume = %#v", resumed)
+	}
+	projected := manageFixtureResult(t, callManageFixture(t, srv, output, 4, "mothx/manage/knowledge-bases/schedule", map[string]any{"id": base.ID}))
+	if projected["configured"] != true || strings.TrimSpace(fmt.Sprint(projected["nextRun"])) == "" {
+		t.Fatalf("resumed schedule projection = %#v", projected)
+	}
+
+	stored, err := session.GetKnowledgeBase(t.Context(), settings.GetSessionDir(), base.ID)
+	if err != nil || !stored.Enabled {
+		t.Fatalf("resume must persist the enabled flag: %#v, err=%v", stored, err)
+	}
+}
+
+// TestManageKnowledgeBaseRPCErrorMapsModelUnavailable pins that the ACP
+// management surface reports the stable knowledge_base_model_unavailable code
+// for an indexer-model failure instead of a generic operation failure.
+func TestManageKnowledgeBaseRPCErrorMapsModelUnavailable(t *testing.T) {
+	rpcErr := manageKnowledgeBaseRPCError(agentruntime.ErrKnowledgeIndexerModelUnavailable)
+	if rpcErr == nil {
+		t.Fatal("expected a structured RPC error")
+	}
+	data, _ := rpcErr.Data.(map[string]any)
+	if data["code"] != "knowledge_base_model_unavailable" {
+		t.Fatalf("error data = %#v, want knowledge_base_model_unavailable", rpcErr.Data)
 	}
 }

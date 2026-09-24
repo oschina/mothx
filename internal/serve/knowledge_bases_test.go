@@ -105,6 +105,60 @@ func TestKnowledgeBaseHandlersRejectScheduledWebUIConfiguration(t *testing.T) {
 	}
 }
 
+// TestKnowledgeBaseHandlersValidateExecutionOptions pins that the WebUI
+// projection rejects an invalid mode/thinking level at write time, so a bad
+// configuration can never be persisted and only fail later at scan time.
+func TestKnowledgeBaseHandlersValidateExecutionOptions(t *testing.T) {
+	runtime := &channelRuntime{sessionDir: t.TempDir()}
+	sourceDir := t.TempDir()
+
+	badThinking := knowledgeBaseRequest(t, runtime, http.MethodPost, "/api/knowledge-bases",
+		`{"knowledgeBase":{"name":"Docs","rootDir":`+quoteJSON(sourceDir)+`,"preprocessProfile":"documents","provider":"openai","model":"gpt-4o","thinkingLevel":"none","schedule":"manual","enabled":true}}`)
+	if badThinking.Code != http.StatusBadRequest || !strings.Contains(badThinking.Body.String(), "invalid thinking level") {
+		t.Fatalf("invalid thinking create = %d: %s", badThinking.Code, badThinking.Body.String())
+	}
+
+	badMode := knowledgeBaseRequest(t, runtime, http.MethodPost, "/api/knowledge-bases",
+		`{"knowledgeBase":{"name":"Docs","rootDir":`+quoteJSON(sourceDir)+`,"preprocessProfile":"documents","mode":"turbo","schedule":"manual","enabled":true}}`)
+	if badMode.Code != http.StatusBadRequest || !strings.Contains(badMode.Body.String(), "unsupported knowledge base mode") {
+		t.Fatalf("invalid mode create = %d: %s", badMode.Code, badMode.Body.String())
+	}
+
+	valid := knowledgeBaseRequest(t, runtime, http.MethodPost, "/api/knowledge-bases",
+		`{"knowledgeBase":{"name":"Docs","rootDir":`+quoteJSON(sourceDir)+`,"preprocessProfile":"documents","provider":"openai","model":"gpt-4o","thinkingLevel":"off","schedule":"manual","enabled":true}}`)
+	if valid.Code != http.StatusCreated {
+		t.Fatalf("valid create = %d: %s", valid.Code, valid.Body.String())
+	}
+}
+
+// TestKnowledgeBaseHandlersReportDisabledBase pins that a disabled base is
+// rejected through the shared sentinel error (HTTP 409), not by matching the
+// error string.
+func TestKnowledgeBaseHandlersReportDisabledBase(t *testing.T) {
+	runtime := &channelRuntime{sessionDir: t.TempDir()}
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "a.md"), []byte("# A\n\nbody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	created := knowledgeBaseRequest(t, runtime, http.MethodPost, "/api/knowledge-bases",
+		`{"knowledgeBase":{"name":"Docs","rootDir":`+quoteJSON(sourceDir)+`,"preprocessProfile":"documents","mode":"yolo","schedule":"manual","enabled":true}}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", created.Code, created.Body.String())
+	}
+	var view knowledgeBaseView
+	if err := json.Unmarshal(created.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	disabled := knowledgeBaseRequest(t, runtime, http.MethodPatch, "/api/knowledge-bases/"+view.KnowledgeBase.ID,
+		`{"knowledgeBase":{"name":"Docs","rootDir":`+quoteJSON(sourceDir)+`,"preprocessProfile":"documents","mode":"yolo","schedule":"manual","enabled":false}}`)
+	if disabled.Code != http.StatusOK {
+		t.Fatalf("disable = %d: %s", disabled.Code, disabled.Body.String())
+	}
+	scan := knowledgeBaseRequest(t, runtime, http.MethodPost, "/api/knowledge-bases/"+view.KnowledgeBase.ID+"/scan", "{}")
+	if scan.Code != http.StatusConflict || !strings.Contains(scan.Body.String(), "disabled") {
+		t.Fatalf("scan of disabled base = %d: %s", scan.Code, scan.Body.String())
+	}
+}
 func knowledgeBaseRequest(t *testing.T, runtime *channelRuntime, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
@@ -159,5 +213,63 @@ func TestKnowledgeBaseCronJobsRouteThroughRuntimeHandler(t *testing.T) {
 	}
 	if strings.TrimSpace(reloaded.ActiveSnapshotID) == "" {
 		t.Fatalf("cron reindex left no active snapshot: %#v", reloaded)
+	}
+}
+
+// TestKnowledgeBaseHandlersRunsSourcesAndClear pins the additive HTTP
+// projections for index Run history, source browsing, and clearing.
+func TestKnowledgeBaseHandlersRunsSourcesAndClear(t *testing.T) {
+	runtime := &channelRuntime{sessionDir: t.TempDir()}
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "guide.md"), []byte("# Guide\n\nDurable evidence body.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	created := knowledgeBaseRequest(t, runtime, http.MethodPost, "/api/knowledge-bases",
+		`{"knowledgeBase":{"name":"Docs","rootDir":`+quoteJSON(sourceDir)+`,"preprocessProfile":"documents","mode":"yolo","schedule":"manual","enabled":true}}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", created.Code, created.Body.String())
+	}
+	var view knowledgeBaseView
+	if err := json.Unmarshal(created.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	service, err := agentruntime.NewKnowledgeBaseService(runtime.sessionDir, agentruntime.DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Index(t.Context(), view.KnowledgeBase.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	sources := knowledgeBaseRequest(t, runtime, http.MethodGet, "/api/knowledge-bases/"+view.KnowledgeBase.ID+"/sources", "")
+	if sources.Code != http.StatusOK || !strings.Contains(sources.Body.String(), `"relativePath":"guide.md"`) {
+		t.Fatalf("sources = %d: %s", sources.Code, sources.Body.String())
+	}
+
+	runs := knowledgeBaseRequest(t, runtime, http.MethodGet, "/api/knowledge-bases/"+view.KnowledgeBase.ID+"/runs", "")
+	if runs.Code != http.StatusOK || !strings.Contains(runs.Body.String(), `"runId"`) {
+		t.Fatalf("runs = %d: %s", runs.Code, runs.Body.String())
+	}
+
+	cleared := knowledgeBaseRequest(t, runtime, http.MethodPost, "/api/knowledge-bases/"+view.KnowledgeBase.ID+"/clear", "{}")
+	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"cleared":true`) {
+		t.Fatalf("clear = %d: %s", cleared.Code, cleared.Body.String())
+	}
+	after := knowledgeBaseRequest(t, runtime, http.MethodGet, "/api/knowledge-bases/"+view.KnowledgeBase.ID+"/sources", "")
+	if after.Code != http.StatusOK || !strings.Contains(after.Body.String(), `"sources":[]`) {
+		t.Fatalf("sources after clear = %d: %s", after.Code, after.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(sourceDir, "guide.md")); err != nil {
+		t.Fatalf("clear must preserve the source file: %v", err)
+	}
+}
+
+// TestWriteKnowledgeBaseErrorMapsModelUnavailable pins that the HTTP surface
+// reports a conflict for an indexer-model failure instead of a generic 400.
+func TestWriteKnowledgeBaseErrorMapsModelUnavailable(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeKnowledgeBaseError(recorder, agentruntime.ErrKnowledgeIndexerModelUnavailable)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "model is unavailable") {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
 	}
 }

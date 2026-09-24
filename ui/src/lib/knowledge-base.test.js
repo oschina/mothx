@@ -22,17 +22,23 @@ const {
   updateKnowledgeBase,
   deleteKnowledgeBase,
   scanKnowledgeBase,
-  queryKnowledgeBase
+  queryKnowledgeBase,
+  listKnowledgeBaseRuns,
+  listKnowledgeBaseSources,
+  clearKnowledgeBase,
+  normalizeKnowledgeIndexRun,
+  normalizeKnowledgeSource
 } = await import('./knowledge-base.js');
 
 test('defaultKnowledgeBase provides yolo defaults', () => {
   const draft = defaultKnowledgeBase();
   assert.equal(draft.mode, 'yolo');
-  assert.equal(draft.thinkingLevel, 'none');
+  assert.equal(draft.thinkingLevel, 'off');
   assert.equal(draft.preprocessProfile, 'documents');
   assert.equal(draft.schedule, 'manual');
   assert.equal(draft.enabled, true);
   assert.equal(draft.name, '');
+  assert.deepEqual(draft.ignoreGlobs, []);
 });
 
 test('emptyKnowledgeBaseView mirrors the backend view shape', () => {
@@ -60,7 +66,7 @@ test('knowledgeBasePayload trims strings and preserves booleans', () => {
   assert.equal(payload.model, 'gpt-4o');
   assert.equal(payload.preprocessProfile, 'documents');
   assert.equal(payload.mode, 'agent');
-  assert.equal(payload.schedule, 'manual');
+  assert.equal(payload.schedule, '@daily');
   assert.equal(payload.enabled, false);
 });
 
@@ -69,8 +75,13 @@ test('knowledgeBasePayload falls back to document defaults', () => {
   assert.equal(payload.preprocessProfile, 'documents');
   assert.equal(payload.schedule, 'manual');
   assert.equal(payload.mode, 'yolo');
-  assert.equal(payload.thinkingLevel, 'none');
+  assert.equal(payload.thinkingLevel, 'off');
   assert.equal(payload.enabled, true);
+});
+
+test('knowledgeBasePayload trims ignore globs and drops empties', () => {
+  const payload = knowledgeBasePayload({ name: 'Docs', rootDir: '/docs', ignoreGlobs: [' *.log ', '', 'tmp/**'] });
+  assert.deepEqual(payload.ignoreGlobs, ['*.log', 'tmp/**']);
 });
 
 test('validateKnowledgeBase requires name and rootDir', () => {
@@ -109,7 +120,14 @@ test('normalizeKnowledgeBaseView fills missing fields with defaults', () => {
   assert.equal(normalized.knowledgeBase.mode, 'yolo');
   assert.equal(normalized.knowledgeBase.enabled, true);
   assert.equal(normalized.knowledgeBase.preprocessProfile, 'documents');
+  assert.equal(normalized.knowledgeBase.schedule, 'manual');
+  assert.deepEqual(normalized.knowledgeBase.ignoreGlobs, []);
   assert.equal(normalized.status, 'unindexed');
+});
+
+test('normalizeKnowledgeBaseView preserves a persisted Desktop schedule', () => {
+  const normalized = normalizeKnowledgeBaseView({ knowledgeBase: { id: 'kb-1', name: 'A', schedule: 'daily' } });
+  assert.equal(normalized.knowledgeBase.schedule, 'daily');
 });
 
 test('normalizeKnowledgeBaseView keeps a live indexing projection', () => {
@@ -229,4 +247,57 @@ test('queryKnowledgeBase posts query and bounded limit', async (t) => {
   assert.equal(body.query, 'how do I');
   assert.equal(body.limit, 3);
   assert.equal(result.query.chunks.length, 1);
+});
+
+test('listKnowledgeBaseRuns projects the run history', async (t) => {
+  let path;
+  installFetch(t, async (p) => {
+    path = p;
+    return new Response(JSON.stringify({ runs: [
+      { runId: 'knowledge_index_1', status: 'completed', fileCount: 3, nodeCount: 9, active: true },
+      { runId: 'knowledge_index_0', status: 'failed', errorSummary: 'boom' }
+    ] }), { status: 200 });
+  });
+  const runs = await listKnowledgeBaseRuns('kb/1', 5);
+  assert.equal(path, '/api/knowledge-bases/kb%2F1/runs?limit=5');
+  assert.equal(runs.length, 2);
+  assert.equal(runs[0].runId, 'knowledge_index_1');
+  assert.equal(runs[0].fileCount, 3);
+  assert.equal(runs[0].active, true);
+  assert.equal(runs[1].status, 'failed');
+  assert.equal(runs[1].errorSummary, 'boom');
+});
+
+test('listKnowledgeBaseSources projects file provenance without contents', async (t) => {
+  let path;
+  installFetch(t, async (p) => {
+    path = p;
+    return new Response(JSON.stringify({ sources: [
+      { relativePath: 'docs/a.md', status: 'indexed', byteSize: 2048, chunkCount: 4, title: 'A' }
+    ] }), { status: 200 });
+  });
+  const sources = await listKnowledgeBaseSources('kb-1');
+  assert.equal(path, '/api/knowledge-bases/kb-1/sources');
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].path, 'docs/a.md');
+  assert.equal(sources[0].chunkCount, 4);
+  assert.equal(sources[0].byteSize, 2048);
+});
+
+test('clearKnowledgeBase posts to the clear endpoint', async (t) => {
+  let path;
+  installFetch(t, async (p, options) => {
+    path = p;
+    assert.equal(options.method, 'POST');
+    return new Response(JSON.stringify({ cleared: true }), { status: 200 });
+  });
+  await clearKnowledgeBase('kb-1');
+  assert.equal(path, '/api/knowledge-bases/kb-1/clear');
+});
+
+test('normalizeKnowledgeIndexRun and normalizeKnowledgeSource are null-safe', () => {
+  assert.equal(normalizeKnowledgeIndexRun(null), null);
+  assert.equal(normalizeKnowledgeSource('nope'), null);
+  assert.equal(normalizeKnowledgeIndexRun({ runId: 'r' }).status, 'unknown');
+  assert.equal(normalizeKnowledgeSource({}).chunkCount, 0);
 });

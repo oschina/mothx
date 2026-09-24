@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/oschina/mothx/internal/session"
 )
@@ -71,6 +72,12 @@ func TestKnowledgeBaseStartIndexRunsInBackgroundWithProgress(t *testing.T) {
 	if progress.Phase != KnowledgeIndexPhaseCommitting {
 		t.Fatalf("progress phase = %q, want %q", progress.Phase, KnowledgeIndexPhaseCommitting)
 	}
+	// The concurrent start above was coalesced into exactly one follow-up pass;
+	// wait for it before asserting the idle state.
+	follow := waitForFollowUpJob(t, service, base.ID, job)
+	if _, err := follow.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if _, running := service.IndexProgress(base.ID); running {
 		t.Fatalf("IndexProgress must stop reporting once the scan finished")
 	}
@@ -112,5 +119,79 @@ func TestKnowledgeBaseStartIndexRejectsDisabledBaseSynchronously(t *testing.T) {
 	}
 	if _, ok := service.IndexJob(base.ID); ok {
 		t.Fatalf("rejected start must not register a job")
+	}
+}
+
+// waitForFollowUpJob waits until a scan different from previous is registered for
+// the base, which is how the coalesced follow-up pass becomes observable.
+func waitForFollowUpJob(t *testing.T, service *KnowledgeBaseService, baseID string, previous *KnowledgeIndexJob) *KnowledgeIndexJob {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		service.indexJobsMu.Lock()
+		current := service.indexJobs[baseID]
+		service.indexJobsMu.Unlock()
+		if current != nil && current != previous {
+			return current
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("coalesced follow-up job was not started")
+	return nil
+}
+
+// TestKnowledgeIndexCoalescesTriggersWhileScanning pins the coalesce contract: a
+// trigger that arrives while a scan is running is not dropped and does not start
+// a parallel scan; it is merged into exactly one follow-up pass, and the most
+// recent trigger source wins.
+func TestKnowledgeIndexCoalescesTriggersWhileScanning(t *testing.T) {
+	sessionDir := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "a.md"), []byte("# A\n\nbody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, err := session.CreateKnowledgeBase(context.Background(), sessionDir, session.KnowledgeBaseSpec{
+		Name: "Coalesce", RootDir: source, PreprocessProfile: "documents",
+		Mode: "yolo", Schedule: "manual", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewKnowledgeBaseService(sessionDir, DefaultKnowledgeBaseIndexPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an in-flight scan without starting a real goroutine.
+	inflight := newKnowledgeIndexJob()
+	service.indexJobs = map[string]*KnowledgeIndexJob{base.ID: inflight}
+
+	job, err := service.StartIndex(context.Background(), base.ID, SourceCron)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job != inflight {
+		t.Fatalf("trigger during a scan must reuse the running job")
+	}
+	if _, err := service.StartIndex(context.Background(), base.ID, SourceWebUI); err != nil {
+		t.Fatal(err)
+	}
+	service.indexJobsMu.Lock()
+	pending := service.indexPending[base.ID]
+	service.indexJobsMu.Unlock()
+	if pending != SourceWebUI {
+		t.Fatalf("pending source = %q, want the most recent trigger %q", pending, SourceWebUI)
+	}
+
+	// Finishing the in-flight scan must start exactly one coalesced follow-up.
+	inflight.finish(session.KnowledgeSnapshot{}, nil)
+	service.afterIndexJob(base.ID)
+	follow := waitForFollowUpJob(t, service, base.ID, inflight)
+	service.indexJobsMu.Lock()
+	_, stillPending := service.indexPending[base.ID]
+	service.indexJobsMu.Unlock()
+	if stillPending {
+		t.Fatalf("pending trigger must be consumed by the follow-up run")
+	}
+	if _, err := follow.Wait(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

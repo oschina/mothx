@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,26 +14,37 @@ import (
 	"github.com/oschina/mothx/internal/dao"
 )
 
-const KnowledgeGraphSchemaVersion = 1
+const KnowledgeGraphSchemaVersion = 2
+
+// Knowledge node status values. A "fact" node is derived deterministically by
+// the Runtime; a "candidate" node is a model assertion without locally
+// verifiable evidence and is hidden from default query results.
+const (
+	KnowledgeNodeStatusFact      = "fact"
+	KnowledgeNodeStatusCandidate = "candidate"
+)
 
 var (
 	ErrKnowledgeBaseNotFound             = errors.New("knowledge base not found")
 	ErrKnowledgeBaseUnindexed            = errors.New("knowledge base has no completed index")
 	ErrKnowledgeBaseConfigurationChanged = errors.New("knowledge base configuration changed during indexing")
+	ErrKnowledgeBaseDisabled             = errors.New("knowledge base is disabled")
+	ErrKnowledgeBaseRootUnavailable      = errors.New("knowledge base root directory is unavailable")
 )
 
 // KnowledgeBaseSpec is the editable Desktop configuration. It deliberately
 // stores provider/model/mode as references, not copied provider credentials.
 type KnowledgeBaseSpec struct {
-	Name              string `json:"name"`
-	RootDir           string `json:"rootDir"`
-	PreprocessProfile string `json:"preprocessProfile"`
-	Provider          string `json:"provider"`
-	Model             string `json:"model"`
-	Mode              string `json:"mode"`
-	ThinkingLevel     string `json:"thinkingLevel,omitempty"`
-	Schedule          string `json:"schedule"`
-	Enabled           bool   `json:"enabled"`
+	Name              string   `json:"name"`
+	RootDir           string   `json:"rootDir"`
+	PreprocessProfile string   `json:"preprocessProfile"`
+	Provider          string   `json:"provider"`
+	Model             string   `json:"model"`
+	Mode              string   `json:"mode"`
+	ThinkingLevel     string   `json:"thinkingLevel,omitempty"`
+	Schedule          string   `json:"schedule"`
+	Enabled           bool     `json:"enabled"`
+	IgnoreGlobs       []string `json:"ignoreGlobs,omitempty"`
 }
 
 type KnowledgeBase struct {
@@ -45,18 +57,76 @@ type KnowledgeBase struct {
 }
 
 type KnowledgeSnapshot struct {
-	ID              string    `json:"id"`
-	KnowledgeBaseID string    `json:"knowledgeBaseId"`
-	RunID           string    `json:"runId,omitempty"`
-	Status          string    `json:"status"`
-	SchemaVersion   int       `json:"schemaVersion"`
-	FileCount       int       `json:"fileCount"`
-	ChunkCount      int       `json:"chunkCount"`
-	NodeCount       int       `json:"nodeCount"`
-	EdgeCount       int       `json:"edgeCount"`
-	StartedAt       time.Time `json:"startedAt"`
-	FinishedAt      time.Time `json:"finishedAt,omitempty"`
-	ErrorSummary    string    `json:"errorSummary,omitempty"`
+	ID               string                     `json:"id"`
+	KnowledgeBaseID  string                     `json:"knowledgeBaseId"`
+	RunID            string                     `json:"runId,omitempty"`
+	Status           string                     `json:"status"`
+	SchemaVersion    int                        `json:"schemaVersion"`
+	FileCount        int                        `json:"fileCount"`
+	ChunkCount       int                        `json:"chunkCount"`
+	NodeCount        int                        `json:"nodeCount"`
+	EdgeCount        int                        `json:"edgeCount"`
+	StartedAt        time.Time                  `json:"startedAt"`
+	FinishedAt       time.Time                  `json:"finishedAt,omitempty"`
+	ErrorSummary     string                     `json:"errorSummary,omitempty"`
+	DiffSummary      *KnowledgeDiffSummary      `json:"diffSummary,omitempty"`
+	DiscoverySummary *KnowledgeDiscoverySummary `json:"discoverySummary,omitempty"`
+}
+
+// KnowledgeDiffSummary is the bounded incremental-diff projection of one scan
+// against the prior active snapshot. Path lists are capped so a huge directory
+// cannot bloat the snapshot row; the counts always reflect the whole scan.
+const maxKnowledgeDiffPaths = 200
+
+type KnowledgeDiffSummary struct {
+	Added         int      `json:"added"`
+	Modified      int      `json:"modified"`
+	Removed       int      `json:"removed"`
+	Unchanged     int      `json:"unchanged"`
+	AddedPaths    []string `json:"addedPaths,omitempty"`
+	ModifiedPaths []string `json:"modifiedPaths,omitempty"`
+	RemovedPaths  []string `json:"removedPaths,omitempty"`
+}
+
+// KnowledgeDiscoveryEntry is one relative path with the reason it was not
+// indexed. It never carries file contents.
+type KnowledgeDiscoveryEntry struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+// KnowledgeDiscoverySummary makes discovery decisions visible: how many files
+// were indexed, ignored by rule, or skipped as unreadable.
+const maxKnowledgeDiscoveryEntries = 500
+
+type KnowledgeDiscoverySummary struct {
+	Discovered     int                       `json:"discovered"`
+	Ignored        int                       `json:"ignored"`
+	Skipped        int                       `json:"skipped"`
+	IgnoredEntries []KnowledgeDiscoveryEntry `json:"ignoredEntries,omitempty"`
+	SkippedEntries []KnowledgeDiscoveryEntry `json:"skippedEntries,omitempty"`
+}
+
+// RecordIgnored counts one ignored path and keeps a bounded sample entry.
+func (s *KnowledgeDiscoverySummary) RecordIgnored(path, reason string) {
+	if s == nil {
+		return
+	}
+	s.Ignored++
+	if len(s.IgnoredEntries) < maxKnowledgeDiscoveryEntries {
+		s.IgnoredEntries = append(s.IgnoredEntries, KnowledgeDiscoveryEntry{Path: path, Reason: reason})
+	}
+}
+
+// RecordSkipped counts one skipped path and keeps a bounded sample entry.
+func (s *KnowledgeDiscoverySummary) RecordSkipped(path, reason string) {
+	if s == nil {
+		return
+	}
+	s.Skipped++
+	if len(s.SkippedEntries) < maxKnowledgeDiscoveryEntries {
+		s.SkippedEntries = append(s.SkippedEntries, KnowledgeDiscoveryEntry{Path: path, Reason: reason})
+	}
 }
 
 type KnowledgeFile struct {
@@ -89,6 +159,20 @@ type KnowledgeNode struct {
 	Label           string `json:"label"`
 	NormalizedLabel string `json:"normalizedLabel"`
 	Summary         string `json:"summary,omitempty"`
+	// Status is "fact" for deterministically derived nodes and "candidate" for
+	// model-asserted nodes that carry no locally verifiable evidence. Confidence
+	// is the Runtime-assigned reliability of the node.
+	Status     string  `json:"status,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
+}
+
+// KnowledgeEntityAlias maps one normalized synonym label onto the entity node
+// that owns it inside a snapshot. Merging requires evidence support.
+type KnowledgeEntityAlias struct {
+	ID              string `json:"id"`
+	SnapshotID      string `json:"snapshotId"`
+	NormalizedAlias string `json:"normalizedAlias"`
+	NodeID          string `json:"nodeId"`
 }
 
 type KnowledgeEdge struct {
@@ -122,14 +206,30 @@ type KnowledgeGraphSnapshot struct {
 	Nodes              []KnowledgeNode
 	Edges              []KnowledgeEdge
 	Evidence           []KnowledgeEvidence
+	Aliases            []KnowledgeEntityAlias
+	DiffSummary        *KnowledgeDiffSummary
+	DiscoverySummary   *KnowledgeDiscoverySummary
+}
+
+// KnowledgeUncertainty is one bounded, structured signal that a query result
+// may be incomplete or low-confidence. It never contains full document text.
+type KnowledgeUncertainty struct {
+	Kind        string `json:"kind"`
+	Description string `json:"description"`
+	NodeID      string `json:"nodeId,omitempty"`
+	EdgeID      string `json:"edgeId,omitempty"`
+	Path        string `json:"path,omitempty"`
 }
 
 type KnowledgeGraphQuery struct {
-	KnowledgeBase KnowledgeBase     `json:"knowledgeBase"`
-	Snapshot      KnowledgeSnapshot `json:"snapshot"`
-	Chunks        []KnowledgeChunk  `json:"chunks"`
-	Nodes         []KnowledgeNode   `json:"nodes"`
-	Edges         []KnowledgeEdge   `json:"edges"`
+	KnowledgeBase KnowledgeBase          `json:"knowledgeBase"`
+	Snapshot      KnowledgeSnapshot      `json:"snapshot"`
+	Chunks        []KnowledgeChunk       `json:"chunks"`
+	Nodes         []KnowledgeNode        `json:"nodes"`
+	Edges         []KnowledgeEdge        `json:"edges"`
+	Evidence      []KnowledgeEvidence    `json:"evidence,omitempty"`
+	Uncertainties []KnowledgeUncertainty `json:"uncertainties,omitempty"`
+	Truncated     bool                   `json:"truncated"`
 }
 
 func CreateKnowledgeBase(ctx context.Context, sessionDir string, spec KnowledgeBaseSpec) (KnowledgeBase, error) {
@@ -343,6 +443,12 @@ func StoreKnowledgeGraphSnapshot(ctx context.Context, sessionDir string, graph K
 		graph.Snapshot.StartedAt = now
 	}
 	graph.Snapshot.FinishedAt = now
+	if graph.Snapshot.DiffSummary == nil {
+		graph.Snapshot.DiffSummary = graph.DiffSummary
+	}
+	if graph.Snapshot.DiscoverySummary == nil {
+		graph.Snapshot.DiscoverySummary = graph.DiscoverySummary
+	}
 	err := writeKnowledgeBaseDatabase(ctx, sessionDir, graph.Snapshot.KnowledgeBaseID, false, func(tx *dao.Tx) error {
 		store := dao.NewKnowledgeBaseDAO(nil)
 		if err := store.InsertSnapshot(ctx, tx, knowledgeSnapshotRecord(graph.Snapshot)); err != nil {
@@ -361,6 +467,9 @@ func StoreKnowledgeGraphSnapshot(ctx context.Context, sessionDir string, graph K
 			return err
 		}
 		if err := store.InsertEvidence(ctx, tx, knowledgeEvidenceRecords(graph.Evidence)); err != nil {
+			return err
+		}
+		if err := store.InsertAliases(ctx, tx, knowledgeAliasRecords(graph.Aliases)); err != nil {
 			return err
 		}
 		changed, err := store.ActivateSnapshot(ctx, tx, graph.Snapshot.KnowledgeBaseID, graph.Snapshot.ID, now.Format(time.RFC3339Nano), graph.BaseConfigRevision)
@@ -744,6 +853,9 @@ func QueryKnowledgeGraph(ctx context.Context, sessionDir, baseID, query string, 
 		result.Chunks = knowledgeChunksFromRecords(projection.Chunks)
 		result.Nodes = knowledgeNodesFromRecords(projection.Nodes)
 		result.Edges = knowledgeEdgesFromRecords(projection.Edges)
+		result.Evidence = knowledgeEvidenceFromRecords(projection.Evidence)
+		result.Truncated = projection.Truncated
+		rankKnowledgeQueryResult(&result, query)
 		return nil
 	})
 	if errors.Is(err, dao.ErrNoRows) || errors.Is(err, ErrKnowledgeBaseNotFound) {
@@ -753,6 +865,161 @@ func QueryKnowledgeGraph(ctx context.Context, sessionDir, baseID, query string, 
 		return KnowledgeGraphQuery{}, err
 	}
 	return result, nil
+}
+
+// KnowledgeSource is the bounded file-level provenance projection for one
+// active snapshot. It never carries file contents.
+type KnowledgeSource struct {
+	RelativePath  string `json:"relativePath"`
+	Title         string `json:"title,omitempty"`
+	MediaType     string `json:"mediaType,omitempty"`
+	Status        string `json:"status"`
+	ByteSize      int64  `json:"byteSize"`
+	ChunkCount    int    `json:"chunkCount"`
+	ContentSHA256 string `json:"contentSha256,omitempty"`
+}
+
+// ListKnowledgeSources projects the active snapshot's file manifest. It reads
+// no source directory and returns no file contents.
+func ListKnowledgeSources(ctx context.Context, sessionDir, baseID string) ([]KnowledgeSource, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := migrateLegacyKnowledgeBaseStorage(ctx, sessionDir); err != nil {
+		return nil, err
+	}
+	baseID = strings.TrimSpace(baseID)
+	sources := make([]KnowledgeSource, 0)
+	err := queryKnowledgeBaseDatabase(sessionDir, baseID, func(db *dao.Database) error {
+		store := dao.NewKnowledgeBaseDAO(db.Bun())
+		base, err := store.FindBase(ctx, baseID)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(base.ActiveSnapshotID) == "" {
+			return nil
+		}
+		files, err := store.ListFilesForSnapshot(ctx, base.ActiveSnapshotID)
+		if err != nil {
+			return err
+		}
+		chunksPerFile, err := store.CountChunksPerFile(ctx, base.ActiveSnapshotID)
+		if err != nil {
+			return err
+		}
+		sources = make([]KnowledgeSource, 0, len(files))
+		for _, file := range files {
+			sources = append(sources, KnowledgeSource{RelativePath: file.RelativePath, Title: file.Title,
+				MediaType: file.MediaType, Status: file.Status, ByteSize: file.ByteSize,
+				ChunkCount: chunksPerFile[file.ID], ContentSHA256: file.ContentSHA256})
+		}
+		return nil
+	})
+	if errors.Is(err, dao.ErrNoRows) || errors.Is(err, ErrKnowledgeBaseNotFound) {
+		return nil, ErrKnowledgeBaseNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return sources, nil
+}
+
+// ClearKnowledgeBaseIndex removes the active snapshot and every graph row while
+// preserving configuration and the source directory. It is idempotent: an
+// already-unindexed base clears nothing and reports success.
+func ClearKnowledgeBaseIndex(ctx context.Context, sessionDir, baseID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	baseID = strings.TrimSpace(baseID)
+	base, err := GetKnowledgeBase(ctx, sessionDir, baseID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	return writeKnowledgeBaseDatabase(ctx, sessionDir, baseID, false, func(tx *dao.Tx) error {
+		store := dao.NewKnowledgeBaseDAO(nil)
+		changed, err := store.ClearActiveSnapshot(ctx, tx, baseID, now.Format(time.RFC3339Nano), base.ConfigRevision)
+		if err != nil {
+			return err
+		}
+		if changed != 1 {
+			if _, findErr := store.FindBaseWith(ctx, tx, baseID); errors.Is(findErr, dao.ErrNoRows) {
+				return ErrKnowledgeBaseNotFound
+			}
+			return ErrKnowledgeBaseConfigurationChanged
+		}
+		return store.PruneSnapshotsExcept(ctx, tx, baseID, "")
+	})
+}
+
+// DiffKnowledgeManifest compares an indexable manifest against the files of the
+// active snapshot. Path lists are bounded; the counts always cover the whole
+// comparison. A base without an active snapshot reports every file as added.
+func DiffKnowledgeManifest(ctx context.Context, sessionDir, baseID string, manifest []KnowledgeFile) (KnowledgeDiffSummary, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := migrateLegacyKnowledgeBaseStorage(ctx, sessionDir); err != nil {
+		return KnowledgeDiffSummary{}, err
+	}
+	baseID = strings.TrimSpace(baseID)
+	var diff KnowledgeDiffSummary
+	var stored []dao.KnowledgeFileRecord
+	err := queryKnowledgeBaseDatabase(sessionDir, baseID, func(db *dao.Database) error {
+		store := dao.NewKnowledgeBaseDAO(db.Bun())
+		base, err := store.FindBase(ctx, baseID)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(base.ActiveSnapshotID) == "" {
+			return nil
+		}
+		stored, err = store.ListFilesForSnapshot(ctx, base.ActiveSnapshotID)
+		return err
+	})
+	if errors.Is(err, dao.ErrNoRows) || errors.Is(err, ErrKnowledgeBaseNotFound) {
+		return KnowledgeDiffSummary{}, ErrKnowledgeBaseNotFound
+	}
+	if err != nil {
+		return KnowledgeDiffSummary{}, err
+	}
+	storedByPath := make(map[string]dao.KnowledgeFileRecord, len(stored))
+	for _, record := range stored {
+		storedByPath[record.RelativePath] = record
+	}
+	seen := make(map[string]struct{}, len(manifest))
+	for _, file := range manifest {
+		if file.RelativePath == "" {
+			continue
+		}
+		seen[file.RelativePath] = struct{}{}
+		record, ok := storedByPath[file.RelativePath]
+		switch {
+		case !ok:
+			diff.Added++
+			diff.AddedPaths = appendBoundedKnowledgePath(diff.AddedPaths, file.RelativePath)
+		case record.ContentSHA256 != file.ContentSHA256 || record.ByteSize != file.ByteSize || record.MediaType != file.MediaType || record.Status != file.Status:
+			diff.Modified++
+			diff.ModifiedPaths = appendBoundedKnowledgePath(diff.ModifiedPaths, file.RelativePath)
+		default:
+			diff.Unchanged++
+		}
+	}
+	for _, record := range stored {
+		if _, ok := seen[record.RelativePath]; !ok {
+			diff.Removed++
+			diff.RemovedPaths = appendBoundedKnowledgePath(diff.RemovedPaths, record.RelativePath)
+		}
+	}
+	return diff, nil
+}
+
+func appendBoundedKnowledgePath(paths []string, path string) []string {
+	if len(paths) >= maxKnowledgeDiffPaths {
+		return paths
+	}
+	return append(paths, path)
 }
 
 // migrateLegacyKnowledgeBaseStorage moves the short-lived shared-store layout
@@ -903,14 +1170,14 @@ func validateKnowledgeBaseSpec(spec *KnowledgeBaseSpec) error {
 		return fmt.Errorf("knowledge base name is required")
 	}
 	if !filepath.IsAbs(spec.RootDir) {
-		return fmt.Errorf("knowledge base root directory must be absolute")
+		return fmt.Errorf("%w: must be absolute", ErrKnowledgeBaseRootUnavailable)
 	}
 	info, err := os.Stat(spec.RootDir)
 	if err != nil {
-		return fmt.Errorf("knowledge base root directory: %w", err)
+		return fmt.Errorf("%w: %v", ErrKnowledgeBaseRootUnavailable, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("knowledge base root directory is not a directory")
+		return fmt.Errorf("%w: not a directory", ErrKnowledgeBaseRootUnavailable)
 	}
 	switch spec.PreprocessProfile {
 	case "documents", "code", "notes", "mixed":
@@ -926,7 +1193,43 @@ func validateKnowledgeBaseSpec(spec *KnowledgeBaseSpec) error {
 	if len(spec.Schedule) > 128 || strings.ContainsAny(spec.Schedule, "\r\n") {
 		return fmt.Errorf("invalid knowledge base schedule")
 	}
+	globs, err := normalizeKnowledgeIgnoreGlobs(spec.IgnoreGlobs)
+	if err != nil {
+		return err
+	}
+	spec.IgnoreGlobs = globs
 	return nil
+}
+
+const maxKnowledgeIgnoreGlobs = 128
+
+// normalizeKnowledgeIgnoreGlobs trims, validates and de-duplicates the
+// knowledge-base ignore glob list. It rejects empty or newline-bearing
+// patterns so a stored glob always maps to one path rule.
+func normalizeKnowledgeIgnoreGlobs(values []string) ([]string, error) {
+	if len(values) > maxKnowledgeIgnoreGlobs {
+		return nil, fmt.Errorf("at most %d knowledge base ignore globs are allowed", maxKnowledgeIgnoreGlobs)
+	}
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+		if value == "" {
+			continue
+		}
+		if len(value) > 256 || strings.ContainsAny(value, "\r\n") {
+			return nil, fmt.Errorf("invalid knowledge base ignore glob")
+		}
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	return normalized, nil
 }
 
 func validateKnowledgeGraphSnapshot(graph *KnowledgeGraphSnapshot) error {
@@ -966,34 +1269,105 @@ func validateKnowledgeGraphSnapshot(graph *KnowledgeGraphSnapshot) error {
 			return fmt.Errorf("invalid knowledge graph evidence")
 		}
 	}
+	nodeIDs := make(map[string]struct{}, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		nodeIDs[node.ID] = struct{}{}
+	}
+	seenAlias := make(map[string]struct{}, len(graph.Aliases))
+	for _, alias := range graph.Aliases {
+		if alias.ID == "" || alias.SnapshotID != graph.Snapshot.ID || alias.NormalizedAlias == "" {
+			return fmt.Errorf("invalid knowledge graph entity alias")
+		}
+		if _, ok := nodeIDs[alias.NodeID]; !ok {
+			return fmt.Errorf("knowledge graph entity alias references an unknown node")
+		}
+		if _, duplicate := seenAlias[alias.NormalizedAlias]; duplicate {
+			return fmt.Errorf("duplicate knowledge graph entity alias")
+		}
+		seenAlias[alias.NormalizedAlias] = struct{}{}
+	}
 	return nil
 }
 
 func knowledgeBaseRecord(base KnowledgeBase) *dao.KnowledgeBaseRecord {
 	return &dao.KnowledgeBaseRecord{ID: base.ID, Name: base.Name, RootDir: base.RootDir, PreprocessProfile: base.PreprocessProfile,
 		Provider: base.Provider, Model: base.Model, Mode: base.Mode, ThinkingLevel: base.ThinkingLevel, Schedule: base.Schedule,
-		Enabled: boolToInt(base.Enabled), ActiveSnapshotID: base.ActiveSnapshotID, ConfigRevision: max(base.ConfigRevision, 1),
+		Enabled: boolToInt(base.Enabled), IgnoreGlobs: encodeKnowledgeStringList(base.IgnoreGlobs),
+		ActiveSnapshotID: base.ActiveSnapshotID, ConfigRevision: max(base.ConfigRevision, 1),
 		CreatedAt: base.CreatedAt.Format(time.RFC3339Nano), UpdatedAt: base.UpdatedAt.Format(time.RFC3339Nano)}
 }
 
 func knowledgeBaseFromRecord(record dao.KnowledgeBaseRecord) KnowledgeBase {
 	return KnowledgeBase{ID: record.ID, KnowledgeBaseSpec: KnowledgeBaseSpec{Name: record.Name, RootDir: record.RootDir,
 		PreprocessProfile: record.PreprocessProfile, Provider: record.Provider, Model: record.Model, Mode: record.Mode,
-		ThinkingLevel: record.ThinkingLevel, Schedule: record.Schedule, Enabled: record.Enabled != 0},
+		ThinkingLevel: record.ThinkingLevel, Schedule: record.Schedule, Enabled: record.Enabled != 0,
+		IgnoreGlobs: decodeKnowledgeStringList(record.IgnoreGlobs)},
 		ActiveSnapshotID: record.ActiveSnapshotID, CreatedAt: parseProjectTime(record.CreatedAt), UpdatedAt: parseProjectTime(record.UpdatedAt), ConfigRevision: record.ConfigRevision}
+}
+
+// encodeKnowledgeStringList stores a bounded string list as a JSON array so the
+// knowledge-base row keeps one canonical representation for ignore globs.
+func encodeKnowledgeStringList(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+func decodeKnowledgeStringList(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(value), &values); err != nil {
+		return nil
+	}
+	return values
 }
 
 func knowledgeSnapshotRecord(snapshot KnowledgeSnapshot) *dao.KnowledgeSnapshotRecord {
 	return &dao.KnowledgeSnapshotRecord{ID: snapshot.ID, KnowledgeBaseID: snapshot.KnowledgeBaseID, RunID: snapshot.RunID,
 		Status: snapshot.Status, SchemaVersion: snapshot.SchemaVersion, FileCount: snapshot.FileCount, ChunkCount: snapshot.ChunkCount,
 		NodeCount: snapshot.NodeCount, EdgeCount: snapshot.EdgeCount, StartedAt: snapshot.StartedAt.Format(time.RFC3339Nano),
-		FinishedAt: timestampString(snapshot.FinishedAt), ErrorSummary: snapshot.ErrorSummary}
+		FinishedAt: timestampString(snapshot.FinishedAt), ErrorSummary: snapshot.ErrorSummary,
+		DiffSummary: encodeKnowledgeJSON(snapshot.DiffSummary), DiscoverySummary: encodeKnowledgeJSON(snapshot.DiscoverySummary)}
 }
 
 func knowledgeSnapshotFromRecord(record dao.KnowledgeSnapshotRecord) KnowledgeSnapshot {
 	return KnowledgeSnapshot{ID: record.ID, KnowledgeBaseID: record.KnowledgeBaseID, RunID: record.RunID, Status: record.Status,
 		SchemaVersion: record.SchemaVersion, FileCount: record.FileCount, ChunkCount: record.ChunkCount, NodeCount: record.NodeCount,
-		EdgeCount: record.EdgeCount, StartedAt: parseProjectTime(record.StartedAt), FinishedAt: parseProjectTime(record.FinishedAt), ErrorSummary: record.ErrorSummary}
+		EdgeCount: record.EdgeCount, StartedAt: parseProjectTime(record.StartedAt), FinishedAt: parseProjectTime(record.FinishedAt),
+		ErrorSummary:     record.ErrorSummary,
+		DiffSummary:      decodeKnowledgeJSON[KnowledgeDiffSummary](record.DiffSummary),
+		DiscoverySummary: decodeKnowledgeJSON[KnowledgeDiscoverySummary](record.DiscoverySummary)}
+}
+
+func encodeKnowledgeJSON[T any](value *T) string {
+	if value == nil {
+		return ""
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+func decodeKnowledgeJSON[T any](value string) *T {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	decoded := new(T)
+	if err := json.Unmarshal([]byte(value), decoded); err != nil {
+		return nil
+	}
+	return decoded
 }
 
 func timestampString(value time.Time) string {
@@ -1024,8 +1398,25 @@ func knowledgeChunkRecords(chunks []KnowledgeChunk) []dao.KnowledgeChunkRecord {
 func knowledgeNodeRecords(nodes []KnowledgeNode) []dao.KnowledgeNodeRecord {
 	records := make([]dao.KnowledgeNodeRecord, 0, len(nodes))
 	for _, node := range nodes {
+		status := strings.TrimSpace(node.Status)
+		if status == "" {
+			status = KnowledgeNodeStatusFact
+		}
+		confidence := node.Confidence
+		if confidence <= 0 {
+			confidence = 1
+		}
 		records = append(records, dao.KnowledgeNodeRecord{ID: node.ID, SnapshotID: node.SnapshotID, Kind: node.Kind, Label: node.Label,
-			NormalizedLabel: node.NormalizedLabel, Summary: node.Summary, Attributes: "{}"})
+			NormalizedLabel: node.NormalizedLabel, Summary: node.Summary, Attributes: "{}", Status: status, Confidence: confidence})
+	}
+	return records
+}
+
+func knowledgeAliasRecords(aliases []KnowledgeEntityAlias) []dao.KnowledgeEntityAliasRecord {
+	records := make([]dao.KnowledgeEntityAliasRecord, 0, len(aliases))
+	for _, alias := range aliases {
+		records = append(records, dao.KnowledgeEntityAliasRecord{ID: alias.ID, SnapshotID: alias.SnapshotID,
+			NormalizedAlias: alias.NormalizedAlias, NodeID: alias.NodeID})
 	}
 	return records
 }
@@ -1060,8 +1451,16 @@ func knowledgeChunksFromRecords(records []dao.KnowledgeChunkRecord) []KnowledgeC
 func knowledgeNodesFromRecords(records []dao.KnowledgeNodeRecord) []KnowledgeNode {
 	nodes := make([]KnowledgeNode, 0, len(records))
 	for _, record := range records {
+		status := strings.TrimSpace(record.Status)
+		if status == "" {
+			status = KnowledgeNodeStatusFact
+		}
+		confidence := record.Confidence
+		if confidence <= 0 {
+			confidence = 1
+		}
 		nodes = append(nodes, KnowledgeNode{ID: record.ID, SnapshotID: record.SnapshotID, Kind: record.Kind, Label: record.Label,
-			NormalizedLabel: record.NormalizedLabel, Summary: record.Summary})
+			NormalizedLabel: record.NormalizedLabel, Summary: record.Summary, Status: status, Confidence: confidence})
 	}
 	return nodes
 }
@@ -1073,4 +1472,112 @@ func knowledgeEdgesFromRecords(records []dao.KnowledgeEdgeRecord) []KnowledgeEdg
 			ToNodeID: record.ToNodeID, RelationType: record.RelationType, Confidence: record.Confidence})
 	}
 	return edges
+}
+
+func knowledgeEvidenceFromRecords(records []dao.KnowledgeEvidenceRecord) []KnowledgeEvidence {
+	evidence := make([]KnowledgeEvidence, 0, len(records))
+	for _, record := range records {
+		evidence = append(evidence, KnowledgeEvidence{ID: record.ID, SnapshotID: record.SnapshotID, NodeID: record.NodeID,
+			EdgeID: record.EdgeID, ChunkID: record.ChunkID, StartLine: record.StartLine, EndLine: record.EndLine, Confidence: record.Confidence})
+	}
+	return evidence
+}
+
+// knowledgeRelationWeights orders relations by usefulness when a bounded query
+// result must be presented in a stable priority order.
+var knowledgeRelationWeights = map[string]int{
+	"defines": 5, "declares": 5, "references": 4, "imports": 4, "calls": 3,
+	"configured_by": 3, "tested_by": 3, "contains": 3, "co_mentions": 1,
+}
+
+// rankKnowledgeQueryResult orders a bounded graph result, drops candidate nodes
+// that carry no evidence, and derives the structured uncertainty list. It never
+// expands the scan; it only reorders and annotates what the DAO already read.
+func rankKnowledgeQueryResult(result *KnowledgeGraphQuery, query string) {
+	if result == nil {
+		return
+	}
+	nodeEvidence := map[string]int{}
+	edgeEvidence := map[string]int{}
+	for _, item := range result.Evidence {
+		if item.NodeID != "" {
+			nodeEvidence[item.NodeID]++
+		}
+		if item.EdgeID != "" {
+			edgeEvidence[item.EdgeID]++
+		}
+	}
+	terms := knowledgeQueryTerms(query)
+	hit := func(label string) bool {
+		normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(label)), " "))
+		for _, term := range terms {
+			if term != "" && strings.Contains(normalized, term) {
+				return true
+			}
+		}
+		return false
+	}
+	kept := make([]KnowledgeNode, 0, len(result.Nodes))
+	candidateExcluded := 0
+	candidateIncluded := 0
+	for _, node := range result.Nodes {
+		if node.Status == KnowledgeNodeStatusCandidate {
+			if nodeEvidence[node.ID] == 0 {
+				candidateExcluded++
+				continue
+			}
+			candidateIncluded++
+		}
+		kept = append(kept, node)
+	}
+	sort.SliceStable(kept, func(i, j int) bool {
+		if hi, hj := hit(kept[i].Label), hit(kept[j].Label); hi != hj {
+			return hi
+		}
+		if ei, ej := nodeEvidence[kept[i].ID], nodeEvidence[kept[j].ID]; ei != ej {
+			return ei > ej
+		}
+		return strings.ToLower(kept[i].Label) < strings.ToLower(kept[j].Label)
+	})
+	result.Nodes = kept
+	edges := append([]KnowledgeEdge(nil), result.Edges...)
+	sort.SliceStable(edges, func(i, j int) bool {
+		if wi, wj := knowledgeRelationWeights[edges[i].RelationType], knowledgeRelationWeights[edges[j].RelationType]; wi != wj {
+			return wi > wj
+		}
+		if ei, ej := edgeEvidence[edges[i].ID], edgeEvidence[edges[j].ID]; ei != ej {
+			return ei > ej
+		}
+		return edges[i].ID < edges[j].ID
+	})
+	result.Edges = edges
+	uncertainties := make([]KnowledgeUncertainty, 0)
+	if result.Truncated {
+		uncertainties = append(uncertainties, KnowledgeUncertainty{Kind: "truncated", Description: "graph result was truncated at the node or edge limit"})
+	}
+	if candidateExcluded > 0 {
+		uncertainties = append(uncertainties, KnowledgeUncertainty{Kind: "candidate_excluded", Description: fmt.Sprintf("%d candidate node(s) without evidence were excluded", candidateExcluded)})
+	}
+	if candidateIncluded > 0 {
+		uncertainties = append(uncertainties, KnowledgeUncertainty{Kind: "candidate_node", Description: fmt.Sprintf("%d model-asserted candidate node(s) with evidence were included", candidateIncluded)})
+	}
+	for _, edge := range result.Edges {
+		if edge.Confidence > 0 && edge.Confidence < 0.5 {
+			uncertainties = append(uncertainties, KnowledgeUncertainty{Kind: "low_confidence_edge", Description: "an edge carries low confidence", EdgeID: edge.ID})
+		}
+	}
+	result.Uncertainties = uncertainties
+}
+
+func knowledgeQueryTerms(query string) []string {
+	fields := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
+		return !(r == '_' || r == '-' || r == '.' || r == '/' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z')
+	})
+	terms := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field = strings.TrimSpace(field); field != "" {
+			terms = append(terms, field)
+		}
+	}
+	return terms
 }

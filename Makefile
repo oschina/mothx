@@ -241,6 +241,11 @@ fuzz:
 	go test ./internal/mcp -run='^$$' -fuzz=. -fuzztime=$(FUZZTIME)
 	go test ./internal/util -run='^$$' -fuzz=. -fuzztime=$(FUZZTIME)
 
+# Controlled knowledge-base quality benchmark (proposal Phase C4). Writes the
+# metric baseline to knowledge-benchmark.json and enforces regression thresholds.
+knowledge-benchmark:
+	scripts/knowledge-benchmark.sh
+
 # Serve Web UI
 ui-install:
 	cd ui && $(NPM) ci

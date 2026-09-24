@@ -7,6 +7,9 @@
     deleteKnowledgeBase,
     scanKnowledgeBase,
     queryKnowledgeBase,
+    listKnowledgeBaseRuns,
+    listKnowledgeBaseSources,
+    clearKnowledgeBase,
     defaultKnowledgeBase,
     knowledgeBasePayload,
     knowledgeBaseIndexing,
@@ -28,6 +31,10 @@
   let busy = '';
   let dirBrowserOpen = false;
   let pollTimer = null;
+  let panel = 'runs';
+  let runs = [];
+  let sources = [];
+  let panelBusy = false;
 
   const PHASE_KEYS = {
     scanning: 'knowledge.phase.scanning',
@@ -79,9 +86,64 @@
   });
 
   function openEditor(view) {
-    editing = view ? { ...view.knowledgeBase } : defaultKnowledgeBase();
+    editing = view ? { ...view.knowledgeBase, ignoreGlobs: [...(view.knowledgeBase.ignoreGlobs || [])] } : defaultKnowledgeBase();
     query = '';
     queryResult = null;
+    runs = [];
+    sources = [];
+    panel = 'runs';
+    if (editing.id) loadPanels(editing.id);
+  }
+
+  // loadPanels refreshes the run-history and source-provenance projections for
+  // one knowledge base. Both are bounded server projections and never carry
+  // file contents.
+  async function loadPanels(id) {
+    if (!id) return;
+    panelBusy = true;
+    try {
+      const [nextRuns, nextSources] = await Promise.all([
+        listKnowledgeBaseRuns(id, 20),
+        listKnowledgeBaseSources(id)
+      ]);
+      if (editing?.id !== id) return;
+      runs = nextRuns.filter(Boolean);
+      sources = nextSources.filter(Boolean);
+    } catch (err) {
+      setError(err);
+    } finally {
+      panelBusy = false;
+    }
+  }
+
+  function formatDate(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+  }
+
+  function formatSize(bytes) {
+    const size = Number(bytes) || 0;
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function clearIndex() {
+    if (!editing?.id || busy) return;
+    if (!confirm($t('knowledge.clearConfirm', { name: editing.name }))) return;
+    const id = editing.id;
+    busy = `clear:${id}`;
+    try {
+      await clearKnowledgeBase(id);
+      setNotice($t('knowledge.cleared', { name: editing.name }));
+      await loadPanels(id);
+      await load(true);
+    } catch (err) {
+      setError(err);
+    } finally {
+      busy = '';
+    }
   }
 
   async function load(silent = false) {
@@ -297,6 +359,18 @@
                 <span>{$t('knowledge.thinkingLevel')}</span>
                 <input bind:value={editing.thinkingLevel} placeholder={$t('knowledge.thinkingLevel')} />
               </label>
+              <label>
+                <span>{$t('knowledge.schedule')}</span>
+                <input bind:value={editing.schedule} placeholder={$t('knowledge.schedulePlaceholder')} />
+              </label>
+              <label class="wide">
+                <span>{$t('knowledge.ignoreGlobs')}</span>
+                <input
+                  value={(editing.ignoreGlobs || []).join(', ')}
+                  placeholder={$t('knowledge.ignoreGlobsHint')}
+                  oninput={(event) => { editing.ignoreGlobs = event.currentTarget.value.split(',').map((glob) => glob.trim()).filter(Boolean); }}
+                />
+              </label>
               <label class="checkbox">
                 <input type="checkbox" bind:checked={editing.enabled} />
                 <span>{$t('knowledge.enabled')}</span>
@@ -313,32 +387,84 @@
             </div>
 
             {#if editing.id}
-              <form class="knowledge-query" onsubmit={(event) => { event.preventDefault(); runQuery(); }}>
-                <label class="query-field">
-                  <span>{$t('knowledge.query')}</span>
-                  <input bind:value={query} placeholder={$t('knowledge.queryPlaceholder')} />
-                </label>
-                <Button type="submit" variant="outline" disabled={!query.trim() || busy === `query:${editing.id}`}>
-                  {$t('knowledge.query')}
-                </Button>
-              </form>
-
-              {#if queryResult}
-                <div class="knowledge-results">
-                  {#if queryResult.chunks?.length}
-                    <h3>{$t('knowledge.queryResults')}</h3>
-                    {#each queryResult.chunks as chunk (chunk.id)}
-                      <article>
-                        <strong>{chunk.relativePath || chunk.fileId}</strong>
-                        <small>L{chunk.startLine}–{chunk.endLine}</small>
-                        <pre>{chunk.text}</pre>
-                      </article>
-                    {/each}
-                  {:else}
-                    <p class="empty">{$t('knowledge.queryEmpty')}</p>
-                  {/if}
+              <div class="knowledge-panels">
+                <div class="knowledge-tabs" role="tablist">
+                  <button type="button" class:active={panel === 'runs'} onclick={() => (panel = 'runs')}>{$t('knowledge.panelRuns')}</button>
+                  <button type="button" class:active={panel === 'sources'} onclick={() => (panel = 'sources')}>{$t('knowledge.panelSources')}</button>
+                  <button type="button" class:active={panel === 'query'} onclick={() => (panel = 'query')}>{$t('knowledge.panelQuery')}</button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={panelBusy || busy === `clear:${editing.id}`}
+                    onclick={clearIndex}
+                  >
+                    {$t('knowledge.clearIndex')}
+                  </Button>
                 </div>
-              {/if}
+
+                {#if panel === 'runs'}
+                  <div class="knowledge-results">
+                    {#if runs.length}
+                      {#each runs as run (run.runId)}
+                        <article>
+                          <strong>
+                            {run.status}
+                            {#if run.active}<em class="badge">{$t('knowledge.runActive')}</em>{/if}
+                          </strong>
+                          <small>{formatDate(run.startedAt)}{run.finishedAt ? ` → ${formatDate(run.finishedAt)}` : ''}</small>
+                          <small>{$t('knowledge.runStats', { files: run.fileCount, chunks: run.chunkCount, nodes: run.nodeCount, edges: run.edgeCount })}</small>
+                          {#if run.errorSummary}
+                            <small class="run-error">{$t('knowledge.runError')}: {run.errorSummary}</small>
+                          {/if}
+                        </article>
+                      {/each}
+                    {:else}
+                      <p class="empty">{$t('knowledge.runsEmpty')}</p>
+                    {/if}
+                  </div>
+                {:else if panel === 'sources'}
+                  <div class="knowledge-results">
+                    {#if sources.length}
+                      {#each sources as source (source.path)}
+                        <article>
+                          <strong>{source.title || source.path}</strong>
+                          <small>{source.path}</small>
+                          <small>{source.status} · {formatSize(source.byteSize)} · {$t('knowledge.sourceChunks', { count: source.chunkCount })}</small>
+                        </article>
+                      {/each}
+                    {:else}
+                      <p class="empty">{$t('knowledge.sourcesEmpty')}</p>
+                    {/if}
+                  </div>
+                {:else}
+                  <form class="knowledge-query" onsubmit={(event) => { event.preventDefault(); runQuery(); }}>
+                    <label class="query-field">
+                      <span>{$t('knowledge.query')}</span>
+                      <input bind:value={query} placeholder={$t('knowledge.queryPlaceholder')} />
+                    </label>
+                    <Button type="submit" variant="outline" disabled={!query.trim() || busy === `query:${editing.id}`}>
+                      {$t('knowledge.query')}
+                    </Button>
+                  </form>
+
+                  {#if queryResult}
+                    <div class="knowledge-results">
+                      {#if queryResult.chunks?.length}
+                        <h3>{$t('knowledge.queryResults')}</h3>
+                        {#each queryResult.chunks as chunk (chunk.id)}
+                          <article>
+                            <strong>{chunk.relativePath || chunk.fileId}</strong>
+                            <small>L{chunk.startLine}–{chunk.endLine}</small>
+                            <pre>{chunk.text}</pre>
+                          </article>
+                        {/each}
+                      {:else}
+                        <p class="empty">{$t('knowledge.queryEmpty')}</p>
+                      {/if}
+                    </div>
+                  {/if}
+                {/if}
+              </div>
             {/if}
           </Card.Content>
         </Card.Root>
@@ -412,6 +538,9 @@
     align-items: center;
     gap: 8px;
   }
+  .knowledge-fields label.wide {
+    grid-column: 1 / -1;
+  }
   .knowledge-fields input,
   .knowledge-fields select,
   .knowledge-query input {
@@ -424,6 +553,48 @@
   }
   .directory-field { display:flex; gap:8px; }
   .directory-field input { flex:1; }
+  .knowledge-panels {
+    margin-top: 18px;
+    display: grid;
+    gap: 12px;
+  }
+  .knowledge-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  .knowledge-tabs button {
+    background: none;
+    border: 0;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    padding: 4px 2px;
+    font: inherit;
+  }
+  .knowledge-tabs button.active {
+    color: inherit;
+    font-weight: 600;
+    border-bottom: 2px solid var(--primary, var(--border));
+  }
+  .knowledge-tabs :global(button:last-child) {
+    margin-left: auto;
+  }
+  .badge {
+    margin-left: 6px;
+    font-style: normal;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 6px;
+  }
+  .run-error {
+    color: var(--destructive, #b91c1c);
+  }
   .knowledge-query {
     display: flex;
     gap: 8px;

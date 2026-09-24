@@ -938,7 +938,7 @@ CREATE TABLE knowledge_evidence (
 CREATE INDEX idx_knowledge_evidence_chunk ON knowledge_evidence(snapshot_id, chunk_id, node_id, edge_id);
 `
 
-const knowledgeStoreSchemaVersion = 3
+const knowledgeStoreSchemaVersion = 4
 
 // EnsureKnowledgeBaseSchema migrates one dedicated knowledge-base SQLite
 // database. It intentionally does not invoke EnsureCurrentSchema, which owns
@@ -990,6 +990,34 @@ func EnsureKnowledgeBaseSchema(db *sql.DB) error {
 			return fmt.Errorf("add knowledge base configuration revision: %w", err)
 		}
 		if _, err := tx.Exec(`INSERT INTO knowledge_store_schema(version) VALUES (?)`, 3); err != nil {
+			return fmt.Errorf("record knowledge store schema version: %w", err)
+		}
+	}
+	if version < 4 {
+		// v4 adds the ignore-glob configuration, per-snapshot discovery and
+		// incremental diff summaries, node fact/candidate status with confidence,
+		// and the entity-alias table used to merge synonymous labels. Existing
+		// snapshots stay readable: every added column carries a safe default.
+		for _, stmt := range []string{
+			`ALTER TABLE knowledge_bases ADD COLUMN ignore_globs TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE knowledge_index_snapshots ADD COLUMN diff_summary TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE knowledge_index_snapshots ADD COLUMN discovery_summary TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE knowledge_nodes ADD COLUMN status TEXT NOT NULL DEFAULT 'fact'`,
+			`ALTER TABLE knowledge_nodes ADD COLUMN confidence REAL NOT NULL DEFAULT 1`,
+			`CREATE TABLE IF NOT EXISTS knowledge_entity_aliases (
+				id TEXT PRIMARY KEY,
+				snapshot_id TEXT NOT NULL REFERENCES knowledge_index_snapshots(id) ON DELETE CASCADE,
+				normalized_alias TEXT NOT NULL,
+				node_id TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+				UNIQUE(snapshot_id, normalized_alias)
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_knowledge_aliases_node ON knowledge_entity_aliases(snapshot_id, node_id)`,
+		} {
+			if _, err := tx.Exec(stmt); err != nil {
+				return fmt.Errorf("apply knowledge store schema v4: %w", err)
+			}
+		}
+		if _, err := tx.Exec(`INSERT INTO knowledge_store_schema(version) VALUES (?)`, 4); err != nil {
 			return fmt.Errorf("record knowledge store schema version: %w", err)
 		}
 	}

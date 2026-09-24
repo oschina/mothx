@@ -95,7 +95,7 @@ func (h *KnowledgeMCPHandler) CallTool(ctx context.Context, name string, argumen
 		return mcp.ServerToolResult{}, err
 	}
 	if !base.Enabled {
-		return mcp.ServerToolResult{}, fmt.Errorf("knowledge base %q is disabled", base.Name)
+		return mcp.ServerToolResult{}, fmt.Errorf("%w: %s", session.ErrKnowledgeBaseDisabled, base.Name)
 	}
 	graph, err := h.service.Query(ctx, input.KnowledgeBaseID, input.Query, input.Limit)
 	if err != nil {
@@ -108,14 +108,45 @@ func (h *KnowledgeMCPHandler) CallTool(ctx context.Context, name string, argumen
 		End     int    `json:"endLine"`
 	}
 	type evidence struct {
-		Text      string     `json:"text"`
-		Citations []citation `json:"citations"`
+		Text         string     `json:"text"`
+		Citations    []citation `json:"citations"`
+		RelationType string     `json:"relationType,omitempty"`
+		Confidence   float64    `json:"confidence,omitempty"`
+	}
+	type uncertainty struct {
+		Kind        string `json:"kind"`
+		Description string `json:"description"`
+	}
+	// Index the evidence-backed relations by chunk so a returned excerpt can
+	// name the strongest relation type that cites it.
+	edgeByID := make(map[string]session.KnowledgeEdge, len(graph.Edges))
+	for _, edge := range graph.Edges {
+		edgeByID[edge.ID] = edge
+	}
+	type chunkRelation struct {
+		relationType string
+		confidence   float64
+	}
+	chunkRelations := make(map[string]chunkRelation)
+	for _, item := range graph.Evidence {
+		if item.EdgeID == "" || item.ChunkID == "" {
+			continue
+		}
+		edge, ok := edgeByID[item.EdgeID]
+		if !ok {
+			continue
+		}
+		current, exists := chunkRelations[item.ChunkID]
+		if !exists || knowledgeRelationWeight(edge.RelationType) > knowledgeRelationWeight(current.relationType) {
+			chunkRelations[item.ChunkID] = chunkRelation{relationType: edge.RelationType, confidence: edge.Confidence}
+		}
 	}
 	result := struct {
-		KnowledgeBaseID string     `json:"knowledgeBaseId"`
-		SnapshotID      string     `json:"snapshotId"`
-		Evidence        []evidence `json:"evidence"`
-		Truncated       bool       `json:"truncated"`
+		KnowledgeBaseID string        `json:"knowledgeBaseId"`
+		SnapshotID      string        `json:"snapshotId"`
+		Evidence        []evidence    `json:"evidence"`
+		Uncertainties   []uncertainty `json:"uncertainties,omitempty"`
+		Truncated       bool          `json:"truncated"`
 	}{KnowledgeBaseID: base.ID, SnapshotID: graph.Snapshot.ID, Evidence: make([]evidence, 0, len(graph.Chunks))}
 	remaining := maxKnowledgeMCPResultChars
 	for _, chunk := range graph.Chunks {
@@ -131,8 +162,19 @@ func (h *KnowledgeMCPHandler) CallTool(ctx context.Context, name string, argumen
 		if text == "" {
 			continue
 		}
-		result.Evidence = append(result.Evidence, evidence{Text: text, Citations: []citation{{ChunkID: chunk.ID, Path: chunk.RelativePath, Start: chunk.StartLine, End: chunk.EndLine}}})
+		item := evidence{Text: text, Citations: []citation{{ChunkID: chunk.ID, Path: chunk.RelativePath, Start: chunk.StartLine, End: chunk.EndLine}}}
+		if relation, ok := chunkRelations[chunk.ID]; ok {
+			item.RelationType = relation.relationType
+			item.Confidence = relation.confidence
+		}
+		result.Evidence = append(result.Evidence, item)
 		remaining -= len(text)
+	}
+	for _, item := range graph.Uncertainties {
+		result.Uncertainties = append(result.Uncertainties, uncertainty{Kind: item.Kind, Description: item.Description})
+	}
+	if graph.Truncated {
+		result.Truncated = true
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil {

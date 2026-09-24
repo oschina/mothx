@@ -161,6 +161,16 @@ func (s *server) handleManageRequest(req rpcRequest) {
 		s.handleManageKnowledgeBasesStatus(req)
 	case "mothx/manage/knowledge-bases/query":
 		s.handleManageKnowledgeBasesQuery(req)
+	case "mothx/manage/knowledge-bases/runs/list":
+		s.handleManageKnowledgeBasesRunsList(req)
+	case "mothx/manage/knowledge-bases/runs/get":
+		s.handleManageKnowledgeBasesRunGet(req)
+	case "mothx/manage/knowledge-bases/clear":
+		s.handleManageKnowledgeBasesClear(req)
+	case "mothx/manage/knowledge-bases/sources/list":
+		s.handleManageKnowledgeBasesSourcesList(req)
+	case "mothx/manage/knowledge-bases/schedule":
+		s.handleManageKnowledgeBasesSchedule(req)
 	case "mothx/manage/knowledge-bases/mcp/apply":
 		s.handleManageKnowledgeBaseMCPApply(req)
 	case "mothx/manage/env/get":

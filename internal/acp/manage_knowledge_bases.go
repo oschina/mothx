@@ -23,15 +23,16 @@ import (
 // Runtime input contract in the next integration step.
 
 type manageKnowledgeBaseMutation struct {
-	Name              string `json:"name"`
-	RootDir           string `json:"rootDir"`
-	PreprocessProfile string `json:"preprocessProfile"`
-	Provider          string `json:"provider"`
-	Model             string `json:"model"`
-	Mode              string `json:"mode"`
-	ThinkingLevel     string `json:"thinkingLevel,omitempty"`
-	Schedule          string `json:"schedule"`
-	Enabled           *bool  `json:"enabled,omitempty"`
+	Name              string   `json:"name"`
+	RootDir           string   `json:"rootDir"`
+	PreprocessProfile string   `json:"preprocessProfile"`
+	Provider          string   `json:"provider"`
+	Model             string   `json:"model"`
+	Mode              string   `json:"mode"`
+	ThinkingLevel     string   `json:"thinkingLevel,omitempty"`
+	Schedule          string   `json:"schedule"`
+	Enabled           *bool    `json:"enabled,omitempty"`
+	IgnoreGlobs       []string `json:"ignoreGlobs,omitempty"`
 }
 
 func (m manageKnowledgeBaseMutation) spec() session.KnowledgeBaseSpec {
@@ -42,7 +43,7 @@ func (m manageKnowledgeBaseMutation) spec() session.KnowledgeBaseSpec {
 	return session.KnowledgeBaseSpec{
 		Name: m.Name, RootDir: m.RootDir, PreprocessProfile: m.PreprocessProfile,
 		Provider: m.Provider, Model: m.Model, Mode: m.Mode, ThinkingLevel: m.ThinkingLevel,
-		Schedule: m.Schedule, Enabled: enabled,
+		Schedule: m.Schedule, Enabled: enabled, IgnoreGlobs: m.IgnoreGlobs,
 	}
 }
 
@@ -248,6 +249,14 @@ func (s *server) syncKnowledgeBaseScheduleWithStore(store cron.CronStore, base s
 		}
 		return nil
 	}
+	// A base whose root directory is gone must not keep triggering. Invalidate
+	// the plan until the user restores the directory and rescans explicitly.
+	if !knowledgeBaseRootAvailable(base.RootDir) {
+		if err := store.Delete(jobID); err != nil && !strings.Contains(err.Error(), "not found") {
+			return fmt.Errorf("invalidate knowledge base schedule: %w", err)
+		}
+		return nil
+	}
 	job := cron.CronJob{
 		ID: jobID, Name: "Knowledge base: " + base.Name,
 		Prompt:   "Reindex the Desktop knowledge base " + base.ID + ".",
@@ -277,6 +286,13 @@ func (s *server) syncKnowledgeBaseScheduleWithStore(store cron.CronStore, base s
 		return fmt.Errorf("create knowledge base schedule: %w", err)
 	}
 	return nil
+}
+
+// knowledgeBaseRootAvailable reports whether a knowledge base root directory is
+// currently present and usable, so a schedule can be invalidated when it is not.
+func knowledgeBaseRootAvailable(root string) bool {
+	info, err := os.Stat(strings.TrimSpace(root))
+	return err == nil && info.IsDir()
 }
 
 func normalizeKnowledgeBaseSchedule(value string, baseEnabled bool) (schedule string, enabled bool, err error) {
@@ -421,21 +437,33 @@ func validateKnowledgeBaseSchedule(spec session.KnowledgeBaseSpec) *mcp.RPCError
 	return nil
 }
 
+// validateKnowledgeBaseExecutionOptions front-loads the mode/thinking checks
+// the indexer would otherwise only hit during a scan. Empty values stay valid
+// and resolve to the Runtime defaults.
+func validateKnowledgeBaseExecutionOptions(spec session.KnowledgeBaseSpec) *mcp.RPCError {
+	if mode := strings.TrimSpace(spec.Mode); mode != "" && !agentruntime.IsValidMode(mode) {
+		return acpStructuredRPCError(-32602, "knowledge_base_mode_invalid", fmt.Sprintf("unsupported knowledge base mode %q", mode), map[string]any{"mode": mode})
+	}
+	if _, err := agentruntime.ValidateThinkingLevel(spec.ThinkingLevel); err != nil {
+		return acpStructuredRPCError(-32602, "knowledge_base_thinking_invalid", err.Error(), map[string]any{"thinkingLevel": strings.TrimSpace(spec.ThinkingLevel)})
+	}
+	return nil
+}
+
 func manageKnowledgeBaseRPCError(err error) *mcp.RPCError {
 	switch {
 	case errors.Is(err, session.ErrKnowledgeBaseNotFound):
 		return acpStructuredRPCError(-32602, "knowledge_base_not_found", "knowledge base was not found", nil)
 	case errors.Is(err, session.ErrKnowledgeBaseUnindexed):
 		return acpStructuredRPCError(-32602, "knowledge_base_unindexed", "knowledge base has no completed index", nil)
+	case errors.Is(err, session.ErrKnowledgeBaseDisabled):
+		return acpStructuredRPCError(-32602, "knowledge_base_disabled", err.Error(), nil)
+	case errors.Is(err, session.ErrKnowledgeBaseRootUnavailable):
+		return acpStructuredRPCError(-32602, "knowledge_base_root_unavailable", err.Error(), nil)
+	case errors.Is(err, agentruntime.ErrKnowledgeIndexerModelUnavailable):
+		return acpStructuredRPCError(-32602, "knowledge_base_model_unavailable", err.Error(), nil)
 	}
-	message := strings.TrimSpace(err.Error())
-	if strings.Contains(message, "is disabled") {
-		return acpStructuredRPCError(-32602, "knowledge_base_disabled", message, nil)
-	}
-	if strings.Contains(message, "knowledge base root") || strings.Contains(message, "path escaped root") {
-		return acpStructuredRPCError(-32602, "knowledge_base_root_unavailable", message, nil)
-	}
-	return acpStructuredRPCError(-32000, "knowledge_base_operation_failed", message, nil)
+	return acpStructuredRPCError(-32000, "knowledge_base_operation_failed", strings.TrimSpace(err.Error()), nil)
 }
 
 func manageKnowledgeBaseID(req rpcRequest) (string, *mcp.RPCError) {
@@ -498,6 +526,10 @@ func (s *server) handleManageKnowledgeBasesCreate(req rpcRequest) {
 		s.writeResponse(req.ID, nil, rpcErr)
 		return
 	}
+	if rpcErr := validateKnowledgeBaseExecutionOptions(spec); rpcErr != nil {
+		s.writeResponse(req.ID, nil, rpcErr)
+		return
+	}
 	if rpcErr := validateKnowledgeBaseSchedule(spec); rpcErr != nil {
 		s.writeResponse(req.ID, nil, rpcErr)
 		return
@@ -522,6 +554,10 @@ func (s *server) handleManageKnowledgeBasesUpdate(req rpcRequest) {
 	}
 	spec := input.KnowledgeBase.spec()
 	if rpcErr := s.validateKnowledgeBaseProvider(spec); rpcErr != nil {
+		s.writeResponse(req.ID, nil, rpcErr)
+		return
+	}
+	if rpcErr := validateKnowledgeBaseExecutionOptions(spec); rpcErr != nil {
 		s.writeResponse(req.ID, nil, rpcErr)
 		return
 	}
@@ -620,4 +656,164 @@ func (s *server) handleManageKnowledgeBasesQuery(req rpcRequest) {
 		return
 	}
 	s.writeResponse(req.ID, map[string]any{"query": result}, nil)
+}
+
+type manageKnowledgeBaseRunsListRequest struct {
+	ID    string `json:"id"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+type manageKnowledgeBaseRunGetRequest struct {
+	ID    string `json:"id"`
+	RunID string `json:"runId"`
+}
+
+// handleManageKnowledgeBasesRunsList projects the canonical index Run history.
+func (s *server) handleManageKnowledgeBasesRunsList(req rpcRequest) {
+	var input manageKnowledgeBaseRunsListRequest
+	if err := json.Unmarshal(req.Params, &input); err != nil || strings.TrimSpace(input.ID) == "" {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32602, "invalid_params", "id is required", nil))
+		return
+	}
+	service, err := s.manageKnowledgeBaseService()
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "knowledge_base_unavailable", err.Error(), nil))
+		return
+	}
+	runs, err := service.IndexRuns(context.Background(), strings.TrimSpace(input.ID), input.Limit)
+	if err != nil {
+		s.writeResponse(req.ID, nil, manageKnowledgeBaseRPCError(err))
+		return
+	}
+	s.writeResponse(req.ID, map[string]any{"runs": runs}, nil)
+}
+
+// handleManageKnowledgeBasesRunGet projects one index Run with its diagnostics.
+func (s *server) handleManageKnowledgeBasesRunGet(req rpcRequest) {
+	var input manageKnowledgeBaseRunGetRequest
+	if err := json.Unmarshal(req.Params, &input); err != nil || strings.TrimSpace(input.ID) == "" || strings.TrimSpace(input.RunID) == "" {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32602, "invalid_params", "id and runId are required", nil))
+		return
+	}
+	service, err := s.manageKnowledgeBaseService()
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "knowledge_base_unavailable", err.Error(), nil))
+		return
+	}
+	run, err := service.IndexRun(context.Background(), strings.TrimSpace(input.ID), strings.TrimSpace(input.RunID))
+	if err != nil {
+		s.writeResponse(req.ID, nil, manageKnowledgeBaseRPCError(err))
+		return
+	}
+	s.writeResponse(req.ID, map[string]any{"run": run}, nil)
+}
+
+// handleManageKnowledgeBasesClear removes the active index while keeping the
+// configuration and source directory.
+func (s *server) handleManageKnowledgeBasesClear(req rpcRequest) {
+	id, rpcErr := manageKnowledgeBaseID(req)
+	if rpcErr != nil {
+		s.writeResponse(req.ID, nil, rpcErr)
+		return
+	}
+	service, err := s.manageKnowledgeBaseService()
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "knowledge_base_unavailable", err.Error(), nil))
+		return
+	}
+	if err := service.ClearIndex(context.Background(), id); err != nil {
+		s.writeResponse(req.ID, nil, manageKnowledgeBaseRPCError(err))
+		return
+	}
+	s.writeResponse(req.ID, map[string]any{"cleared": true, "id": id}, nil)
+}
+
+// handleManageKnowledgeBasesSourcesList projects file-level provenance of the
+// active snapshot without exposing file contents.
+func (s *server) handleManageKnowledgeBasesSourcesList(req rpcRequest) {
+	id, rpcErr := manageKnowledgeBaseID(req)
+	if rpcErr != nil {
+		s.writeResponse(req.ID, nil, rpcErr)
+		return
+	}
+	service, err := s.manageKnowledgeBaseService()
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "knowledge_base_unavailable", err.Error(), nil))
+		return
+	}
+	sources, err := service.Sources(context.Background(), id)
+	if err != nil {
+		s.writeResponse(req.ID, nil, manageKnowledgeBaseRPCError(err))
+		return
+	}
+	s.writeResponse(req.ID, map[string]any{"sources": sources}, nil)
+}
+
+type manageKnowledgeBaseScheduleRequest struct {
+	ID      string `json:"id"`
+	Enabled *bool  `json:"enabled,omitempty"`
+}
+
+// handleManageKnowledgeBasesSchedule projects one knowledge base's scheduled
+// reindex state from its persisted cadence and the shared Cron store. It owns
+// no scheduler state: the Cron store remains the lifecycle owner for claims,
+// recovery, terminal status and next-run calculation, and this handler only
+// reads the namespaced job. When enabled is supplied it pauses or resumes by
+// persisting the base's enabled flag and resyncing its Cron projection, which
+// keeps pause durable across ACP restarts.
+func (s *server) handleManageKnowledgeBasesSchedule(req rpcRequest) {
+	var input manageKnowledgeBaseScheduleRequest
+	if err := json.Unmarshal(req.Params, &input); err != nil || strings.TrimSpace(input.ID) == "" {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32602, "invalid_params", "id is required", nil))
+		return
+	}
+	if s.settings == nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "knowledge_base_unavailable", "knowledge base runtime is unavailable", nil))
+		return
+	}
+	sessionDir := s.settings.GetSessionDir()
+	base, err := session.GetKnowledgeBase(context.Background(), sessionDir, strings.TrimSpace(input.ID))
+	if err != nil {
+		s.writeResponse(req.ID, nil, manageKnowledgeBaseRPCError(err))
+		return
+	}
+	if input.Enabled != nil && *input.Enabled != base.Enabled {
+		spec := base.KnowledgeBaseSpec
+		spec.Enabled = *input.Enabled
+		updated, err := session.UpdateKnowledgeBase(context.Background(), sessionDir, base.ID, spec)
+		if err != nil {
+			s.writeResponse(req.ID, nil, manageKnowledgeBaseRPCError(err))
+			return
+		}
+		base = updated
+		if err := s.syncKnowledgeBaseScheduleWithStore(cron.NewSQLiteCronStore(sessionDir), base); err != nil {
+			s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "knowledge_base_unavailable", fmt.Sprintf("sync knowledge base schedule: %v", err), nil))
+			return
+		}
+	}
+	schedule, _, err := normalizeKnowledgeBaseSchedule(base.Schedule, base.Enabled)
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32602, "knowledge_base_schedule_invalid", err.Error(), nil))
+		return
+	}
+	view := map[string]any{
+		"id":            base.ID,
+		"enabled":       base.Enabled,
+		"schedule":      schedule,
+		"rootAvailable": knowledgeBaseRootAvailable(base.RootDir),
+		"configured":    false,
+	}
+	store := cron.NewSQLiteCronStore(sessionDir)
+	if job, err := store.Get(knowledgeBaseCronJobID(base.ID)); err == nil {
+		view["configured"] = true
+		view["nextRun"] = job.NextRun
+		view["lastRun"] = job.LastRun
+		view["lastStatus"] = job.LastStatus
+		view["lastError"] = job.LastError
+		view["runCount"] = job.RunCount
+	} else if !strings.Contains(err.Error(), "not found") {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "knowledge_base_unavailable", fmt.Sprintf("load knowledge base schedule: %v", err), nil))
+		return
+	}
+	s.writeResponse(req.ID, view, nil)
 }

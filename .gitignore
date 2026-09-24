@@ -55,3 +55,6 @@ debug.log
 
 # Local audit/review scratch notes (not project documentation)
 /review.md
+
+# Local knowledge-base benchmark report (regenerate with `make knowledge-benchmark`)
+/knowledge-benchmark.json

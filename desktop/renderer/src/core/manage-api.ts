@@ -251,6 +251,32 @@ export interface KnowledgeBaseView {
   status?: string;
   indexing?: KnowledgeIndexProgressView;
 }
+// KnowledgeIndexRunView is the bounded projection of one canonical index Run
+// plus the snapshot statistics it produced. Desktop renders it; it never owns
+// run state.
+export interface KnowledgeIndexRunView {
+  runId: string;
+  snapshotId?: string;
+  status: string;
+  startedAt?: string;
+  finishedAt?: string;
+  errorSummary?: string;
+  fileCount: number;
+  chunkCount: number;
+  nodeCount: number;
+  edgeCount: number;
+  active?: boolean;
+}
+// KnowledgeSourceView is file-level provenance of the active snapshot. It never
+// carries file contents.
+export interface KnowledgeSourceView {
+  relativePath: string;
+  title?: string;
+  mediaType?: string;
+  status: string;
+  byteSize: number;
+  chunkCount: number;
+}
 export interface CronJobView {
   id: string;
   name?: string;
@@ -553,6 +579,60 @@ export function knowledgeBaseMcpName(baseId: string): string {
 // MCP persistence. Desktop only requests the desired knowledge-base state.
 export async function applyKnowledgeBaseMcp(baseId: string, enabled: boolean): Promise<void> {
   await invoke('mothx/manage/knowledge-bases/mcp/apply', { id: baseId, enabled });
+}
+
+// Index run history is an additive ACP projection of canonical Runs, gated by
+// the knowledgeRuns capability.
+export async function loadKnowledgeBaseRuns(id: string, limit = 20): Promise<KnowledgeIndexRunView[]> {
+  if (!hasFeature('knowledgeRuns')) return [];
+  const result = await guard('knowledgeRuns', () => invoke<{ runs?: KnowledgeIndexRunView[] }>('mothx/manage/knowledge-bases/runs/list', { id, limit }), null);
+  return result?.runs || [];
+}
+
+export async function loadKnowledgeBaseRun(id: string, runId: string): Promise<KnowledgeIndexRunView | undefined> {
+  if (!hasFeature('knowledgeRuns')) return undefined;
+  const result = await guard('knowledgeRuns', () => invoke<{ run?: KnowledgeIndexRunView }>('mothx/manage/knowledge-bases/runs/get', { id, runId }), null);
+  return result?.run;
+}
+
+// Source browsing projects file-level provenance only; the capability gate keeps
+// a Desktop build without the projection from calling it.
+export async function loadKnowledgeBaseSources(id: string): Promise<KnowledgeSourceView[]> {
+  if (!hasFeature('knowledgeSources')) return [];
+  const result = await guard('knowledgeSources', () => invoke<{ sources?: KnowledgeSourceView[] }>('mothx/manage/knowledge-bases/sources/list', { id }), null);
+  return result?.sources || [];
+}
+
+// Clear removes the active index while keeping configuration and the source
+// directory; the Runtime owns the operation.
+export async function clearKnowledgeBase(id: string): Promise<void> {
+  await invoke('mothx/manage/knowledge-bases/clear', { id });
+}
+
+// KnowledgeBaseScheduleView projects one base's scheduled reindex state from
+// the Runtime-owned cadence and the shared Cron store.
+export interface KnowledgeBaseScheduleView {
+  id: string;
+  enabled: boolean;
+  schedule: string;
+  configured: boolean;
+  rootAvailable: boolean;
+  nextRun?: string;
+  lastRun?: string;
+  lastStatus?: string;
+  lastError?: string;
+  runCount?: number;
+}
+
+export async function loadKnowledgeBaseSchedule(id: string): Promise<KnowledgeBaseScheduleView | undefined> {
+  if (!hasFeature('manageKnowledgeBases')) return undefined;
+  return guard('manageKnowledgeBases', () => invoke<KnowledgeBaseScheduleView>('mothx/manage/knowledge-bases/schedule', { id }), undefined);
+}
+
+// Pause/resume persists the base's enabled flag and resyncs its Cron
+// projection in the Runtime; Desktop never owns scheduler state.
+export async function setKnowledgeBaseScheduleEnabled(id: string, enabled: boolean): Promise<KnowledgeBaseScheduleView | undefined> {
+  return invoke<KnowledgeBaseScheduleView>('mothx/manage/knowledge-bases/schedule', { id, enabled });
 }
 
 // ---- skills ----
