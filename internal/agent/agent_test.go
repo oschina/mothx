@@ -2911,6 +2911,122 @@ func TestEmptyResponseRecoversAfterRetry(t *testing.T) {
 	}
 }
 
+// TestEmptyResponseRecoveryDoesNotConsumeIterationBudget guards the loop budget
+// semantics: an empty-response retry is recovery, not a new logical iteration.
+// With MaxIterations=1 the summarizer child (and any bounded agent) must survive
+// two empty responses plus a success instead of dying with
+// "max iterations (1) exceeded".
+func TestEmptyResponseRecoveryDoesNotConsumeIterationBudget(t *testing.T) {
+	p := &emptyRecoveringProvider{
+		models:     []*provider.Model{{ID: "model1", Name: "Model 1"}},
+		emptyTimes: 2, // first 2 empty, 3rd succeeds
+	}
+	cfg := AgentLoopConfig{
+		Config: Config{
+			Provider: p,
+			Model:    p.models[0],
+			Mode:     "agent",
+		},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     1, // recovery must not consume the logical turn budget
+	}
+	a := NewWithLoopConfig(cfg, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	var done *Event
+	for event := range a.Run(context.Background(), "test") {
+		if event.Type == EventDone {
+			ev := event
+			done = &ev
+		}
+		if event.Type == EventError {
+			t.Fatalf("unexpected EventError: %v", event.Error)
+		}
+	}
+	if done == nil {
+		t.Fatal("expected EventDone after empty-response recovery within a 1-iteration budget")
+	}
+	if p.callCount != 3 {
+		t.Fatalf("callCount = %d, want 3 (2 empty + 1 success)", p.callCount)
+	}
+}
+
+// TestOutputLimitEscalationDoesNotConsumeIterationBudget guards the same budget
+// semantics for output-limit escalation: a truncated first turn escalates
+// MaxTokens and retries without spending a logical iteration, so a
+// MaxIterations=1 agent can still recover.
+func TestOutputLimitEscalationDoesNotConsumeIterationBudget(t *testing.T) {
+	p := newScriptedProvider(
+		[]provider.StreamEvent{
+			{Type: provider.StreamStart},
+			{Type: provider.StreamTextDelta, TextDelta: "cut off"},
+			{Type: provider.StreamDone, StopReason: "length"},
+		},
+		[]provider.StreamEvent{
+			{Type: provider.StreamStart},
+			{Type: provider.StreamTextDelta, TextDelta: "complete answer"},
+			{Type: provider.StreamDone, StopReason: "stop"},
+		},
+	)
+	cfg := AgentLoopConfig{
+		Config: Config{
+			Provider: p,
+			Model:    p.models[0],
+			Mode:     "agent",
+		},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     1, // escalation is recovery, not a new logical turn
+	}
+	a := NewWithLoopConfig(cfg, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	var done *Event
+	for event := range a.Run(context.Background(), "test") {
+		if event.Type == EventDone {
+			ev := event
+			done = &ev
+		}
+		if event.Type == EventError {
+			t.Fatalf("unexpected EventError: %v", event.Error)
+		}
+	}
+	if done == nil {
+		t.Fatal("expected EventDone after output-limit escalation within a 1-iteration budget")
+	}
+	if p.calls != 2 {
+		t.Fatalf("provider calls = %d, want 2 (1 truncated + 1 escalated success)", p.calls)
+	}
+}
+
+// TestSummarizeRecoversFromEmptyResponse proves the compaction summarizer child
+// survives provider empty responses instead of failing the whole compaction with
+// "generate summary: max iterations (1) exceeded".
+func TestSummarizeRecoversFromEmptyResponse(t *testing.T) {
+	p := &emptyRecoveringProvider{
+		models:     []*provider.Model{{ID: "model1", Name: "Model 1"}},
+		emptyTimes: 2, // first 2 empty, 3rd produces the summary
+	}
+	a := NewWithLoopConfig(AgentLoopConfig{
+		Config: Config{
+			Provider: p,
+			Model:    p.models[0],
+			Mode:     "agent",
+		},
+		ToolExecutionMode: "sequential",
+		MaxIterations:     20,
+	}, tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox()))
+
+	summary, err := a.summarizeMessagesWithSubAgent(context.Background(),
+		[]provider.Message{provider.NewUserMessage("a long conversation")}, 1024)
+	if err != nil {
+		t.Fatalf("summarizeMessagesWithSubAgent failed: %v", err)
+	}
+	if summary != "done" {
+		t.Fatalf("summary = %q, want done", summary)
+	}
+	if p.callCount != 3 {
+		t.Fatalf("callCount = %d, want 3 (2 empty + 1 success)", p.callCount)
+	}
+}
+
 func TestStreamTimeoutRetriesBeyondPreviousLimit(t *testing.T) {
 	disableStreamRecoveryBackoff(t)
 	p := &timeoutRecoveringProvider{

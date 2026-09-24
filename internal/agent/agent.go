@@ -1058,7 +1058,14 @@ func (a *Agent) summarizeMessagesWithSubAgent(ctx context.Context, messages []pr
 		ThinkingLevel:      a.config.ThinkingLevel,
 		MaxTokens:          maxTokens,
 		CompactionSettings: ctxpkg.CompactionSettings{Enabled: false},
-	}, MaxIterations: 1, ToolExecutionMode: "sequential"}, registry)
+		// The summarizer is a single-purpose child: it must produce one text summary
+		// from the (possibly oversized) history. The iteration limit is a safety
+		// bound, not a functional budget — recovery retries (empty response,
+		// output-limit escalation/continuation, content rejection, transport stalls)
+		// do not consume logical iterations in the loop, so a limit of 3 comfortably
+		// covers one summary turn plus a stray phantom tool-call turn without ever
+		// letting the child drift into a loop.
+	}, MaxIterations: 3, ToolExecutionMode: "sequential"}, registry)
 	child.frozenSystemPrompt = a.frozenSystemPrompt
 	child.frozenToolDefs = nil
 	child.context.SystemPrompt = a.frozenSystemPrompt
@@ -1077,7 +1084,7 @@ func (a *Agent) summarizeMessagesWithSubAgent(ctx context.Context, messages []pr
 	}
 	result := strings.TrimSpace(summary.String())
 	if result == "" {
-		return "", fmt.Errorf("tool result summarization returned empty result")
+		return "", fmt.Errorf("summarization returned empty result")
 	}
 	return result, nil
 }
@@ -1688,13 +1695,16 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 					responsesReplayFallback = true
 					a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: retryCompatibilityStatus(1, 1, 0), RetryStatus: true, ResponseStateFailureClass: string(failureClass), RetryAttempt: 1, RetryMaxAttempts: 1})
 					a.sendEvent(ch, Event{Type: EventRetry, RetryAttempt: 1, RetryMaxAttempts: 1, RetryReason: "response_state"})
+					i-- // remote-state replay is recovery, not a new logical iteration
 					continue
 				}
 			}
 			if provider.IsContextOverflowError(streamErr) && a.tryRecoverContextOverflow(runCtx, ch, &contextOverflowRetried, streamErr) {
+				i-- // compaction/truncation recovery is not a new logical iteration
 				continue
 			}
 			if a.tryRecoverContentRejection(ch, &contentRejectionStage, textContent != "" || thinkContent != "" || len(toolCalls) > 0, streamErr) {
+				i-- // content-rejection recovery is not a new logical iteration
 				continue
 			}
 			if a.tryRetryStreamTimeout(runCtx, ch, &streamTimeoutRetries, maxStreamTimeoutRetries, textContent, thinkContent, streamErr) {
@@ -1733,6 +1743,7 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 					escalated = true
 					a.config.MaxTokens = nextMax
 					a.sendEvent(ch, Event{Type: EventRetry, RetryAttempt: 1, RetryMaxAttempts: 1, RetryMaxTokens: nextMax, RetryReason: "output_limit"})
+					i-- // output-limit escalation is recovery, not a new logical iteration
 					continue
 				}
 			}
@@ -1760,6 +1771,7 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 				a.context.Messages = append(a.context.Messages, recovery)
 				a.mu.Unlock()
 				a.sendEvent(ch, Event{Type: EventRetry, RetryAttempt: recoveryAttempts + 1, RetryMaxAttempts: maxOutputRecoveryAttempts + 1, RetryMaxTokens: params.MaxTokens, RetryReason: "continuation", RetryContinue: true})
+				i-- // output continuation is recovery, not a new logical iteration
 				continue
 			}
 			if len(toolCalls) == 0 {
@@ -1778,6 +1790,7 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 			if emptyResponseRetries <= maxEmptyResponseRetries {
 				a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: retryCompatibilityStatus(emptyResponseRetries, maxEmptyResponseRetries, 0), RetryStatus: true, RetryAttempt: emptyResponseRetries, RetryMaxAttempts: maxEmptyResponseRetries})
 				a.sendEvent(ch, Event{Type: EventRetry, RetryAttempt: emptyResponseRetries, RetryMaxAttempts: maxEmptyResponseRetries, RetryReason: "empty_response"})
+				i-- // empty-response retry is recovery, not a new logical iteration
 				continue
 			}
 			a.emitRunFinished(ch, TaskFailed, "empty_response", fmt.Errorf("provider returned an empty response %d times in a row", emptyResponseRetries), usage, nil)
