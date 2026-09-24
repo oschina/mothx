@@ -50,6 +50,12 @@
 - **火山引擎新增模型：`deepseek-v4.1-flash`**
   - `volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 三个火山引擎渠道均新增 `deepseek-v4.1-flash`，支持思考、1M 上下文窗口与文本/图片输入；标准版 MaxTokens 为 262K，两个套餐版为 100K。
 
+- **Gitee/Moark 模型顺序改为旗舰优先**
+  - `gitee` 与 `moark` 的内置模型列表改为旗舰模型优先（`deepseek-v4.1-flash`、`qwen3.8-flash`、`glm-5.3-flash`、`qwen3.8-max-0902`、`glm-5.3`、`kimi-k3`、`minimax-m3`），其余模型按上下文窗口（其次按最大输出）从大到小排列。由于预设顺序同时是未配置默认模型时的回退顺序，未配置的 `gitee`/`moark` 会话现在默认使用 `deepseek-v4.1-flash`，而非此前的 `auto`。
+
+- **小米 MiMo 渠道仅保留 V2.6 模型**
+  - `xiaomi` 提供商及三个 MiMo Token Plan 渠道（`xiaomi-token-plan-ams`、`xiaomi-token-plan-cn`、`xiaomi-token-plan-sgp`）现在仅保留 `mimo-v2.6-flash` 与 `mimo-v2.6-pro`，并将 `mimo-v2.6-flash` 放在首位。已移除 `mimo-v2.5`、`mimo-v2.5-pro` 与 `mimo-v2.5-pro-ultraspeed`，因此未配置的小米会话默认使用 `mimo-v2.6-flash`。
+
 - **新增渠道：B.AI（`bai`）**
   - 新增内置 `bai` 供应商预设，指向 OpenAI 兼容的 B.AI 聚合平台 `https://api.b.ai/v1`（API Key `${BAI_API_KEY}`），并支持按 baseUrl 自动识别厂商。模型清单与 `https://api.b.ai/v1/models` 实时接口一致——涵盖 OpenAI、Claude、Gemini、DeepSeek、Kimi、GLM、Qwen、MiniMax、混元与 MiMo 系列共 49 个聊天模型（已排除仅用于图像生成的 `gpt-image-2`），上下文窗口 / MaxTokens / 输入能力字段参考各模型公开规格填写。
 
@@ -167,6 +173,9 @@
   - 非法调用不再被当作「猜测的副作用」重放：Agent 会把它记录为失败的工具结果并注入一条瞬时恢复提示，使下一次请求重建合法的 JSON 参数，而不是假定已发生任何副作用。`marshalSessionEntry` 在修复后重试一次失败的 marshal，作为最后一道防线。
 
 ### 🔧 改进
+
+- **统一供应商/模型目录到 `docs/provider-model-list.md`**
+  - `docs/provider-model-list.md` 现在是唯一的供应商/模型参考：原先基于 OpenRouter 快照的 `docs/models.md` 已删除并合并进内置目录。该文件由 `docs/scripts/generate-models.py`（`make docs-models`）从 `internal/config/settings.go` 生成，覆盖全部内置供应商（API 协议、vendor、thinking 格式、BaseURL、API Key 环境变量）以及每个模型的上下文窗口、最大输出、推理、输入模态与价格，并保留 Quick Reference 与配置字段说明。
 
 - **模型预设统一新模型的初始默认值**
   - `config.PresetModelConfig` 现在是某个模型 ID 草稿默认值的唯一来源：优先采用当前提供商的配置，其次匹配内置目录中的同 ID 模型，最后回退到安全的通用默认值（256K 上下文、默认开启思考、文本输入）。模型发现、provider factory、TUI 认证设置、WebUI 提供商编辑器、Serve 模型目录与 ACP 提供商目录都会以相同方式为新录入的模型填充默认值，并通过 `modelDefaults` 把通用默认值投影给客户端，使客户端编辑器从同一组值起步。

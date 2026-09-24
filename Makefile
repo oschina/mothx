@@ -1,4 +1,4 @@
-.PHONY: help build build-all install test test-all test-ui test-desktop test-npm test-pypi fuzz lint fmt clean run serve docs-llms
+.PHONY: help build build-all install test test-all test-ui test-desktop test-npm test-pypi fuzz lint fmt clean run serve docs-llms docs-models
 .PHONY: ui-install ui-build ui-dev ui-preview
 .PHONY: desktop-runtime desktop-vendor desktop-build desktop-dev desktop-dist desktop-version-check desktop-dist-dev-mac desktop-dist-dev-win desktop-dist-dev-linux
 .PHONY: build-linux build-linux-loong64 build-linux-musl build-darwin build-windows
@@ -134,10 +134,14 @@ help:
 	@echo "  run            Build and run"
 	@echo "  serve          Build and start serve mode"
 	@echo "  docs-llms      Generate llms.txt indexes and full documentation files"
+	@echo "  docs-models    Generate docs/provider-model-list.md from the built-in provider presets"
 	@echo "  help           Show this help"
 
 docs-llms:
 	$(PYTHON) docs/scripts/generate-llms.py
+
+docs-models:
+	$(PYTHON) docs/scripts/generate-models.py
 
 # Build for current platform
 build:
