@@ -863,11 +863,61 @@ func TestIsDoubaoSeedModel(t *testing.T) {
 		{"doubao-seed-2-1-turbo-260628", true},
 		{"doubao-seed-evolving", true},
 		{"doubao-seed-2-0-lite", false},
-		{"deepseek-v4-pro", false},
 	}
 	for _, tc := range cases {
 		if got := isDoubaoSeedModel(tc.id); got != tc.want {
 			t.Errorf("isDoubaoSeedModel(%q) = %v, want %v", tc.id, got, tc.want)
+		}
+	}
+}
+
+func TestOpenAIThinkingFormatDeepSeekV41NoReasoningEffort(t *testing.T) {
+	bodyCh := make(chan string, 1)
+	p := newMockOpenAIProvider(t, []*provider.Model{
+		{ID: "deepseek-v4.1-flash", Reasoning: true},
+	}, "data: [DONE]\n", bodyCh, nil)
+	params := provider.ChatParams{
+		ModelID:       "deepseek-v4.1-flash",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingHigh,
+		Abort:         make(chan struct{}),
+	}
+	for range p.Chat(context.Background(), params) {
+	}
+
+	var req openAIRequest
+	select {
+	case body := <-bodyCh:
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatalf("unmarshal request body: %v\nbody: %s", err, body)
+		}
+	default:
+		t.Fatal("no request body captured")
+	}
+
+	if req.Thinking == nil || req.Thinking.Type != "enabled" {
+		t.Fatalf("thinking = %#v, want enabled", req.Thinking)
+	}
+	if req.ReasoningEffort != "" {
+		t.Fatalf("reasoning_effort = %q, want empty: vLLM-backed gateways reject reasoning_effort for DeepSeek V4.1 chat template", req.ReasoningEffort)
+	}
+}
+
+func TestIsDeepSeekV41Model(t *testing.T) {
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{"deepseek-v4.1-flash", true},
+		{"DeepSeek-V4.1-Flash", true},
+		{"deepseek-v4-1", true},
+		{"deepseek-v4-flash", false},
+		{"deepseek-v4-pro", false},
+		{"glm-5.3-flash", false},
+	}
+	for _, tc := range cases {
+		if got := isDeepSeekV41Model(tc.id); got != tc.want {
+			t.Errorf("isDeepSeekV41Model(%q) = %v, want %v", tc.id, got, tc.want)
 		}
 	}
 }

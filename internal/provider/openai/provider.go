@@ -295,6 +295,11 @@ func (p *Provider) IsReasoningDisabled() bool {
 // "kimi" = reasoning_effort with Kimi's low/high/max levels,
 // "doubao-seed" = reasoning_effort with minimal/low/medium/high (minimal = no thinking),
 // "xiaomi" = legacy thinking-only format.
+// "thinking-only" = thinking switch without any effort field. DeepSeek V4.1
+// models auto-select this format: their chat templates accept only a thinking
+// switch, and any OpenAI-style reasoning_effort string makes vLLM-backed
+// gateways fail with
+// "cannot unmarshal bool into ... chat_template_kwargs.reasoning_effort".
 func (p *Provider) SetThinkingFormat(format string) {
 	p.thinkingFormat = format
 }
@@ -512,7 +517,7 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 				if supportsReasoningEffort(model) {
 					reqBody.ReasoningEffort = doubaoSeedReasoningEffort(params.ThinkingLevel)
 				}
-			case "xiaomi":
+			case "thinking-only", "xiaomi":
 				reqBody.Thinking = &thinkingConfig{Type: "enabled"}
 			case "qwen":
 				enabled := true
@@ -938,6 +943,9 @@ func (p *Provider) thinkingFormatForModel(model *provider.Model) string {
 	if model != nil && model.Compat != nil && model.Compat.ThinkingFormat != "" {
 		return model.Compat.ThinkingFormat
 	}
+	if model != nil && isDeepSeekV41Model(model.ID) {
+		return "thinking-only"
+	}
 	if model != nil && isQwenModel(model.ID) {
 		return "qwen"
 	}
@@ -960,6 +968,11 @@ func isQwenModel(modelID string) bool {
 	return strings.Contains(lower, "qwen3.6") ||
 		strings.Contains(lower, "qwen3.7") ||
 		strings.Contains(lower, "qwen3.8")
+}
+
+func isDeepSeekV41Model(modelID string) bool {
+	lower := strings.ToLower(modelID)
+	return strings.Contains(lower, "deepseek-v4.1") || strings.Contains(lower, "deepseek-v4-1")
 }
 
 func isDoubaoSeedModel(modelID string) bool {
