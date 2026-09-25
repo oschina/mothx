@@ -89,6 +89,9 @@ const client = new AcpClient({
   onReverseRequest: (request) => {
     sendRendererEvent(deps, { type: 'reverse-request', id: request.id, method: request.method, params: request.params });
   },
+  onWorktreeStatus: (notification) => {
+    sendRendererEvent(deps, { type: 'worktree-status', worktree: notification.worktree });
+  },
   onLog: (line) => logDesktopEvent(line, 'acp'),
 });
 

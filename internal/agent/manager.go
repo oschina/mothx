@@ -53,6 +53,19 @@ type AgentManager struct {
 	Members  *MemberDefRegistry
 	Mailbox  *MemberMailbox
 	ExpertID string
+
+	// worktreeProvider materializes an isolated worktree for a child agent on
+	// demand, and worktreePerChild makes every sub-agent get one. The provider
+	// is installed by the runtime assembly layer; internal/agent never runs git.
+	worktreeProvider WorktreeProvider
+	worktreePerChild bool
+}
+
+// WorktreeProvider materializes (or reuses) an isolated worktree for baseCwd
+// and returns its directory. The Runtime implements it; internal/agent only
+// requests.
+type WorktreeProvider interface {
+	ResolveWorktree(baseCwd string, spec WorktreeSpec) (string, error)
 }
 
 // NewAgentManager creates a new agent manager.
@@ -93,6 +106,29 @@ func (m *AgentManager) SetMemberContext(members *MemberDefRegistry, mailbox *Mem
 	if m.factory != nil {
 		m.factory.memberMailbox = mailbox
 	}
+}
+
+// SetWorktreeProvider installs the Runtime-owned worktree resolver. It must be
+// set during assembly, before any sub-agent is created.
+func (m *AgentManager) SetWorktreeProvider(provider WorktreeProvider) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.worktreeProvider = provider
+	m.mu.Unlock()
+}
+
+// SetWorktreePerChild makes every sub-agent run in its own isolated worktree.
+// It is the policy-driven trigger; explicit requests (tool parameter or member
+// declaration) work regardless of this setting.
+func (m *AgentManager) SetWorktreePerChild(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.worktreePerChild = enabled
+	m.mu.Unlock()
 }
 
 // SetMemberWaitEnabled records whether this manager's lead may hold its run open
@@ -228,6 +264,36 @@ func (m *AgentManager) Register(a agentpkg.Agent) {
 // Create creates a new agent and registers it.
 // If opts.ParentID is set, validates the parent exists and is a top-level agent.
 func (m *AgentManager) Create(opts AgentOptions) (agentpkg.Agent, error) {
+	// Resolve an on-demand worktree before taking the manager lock: it may
+	// block on git and must not stall other manager operations.
+	if opts.Worktree != nil || opts.ParentID != "" {
+		m.mu.RLock()
+		provider := m.worktreeProvider
+		perChild := m.worktreePerChild
+		m.mu.RUnlock()
+		// An explicit request (tool parameter or member declaration) resolves for
+		// any child, including an ESM role with no parent. The per-child policy
+		// applies only to spawned sub-agents.
+		if opts.Worktree != nil || (perChild && opts.ParentID != "") {
+			if provider == nil {
+				return nil, fmt.Errorf("an isolated worktree was requested but no worktree provider is configured")
+			}
+			spec := WorktreeSpec{}
+			if opts.Worktree != nil {
+				spec = *opts.Worktree
+			}
+			dir, err := provider.ResolveWorktree(opts.WorkDir, spec)
+			if err != nil {
+				if !spec.Optional {
+					return nil, fmt.Errorf("resolve sub-agent worktree: %w", err)
+				}
+				// Optional: keep the inherited workspace and continue.
+			} else {
+				opts.WorkDir = dir
+			}
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

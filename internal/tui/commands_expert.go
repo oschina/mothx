@@ -279,6 +279,7 @@ func (a *App) refreshExpertAwareAgentManager() error {
 		Runtime: a.runtime, Provider: a.provider, ProviderName: a.activeProviderName(), Model: a.model,
 		Settings: a.settings, Allow: a.allow, MultiAgentEnabled: a.multiAgent,
 		DelegateEnabled: a.delegateMode, WorkflowsEnabled: a.workflows,
+		Worktree: defaultWorktreeManager(a.settings), WorktreePerChild: a.settings.WorktreePerChildSubagents(),
 	})
 	if err != nil {
 		return err

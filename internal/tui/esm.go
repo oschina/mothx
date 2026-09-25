@@ -12,6 +12,7 @@ import (
 	agentpkg "github.com/oschina/mothx/agent"
 	internalagent "github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/esm"
 	"github.com/oschina/mothx/internal/provider"
 )
@@ -526,6 +527,21 @@ func (a *App) runESMRoleAgentWithTimeout(ctx context.Context, eventCh chan<- int
 // adapter edge: only a team-bound worker continuation may act as the lead and
 // receive member scheduling. Critic, audit, recovery, and ordinary sessions
 // retain their isolated tool surface.
+// esmWorktreeSpec is the shared per-objective ESM worktree request: one worktree
+// per session objective, reused across every role. It is off unless
+// settings.json enables worktree.esm, and optional so a non-git workspace
+// degrades to the session workspace instead of failing the role.
+func (a *App) esmWorktreeSpec() *internalagent.WorktreeSpec {
+	if a == nil || a.settings == nil || !a.settings.WorktreeESMEnabled() {
+		return nil
+	}
+	sessionID := a.currentSessionID()
+	if sessionID == "" {
+		return nil
+	}
+	return &internalagent.WorktreeSpec{Name: "esm-" + sessionID, Reuse: true, Optional: true}
+}
+
 func (a *App) runESMRoleAgentWithTimeoutForRole(ctx context.Context, eventCh chan<- internalagent.Event, manager *internalagent.AgentManager, role esm.Role, id, workDir, mode string, toolFilter []string, maxIterations int, task string, timeout time.Duration) (esmRoleResult, error) {
 	if a.esmRoleRunner != nil {
 		return a.esmRoleRunner(ctx, eventCh, manager, id, workDir, mode, toolFilter, maxIterations, task)
@@ -538,6 +554,7 @@ func (a *App) runESMRoleAgentWithTimeoutForRole(ctx context.Context, eventCh cha
 		IsSubAgent:    true,
 		Mode:          mode,
 		WorkDir:       workDir,
+		Worktree:      a.esmWorktreeSpec(),
 		Tools:         toolFilter,
 		MaxIterations: maxIterations,
 		MultiAgent:    &teamWorker,
@@ -727,4 +744,14 @@ func lastPublicAssistantResponse(a agentpkg.Agent) string {
 		return ""
 	}
 	return esm.FinalAssistantResponse(a.GetMessages())
+}
+
+// defaultWorktreeManager builds the shared Runtime worktree manager from
+// settings, or nil when worktrees are disabled.
+func defaultWorktreeManager(settings *config.Settings) *agentruntime.WorktreeManager {
+	mgr, err := agentruntime.NewDefaultWorktreeManager(settings)
+	if err != nil {
+		return nil
+	}
+	return mgr
 }

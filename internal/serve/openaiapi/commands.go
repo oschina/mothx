@@ -629,6 +629,8 @@ func (s *Server) newAgentManagerForSession(sess *APISession) *agent.AgentManager
 		Runtime: sess.Runtime, Provider: s.provider, Model: s.model, Settings: runtimeSettings,
 		ProviderName: s.providerName, Allow: s.getAllow(), MultiAgentEnabled: true,
 		DelegateEnabled: sess.DelegateMode || s.cfg.EnableDelegate, WorkflowsEnabled: sess.Workflows,
+		Worktree:         s.worktreeManagerForSession(runtimeSettings),
+		WorktreePerChild: runtimeSettings.WorktreePerChildSubagents(),
 	})
 	if err != nil {
 		return nil

@@ -131,6 +131,20 @@ func NewAgentFactoryWithOptions(
 }
 
 // AgentOptions specifies per-agent overrides.
+// WorktreeSpec requests an isolated worktree workspace for a child agent. The
+// Runtime resolves it; internal/agent never runs git itself.
+type WorktreeSpec struct {
+	// Name is the requested worktree name (empty = derive one).
+	Name string
+	// Reuse returns an existing registered worktree with the same name instead
+	// of creating a new one, so a workstream (for example an ESM objective's
+	// roles) can share a single worktree.
+	Reuse bool
+	// Optional makes a failed resolution fall back to the inherited workspace
+	// instead of failing the agent (for example ESM in a non-git directory).
+	Optional bool
+}
+
 type AgentOptions struct {
 	ID       agentpkg.AgentID
 	ParentID agentpkg.AgentID
@@ -146,6 +160,10 @@ type AgentOptions struct {
 	Model             *provider.Model
 	WorkDir           string
 	Tools             []string // optional: tool filter
+	// Worktree requests an isolated worktree workspace for this child agent.
+	// The Runtime resolves it before construction and replaces WorkDir with the
+	// materialized directory; internal/agent never runs git itself.
+	Worktree *WorktreeSpec
 	// ExcludeTools removes tools from the resolved child registry after the
 	// standard mode/tool filtering. Used for children whose callers cannot answer
 	// a tool's interactive contract (for example a blocking delegate child that

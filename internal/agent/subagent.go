@@ -19,6 +19,28 @@ type SubAgentSpawnTool struct {
 	manager *AgentManager
 }
 
+// parseWorktreeRequest interprets the sub-agent worktree parameter. It accepts a
+// boolean (true = create with a derived name) or a string ("true" = create, a
+// name = create named, ""/"false"/"none"/"off" = inherit the parent workspace).
+func parseWorktreeRequest(value any) *WorktreeSpec {
+	switch v := value.(type) {
+	case bool:
+		if v {
+			return &WorktreeSpec{}
+		}
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "", "false", "none", "off":
+			return nil
+		case "true":
+			return &WorktreeSpec{}
+		default:
+			return &WorktreeSpec{Name: strings.TrimSpace(v)}
+		}
+	}
+	return nil
+}
+
 // NewSubAgentSpawnTool creates a new subagent_spawn tool.
 func NewSubAgentSpawnTool(m *AgentManager) *SubAgentSpawnTool {
 	return &SubAgentSpawnTool{manager: m}
@@ -57,7 +79,8 @@ func (t *DelegateSubAgentTool) Parameters() json.RawMessage {
 		"properties": {
 			"task": {"type": "string", "description": "A specific, bounded task description. Must include: (1) the exact goal or question, (2) relevant file paths or search patterns, (3) expected output format, (4) stop conditions. Example: 'Find all Go files in internal/serve/openaiapi/ that import net/http but do not call http.Error. Return file paths with line numbers.'"},
 			"mode": {"type": "string", "enum": ["plan", "agent", "yolo", "os"], "description": "Sub-agent execution mode. Defaults to the parent agent's mode; if unavailable, falls back to 'yolo'. 'agent' is balanced, 'yolo' is unrestricted, and 'plan' is read-only analysis."},
-			"work_dir": {"type": "string", "description": "Working directory for the sub-agent (defaults to current directory). Set explicitly if the task targets a different directory."},
+			"work_dir": {"type": "string", "description": "Working directory for the sub-agent (defaults to the parent workspace). Set explicitly if the task targets a different directory."},
+			"worktree": {"type": "string", "description": "Run the delegated sub-agent in its own isolated git worktree. Pass \"true\" to create one, or a worktree name. Defaults to inheriting the parent workspace."},
 			"tools": {"type": "array", "items": {"type": "string"}, "description": "Restrict sub-agent to specific tools (empty = all tools except nested sub-agent/delegate). Use to narrow scope, e.g. ['read', 'grep', 'find'] for investigation-only tasks."},
 			"max_iterations": {"type": "integer", "default": 50, "description": "Maximum tool-call iterations. Lower for simple tasks (10-20), higher for complex exploration (50-100)."},
 			"system_prompt_extra": {"type": "string", "description": "Additional context or constraints for the sub-agent. Use to pass domain knowledge, coding conventions, or specific instructions not in the task description."}
@@ -90,6 +113,12 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 		}
 	}
 	workDir, _ := params["work_dir"].(string)
+	if strings.TrimSpace(workDir) == "" {
+		if parent, ok := WorkDirFromContext(ctx); ok {
+			workDir = parent
+		}
+	}
+	worktreeReq := parseWorktreeRequest(params["worktree"])
 	maxIter := 50
 	if v, ok := params["max_iterations"].(float64); ok && v > 0 {
 		maxIter = int(v)
@@ -119,6 +148,7 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 		ParentID: parentID,
 		Mode:     mode,
 		WorkDir:  workDir,
+		Worktree: worktreeReq,
 		Tools:    toolFilter,
 		// A blocking delegate's caller is parked inside this tool call, so nobody
 		// could ever answer a child question. Remove the tool instead of letting
@@ -250,7 +280,8 @@ func (t *SubAgentSpawnTool) Parameters() json.RawMessage {
 			"task": {"type": "string", "description": "Focused task for the sub-agent, including scope, relevant paths/context, expected artifact, and stop conditions"},
 			"member": {"type": "string", "description": "Member definition id from the bound expert team roster (see system prompt roster). Resolves the member persona and capability overrides."},
 			"mode": {"type": "string", "enum": ["plan", "agent", "yolo", "os"], "description": "Sub-agent execution mode. Defaults to the parent agent's mode; if unavailable, falls back to 'yolo'."},
-			"work_dir": {"type": "string", "description": "Working directory for the sub-agent (defaults to current)"},
+			"work_dir": {"type": "string", "description": "Working directory for the sub-agent (defaults to the parent workspace)"},
+			"worktree": {"type": "string", "description": "Run this sub-agent in its own isolated git worktree. Pass \"true\" to create one, or a worktree name. Defaults to inheriting the parent workspace."},
 			"tools": {"type": "array", "items": {"type": "string"}, "description": "Allowed tools (empty = all)"},
 			"max_iterations": {"type": "integer", "default": 50, "description": "Maximum iterations"},
 			"system_prompt_extra": {"type": "string", "description": "Extra context for the sub-agent"}
@@ -302,11 +333,26 @@ func (t *SubAgentSpawnTool) Execute(ctx context.Context, params map[string]any) 
 	}
 
 	workDir, _ := params["work_dir"].(string)
+	if strings.TrimSpace(workDir) == "" {
+		if parent, ok := WorkDirFromContext(ctx); ok {
+			workDir = parent
+		}
+	}
 	if memberDef != nil && memberDef.WorkDir != "" {
 		if workDir != "" && workDir != memberDef.WorkDir {
 			return tools.ToolResult{}, fmt.Errorf("member %q work_dir is fixed to %q", memberID, memberDef.WorkDir)
 		}
 		workDir = memberDef.WorkDir
+	}
+
+	worktreeReq := parseWorktreeRequest(params["worktree"])
+	if memberDef != nil && memberDef.Worktree {
+		if memberDef.WorkDir != "" {
+			return tools.ToolResult{}, fmt.Errorf("member %q declares both work_dir and worktree", memberID)
+		}
+		if worktreeReq == nil {
+			worktreeReq = &WorktreeSpec{}
+		}
 	}
 
 	maxIter := 0
@@ -376,6 +422,7 @@ func (t *SubAgentSpawnTool) Execute(ctx context.Context, params map[string]any) 
 		MemberRole:        memberRole,
 		Mode:              mode,
 		WorkDir:           workDir,
+		Worktree:          worktreeReq,
 		Tools:             toolFilter,
 		SystemPromptExtra: extra,
 		MaxIterations:     maxIter,

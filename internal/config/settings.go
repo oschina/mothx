@@ -45,6 +45,7 @@ type Settings struct {
 	Theme                string                     `json:"theme,omitempty"`
 	Retry                RetrySettings              `json:"retry"`
 	Approval             ApprovalSettings           `json:"approval"`
+	Worktree             WorktreeSettings           `json:"worktree,omitempty"`
 	Maintenance          *MaintenanceSettings       `json:"maintenance,omitempty"`
 	UpdateCheck          *bool                      `json:"updateCheck,omitempty"` // nil/true = check npm for updates on startup, false = disabled
 }
@@ -471,10 +472,43 @@ func (s SandboxSettings) Options() sandbox.Options {
 	}
 }
 
+// EffectiveLevel resolves the configured sandbox level, defaulting to direct
+// execution when the sandbox is disabled.
+func (s SandboxSettings) EffectiveLevel() sandbox.Level {
+	if !s.Enabled {
+		return sandbox.LevelNone
+	}
+	if s.Level == "strict" {
+		return sandbox.LevelStrict
+	}
+	return sandbox.LevelStandard
+}
+
 type RetrySettings struct {
 	Enabled     bool `json:"enabled"`
 	MaxRetries  int  `json:"maxRetries"`
 	BaseDelayMs int  `json:"baseDelayMs"`
+}
+
+// WorktreeSettings configures managed git worktrees (see
+// docs/proposal/git-worktree-workspaces-proposal.md). Every field is optional
+// and falls back to the documented default; no existing field meaning changes.
+type WorktreeSettings struct {
+	// Enabled gates creating new worktrees. nil/true = enabled, false = only
+	// list/remove/reset existing worktrees.
+	Enabled *bool `json:"enabled,omitempty"`
+	// BranchPrefix is the default branch prefix for created worktrees.
+	BranchPrefix string `json:"branchPrefix,omitempty"`
+	// StartCommand is the default command run after a worktree is created or
+	// reset. Empty means no start command runs.
+	StartCommand string `json:"startCommand,omitempty"`
+	// PerChildSubagents makes every sub-agent run in its own isolated worktree
+	// (the policy-driven trigger). Explicit per-spawn requests work regardless.
+	PerChildSubagents bool `json:"perChildSubagents,omitempty"`
+	// ESM makes ESM worker/critic/audit roles share one isolated worktree per
+	// objective. Off by default; falls back to the session workspace outside a
+	// git repository.
+	ESM bool `json:"esm,omitempty"`
 }
 
 type ApprovalSettings struct {
@@ -1117,6 +1151,7 @@ func DefaultSettings() *Settings {
 		SessionDir: platform.SessionDir(),
 		Theme:      "dark",
 		Retry:      RetrySettings{Enabled: true, MaxRetries: 5, BaseDelayMs: 3000},
+		Worktree:   WorktreeSettings{Enabled: boolPtr(true), BranchPrefix: "mothx"},
 		Approval: ApprovalSettings{
 			BashWhitelist:      []string{"go ", "make ", "git ", "npm ", "yarn ", "node ", "python ", "pip "},
 			ConfirmBeforeWrite: boolPtr(true),
@@ -1891,6 +1926,43 @@ func (s *Settings) GetSessionDir() string {
 	return platform.SessionDir()
 }
 
+// IsWorktreeEnabled reports whether creating new worktrees is allowed. Absent
+// configuration means enabled.
+func (s *Settings) IsWorktreeEnabled() bool {
+	if s == nil || s.Worktree.Enabled == nil {
+		return true
+	}
+	return *s.Worktree.Enabled
+}
+
+// WorktreeBranchPrefix returns the default branch prefix for created
+// worktrees, falling back to "mothx".
+func (s *Settings) WorktreeBranchPrefix() string {
+	if s == nil || strings.TrimSpace(s.Worktree.BranchPrefix) == "" {
+		return "mothx"
+	}
+	return strings.TrimSpace(s.Worktree.BranchPrefix)
+}
+
+// WorktreeStartCommand returns the default start command for created worktrees.
+func (s *Settings) WorktreeStartCommand() string {
+	if s == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.Worktree.StartCommand)
+}
+
+// WorktreePerChildSubagents reports whether every sub-agent should run in its
+// own isolated worktree.
+func (s *Settings) WorktreePerChildSubagents() bool {
+	return s != nil && s.Worktree.PerChildSubagents
+}
+
+// WorktreeESMEnabled reports whether ESM roles should share one isolated
+// worktree per objective.
+func (s *Settings) WorktreeESMEnabled() bool {
+	return s != nil && s.Worktree.ESM
+}
 func (s *Settings) GetGlobalSkillsDir() string {
 	if s.SkillsDir != "" {
 		return platform.ExpandHome(s.SkillsDir)

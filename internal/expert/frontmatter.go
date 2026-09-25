@@ -102,6 +102,8 @@ func parseFrontmatterFields(lines []string, fm *Frontmatter) error {
 			fm.Mode = unquote(value)
 		case "work_dir":
 			fm.WorkDir = unquote(value)
+		case "worktree":
+			fm.Worktree = strings.EqualFold(unquote(value), "true")
 		case "tools":
 			fm.Tools = parseInlineList(value)
 		case "max_iterations":

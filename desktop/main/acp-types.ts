@@ -190,6 +190,19 @@ export interface SessionEvent {
   [key: string]: unknown;
 }
 
+// mothx/worktree/status extension payload: the additive projection of a
+// canonical Runtime worktree lifecycle event (pending|ready|failed|removed).
+export interface WorktreeStatusNotification {
+  worktree?: {
+    id?: string;
+    name?: string;
+    branch?: string;
+    directory?: string;
+    status?: string;
+    error?: string;
+  };
+}
+
 export interface PermissionToolCall {
   toolCallId: string;
   title?: string;

@@ -301,6 +301,9 @@ func loadAgentDef(src bundleSource, id string) (*AgentDef, string, error) {
 	if fm.MaxIterations < 0 {
 		return nil, fmt.Sprintf("agents/%s: max_iterations 不能为负数（%d）", fileName, fm.MaxIterations), nil
 	}
+	if fm.Worktree && strings.TrimSpace(fm.WorkDir) != "" {
+		return nil, fmt.Sprintf("agents/%s: work_dir 与 worktree 不能同时声明", fileName), nil
+	}
 	def := &AgentDef{
 		ID:          id,
 		Emoji:       fm.Emoji,

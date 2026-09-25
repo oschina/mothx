@@ -81,6 +81,9 @@ type Frontmatter struct {
 	Tools         []string
 	MaxIterations int
 	WorkDir       string
+	// Worktree marks a member persona that must run in its own isolated
+	// worktree. It is mutually exclusive with WorkDir.
+	Worktree bool
 }
 
 // AgentDef is one parsed persona definition (agents/<ID>.md).

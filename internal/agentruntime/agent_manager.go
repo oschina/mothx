@@ -22,6 +22,11 @@ type AgentManagerOptions struct {
 	MultiAgentEnabled bool
 	DelegateEnabled   bool
 	WorkflowsEnabled  bool
+	// Worktree, when set, lets sub-agents run in an on-demand isolated worktree
+	// (tool parameter or member declaration). WorktreePerChild additionally makes
+	// every sub-agent get its own worktree (policy trigger).
+	Worktree         *WorktreeManager
+	WorktreePerChild bool
 }
 
 // NewAgentManager constructs an AgentFactory and AgentManager using the shared
@@ -135,6 +140,12 @@ func NewAgentManager(opts AgentManagerOptions) (*agent.AgentManager, error) {
 	if mailbox != nil || expertBinding != nil {
 		manager.SetMemberContext(members, mailbox, expertID)
 		manager.SetMemberWaitEnabled(teamBound)
+	}
+	if opts.Worktree != nil {
+		manager.SetWorktreeProvider(NewWorktreeProviderAdapter(opts.Worktree))
+	}
+	if opts.WorktreePerChild {
+		manager.SetWorktreePerChild(true)
 	}
 	return manager, nil
 }

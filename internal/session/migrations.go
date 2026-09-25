@@ -10,7 +10,7 @@ import (
 	"github.com/oschina/mothx/internal/dao"
 )
 
-const currentSchemaVersion = 43
+const currentSchemaVersion = 44
 
 type schemaMigration struct {
 	version int
@@ -607,6 +607,35 @@ var schemaMigrations = []schemaMigration{
 			return nil
 		}
 		return addColumnIfMissing(tx, "delivery_operations", "retry_window_started_at", "TEXT")
+	}},
+	// worktrees is the Runtime-owned registry of managed git worktrees. It is
+	// the identity/ownership/authorization authority for a worktree; git stays
+	// the content authority (existence, branch, cleanliness). See
+	// docs/proposal/git-worktree-workspaces-proposal.md.
+	{version: 44, name: "create_worktrees", apply: func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS worktrees (
+			id TEXT PRIMARY KEY,
+			repository_root TEXT NOT NULL,
+			directory TEXT NOT NULL,
+			name TEXT NOT NULL,
+			branch TEXT,
+			project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+			start_command TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`); err != nil {
+			return fmt.Errorf("create worktrees table: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_worktrees_directory ON worktrees(directory)`); err != nil {
+			return fmt.Errorf("index worktrees directory: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_worktrees_repo ON worktrees(repository_root)`); err != nil {
+			return fmt.Errorf("index worktrees repo: %w", err)
+		}
+		_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_worktrees_project ON worktrees(project_id, updated_at)`)
+		return err
 	}},
 }
 

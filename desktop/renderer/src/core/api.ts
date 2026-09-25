@@ -25,7 +25,19 @@ export type RendererEvent =
   | { type: 'state'; snapshot: ConnectionState }
   | { type: 'session-update'; sessionId: string; update: SessionUpdatePayload }
   | { type: 'session-event'; event: SessionEventPayload }
-  | { type: 'reverse-request'; id: number | string; method: string; params: unknown };
+  | { type: 'reverse-request'; id: number | string; method: string; params: unknown }
+  | { type: 'worktree-status'; worktree: WorktreeStatusPayload };
+
+// WorktreeStatusPayload is the additive projection of a canonical Runtime
+// worktree lifecycle event (pending|ready|failed|removed).
+export interface WorktreeStatusPayload {
+  id?: string;
+  name?: string;
+  branch?: string;
+  directory?: string;
+  status?: string;
+  error?: string;
+}
 
 export interface SessionUpdatePayload {
   sessionUpdate: string;

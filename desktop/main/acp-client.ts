@@ -9,6 +9,7 @@ import type {
   RpcMessage,
   SessionEvent,
   SessionUpdateNotification,
+  WorktreeStatusNotification,
 } from './acp-types';
 
 export const ACP_PROTOCOL_VERSION = 1;
@@ -34,6 +35,7 @@ export interface AcpClientHandlers {
   onState?: (snapshot: AcpClientSnapshot) => void;
   onSessionUpdate?: (notification: SessionUpdateNotification) => void;
   onSessionEvent?: (event: SessionEvent) => void;
+  onWorktreeStatus?: (notification: WorktreeStatusNotification) => void;
   onReverseRequest?: (request: ReverseRequest) => void;
   onLog?: (line: string) => void;
 }
@@ -393,6 +395,13 @@ export class AcpClient {
     if (method === '_mothx/session_event') {
       const event = params as SessionEvent;
       if (event && typeof event.sessionId === 'string') this.handlers.onSessionEvent?.(event);
+      return;
+    }
+    if (method === 'mothx/worktree/status') {
+      const notification = params as WorktreeStatusNotification;
+      if (notification && notification.worktree && typeof notification.worktree.directory === 'string') {
+        this.handlers.onWorktreeStatus?.(notification);
+      }
       return;
     }
     this.handlers.onLog?.(`acp notification ignored: ${method}`);

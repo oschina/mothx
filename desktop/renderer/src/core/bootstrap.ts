@@ -8,6 +8,7 @@ import { refreshProjects, refreshSessions } from './sessions';
 import { emit, state } from './state';
 import { applyHomeBackground, applyTheme } from './theme';
 import { applyReverseRequest, applySessionEvent, applySessionUpdate } from './transcript';
+import { applyWorktreeStatus } from './worktrees';
 
 export function handleEvent(event: RendererEvent): void {
   switch (event.type) {
@@ -34,6 +35,10 @@ export function handleEvent(event: RendererEvent): void {
       return;
     case 'reverse-request':
       applyReverseRequest(event.id, event.method, (event.params || {}) as Record<string, unknown>);
+      emit();
+      return;
+    case 'worktree-status':
+      applyWorktreeStatus(event.worktree);
       emit();
       return;
     default:

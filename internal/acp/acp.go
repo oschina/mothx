@@ -165,6 +165,11 @@ type server struct {
 	workspaceCwd                   string
 	workspaceAdditionalDirectories []string
 
+	// worktrees is the shared Runtime-owned worktree manager. It is the
+	// identity/authorization authority for managed git worktrees; the ACP layer
+	// only projects its methods and events.
+	worktrees *agentruntime.WorktreeManager
+
 	nextID int64
 	r      *bufio.Reader
 	w      io.Writer
@@ -1101,6 +1106,7 @@ func Run(opts RunOptions) (runErr error) {
 
 	sbMgr := sandbox.NewManagerWithOptions(cwd, settings.Sandbox.Options())
 	sbEnabled := opts.Sandbox || settings.Sandbox.Enabled
+	worktreeSandboxLevel := sandbox.LevelNone
 	if !sbEnabled {
 		_ = sbMgr.SetLevel(sandbox.LevelNone)
 	} else {
@@ -1111,11 +1117,29 @@ func Run(opts RunOptions) (runErr error) {
 		if err := sbMgr.SetLevel(level); err != nil {
 			return &startupError{Code: "config_invalid", Message: "sandbox is unavailable", Fix: "Disable strict sandbox or install bwrap", Cause: err}
 		}
+		worktreeSandboxLevel = level
 		if err := sbMgr.FallbackError(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: sandbox unavailable; using direct execution: %v\n", err)
 		}
 	}
 	srv.sbMgr = sbMgr
+
+	// The worktree manager needs the resolved sandbox level so a worktree start
+	// command runs under the same policy as the session sandbox.
+	worktreeMgr, err := agentruntime.NewWorktreeManager(agentruntime.WorktreeManagerOptions{
+		SessionDir:          settings.GetSessionDir(),
+		BranchPrefix:        settings.WorktreeBranchPrefix(),
+		DefaultStartCommand: settings.WorktreeStartCommand(),
+		SandboxOptions:      settings.Sandbox.Options(),
+		SandboxLevel:        &worktreeSandboxLevel,
+		EventSink: agentruntime.WorktreeEventSinkFunc(func(event agentruntime.WorktreeEvent) {
+			srv.notifyWorktreeStatus(event)
+		}),
+	})
+	if err != nil {
+		return fmt.Errorf("initialize worktree manager: %w", err)
+	}
+	srv.worktrees = worktreeMgr
 
 	resources, err := agentruntime.LoadContextResources(settings, cwd, opts.Workflows, opts.Browser)
 	if err != nil {
@@ -1137,6 +1161,7 @@ func Run(opts RunOptions) (runErr error) {
 			Runtime: srv.runtime, Provider: p, Model: model, Settings: settings,
 			ProviderName: srv.providerName, Allow: srv.allow, MultiAgentEnabled: true,
 			DelegateEnabled: opts.Delegate, WorkflowsEnabled: opts.Workflows,
+			Worktree: srv.worktrees, WorktreePerChild: settings.WorktreePerChildSubagents(),
 		})
 		if err != nil {
 			return fmt.Errorf("create agent manager: %w", err)
@@ -1245,6 +1270,14 @@ func Run(opts RunOptions) (runErr error) {
 			srv.handleProjectsDelete(req)
 		case "mothx/workspace/extend":
 			srv.handleWorkspaceExtend(req)
+		case "mothx/worktree/list":
+			srv.handleWorktreeList(req)
+		case "mothx/worktree/create":
+			srv.handleWorktreeCreate(req)
+		case "mothx/worktree/remove":
+			srv.handleWorktreeRemove(req)
+		case "mothx/worktree/reset":
+			srv.handleWorktreeReset(req)
 		case "mothx/attachment/fetch":
 			srv.handleAttachmentFetch(req)
 		case "mothx/attachment/list":
@@ -1396,6 +1429,7 @@ func (s *server) registerTeamExpertTools(runtime *agentruntime.SessionRuntime, r
 		created, err := agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
 			Runtime: runtime, Provider: p, ProviderName: providerName, Model: model,
 			Settings: s.settings, Allow: s.allow, MultiAgentEnabled: true,
+			Worktree: s.worktrees, WorktreePerChild: s.settings.WorktreePerChildSubagents(),
 		})
 		if err != nil {
 			return nil, err
@@ -1613,6 +1647,7 @@ func (s *server) handleInitialize(req rpcRequest) {
 		s.workspaceAdditionalDirectories = workspaceAdditionalDirectories
 	}
 	s.mu.Unlock()
+	s.reauthorizeWorktrees()
 	meta := map[string]any{
 		mothxExtensionNamespace: map[string]any{
 			"minClientProtocol":  1,
@@ -1671,8 +1706,17 @@ func (s *server) handleInitialize(req rpcRequest) {
 				// file-level source browsing. Desktop gates their panels on these keys.
 				"knowledgeRuns",
 				"knowledgeSources",
+				// Additive worktree management projections (mothx/worktree/*). The
+				// keys are appended below only when creation stays enabled, so
+				// worktree.enabled=false hides the controls instead of letting a
+				// client discover a rejected method.
 			},
 		},
+	}
+	if caps, ok := meta[mothxExtensionNamespace].(map[string]any); ok && s.settings != nil && s.settings.IsWorktreeEnabled() {
+		if base, ok := caps["features"].([]string); ok {
+			caps["features"] = append(base, "worktrees", "worktreeReset")
+		}
 	}
 	result := initializeResult{
 		ProtocolVersion: protocolVersion,
@@ -1916,16 +1960,28 @@ func (s *server) resolveWorkspace(meta requestMeta, requestedCwd string, request
 		if requestedCwd == "" {
 			return "", nil, fmt.Errorf("workspace cwd is required")
 		}
-		if _, ok := allowed[requestedCwd]; !ok {
+		if _, ok := allowed[requestedCwd]; !ok && !s.workspaceRootAuthorized(requestedCwd, allowed) {
 			return "", nil, fmt.Errorf("cwd is outside the negotiated workspace")
 		}
 		for _, directory := range normalizedAdditional {
-			if _, ok := allowed[directory]; !ok {
+			if _, ok := allowed[directory]; !ok && !s.workspaceRootAuthorized(directory, allowed) {
 				return "", nil, fmt.Errorf("additional directory is outside the negotiated workspace: %s", directory)
 			}
 		}
 	}
 	return requestedCwd, normalizedAdditional, nil
+}
+
+// workspaceRootAuthorized reports whether dir is inside the negotiated window
+// or is a Runtime-granted worktree directory. Worktrees are a distinct
+// authorization source: they are created by the Runtime, do not consume the
+// client's additional-directory budget, and are re-authorized from the registry
+// on restart.
+func (s *server) workspaceRootAuthorized(dir string, allowed map[string]struct{}) bool {
+	if _, ok := allowed[dir]; ok {
+		return true
+	}
+	return s != nil && s.worktrees != nil && s.worktrees.IsAuthorized(dir)
 }
 
 func acpInitialized(s *server) bool {

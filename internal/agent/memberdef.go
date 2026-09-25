@@ -17,6 +17,9 @@ type MemberDef struct {
 	Tools         []string
 	MaxIterations int
 	WorkDir       string
+	// Worktree marks a member that must run in its own isolated worktree. It is
+	// mutually exclusive with a fixed WorkDir.
+	Worktree bool
 }
 
 // MemberDefRegistry is an insertion-ordered, concurrency-safe lookup table of

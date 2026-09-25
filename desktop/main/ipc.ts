@@ -13,7 +13,8 @@ export type RendererEvent =
   | { type: 'state'; snapshot: AcpClientSnapshot }
   | { type: 'session-update'; sessionId: string; update: unknown }
   | { type: 'session-event'; event: unknown }
-  | { type: 'reverse-request'; id: number | string; method: string; params: unknown };
+  | { type: 'reverse-request'; id: number | string; method: string; params: unknown }
+  | { type: 'worktree-status'; worktree: unknown };
 
 export interface IpcDeps {
   client: AcpClient;

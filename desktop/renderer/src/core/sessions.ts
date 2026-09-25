@@ -22,6 +22,7 @@ import { sortTaskSessions } from './task-tree';
 import { applyTranscriptPage, clearTranscript } from './transcript';
 import { confirmDanger, promptModal, toast } from './ui-host';
 import { switchView } from './views';
+import { createWorktree, waitForWorktree, worktreeSupported } from './worktrees';
 
 const RECENT_SESSION_LIMIT = 8;
 const TRANSCRIPT_PAGE_SIZE = 40;
@@ -360,6 +361,53 @@ export async function chooseWorkingDirectory(): Promise<boolean> {
   state.dirConfirmed = true;
   emit();
   return true;
+}
+
+// createIsolatedWorktree materializes an isolated git worktree on demand and
+// makes it the workspace of the active session (when idle) or of the next new
+// session. The Runtime authorizes the directory; the renderer waits for the
+// canonical ready/failed notification before switching to it.
+export async function createIsolatedWorktree(): Promise<void> {
+  if (!worktreeSupported()) return;
+  const baseCwd = state.activeSessionCwd || newSessionWorkspace();
+  if (!hasWorkingDirectory(baseCwd)) {
+    toast(t('composer.worktreeFailed', { e: 'workspace is not ready' }));
+    return;
+  }
+  const targetSession = state.activeSessionId;
+  if (targetSession && state.promptInFlight) {
+    toast(t('prompt.busy'));
+    return;
+  }
+  try {
+    const worktree = await createWorktree({ baseCwd });
+    const readiness = await waitForWorktree(worktree.directory);
+    if (readiness.status === 'failed') {
+      toast(t('composer.worktreeFailed', { e: readiness.message }));
+      return;
+    }
+    if (targetSession) {
+      const result = await invoke<{ cwd?: string }>('mothx/session/setWorkDir', {
+        sessionId: targetSession,
+        cwd: worktree.directory,
+        _meta: { mothx: { workspace: { cwd: worktree.directory } } },
+      });
+      if (state.activeSessionId === targetSession) {
+        state.activeSessionCwd = result.cwd || worktree.directory;
+        state.configOptions = [];
+      }
+      await refreshTaskLibrary();
+      if (state.activeSessionId === targetSession) await openSession(targetSession);
+    } else {
+      state.newSessionCwd = worktree.directory;
+      void desktop.storeSet({ lastWorkspace: worktree.directory });
+      state.dirConfirmed = true;
+    }
+    toast(t('composer.worktreeReady'));
+    emit();
+  } catch (error) {
+    toast(t('composer.worktreeFailed', { e: error instanceof Error ? error.message : String(error) }));
+  }
 }
 
 async function refreshTaskLibrary(): Promise<void> {

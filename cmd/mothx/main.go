@@ -66,6 +66,7 @@ func newRootCommand(runFn func([]string, runOptions) error, acpRunFn func(acp.Ru
 	rootCmd.AddCommand(newPureCommand())
 	rootCmd.AddCommand(newSpeedtestCommand())
 	rootCmd.AddCommand(newKnowledgeMCPCommand())
+	rootCmd.AddCommand(newWorktreeCommand())
 	installFriendlyFlagErrors(rootCmd)
 	return rootCmd
 }
@@ -695,6 +696,7 @@ func setupAgentRuntime(ctx context.Context, p provider.Provider, providerName st
 		Runtime: sharedRuntime, Provider: p, Model: model, Settings: settings,
 		ProviderName: providerName, Allow: allow, MultiAgentEnabled: true,
 		DelegateEnabled: opts.delegate, WorkflowsEnabled: opts.workflows,
+		Worktree: worktreeManager(settings, ""), WorktreePerChild: settings.WorktreePerChildSubagents(),
 	})
 	if err != nil {
 		sharedRuntime.Close()

@@ -9,7 +9,11 @@ import {
   Cloud,
   Cpu,
   Folder,
+  GitBranch,
+  Loader2,
   Paperclip,
+  RotateCcw,
+  Trash2,
   Plus,
   Send,
   Shield,
@@ -36,11 +40,13 @@ import {
   sendPrompt,
 } from '@/core/composer';
 import { t } from '@/core/i18n';
-import { changeSessionWorkingDirectory, chooseWorkingDirectory } from '@/core/sessions';
+import { changeSessionWorkingDirectory, chooseWorkingDirectory, createIsolatedWorktree } from '@/core/sessions';
 import { currentConfigOptions, currentModelLabel, currentProviderLabel, state, type SessionConfigOptionShape } from '@/core/state';
 import { formatBytes } from '@/core/transcript';
 import { applyWorkspacePickerTarget } from '@/core/workspace-picker';
+import { worktreeSupported, listWorktrees, removeWorktree, resetWorktree, type WorktreeShape } from '@/core/worktrees';
 import { composerFocusEvents, composerInjectEvents, composerReplaceEvents, consumePendingInjection, consumePendingReplacement } from '@/core/bus';
+import { confirmDanger, toast } from '@/core/ui-host';
 import { useAppState } from '@/hooks/useAppState';
 import { useAppBackground } from '@/hooks/useAppBackground';
 import { cn, basename } from '@/lib/utils';
@@ -123,6 +129,112 @@ function ToolButton({
 
 function BorderedTool({ className, ...props }: ComponentProps<'button'>) {
   return <ToolButton className={cn('border-borderstrong bg-card', className)} {...props} />;
+}
+
+// WorktreeMenu lists the repository's managed worktrees and offers on-demand
+// create / reset / remove. All actions go through the shared core module; the
+// renderer never runs git or reads the registry directly.
+function WorktreeMenu({ isHome }: { isHome: boolean }) {
+  const appState = useAppState();
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<WorktreeShape[]>([]);
+  const [loading, setLoading] = useState(false);
+  const workspace = appState.activeSessionCwd || appState.newSessionCwd || appState.store.lastWorkspace || '';
+
+  const refresh = useCallback(async () => {
+    if (!worktreeSupported() || !workspace) {
+      setItems([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      setItems(await listWorktrees(workspace));
+    } catch {
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [workspace]);
+
+  useEffect(() => {
+    if (open) void refresh();
+  }, [open, refresh]);
+
+  const onReset = async (worktree: WorktreeShape) => {
+    if (!(await confirmDanger(t('composer.worktreeConfirmReset')))) return;
+    try {
+      await resetWorktree({ id: worktree.id, directory: worktree.directory });
+      toast(t('composer.worktreeReady'));
+      await refresh();
+    } catch (error) {
+      toast(t('composer.worktreeFailed', { e: error instanceof Error ? error.message : String(error) }));
+    }
+  };
+
+  const onRemove = async (worktree: WorktreeShape) => {
+    if (!(await confirmDanger(t('composer.worktreeConfirmRemove')))) return;
+    try {
+      await removeWorktree({ id: worktree.id, directory: worktree.directory });
+      await refresh();
+    } catch (error) {
+      toast(t('composer.worktreeFailed', { e: error instanceof Error ? error.message : String(error) }));
+    }
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <BorderedTool
+          title={t('composer.worktree')}
+          aria-label={t('composer.worktree')}
+          aria-expanded={open}
+          className={cn('max-w-[190px]', isHome && 'border-home-border bg-home-surface hover:bg-home-accent-softer hover:text-home-accent')}
+        >
+          <GitBranch className={cn('size-3.5 shrink-0', isHome && 'text-home-text/85')} />
+          <span>{t('composer.worktree')}</span>
+        </BorderedTool>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-0" align="start">
+        <div className="flex items-center justify-between px-3 py-1.5 text-[11px] text-muted-foreground">
+          <span>{t('composer.worktree')}</span>
+          {loading ? <Loader2 className="size-3.5 animate-spin" /> : null}
+        </div>
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] hover:bg-accent"
+          onClick={() => {
+            setOpen(false);
+            void createIsolatedWorktree();
+          }}
+        >
+          <Plus className="size-3.5 shrink-0" />
+          <span>{t('composer.worktreeCreate')}</span>
+        </button>
+        {items.map((worktree) => (
+          <div key={worktree.directory} className="flex items-center gap-2 px-3 py-2 text-[12.5px]">
+            <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate">{worktree.name || basename(worktree.directory)}</div>
+              <div className="truncate text-[11px] text-muted-foreground">
+                {worktree.branch || t('composer.worktreeMain')}
+                {worktree.status ? ` · ${worktree.status}` : ''}
+              </div>
+            </div>
+            {worktree.external ? null : (
+              <>
+                <Button size="icon" variant="ghost" title={t('composer.worktreeReset')} aria-label={t('composer.worktreeReset')} onClick={() => void onReset(worktree)}>
+                  <RotateCcw className="size-3.5" />
+                </Button>
+                <Button size="icon" variant="ghost" title={t('composer.worktreeRemove')} aria-label={t('composer.worktreeRemove')} onClick={() => void onRemove(worktree)}>
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </>
+            )}
+          </div>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 function SearchablePicker({
@@ -559,6 +671,9 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
           </TooltipTrigger>
           <TooltipContent>{workspaceTitle}</TooltipContent>
         </Tooltip>
+
+        {/* 隔离工作区:按需为一个任务派生独立 git worktree,并列出/重置/删除 */}
+        {worktreeSupported() ? <WorktreeMenu isHome={isHome} /> : null}
 
         <div className="flex-1" />
 

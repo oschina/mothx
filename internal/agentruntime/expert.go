@@ -426,6 +426,7 @@ func newExpertBinding(bundle *expert.Bundle) *ExpertBinding {
 				Tools:         def.Meta.Tools,
 				MaxIterations: def.Meta.MaxIterations,
 				WorkDir:       def.Meta.WorkDir,
+				Worktree:      def.Meta.Worktree,
 			})
 		}
 	}

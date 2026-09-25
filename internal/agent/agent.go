@@ -39,6 +39,9 @@ const (
 	parentRunContextKey
 	// parentModeKey carries the parent agent's execution mode (plan/agent/yolo/os) for sub-agent inheritance.
 	parentModeKey
+	// workDirKey carries the executing agent's working directory so child-agent
+	// tools inherit it when they do not specify one.
+	workDirKey
 )
 
 // ContextWithAgentID returns a new context with the agent ID attached.
@@ -140,6 +143,18 @@ func ContextWithParentMode(ctx context.Context, mode string) context.Context {
 func ParentModeFromContext(ctx context.Context) (string, bool) {
 	mode, ok := ctx.Value(parentModeKey).(string)
 	return mode, ok
+}
+
+// ContextWithWorkDir attaches the executing agent's working directory so child
+// agent tools can inherit it when they do not specify one.
+func ContextWithWorkDir(ctx context.Context, dir string) context.Context {
+	return context.WithValue(ctx, workDirKey, dir)
+}
+
+// WorkDirFromContext extracts the executing agent's working directory.
+func WorkDirFromContext(ctx context.Context) (string, bool) {
+	dir, ok := ctx.Value(workDirKey).(string)
+	return dir, ok && strings.TrimSpace(dir) != ""
 }
 
 // Config holds the agent configuration.
@@ -2689,6 +2704,7 @@ func (a *Agent) executeSingleToolCallWithRecovery(ctx context.Context, tc provid
 	toolCtx = ContextWithEventChan(toolCtx, ch)
 	toolCtx = ContextWithParentRunContext(toolCtx, ctx)
 	toolCtx = ContextWithParentMode(toolCtx, a.config.Mode)
+	toolCtx = ContextWithWorkDir(toolCtx, a.registry.GetWorkDir())
 	toolCtx = tools.ContextWithQuestionAsker(toolCtx, a)
 	toolCtx = sandbox.ContextWithGitAccess(toolCtx, gitAccessApproved)
 
