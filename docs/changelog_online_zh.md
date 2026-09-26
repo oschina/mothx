@@ -17,3 +17,7 @@
   - **跨入口一致性。** Web UI 不再强制 `schedule=manual` 或 `thinkingLevel=none`：它回显真实 cadence，保存时保留既有 Desktop 计划，并提交忽略 glob。新增架构护栏把遗留的知识上下文迁移桥（`KnowledgeCapsule`/`WithKnowledgeContext`/`knowledgeBaseRefs`）约束到 Runtime owner 与唯一的 ACP 调用方，并写明删除条件。
   - **质量基线。** 新增受控基准（`make knowledge-benchmark`）在确定性夹具上索引，并对索引时长、MCP 查询 p50/p95、tool-result 大小、引用覆盖率、不确定性覆盖率与 token 估算施加文档化回归阈值。
   - 知识库存储 schema 版本升级至 4；旧快照仍可读（新增列带安全默认值），并在下次扫描时重建。
+
+- **Context guard 保留被省略的超大工具输出**
+  - 当请求即将超出模型输入预算时，context guard 省略超大 tool result 不再永久丢弃内容：完整输出会先保存到 `<workDir>/.mothx/tmp/context-guard/`（私有 `0700`/`0600` 权限，沿用 `.mothx/tmp/inputs` 的暂存约定），guard 消息中附带文件路径与总行数/字节数，并明确引导模型用 `read` 的 offset/limit 分页读取保存的文件或用 `grep` 检索，而不是重跑可能非幂等的命令（部署、迁移、一次性脚本）。
+  - 无法保存时（无工作目录、写入失败）回退为原有的“仅省略”文案；暂存区按最新 50 个文件尽力滚动清理；guard 的状态事件同时展示保存路径。

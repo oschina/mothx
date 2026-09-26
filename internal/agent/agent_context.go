@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -429,12 +432,128 @@ func isContextGuardToolResult(msg provider.Message) bool {
 	return msg.Role == "toolResult" && strings.HasPrefix(msg.Content, "[Context guard]")
 }
 
-func contextGuardToolResult(msg provider.Message, estimatedTokens, budgetTokens, contextWindow, reserveTokens int) provider.Message {
+// contextGuardSpillDir is the workdir-relative staging area where the context
+// guard preserves oversized tool outputs. It mirrors the .mothx/tmp/inputs
+// convention used by the Runtime input materializer so the read/grep tools can
+// resolve the spilled file through normal workspace path resolution.
+const contextGuardSpillDir = ".mothx/tmp/context-guard"
+
+// contextGuardSpillMaxFiles bounds how many spilled outputs are kept per
+// workdir. Older spills are pruned best-effort when a new one is written.
+const contextGuardSpillMaxFiles = 50
+
+// contextGuardSpill records where an omitted tool output was preserved.
+type contextGuardSpill struct {
+	path  string
+	lines int
+	bytes int
+}
+
+// spillOversizedToolResult writes the full content of an omitted tool result
+// into the context-guard staging area so the model can page through it with
+// read offset/limit instead of losing data from non-idempotent commands (for
+// example a bash run whose output cannot be reproduced). It returns ok=false
+// when there is no workdir or the write fails; the guard message then falls
+// back to the omit-only wording.
+func (a *Agent) spillOversizedToolResult(msg provider.Message) (contextGuardSpill, bool) {
+	if a.registry == nil {
+		return contextGuardSpill{}, false
+	}
+	workDir := a.registry.GetWorkDir()
+	if workDir == "" {
+		return contextGuardSpill{}, false
+	}
+	content := msg.Content
+	if content == "" {
+		var sb strings.Builder
+		for _, block := range msg.Contents {
+			if block.Type == "text" && block.Text != "" {
+				sb.WriteString(block.Text)
+			}
+		}
+		content = sb.String()
+	}
+	if content == "" {
+		return contextGuardSpill{}, false
+	}
+	dir := filepath.Join(workDir, filepath.FromSlash(contextGuardSpillDir))
+	// Same 0700/0600 permissions as the Runtime input materializer's
+	// .mothx/tmp staging: spilled output may contain secrets from command
+	// output and must stay private to the owning user.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return contextGuardSpill{}, false
+	}
+	name := fmt.Sprintf("%s-%s-%d.txt", contextGuardSpillToken(msg.ToolName, "tool"), contextGuardSpillToken(msg.ToolCallID, "call"), time.Now().UnixNano())
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return contextGuardSpill{}, false
+	}
+	pruneContextGuardSpills(dir)
+	return contextGuardSpill{path: path, lines: strings.Count(content, "\n") + 1, bytes: len(content)}, true
+}
+
+// contextGuardSpillToken sanitizes one filename component of a spill file.
+func contextGuardSpillToken(value, fallback string) string {
+	var sb strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			sb.WriteRune(r)
+		default:
+			sb.WriteRune('-')
+		}
+		if sb.Len() >= 40 {
+			break
+		}
+	}
+	if sb.Len() == 0 {
+		return fallback
+	}
+	return sb.String()
+}
+
+// pruneContextGuardSpills best-effort keeps only the newest
+// contextGuardSpillMaxFiles spill files in dir.
+func pruneContextGuardSpills(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) <= contextGuardSpillMaxFiles {
+		return
+	}
+	type timed struct {
+		name string
+		mod  time.Time
+	}
+	files := make([]timed, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, timed{name: entry.Name(), mod: info.ModTime()})
+	}
+	if len(files) <= contextGuardSpillMaxFiles {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) })
+	for _, file := range files[contextGuardSpillMaxFiles:] {
+		_ = os.Remove(filepath.Join(dir, file.name))
+	}
+}
+
+func contextGuardToolResult(msg provider.Message, estimatedTokens, budgetTokens, contextWindow, reserveTokens int, spill contextGuardSpill, spilled bool) provider.Message {
 	toolName := msg.ToolName
 	if toolName == "" {
 		toolName = "tool"
 	}
-	content := fmt.Sprintf("[Context guard] The %q tool output was omitted because sending it would exceed the model context window (estimated request: %d tokens; input budget: %d tokens; context window: %d; reserved for output: %d). Retry with a narrower scope: use read with offset/limit, grep/find with path/include/maxResults, or request smaller chunks and summarize incrementally.", toolName, estimatedTokens, budgetTokens, contextWindow, reserveTokens)
+	content := fmt.Sprintf("[Context guard] The %q tool output was omitted because sending it would exceed the model context window (estimated request: %d tokens; input budget: %d tokens; context window: %d; reserved for output: %d).", toolName, estimatedTokens, budgetTokens, contextWindow, reserveTokens)
+	if spilled {
+		content += fmt.Sprintf(" The full output (%d lines, %d bytes) was preserved at %s. Do not re-run the command to reproduce it: page through the saved file with read using offset/limit (for example offset=1 limit=200, then continue from the next offset), or search it with grep path=%s. Extract only what the task needs and summarize incrementally.", spill.lines, spill.bytes, spill.path, spill.path)
+	} else {
+		content += " Retry with a narrower scope: use read with offset/limit, grep/find with path/include/maxResults, or request smaller chunks and summarize incrementally."
+	}
 	return provider.Message{
 		Role:       "toolResult",
 		Content:    content,
@@ -445,7 +564,7 @@ func contextGuardToolResult(msg provider.Message, estimatedTokens, budgetTokens,
 	}
 }
 
-func (a *Agent) replaceLargestToolResultForContext(estimatedTokens, budgetTokens, contextWindow, reserveTokens int) (string, bool) {
+func (a *Agent) replaceLargestToolResultForContext(estimatedTokens, budgetTokens, contextWindow, reserveTokens int) (string, string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -463,11 +582,12 @@ func (a *Agent) replaceLargestToolResultForContext(estimatedTokens, budgetTokens
 		}
 	}
 	if bestIndex < 0 {
-		return "", false
+		return "", "", false
 	}
 
 	original := a.messages[bestIndex]
-	a.messages[bestIndex] = contextGuardToolResult(original, estimatedTokens, budgetTokens, contextWindow, reserveTokens)
+	spill, spilled := a.spillOversizedToolResult(original)
+	a.messages[bestIndex] = contextGuardToolResult(original, estimatedTokens, budgetTokens, contextWindow, reserveTokens, spill, spilled)
 	if a.context != nil {
 		if len(a.context.Messages) == len(a.messages) {
 			a.context.Messages[bestIndex] = a.messages[bestIndex]
@@ -475,7 +595,11 @@ func (a *Agent) replaceLargestToolResultForContext(estimatedTokens, budgetTokens
 			a.context.Messages = a.messages
 		}
 	}
-	return original.ToolName, true
+	spillPath := ""
+	if spilled {
+		spillPath = spill.path
+	}
+	return original.ToolName, spillPath, true
 }
 
 func (a *Agent) prepareRequestMessages(sessionContextMsg provider.Message, ch chan<- Event) ([]provider.Message, error) {
@@ -491,14 +615,18 @@ func (a *Agent) prepareRequestMessages(sessionContextMsg provider.Message, ch ch
 		if estimatedTokens <= budgetTokens {
 			return messages, nil
 		}
-		toolName, replaced := a.replaceLargestToolResultForContext(estimatedTokens, budgetTokens, contextWindow, reserveTokens)
+		toolName, spillPath, replaced := a.replaceLargestToolResultForContext(estimatedTokens, budgetTokens, contextWindow, reserveTokens)
 		if !replaced {
 			return nil, fmt.Errorf("estimated request tokens %d exceed input budget %d for context window %d (reserved output: %d). Narrow the request or reduce context before retrying", estimatedTokens, budgetTokens, contextWindow, reserveTokens)
 		}
 		if toolName == "" {
 			toolName = "tool"
 		}
-		a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: fmt.Sprintf("Context guard omitted oversized %s output; asking model to retry with a narrower scope.", toolName)})
+		statusMessage := fmt.Sprintf("Context guard omitted oversized %s output; asking model to retry with a narrower scope.", toolName)
+		if spillPath != "" {
+			statusMessage = fmt.Sprintf("Context guard omitted oversized %s output (full output saved to %s); asking model to retry with a narrower scope.", toolName, spillPath)
+		}
+		a.sendEvent(ch, Event{Type: EventStatus, StatusMessage: statusMessage})
 	}
 
 	return nil, fmt.Errorf("estimated request still exceeds context after omitting oversized tool outputs")

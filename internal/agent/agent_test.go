@@ -1322,8 +1322,34 @@ func TestOversizedToolResultIsOmittedBeforeNextProviderTurn(t *testing.T) {
 	if !strings.Contains(guardMessage, "[Context guard]") {
 		t.Fatalf("second provider call missing context guard tool result: %#v", recorder.calls[1].Messages)
 	}
-	if !strings.Contains(guardMessage, "offset/limit") || !strings.Contains(guardMessage, "maxResults") {
+	if !strings.Contains(guardMessage, "offset/limit") {
 		t.Fatalf("context guard did not instruct the model to narrow scope: %q", guardMessage)
+	}
+
+	// The omitted output must be preserved in the workdir staging area so the
+	// model can page through it with read offset/limit instead of losing
+	// non-idempotent command output.
+	spillDir := filepath.Join(registry.GetWorkDir(), ".mothx", "tmp", "context-guard")
+	entries, err := os.ReadDir(spillDir)
+	if err != nil {
+		t.Fatalf("context guard spill dir missing: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 spill file, got %d", len(entries))
+	}
+	spillPath := filepath.Join(spillDir, entries[0].Name())
+	if !strings.Contains(guardMessage, spillPath) {
+		t.Fatalf("context guard message does not reference spill file %s: %q", spillPath, guardMessage)
+	}
+	spilled, err := os.ReadFile(spillPath)
+	if err != nil {
+		t.Fatalf("read spill file: %v", err)
+	}
+	if string(spilled) != strings.Repeat("x", 60000) {
+		t.Fatalf("spill file content length = %d, want 60000", len(spilled))
+	}
+	if !strings.Contains(guardMessage, "Do not re-run") {
+		t.Fatalf("context guard message should steer the model to the saved file: %q", guardMessage)
 	}
 }
 

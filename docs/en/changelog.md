@@ -16,6 +16,10 @@
   - **Quality baseline.** A controlled benchmark (`make knowledge-benchmark`) indexes a deterministic fixture and enforces documented regression thresholds for index duration, MCP query p50/p95, tool-result size, citation coverage, uncertainty coverage, and token estimate.
   - Knowledge-store schema version advances to 4; existing snapshots stay readable (added columns carry safe defaults) and are rebuilt on the next scan.
 
+- **Context Guard Preserves Omitted Oversized Tool Outputs**
+  - When a provider request would exceed the model input budget, the context guard no longer discards the oversized tool result for good: the full output is first saved to `<workDir>/.mothx/tmp/context-guard/` (private `0700`/`0600` permissions, the same staging convention as `.mothx/tmp/inputs`), and the guard tool-result message carries the file path with total line/byte counts, explicitly steering the model to page through the saved file with `read` offset/limit or search it with `grep` instead of re-running a possibly non-idempotent command (deploys, migrations, one-off scripts).
+  - When the output cannot be saved (no working directory, write failure), the guard falls back to the previous omit-only wording. The staging area is pruned best-effort to the newest 50 files, and the guard status event now also surfaces the saved path.
+
 ## v1.3.103
 
 ### 🐛 Bug Fixes
