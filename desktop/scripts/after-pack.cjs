@@ -1,72 +1,79 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { Arch } = require('builder-util');
 
-// Read the CPU architecture of a bare Go binary from its file header so we
-// can refuse to bundle a CLI whose arch does not match the Electron app arch.
-// Returns 'amd64', 'arm64', or null if the binary is not a recognized
-// ELF / Mach-O / PE image.
-function binaryArch(file) {
-  const fd = fs.openSync(file, 'r');
-  try {
-    const buf = Buffer.alloc(64);
-    const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    if (n < 24) return null;
-    if (buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46) {
-      // ELF: e_machine (2 bytes) at offset 18.
-      const machine = buf.readUInt16LE(18);
-      if (machine === 62) return 'amd64'; // EM_X86_64
-      if (machine === 183) return 'arm64'; // EM_AARCH64
-      return null;
-    }
-    if (buf[0] === 0xfe && buf[1] === 0xed && buf[2] === 0xfa && buf[3] === 0xcf) {
-      // Mach-O 64-bit: cputype (4 bytes) at offset 4.
-      const cputype = buf.readUInt32LE(4);
-      if (cputype === 0x01000007) return 'amd64'; // CPU_TYPE_X86_64
-      if (cputype === 0x0100000c) return 'arm64'; // CPU_TYPE_ARM64
-      return null;
-    }
-    if (buf[0] === 0x4d && buf[1] === 0x5a) {
-      // PE: e_lfanew at 0x3c, then PE signature, then COFF Machine (2 bytes).
-      const peOffset = buf.readUInt32LE(0x3c);
-      const pe = Buffer.alloc(8);
-      const pn = fs.readSync(fd, pe, 0, pe.length, peOffset);
-      if (pn >= 6 && pe[0] === 0x50 && pe[1] === 0x45 && pe[2] === 0 && pe[3] === 0) {
-        const machine = pe.readUInt16LE(4);
-        if (machine === 0x8664) return 'amd64'; // IMAGE_FILE_MACHINE_AMD64
-        if (machine === 0xaa64) return 'arm64'; // IMAGE_FILE_MACHINE_ARM64
-      }
-      return null;
-    }
-    return null;
-  } finally {
-    fs.closeSync(fd);
-  }
+const { binaryArch } = require('./binary-arch.cjs');
+
+const desktopRoot = path.resolve(__dirname, '..');
+
+// electron-builder's Arch enum is resolved by name (not by a hard-coded
+// number) so a dependency update cannot silently change the mapping.
+function goarchForElectronArch(arch) {
+  const name = Arch[arch];
+  if (name === 'x64') return 'amd64';
+  if (name === 'arm64') return 'arm64';
+  throw new Error(`Unsupported desktop architecture for bundled CLI: ${name || arch}`);
 }
 
-function targetFor(packContext) {
-  const platform = packContext.electronPlatformName;
-  const arch = packContext.arch === 3 ? 'arm64' : packContext.arch === 1 ? 'amd64' : undefined;
-  if (!arch) throw new Error(`Unsupported desktop architecture for bundled CLI: ${packContext.arch}`);
-  const goos = platform === 'win32' ? 'windows' : platform;
-  return { goos, goarch: arch, binaryName: goos === 'windows' ? 'mothx.exe' : 'mothx' };
+function binaryNameFor(electronPlatformName) {
+  return electronPlatformName === 'win32' ? 'mothx.exe' : 'mothx';
+}
+
+// The vendored runtime is injected after packing (instead of being shipped
+// through the `files` patterns) so that:
+//   - exactly one copy is packaged, at the path `main/runtime-binary.ts`
+//     probes first (`<resources>/app/vendor/mothx/bin/...`),
+//   - the copy always matches the packed app's CPU architecture even when one
+//     `build:runtime` run produces several architectures (macOS arm64 + x64),
+//   - on macOS the binary lives inside `MothX.app`, where the code signing
+//     pass seals it together with the rest of the bundle.
+function resolveSource(goos, goarch, binaryName) {
+  const candidates = [
+    // Per-target output of `npm run build:runtime`.
+    path.join(desktopRoot, 'vendor', 'mothx', 'bin', `${goos}-${goarch}`, binaryName),
+    path.join(desktopRoot, 'vendor', 'mothx', 'bin', goarch, binaryName),
+    // Legacy single-architecture layout.
+    path.join(desktopRoot, 'vendor', 'mothx', 'bin', binaryName),
+    path.join(desktopRoot, 'vendor', 'mothx', binaryName),
+  ];
+  const source = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!source) {
+    throw new Error(
+      `Source-built MothX CLI not found for ${goarch}. Checked:\n${candidates.join('\n')}\n` +
+        'Run `npm run build:runtime` (it builds every packaged architecture) before packaging.'
+    );
+  }
+  return source;
 }
 
 module.exports = async function afterPack(packContext) {
-  const { goos, goarch, binaryName } = targetFor(packContext);
-  const source = path.join(__dirname, '..', 'vendor', 'mothx', 'bin', binaryName);
-  const binary = path.join(packContext.appOutDir, 'vendor', 'mothx', 'bin', binaryName);
-  if (!fs.existsSync(source)) {
-    throw new Error(`Source-built MothX CLI not found at ${source}. Run npm run build:runtime before packaging.`);
-  }
-  fs.mkdirSync(path.dirname(binary), { recursive: true });
-  fs.copyFileSync(source, binary);
-  if (goos !== 'windows') fs.chmodSync(binary, 0o755);
-  const detected = binaryArch(binary);
-  if (detected && detected !== goarch) {
+  const { appOutDir, electronPlatformName, packager } = packContext;
+  const goos = electronPlatformName === 'win32' ? 'windows' : electronPlatformName;
+  const goarch = goarchForElectronArch(packContext.arch);
+  const binaryName = binaryNameFor(electronPlatformName);
+  const source = resolveSource(goos, goarch, binaryName);
+
+  const resourcesDir = packager.getResourcesDir(appOutDir);
+  if (!fs.existsSync(path.join(resourcesDir, 'app'))) {
     throw new Error(
-      `Bundled MothX CLI arch mismatch: binary is ${detected} but the app is ${goarch}. ` +
-      `Rebuild the runtime with the matching --arch (npm run build:runtime -- --platform ${goos} --arch ${goarch}).`
+      `Packaged app directory not found at ${path.join(resourcesDir, 'app')}. ` +
+        'Bundled CLI injection requires asar: false (see electron-builder.yml).'
     );
   }
-  console.log(`Bundled source-built MothX CLI at ${binary} (${detected || goarch})`);
+  const binary = path.join(resourcesDir, 'app', 'vendor', 'mothx', 'bin', binaryName);
+
+  const detected = binaryArch(source);
+  if (detected !== goarch) {
+    throw new Error(
+      `Bundled MothX CLI arch mismatch: ${source} is ${detected || 'unrecognized'} but the app is ${goarch}. ` +
+        `Rebuild the runtime with the matching --arch (npm run build:runtime -- --platform ${electronPlatformName} --arch ${
+          goarch === 'amd64' ? 'x64' : goarch
+        }).`
+    );
+  }
+
+  fs.mkdirSync(path.dirname(binary), { recursive: true });
+  fs.copyFileSync(source, binary);
+  if (electronPlatformName !== 'win32') fs.chmodSync(binary, 0o755);
+  console.log(`Bundled source-built MothX CLI at ${binary} (${detected})`);
 };

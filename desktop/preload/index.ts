@@ -13,6 +13,15 @@ export interface DiagnosticLogEntry {
   message: string;
 }
 
+export interface RuntimeBinaryStatus {
+  source: 'bundled' | 'custom';
+  configuredPath: string;
+  bundledPath: string;
+  effectivePath: string;
+  effectiveOrigin: 'env' | 'custom' | 'bundled' | 'none';
+  fallback: '' | 'env' | 'custom';
+}
+
 export interface MothxDesktopBridge {
   isDesktop: true;
   platform: NodeJS.Platform;
@@ -36,6 +45,9 @@ export interface MothxDesktopBridge {
     homeLogoDataURL: (path: string) => Promise<ReadHomeImageResult>;
     chooseFiles: () => Promise<{ path: string; grant: string }[]>;
     readFileBase64: (grant: string) => Promise<{ ok: true; data: string; size: number } | { ok: false; error: string }>;
+    runtimeBinary: () => Promise<RuntimeBinaryStatus>;
+    chooseRuntimeBinary: (defaultPath?: string) => Promise<string | null>;
+    setRuntimeBinary: (source: 'bundled' | 'custom', path?: string) => Promise<{ ok: boolean; error?: string; runtime: RuntimeBinaryStatus }>;
     storeGet: () => Promise<unknown>;
     storeSet: (patch: unknown) => Promise<unknown>;
     windowControl: (action: 'minimize' | 'maximize' | 'close') => void;
@@ -72,6 +84,9 @@ const bridge: MothxDesktopBridge = {
     homeLogoDataURL: (path) => ipcRenderer.invoke('desktop:home-logo-data-url', path),
     chooseFiles: () => ipcRenderer.invoke('desktop:choose-files'),
     readFileBase64: (grant) => ipcRenderer.invoke('desktop:read-file-base64', grant),
+    runtimeBinary: () => ipcRenderer.invoke('desktop:runtime-binary'),
+    chooseRuntimeBinary: (defaultPath = '') => ipcRenderer.invoke('desktop:choose-runtime-binary', defaultPath),
+    setRuntimeBinary: (source, path = '') => ipcRenderer.invoke('desktop:set-runtime-binary', source, path),
     storeGet: () => ipcRenderer.invoke('desktop:store-get'),
     storeSet: (patch) => ipcRenderer.invoke('desktop:store-set', patch),
     windowControl: (action) => ipcRenderer.send('desktop:window-control', action),

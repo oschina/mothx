@@ -46,13 +46,18 @@ renderer (desktop/renderer)          main (desktop/main)                runtime
 `MOTHX_ACP_PERMISSION_TIMEOUT` / `MOTHX_ACP_QUESTION_TIMEOUT` 注入（P0-3）。
 
 主题/语言/置顶任务/工作区历史等 ACP 不拥有的 UI 状态保存在 userData 的
-`desktop-store.json`（`main/store.ts`），绝不复制会话权威数据。
+`desktop-store.json`（`main/store.ts`），绝不复制会话权威数据。运行时二进制
+选择（内置/自定义）也属于客户端外壳的启动状态，同样只存在于该文件。
 
 ## 开发与构建
 
-打包的应用包含平台原生 MothX CLI 二进制（`vendor/mothx/bin/mothx[.exe]`），
-由当前源码构建（`scripts/build-runtime.cjs`），并在打包前用 `mothx --version`
-校验。`ui/dist` 只在缺失时构建一次（Go 二进制 embed 需要），桌面前端与其无关。
+打包的应用默认内置平台原生 MothX CLI 二进制：`scripts/build-runtime.cjs` 为
+`electron-builder.yml` 里的每个目标架构构建一份到 `vendor/mothx/bin/<goos>-<goarch>/`
+（macOS arm64+x64、Windows/Linux x64），打包后由 `scripts/after-pack.cjs` 把与目标
+架构匹配的那份注入到 `<resources>/app/vendor/mothx/bin/`（macOS 位于 `MothX.app`
+内，随签名一起封存），并用 `scripts/binary-arch.cjs` 校验 ELF/Mach-O/PE 头部
+架构，不匹配直接构建失败。`ui/dist` 只在缺失时构建一次（Go 二进制 embed 需要），
+桌面前端与其无关。
 
 从仓库根目录：
 
@@ -72,8 +77,10 @@ npm test                # node --test + tsx --test（协议分帧/本地 store�
 npm run start           # version:set + ensure:electron + build:runtime + build + electron .
 ```
 
-开发时可用 `MOTHX_BINARY=/path/to/mothx` 覆盖运行时二进制（未打包时生效，
-优先级最高；随后依次查找 vendor 目录与仓库 `bin/`）。
+运行时二进制的解析优先级（`main/runtime-binary.ts`）：开发覆盖
+`MOTHX_BINARY=/path/to/mothx` > 桌面设置里的自定义二进制（运行时设置页可切换，
+默认使用内置）> 内置 vendor 目录 > 仓库 `bin/`。自定义二进制不可用时回退到内置；
+`npm run build:runtime` 默认构建全部打包架构，加 `--arch x64|arm64` 只构建一种。
 
 `make desktop-dev` 会先准备 Desktop 运行时，再启动 `npm run dev`。直接在
 `desktop/` 中执行 `npm run dev` 时，请先执行一次 `make desktop-vendor`。它以 Vite

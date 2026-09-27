@@ -7,6 +7,7 @@ import type { DiagnosticLogBuffer, DiagnosticLogEntry } from './diagnostic-logs'
 import { SelectedFileGrants } from './file-grants';
 import { readHomeImageDataURL } from './home-image';
 import type { ReadHomeImageResult } from './home-image';
+import { isRunnableBinary, type RuntimeBinarySource, type RuntimeBinaryStatus } from './runtime-binary';
 import type { DesktopStore, DesktopStoreData } from './store';
 
 export type RendererEvent =
@@ -22,6 +23,7 @@ export interface IpcDeps {
   getWindow: () => BrowserWindow | undefined;
   appVersion: string;
   runtimeBinary: () => string;
+  runtimeStatus: () => RuntimeBinaryStatus;
   logFile: () => string;
   log: (message: string, source?: 'desktop' | 'acp' | 'renderer') => void;
   diagnosticLogs: DiagnosticLogBuffer;
@@ -178,6 +180,49 @@ export function registerIpc(deps: IpcDeps): void {
   });
 
   ipcMain.handle('desktop:store-get', () => deps.store.get());
+
+  // Runtime binary selection: the renderer can only ask the user to pick a
+  // file and request a switch; validation, persistence, and the ACP runtime
+  // restart all stay in the privileged process. The client shell must remain
+  // usable when the selected binary cannot start, so a failed switch rolls
+  // back to the previous runtime.
+  ipcMain.handle('desktop:runtime-binary', () => deps.runtimeStatus());
+
+  ipcMain.handle('desktop:choose-runtime-binary', async (event, defaultPath?: string) => {
+    if (!event.sender || event.sender.isDestroyed()) return null;
+    const parent = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const options = {
+      defaultPath: typeof defaultPath === 'string' && defaultPath.trim() ? defaultPath : undefined,
+      properties: ['openFile'] as ('openFile')[],
+      title: 'Select mothx executable',
+    };
+    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? null : result.filePaths[0] || null;
+  });
+
+  ipcMain.handle('desktop:set-runtime-binary', async (_event, source: unknown, path: unknown) => {
+    const nextSource: RuntimeBinarySource = source === 'custom' ? 'custom' : 'bundled';
+    const nextPath = typeof path === 'string' ? path.trim() : '';
+    if (nextSource === 'custom' && !isRunnableBinary(nextPath, process.platform)) {
+      return { ok: false, error: `not an executable file: ${nextPath || '(empty)'}`, runtime: deps.runtimeStatus() };
+    }
+    const previous = deps.store.get();
+    deps.store.set({ runtimeSource: nextSource, runtimeBinaryPath: nextPath });
+    try {
+      await deps.client.restart(undefined, { binary: deps.runtimeBinary() });
+      deps.log(`runtime binary switched to ${nextSource === 'custom' ? nextPath : 'the bundled runtime'}`);
+      return { ok: true, runtime: deps.runtimeStatus() };
+    } catch (error) {
+      deps.store.set({ runtimeSource: previous.runtimeSource, runtimeBinaryPath: previous.runtimeBinaryPath });
+      const message = serializeError(error).message;
+      try {
+        await deps.client.restart(undefined, { binary: deps.runtimeBinary() });
+      } catch (rollbackError) {
+        deps.log(`runtime binary rollback failed: ${serializeError(rollbackError).message}`);
+      }
+      return { ok: false, error: message, runtime: deps.runtimeStatus() };
+    }
+  });
 
   ipcMain.handle('desktop:store-set', (_event, patch: unknown) => {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return deps.store.get();

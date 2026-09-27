@@ -3,12 +3,23 @@
 // 安全：mcp/set 仅做同列表往返；memory/put 先备份原内容并恢复；cron 测试任务用完即删。
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const binary = process.argv[2] || join(root, 'vendor', 'mothx', 'bin', process.platform === 'win32' ? 'mothx.exe' : 'mothx');
+const binaryName = process.platform === 'win32' ? 'mothx.exe' : 'mothx';
+const goarch = process.arch === 'x64' ? 'amd64' : process.arch;
+const goos = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : process.platform;
+const binary =
+  process.argv[2] ||
+  [
+    join(root, 'vendor', 'mothx', 'bin', `${goos}-${goarch}`, binaryName),
+    join(root, 'vendor', 'mothx', 'bin', goarch, binaryName),
+    join(root, 'vendor', 'mothx', 'bin', binaryName),
+  ].find(existsSync) ||
+  join(root, 'vendor', 'mothx', 'bin', `${goos}-${goarch}`, binaryName);
 
 const child = spawn(binary, ['acp'], { cwd: root, stdio: ['pipe', 'pipe', 'pipe'] });
 const rl = createInterface({ input: child.stdout });

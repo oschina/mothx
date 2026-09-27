@@ -1,17 +1,27 @@
 // Phase 1 验收 harness：对重建后的 vendor 运行时验证工作单 #2 的 desktop 相关协议面。
-// 用法：node scripts/phase1-verify.mjs [binaryPath]（默认 desktop/vendor/mothx/bin/mothx）
+// 用法：node scripts/phase1-verify.mjs [binaryPath]（默认 desktop/vendor/mothx/bin/<arch>/mothx）
 // 覆盖：features 发现键、lastRun(active/终态)、setMeta/projects、workspace/extend、
 //       attachment/list + fetch 往返、resume 制品重放。
 // 审批 deadline 与 subagent 由工作单 #2 的进程级 wire 测试覆盖（需 multi-agent/审批场景）。
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const binary = process.argv[2] || join(root, 'vendor', 'mothx', 'bin', process.platform === 'win32' ? 'mothx.exe' : 'mothx');
+const binaryName = process.platform === 'win32' ? 'mothx.exe' : 'mothx';
+const goarch = process.arch === 'x64' ? 'amd64' : process.arch;
+const goos = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : process.platform;
+const binary =
+  process.argv[2] ||
+  [
+    join(root, 'vendor', 'mothx', 'bin', `${goos}-${goarch}`, binaryName),
+    join(root, 'vendor', 'mothx', 'bin', goarch, binaryName),
+    join(root, 'vendor', 'mothx', 'bin', binaryName),
+  ].find(existsSync) ||
+  join(root, 'vendor', 'mothx', 'bin', `${goos}-${goarch}`, binaryName);
 const WS = join(root, '.phase1-verify-ws');
 rmSync(WS, { recursive: true, force: true });
 mkdirSync(WS, { recursive: true });

@@ -236,12 +236,14 @@ export class AcpClient {
 
   // Restart only recreates the local ACP transport. Session work directories
   // stay per-session and are never negotiated as a process-wide workspace.
-  async restart(cwd?: string): Promise<InitializeResult> {
+  // `overrides.binary` lets the desktop shell switch to another mothx
+  // executable (runtime binary setting) without rebuilding the start options.
+  async restart(cwd?: string, overrides?: { binary?: string }): Promise<InitializeResult> {
     const options = this.startOptions;
     if (!options) throw new Error('ACP client has not been started');
     const nextCwd = cwd && cwd.trim() ? cwd : options.cwd;
     this.setState({ state: 'restarting' });
-    return this.start({ ...options, cwd: nextCwd });
+    return this.start({ ...options, ...(overrides?.binary ? { binary: overrides.binary } : {}), cwd: nextCwd });
   }
 
   request(method: string, params?: unknown): Promise<unknown> {

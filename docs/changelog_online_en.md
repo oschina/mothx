@@ -2,7 +2,7 @@
 
 This file contains the changes for the **current version only**. The full history of all versions lives in [docs/en/changelog.md](en/changelog.md).
 
-## v1.3.104
+## v1.3.103
 
 ### ✨ New Features
 
@@ -21,3 +21,7 @@ This file contains the changes for the **current version only**. The full histor
 - **Context Guard Preserves Omitted Oversized Tool Outputs**
   - When a provider request would exceed the model input budget, the context guard no longer discards the oversized tool result for good: the full output is first saved to `<workDir>/.mothx/tmp/context-guard/` (private `0700`/`0600` permissions, the same staging convention as `.mothx/tmp/inputs`), and the guard tool-result message carries the file path with total line/byte counts, explicitly steering the model to page through the saved file with `read` offset/limit or search it with `grep` instead of re-running a possibly non-idempotent command (deploys, migrations, one-off scripts).
   - When the output cannot be saved (no working directory, write failure), the guard falls back to the previous omit-only wording. The staging area is pruned best-effort to the newest 50 files, and the guard status event now also surfaces the saved path.
+
+- **Desktop Bundles the MothX Runtime and Supports Choosing the Runtime Binary**
+  - **Every desktop package now ships a runnable `mothx` CLI.** The desktop release build vendors one source-built runtime per packaged architecture (macOS arm64 and x64, Windows/Linux x64) and injects the architecture-matching binary into `<resources>/app/vendor/mothx/bin/` after packing, before code signing seals the macOS bundle. Until now the macOS x64 package received the build host's arm64 runtime, so the Intel Mac client could not start its ACP runtime at all; the packaging step now verifies the bundled binary's ELF/Mach-O/PE architecture (including little-endian and fat Mach-O headers) and fails the build on a mismatch instead of shipping a broken client. Windows/Linux artifacts no longer carry a second copy of the runtime beside the app directory.
+  - **Runtime binary setting.** The desktop settings (运行时 → MothX 运行时二进制) let the user switch between the bundled `mothx` executable (default) and a custom `mothx` binary path. Selection and validation live in the privileged Electron main process, the ACP runtime restarts on the switch, an unavailable custom path falls back to the bundled runtime with a visible notice, and a custom binary that fails to start rolls the selection back so the client stays usable. The `MOTHX_BINARY` environment variable remains the highest-priority development override.

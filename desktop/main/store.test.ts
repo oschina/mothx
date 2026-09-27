@@ -44,3 +44,42 @@ test('store clamps custom logo path length', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('store defaults to the bundled runtime binary', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mothx-store-'));
+  try {
+    const data = new DesktopStore(dir).get();
+    assert.equal(data.runtimeSource, 'bundled');
+    assert.equal(data.runtimeBinaryPath, '');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('store persists the runtime binary selection across reloads', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mothx-store-'));
+  try {
+    const store = new DesktopStore(dir);
+    store.set({ runtimeSource: 'custom', runtimeBinaryPath: '/opt/mothx/bin/mothx' });
+
+    const reopened = new DesktopStore(dir).get();
+    assert.equal(reopened.runtimeSource, 'custom');
+    assert.equal(reopened.runtimeBinaryPath, '/opt/mothx/bin/mothx');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('store sanitizes the runtime binary selection', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mothx-store-'));
+  try {
+    const store = new DesktopStore(dir);
+    store.set({ runtimeSource: 'custom', runtimeBinaryPath: 'a'.repeat(5000) });
+    assert.equal(store.get().runtimeBinaryPath.length, 4096);
+
+    store.set({ runtimeSource: 'bogus' as unknown as 'bundled' });
+    assert.equal(store.get().runtimeSource, 'custom');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

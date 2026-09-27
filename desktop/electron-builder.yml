@@ -2,9 +2,9 @@ appId: net.mothx.desktop
 productName: MothX
 copyright: Copyright © 2026 MothX
 
-# The desktop app is a pure ACP client: it spawns the vendored `mothx acp`
+# The desktop app is a pure ACP client: it spawns the bundled `mothx acp`
 # runtime over stdio and renders the standalone desktop/renderer frontend.
-# Keep the runtime unpacked so the vendored executable can be spawned directly.
+# Keep the runtime unpacked so the bundled executable can be spawned directly.
 asar: false
 compression: maximum
 
@@ -17,8 +17,11 @@ icon: resources/mothx.png
 files:
   - dist/**/*
   - package.json
-  - vendor/mothx/bin/mothx*
-  - '!vendor/mothx/node_modules/**/*'
+  # The MothX CLI is not copied through `files`: scripts/after-pack.cjs injects
+  # exactly one architecture-matching binary into <resources>/app/vendor/mothx/
+  # bin/ after packing, so every artifact bundles a runnable runtime and no
+  # second copy of the ~60MB binary ships next to the app directory.
+  - '!vendor/**'
 
 afterPack: scripts/after-pack.cjs
 

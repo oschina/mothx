@@ -39,30 +39,58 @@ function ensureUI() {
   run(npm.command, [...npm.prefix, 'run', 'build'], uiRoot);
 }
 
-function target() {
-  const platform = option('platform') || process.platform;
-  const arch = option('arch') || process.arch;
-  const goos = platform === 'win32' || platform === 'win' ? 'windows' : platform === 'mac' ? 'darwin' : platform;
-  const goarch = arch === 'x64' ? 'amd64' : arch;
-  if (!['darwin', 'linux', 'windows'].includes(goos) || !['amd64', 'arm64'].includes(goarch)) {
-    throw new Error(`Unsupported runtime target: ${goos}/${goarch}`);
+function normalizeGoarch(arch) {
+  const value = arch === 'x64' ? 'amd64' : arch;
+  if (!['amd64', 'arm64'].includes(value)) {
+    throw new Error(`Unsupported runtime architecture: ${arch}`);
   }
-  return { goos, goarch, binaryName: goos === 'windows' ? 'mothx.exe' : 'mothx' };
+  return value;
 }
 
-const outputRoot = option('output') || path.join(desktopRoot, 'vendor', 'mothx', 'bin');
-const { goos, goarch, binaryName } = target();
+function target() {
+  const platform = option('platform') || process.platform;
+  const goos = platform === 'win32' || platform === 'win' ? 'windows' : platform === 'mac' ? 'darwin' : platform;
+  if (!['darwin', 'linux', 'windows'].includes(goos)) {
+    throw new Error(`Unsupported runtime target: ${goos}`);
+  }
+  return { goos, binaryName: goos === 'windows' ? 'mothx.exe' : 'mothx' };
+}
+
+// Keep in sync with the target matrix in electron-builder.yml: macOS packages
+// arm64 and x64, Windows and Linux package x64 only. Without an explicit
+// --arch this script builds one vendored runtime per packaged architecture so
+// every release artifact ships a runnable `mothx` binary (macOS x64 used to
+// receive the host's arm64 build). `--arch <x64|arm64|amd64>` builds one.
+const RELEASE_ARCHES = { darwin: ['arm64', 'amd64'], windows: ['amd64'], linux: ['amd64'] };
+
+function archesFor(goos) {
+  const requested = option('arch');
+  if (requested) return [normalizeGoarch(requested)];
+  // A flat `--output` destination can only hold one binary.
+  if (option('output')) return [normalizeGoarch(process.arch)];
+  return RELEASE_ARCHES[goos];
+}
+
+// Per-architecture output keeps several vendored runtimes side by side;
+// `--output <dir>` keeps the legacy flat single-architecture layout.
+const outputRoot = option('output');
+const { goos, binaryName } = target();
+const goarches = archesFor(goos);
 
 ensureUI();
-fs.mkdirSync(outputRoot, { recursive: true });
-const output = path.join(outputRoot, binaryName);
 const version = resolveVersion({ repoRoot });
-console.log(`Building MothX runtime from current source for ${goos}/${goarch}...`);
-run('go', [
-  'build', '-trimpath',
-  '-ldflags', `-s -w -X main.version=${version} -X github.com/oschina/mothx/internal/version.Version=${version} -X github.com/oschina/mothx/internal/ua.Version=${version}`,
-  '-o', output,
-  './cmd/mothx',
-], repoRoot, { ...process.env, CGO_ENABLED: '0', GOOS: goos, GOARCH: goarch });
-if (goos !== 'windows') fs.chmodSync(output, 0o755);
-console.log(`Built MothX runtime at ${output}`);
+for (const goarch of goarches) {
+  // <goos>-<goarch> keeps cross-built runtimes from overwriting each other.
+  const outputDir = outputRoot || path.join(desktopRoot, 'vendor', 'mothx', 'bin', `${goos}-${goarch}`);
+  fs.mkdirSync(outputDir, { recursive: true });
+  const output = path.join(outputDir, binaryName);
+  console.log(`Building MothX runtime from current source for ${goos}/${goarch}...`);
+  run('go', [
+    'build', '-trimpath',
+    '-ldflags', `-s -w -X main.version=${version} -X github.com/oschina/mothx/internal/version.Version=${version} -X github.com/oschina/mothx/internal/ua.Version=${version}`,
+    '-o', output,
+    './cmd/mothx',
+  ], repoRoot, { ...process.env, CGO_ENABLED: '0', GOOS: goos, GOARCH: goarch });
+  if (goos !== 'windows') fs.chmodSync(output, 0o755);
+  console.log(`Built MothX runtime at ${output}`);
+}

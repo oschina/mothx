@@ -3,10 +3,14 @@ import { join } from 'node:path';
 
 // Desktop-local persistence for UI state that ACP intentionally does not own
 // (theme, locale, default-new-session directory history, pinned tasks,
-// observed run statuses). `lastWorkspace` remains the on-disk compatibility
-// field name; it is not a process-wide workspace or session filter.
-// Canonical session data always comes from the ACP runtime; this store must
-// never shadow it (see desktop-acp-frontend-gap-proposal.md P1-4/P1-5).
+// observed run statuses, and which local `mothx` executable this client
+// spawns as its ACP runtime). `lastWorkspace` remains the on-disk
+// compatibility field name; it is not a process-wide workspace or session
+// filter. The runtime binary selection is client-shell launch state only —
+// ACP cannot prescribe which local executable the Electron shell starts — and
+// must never be treated as a workspace or security boundary. Canonical session
+// data always comes from the ACP runtime; this store must never shadow it
+// (see desktop-acp-frontend-gap-proposal.md P1-4/P1-5).
 
 export interface DesktopStoreData {
   theme: 'light' | 'dark';
@@ -19,6 +23,10 @@ export interface DesktopStoreData {
   homeBackgroundPosition: 'center' | 'left' | 'right' | 'top' | 'bottom';
   homeLogoVisible: boolean;
   homeLogoImage: string;
+  // Which local mothx executable becomes the ACP runtime: the bundled one
+  // (default) or a user-picked path (runtimeBinaryPath).
+  runtimeSource: 'bundled' | 'custom';
+  runtimeBinaryPath: string;
   lastWorkspace: string;
   recentWorkspaces: string[];
   pinnedSessions: string[];
@@ -36,6 +44,8 @@ const DEFAULTS: DesktopStoreData = {
   homeBackgroundPosition: 'center',
   homeLogoVisible: true,
   homeLogoImage: '',
+  runtimeSource: 'bundled',
+  runtimeBinaryPath: '',
   lastWorkspace: '',
   recentWorkspaces: [],
   pinnedSessions: [],
@@ -62,6 +72,10 @@ function backgroundPosition(value: unknown): DesktopStoreData['homeBackgroundPos
   return value === 'left' || value === 'right' || value === 'top' || value === 'bottom' ? value : 'center';
 }
 
+function runtimeSource(value: unknown): DesktopStoreData['runtimeSource'] {
+  return value === 'custom' ? 'custom' : 'bundled';
+}
+
 export class DesktopStore {
   private file: string;
   private data: DesktopStoreData;
@@ -86,6 +100,8 @@ export class DesktopStore {
         homeBackgroundPosition: backgroundPosition(parsed.homeBackgroundPosition),
         homeLogoVisible: parsed.homeLogoVisible !== false,
         homeLogoImage: typeof parsed.homeLogoImage === 'string' ? parsed.homeLogoImage.slice(0, 4096) : '',
+        runtimeSource: runtimeSource(parsed.runtimeSource),
+        runtimeBinaryPath: typeof parsed.runtimeBinaryPath === 'string' ? parsed.runtimeBinaryPath.slice(0, 4096) : '',
         lastWorkspace: typeof parsed.lastWorkspace === 'string' ? parsed.lastWorkspace : '',
         recentWorkspaces: Array.isArray(parsed.recentWorkspaces)
           ? parsed.recentWorkspaces.filter((entry): entry is string => typeof entry === 'string' && entry !== '')
@@ -118,6 +134,8 @@ export class DesktopStore {
     if (patch.homeBackgroundPosition !== undefined) this.data.homeBackgroundPosition = backgroundPosition(patch.homeBackgroundPosition);
     if (typeof patch.homeLogoVisible === 'boolean') this.data.homeLogoVisible = patch.homeLogoVisible;
     if (typeof patch.homeLogoImage === 'string') this.data.homeLogoImage = patch.homeLogoImage.slice(0, 4096);
+    if (patch.runtimeSource === 'bundled' || patch.runtimeSource === 'custom') this.data.runtimeSource = patch.runtimeSource;
+    if (typeof patch.runtimeBinaryPath === 'string') this.data.runtimeBinaryPath = patch.runtimeBinaryPath.slice(0, 4096);
     if (typeof patch.lastWorkspace === 'string' && patch.lastWorkspace !== '') {
       this.data.lastWorkspace = patch.lastWorkspace;
       this.rememberWorkspace(patch.lastWorkspace);

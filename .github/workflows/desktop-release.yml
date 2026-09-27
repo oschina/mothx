@@ -130,6 +130,9 @@ jobs:
           printf 'CSC_IDENTITY_AUTO_DISCOVERY=false\n' >> "$GITHUB_ENV"
 
       - name: Build desktop runtime and Web UI
+        # build:runtime vendors one source-built `mothx` CLI per architecture
+        # packaged by electron-builder.yml (macOS arm64 + x64, Windows/Linux
+        # x64); scripts/after-pack.cjs injects the matching one into the app.
         working-directory: desktop
         env:
           MOTHX_VERSION: ${{ inputs.tag }}

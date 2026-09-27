@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, Menu, shell } from 'electron';
-import { createWriteStream, existsSync, mkdirSync, statSync } from 'node:fs';
+import { createWriteStream, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { AcpClient } from './acp-client';
@@ -13,6 +13,12 @@ import {
 import { initialNewSessionDirectory } from './default-new-session-directory';
 import { createDiagnosticLogger, DiagnosticLogBuffer } from './diagnostic-logs';
 import { registerIpc, sendRendererEvent, type IpcDeps } from './ipc';
+import {
+  describeRuntimeBinary,
+  resolveRuntimeBinary,
+  type RuntimeBinaryLookup,
+  type RuntimeBinaryStatus,
+} from './runtime-binary';
 import { DesktopStore } from './store';
 
 // MothX Desktop is a pure ACP client: the Electron main process owns one
@@ -35,27 +41,27 @@ function logDesktopEvent(message: string, source: 'desktop' | 'acp' | 'renderer'
 
 const store = new DesktopStore(app.getPath('userData'));
 
+function runtimeLookup(): RuntimeBinaryLookup {
+  const settings = store.get();
+  return {
+    platform: process.platform,
+    arch: process.arch,
+    env: process.env,
+    resourcesPath: process.resourcesPath,
+    distDir: __dirname,
+    settings: { source: settings.runtimeSource, path: settings.runtimeBinaryPath },
+  };
+}
+
+// Which `mothx` executable becomes the ACP runtime: the bundled one by
+// default, a user-configured custom binary (desktop settings), or the
+// MOTHX_BINARY development override. See main/runtime-binary.ts.
 function binaryPath(): string {
-  const name = process.platform === 'win32' ? 'mothx.exe' : 'mothx';
-  const roots = [
-    // Explicit development override wins so `npm start` can use a fresh build.
-    process.env.MOTHX_BINARY || '',
-    // electron-builder places the explicit `vendor` file pattern beside
-    // `resources/app` when asar is disabled.
-    join(process.resourcesPath, '..', 'vendor', 'mothx', 'bin', name),
-    join(process.resourcesPath, '..', 'vendor', 'mothx', name),
-    join(process.resourcesPath, 'app', 'vendor', 'mothx', 'bin', name),
-    join(process.resourcesPath, 'app', 'vendor', 'mothx', name),
-    join(__dirname, '..', '..', 'vendor', 'mothx', 'bin', name),
-    join(__dirname, '..', '..', 'vendor', 'mothx', name),
-    join(__dirname, '..', 'vendor', 'mothx', 'bin', name),
-    join(__dirname, '..', 'vendor', 'mothx', name),
-    // Development fallback: the repository build output.
-    join(__dirname, '..', '..', '..', 'bin', name),
-  ].filter((candidate) => candidate !== '');
-  const found = roots.find((candidate) => existsSync(candidate));
-  if (!found) throw new Error(`MothX runtime not found. Checked:\n${roots.join('\n')}`);
-  return found;
+  return resolveRuntimeBinary(runtimeLookup()).path;
+}
+
+function runtimeStatus(): RuntimeBinaryStatus {
+  return describeRuntimeBinary(runtimeLookup());
 }
 
 // This only selects the child process's initial cwd. Session working
@@ -101,6 +107,7 @@ const deps: IpcDeps = {
   getWindow: () => windowRef,
   appVersion: app.getVersion(),
   runtimeBinary: binaryPath,
+  runtimeStatus,
   logFile: () => desktopLogPath,
   log: logDesktopEvent,
   diagnosticLogs,
@@ -189,11 +196,15 @@ async function startRuntime(): Promise<void> {
   desktopLogPath = join(logDir, 'desktop.log');
   logStream = createWriteStream(desktopLogPath, { flags: 'a' });
 
-  const binary = binaryPath();
+  const runtime = resolveRuntimeBinary(runtimeLookup());
   const runtimeCwd = resolveRuntimeCwd();
-  logDesktopEvent(`starting ACP runtime ${binary} (runtime cwd: ${runtimeCwd})`);
+  logDesktopEvent(`starting ACP runtime ${runtime.path} (source: ${runtime.origin}, runtime cwd: ${runtimeCwd})`);
+  const status = runtimeStatus();
+  if (status.fallback === 'custom') {
+    logDesktopEvent(`configured custom runtime binary is unavailable (${status.configuredPath}), using the bundled runtime`);
+  }
   await client.start({
-    binary,
+    binary: runtime.path,
     args: ['acp'],
     cwd: runtimeCwd,
     clientInfo: { name: 'mothx-desktop', title: 'MothX Desktop', version: app.getVersion() },

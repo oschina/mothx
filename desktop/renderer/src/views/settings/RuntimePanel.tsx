@@ -2,15 +2,17 @@
 // 诊断日志是主进程状态,renderer 只保存当前过滤词与视图内快照,绝不落盘。
 
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Shield, Zap } from 'lucide-react';
+import { Cpu, RefreshCw, Shield, Zap } from 'lucide-react';
 
 import { RowItem, RowList } from '@/components/layout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { acp, desktop, type DiagnosticLogEntry } from '@/core/api';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { acp, desktop, type DiagnosticLogEntry, type RuntimeBinaryStatus } from '@/core/api';
 import { t } from '@/core/i18n';
 import { mergeDiagnosticLogs } from '@/core/diagnostic-logs';
 import { runDoctor, type DoctorCheck, type DoctorResult } from '@/core/manage-api';
+import { emit, state } from '@/core/state';
 import { toast } from '@/core/ui-host';
 import { useAppState } from '@/hooks/useAppState';
 import { cn } from '@/lib/utils';
@@ -60,6 +62,32 @@ export function RuntimePanel() {
   const [doctorRunning, setDoctorRunning] = useState(false);
   const [logs, setLogs] = useState<DiagnosticLogEntry[]>([]);
   const [filter, setFilter] = useState('');
+  const [runtime, setRuntime] = useState<RuntimeBinaryStatus | null>(null);
+
+  const refreshRuntime = async () => {
+    try {
+      setRuntime(await desktop.runtimeBinary());
+    } catch (error) {
+      desktop.log(`settings: failed to load runtime binary status: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // The About panel shows the effective runtime binary; keep it in sync.
+    state.appInfo = await desktop.appInfo().catch(() => state.appInfo);
+    emit();
+  };
+
+  // Only the privileged process validates the picked executable, persists the
+  // selection, and restarts the ACP runtime (rolling back on failure).
+  const switchRuntime = async (source: 'bundled' | 'custom') => {
+    const picked = source === 'custom' ? await desktop.chooseRuntimeBinary(runtime?.configuredPath || runtime?.bundledPath || '') : null;
+    if (source === 'custom' && !picked) return;
+    const outcome = await desktop.setRuntimeBinary(source, picked || '');
+    toast(outcome.ok ? t('settings.runtimeApplied') : t('settings.runtimeApplyFailed', { e: outcome.error || '' }));
+    await refreshRuntime();
+  };
+
+  useEffect(() => {
+    void refreshRuntime();
+  }, []);
 
   useEffect(() => {
     const off = desktop.onDiagnosticLog((entry) => {
@@ -82,6 +110,15 @@ export function RuntimePanel() {
   const agentVersion = conn.agentInfo?.version || '';
   const detail = `${connLabel(conn.state)}${conn.pid ? ` · pid ${conn.pid}` : ''}${agentVersion ? ` · mothx ${agentVersion}` : ''}${conn.error ? ` · ${conn.error.message}` : ''}`;
 
+  const runtimeSource = runtime?.source || 'bundled';
+  const runtimeDesc =
+    `${t('settings.runtimeEffective')}: ${runtime?.effectivePath || t('settings.runtimeMissing')}` +
+    (runtime?.fallback === 'custom'
+      ? ` · ${t('settings.runtimeFallbackCustom')}`
+      : runtime?.fallback === 'env'
+        ? ` · ${t('settings.runtimeFallbackEnv')}`
+        : '');
+
   const runDoctorNow = async () => {
     setDoctorRunning(true);
     setDoctor(null);
@@ -99,6 +136,32 @@ export function RuntimePanel() {
   return (
     <section className="flex flex-col">
       <RowList>
+        <RowItem icon={<Cpu />} title={t('settings.runtimeBinary')} desc={runtimeDesc}>
+          <div className="flex items-center gap-2">
+            <Select value={runtimeSource} onValueChange={(value) => void switchRuntime(value === 'custom' ? 'custom' : 'bundled')}>
+              <SelectTrigger className="w-[172px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="bundled">{t('settings.runtimeBundled')}</SelectItem>
+                <SelectItem value="custom">{t('settings.runtimeCustom')}</SelectItem>
+              </SelectContent>
+            </Select>
+            {runtimeSource === 'custom' ? (
+              <>
+                <Input
+                  readOnly
+                  className="w-[260px]"
+                  placeholder={t('settings.runtimePathPlaceholder')}
+                  value={runtime?.configuredPath || ''}
+                />
+                <Button variant="outline" onClick={() => void switchRuntime('custom')}>
+                  {t('settings.runtimePick')}
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </RowItem>
         <RowItem icon={<Zap />} title={t('settings.connection')} desc={detail}>
           <Button
             variant="outline"

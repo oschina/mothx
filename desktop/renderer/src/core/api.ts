@@ -61,6 +61,8 @@ export interface StoreData {
   homeBackgroundPosition: 'center' | 'left' | 'right' | 'top' | 'bottom';
   homeLogoVisible: boolean;
   homeLogoImage: string;
+  runtimeSource: 'bundled' | 'custom';
+  runtimeBinaryPath: string;
   lastWorkspace: string;
   recentWorkspaces: string[];
   pinnedSessions: string[];
@@ -72,6 +74,15 @@ export interface AppInfo {
   platform: string;
   arch: string;
   runtimeBinary: string;
+}
+
+export interface RuntimeBinaryStatus {
+  source: 'bundled' | 'custom';
+  configuredPath: string;
+  bundledPath: string;
+  effectivePath: string;
+  effectiveOrigin: 'env' | 'custom' | 'bundled' | 'none';
+  fallback: '' | 'env' | 'custom';
 }
 
 export interface DiagnosticLogEntry {
@@ -104,6 +115,9 @@ interface MothxBridge {
     homeLogoDataURL: (path: string) => Promise<ReadHomeImageResult>;
     chooseFiles: () => Promise<{ path: string; grant: string }[]>;
     readFileBase64: (grant: string) => Promise<{ ok: true; data: string; size: number } | { ok: false; error: string }>;
+    runtimeBinary: () => Promise<RuntimeBinaryStatus>;
+    chooseRuntimeBinary: (defaultPath?: string) => Promise<string | null>;
+    setRuntimeBinary: (source: 'bundled' | 'custom', path?: string) => Promise<{ ok: boolean; error?: string; runtime: RuntimeBinaryStatus }>;
     storeGet: () => Promise<StoreData>;
     storeSet: (patch: Partial<StoreData>) => Promise<StoreData>;
     windowControl: (action: 'minimize' | 'maximize' | 'close') => void;
@@ -155,6 +169,9 @@ export const desktop = {
   homeLogoDataURL: (path: string) => bridge().desktop.homeLogoDataURL(path),
   chooseFiles: () => bridge().desktop.chooseFiles(),
   readFileBase64: (grant: string) => bridge().desktop.readFileBase64(grant),
+  runtimeBinary: () => bridge().desktop.runtimeBinary(),
+  chooseRuntimeBinary: (defaultPath?: string) => bridge().desktop.chooseRuntimeBinary(defaultPath),
+  setRuntimeBinary: (source: 'bundled' | 'custom', path?: string) => bridge().desktop.setRuntimeBinary(source, path),
   storeGet: () => bridge().desktop.storeGet(),
   storeSet: (patch: Partial<StoreData>) => bridge().desktop.storeSet(patch),
   windowControl: (action: 'minimize' | 'maximize' | 'close') => bridge().desktop.windowControl(action),
