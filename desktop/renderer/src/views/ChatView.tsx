@@ -7,6 +7,7 @@ import { Check, ChevronDown, ChevronUp, List, Pencil, ServerCog, Share2, Trash2 
 import { ChatStream } from '@/components/ChatStream';
 import { Composer } from '@/components/Composer';
 import { StatusChip } from '@/components/StatusChip';
+import { WorktreeMenu } from '@/components/WorktreeMenu';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -20,6 +21,7 @@ import { t } from '@/core/i18n';
 import { deleteSession, forkSession, renameSession } from '@/core/sessions';
 import { hasFeature } from '@/core/state';
 import { STATUS_VARIANT, type PlanItem } from '@/core/transcript';
+import { worktreeSupported } from '@/core/worktrees';
 import { useAppBackground } from '@/hooks/useAppBackground';
 import { useAppState } from '@/hooks/useAppState';
 import { McpPanel } from '@/views/settings/McpPanel';
@@ -31,6 +33,8 @@ export function ChatView() {
   const [projectMcpOpen, setProjectMcpOpen] = useState(false);
   const [planCollapsed, setPlanCollapsed] = useState(false);
   const projectMcpEnabled = Boolean(appState.activeSessionId) && hasFeature('manageMcp');
+  // 隔离工作区入口:已有对话后放在头部右上角,不再占用 composer 工具栏。
+  const worktreeEnabled = Boolean(appState.activeSessionId) && worktreeSupported();
   const activePlan = useMemo(
     () => [...appState.transcript].reverse().find((item): item is PlanItem => item.kind === 'plan' && item.entries.length > 0),
     [appState.transcript],
@@ -53,6 +57,7 @@ export function ChatView() {
           {appState.activeTitle || t('chat.newTask')}
         </div>
         <div className="flex gap-0.5">
+          {worktreeEnabled ? <WorktreeMenu variant="header" /> : null}
           {projectMcpEnabled ? (
             <Tooltip>
               <TooltipTrigger asChild>

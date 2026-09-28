@@ -9,6 +9,8 @@ import { applyWorktreeStatus, waitForWorktree, worktreeReadiness } from './workt
 const here = dirname(fileURLToPath(import.meta.url));
 const worktreesSource = readFileSync(join(here, 'worktrees.ts'), 'utf8');
 const composerSource = readFileSync(join(here, '..', 'components', 'Composer.tsx'), 'utf8');
+const worktreeMenuSource = readFileSync(join(here, '..', 'components', 'WorktreeMenu.tsx'), 'utf8');
+const chatViewSource = readFileSync(join(here, '..', 'views', 'ChatView.tsx'), 'utf8');
 const clientSource = readFileSync(join(here, '..', '..', '..', 'main', 'acp-client.ts'), 'utf8');
 const translations = readFileSync(join(here, 'i18n.ts'), 'utf8');
 
@@ -60,18 +62,25 @@ test('main forwards the worktree status notification to the renderer', () => {
   assert.match(clientSource, /onWorktreeStatus/, 'main must expose a worktree status handler');
 });
 
-test('composer exposes the worktree action only when advertised', () => {
-  assert.match(composerSource, /worktreeSupported\(\)/, 'composer must gate the worktree control on the capability key');
-  assert.match(composerSource, /createIsolatedWorktree\(\)/, 'composer must call the shared worktree action');
+test('composer exposes the worktree action only when advertised and only before a conversation', () => {
+  assert.match(composerSource, /worktreeSupported\(\) && isHome \? <WorktreeMenu isHome \/>/, 'composer must gate the worktree control on the capability key and the home scenario');
+  assert.match(worktreeMenuSource, /createIsolatedWorktree\(\)/, 'menu must call the shared worktree action');
 });
 
-test('composer worktree menu lists, resets and removes through shared actions', () => {
-  assert.match(composerSource, /function WorktreeMenu/, 'composer must render a worktree menu');
-  assert.match(composerSource, /listWorktrees\(workspace\)/, 'menu must list worktrees for the workspace');
-  assert.match(composerSource, /resetWorktree\(/, 'menu must expose reset');
-  assert.match(composerSource, /removeWorktree\(/, 'menu must expose remove');
-  assert.match(composerSource, /composer\.worktreeConfirmReset/, 'reset must confirm');
-  assert.match(composerSource, /composer\.worktreeConfirmRemove/, 'remove must confirm');
+test('the chat header hosts the worktree menu once a conversation exists', () => {
+  assert.match(chatViewSource, /worktreeSupported\(\)/, 'chat header must gate the worktree control on the capability key');
+  assert.match(chatViewSource, /Boolean\(appState\.activeSessionId\) && worktreeSupported\(\)/, 'worktree entry requires an active conversation');
+  assert.match(chatViewSource, /<WorktreeMenu variant="header" \/>/, 'chat header must render the shared worktree menu');
+  assert.match(worktreeMenuSource, /variant === 'header'/, 'menu must support the header icon variant');
+});
+
+test('worktree menu lists, resets and removes through shared actions', () => {
+  assert.match(worktreeMenuSource, /export function WorktreeMenu/, 'renderer must share one worktree menu component');
+  assert.match(worktreeMenuSource, /listWorktrees\(workspace\)/, 'menu must list worktrees for the workspace');
+  assert.match(worktreeMenuSource, /resetWorktree\(/, 'menu must expose reset');
+  assert.match(worktreeMenuSource, /removeWorktree\(/, 'menu must expose remove');
+  assert.match(worktreeMenuSource, /composer\.worktreeConfirmReset/, 'reset must confirm');
+  assert.match(worktreeMenuSource, /composer\.worktreeConfirmRemove/, 'remove must confirm');
 });
 
 test('worktree composer copy remains bilingual', () => {

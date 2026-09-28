@@ -142,19 +142,34 @@ async function runPageLoad(key: string, options: SessionListOptions, reset: bool
   return request;
 }
 
+// Project page keys cached in memory, expanded or not. A branch that was
+// loaded once keeps its page cache after collapsing.
+function cachedProjectPageIds(): string[] {
+  const prefix = 'task:project:';
+  const ids: string[] = [];
+  for (const key of Object.keys(state.sessionPages)) {
+    if (!key.startsWith(prefix)) continue;
+    const id = key.slice(prefix.length, key.lastIndexOf(':'));
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
 // Refresh only the projections needed by the visible task tree. Project
 // branches are intentionally lazy, so a large task library is never pulled
-// through a 20-page client-side loop.
+// through a 20-page client-side loop. Cached project pages are revalidated
+// even while collapsed: a grouping change must never leave a stale branch
+// behind just because it is not expanded right now.
 export async function refreshSessions(): Promise<void> {
   if (!hasFeature('sessionListAll')) return;
-  const expanded = [...state.expandedProjectIds];
+  const projectIds = new Set([...state.expandedProjectIds, ...cachedProjectPageIds()]);
   state.sessionsLoading = true;
   emit();
   try {
     await Promise.all([
       runPageLoad(taskRecentPageKey(), { scope: 'all' }, true),
       runPageLoad(taskUngroupedPageKey(), { scope: 'ungrouped' }, true),
-      ...expanded.map((projectId) => runPageLoad(taskProjectPageKey(projectId), { scope: 'project', projectId }, true)),
+      ...[...projectIds].map((projectId) => runPageLoad(taskProjectPageKey(projectId), { scope: 'project', projectId }, true)),
     ]);
   } finally {
     state.sessionsLoading = false;
@@ -177,8 +192,10 @@ export async function toggleProjectExpanded(projectId: string): Promise<void> {
   expanded.add(projectId);
   state.expandedProjectIds = [...expanded];
   emit();
+  // Always revalidate on expand: a cached page can be stale after grouping
+  // changes made while the branch was collapsed. The reset loader keeps the
+  // previous rows visible during the swap, so this does not flicker.
   const key = taskProjectPageKey(projectId);
-  if (sessionPage(key).loaded) return;
   await runPageLoad(key, { scope: 'project', projectId }, true);
 }
 
