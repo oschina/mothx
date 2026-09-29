@@ -41,12 +41,10 @@ import { changeSessionWorkingDirectory, chooseWorkingDirectory } from '@/core/se
 import { currentConfigOptions, currentModelLabel, currentProviderLabel, isSessionRunning, state, type SessionConfigOptionShape } from '@/core/state';
 import { formatBytes } from '@/core/transcript';
 import { applyWorkspacePickerTarget } from '@/core/workspace-picker';
-import { worktreeSupported } from '@/core/worktrees';
 import { composerFocusEvents, composerInjectEvents, composerReplaceEvents, consumePendingInjection, consumePendingReplacement } from '@/core/bus';
 import { useAppState } from '@/hooks/useAppState';
 import { useAppBackground } from '@/hooks/useAppBackground';
 import { cn, basename } from '@/lib/utils';
-import { WorktreeMenu } from '@/components/WorktreeMenu';
 import {
   Command,
   CommandEmpty,
@@ -565,9 +563,6 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
           </TooltipTrigger>
           <TooltipContent>{workspaceTitle}</TooltipContent>
         </Tooltip>
-
-        {/* 隔离工作区:仅 home(新任务)composer 暴露;已有对话的 chat 视图放在头部右上角 */}
-        {worktreeSupported() && isHome ? <WorktreeMenu isHome /> : null}
 
         <div className="flex-1" />
 

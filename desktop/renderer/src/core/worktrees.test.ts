@@ -62,16 +62,17 @@ test('main forwards the worktree status notification to the renderer', () => {
   assert.match(clientSource, /onWorktreeStatus/, 'main must expose a worktree status handler');
 });
 
-test('composer exposes the worktree action only when advertised and only before a conversation', () => {
-  assert.match(composerSource, /worktreeSupported\(\) && isHome \? <WorktreeMenu isHome \/>/, 'composer must gate the worktree control on the capability key and the home scenario');
+test('the home composer does not host the worktree action', () => {
+  assert.doesNotMatch(composerSource, /WorktreeMenu/, 'home composer must not render the worktree control');
+  assert.doesNotMatch(composerSource, /worktreeSupported/, 'home composer must not gate on the worktree capability key');
   assert.match(worktreeMenuSource, /createIsolatedWorktree\(\)/, 'menu must call the shared worktree action');
 });
 
 test('the chat header hosts the worktree menu once a conversation exists', () => {
   assert.match(chatViewSource, /worktreeSupported\(\)/, 'chat header must gate the worktree control on the capability key');
   assert.match(chatViewSource, /Boolean\(appState\.activeSessionId\) && worktreeSupported\(\)/, 'worktree entry requires an active conversation');
-  assert.match(chatViewSource, /<WorktreeMenu variant="header" \/>/, 'chat header must render the shared worktree menu');
-  assert.match(worktreeMenuSource, /variant === 'header'/, 'menu must support the header icon variant');
+  assert.match(chatViewSource, /<WorktreeMenu \/>/, 'chat header must render the shared worktree menu');
+  assert.doesNotMatch(worktreeMenuSource, /variant === 'header'/, 'menu no longer needs a multi-variant trigger');
 });
 
 test('worktree menu lists, resets and removes through shared actions', () => {

@@ -57,7 +57,7 @@ export function ChatView() {
           {appState.activeTitle || t('chat.newTask')}
         </div>
         <div className="flex gap-0.5">
-          {worktreeEnabled ? <WorktreeMenu variant="header" /> : null}
+          {worktreeEnabled ? <WorktreeMenu /> : null}
           {projectMcpEnabled ? (
             <Tooltip>
               <TooltipTrigger asChild>
