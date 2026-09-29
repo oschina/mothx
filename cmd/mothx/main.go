@@ -72,36 +72,39 @@ func newRootCommand(runFn func([]string, runOptions) error, acpRunFn func(acp.Ru
 }
 
 type cliFlags struct {
-	provider        string
-	model           string
-	mode            string
-	thinking        string
-	continueSession bool
-	resume          string
-	session         string
-	sandbox         bool
-	print           bool
-	json            bool
-	verbose         bool
-	debug           bool
-	expert          string
-	multiAgent      bool
-	delegate        bool
-	workflows       bool
-	cron            bool
-	webSearch       bool
-	browser         bool
-	artifact        bool
-	initServe       bool
-	force           bool
-	enableA2AMaster bool
-	initA2AMaster   bool
-	workDir         string
-	serveConfig     string
-	servePort       string
-	serveWebUIDir   string
-	serveUnsafe     bool
-	lobsterMode     bool
+	provider          string
+	model             string
+	mode              string
+	thinking          string
+	continueSession   bool
+	listSessions      bool
+	listSessionsLimit int
+	listSessionsCwd   string
+	resume            string
+	session           string
+	sandbox           bool
+	print             bool
+	json              bool
+	verbose           bool
+	debug             bool
+	expert            string
+	multiAgent        bool
+	delegate          bool
+	workflows         bool
+	cron              bool
+	webSearch         bool
+	browser           bool
+	artifact          bool
+	initServe         bool
+	force             bool
+	enableA2AMaster   bool
+	initA2AMaster     bool
+	workDir           string
+	serveConfig       string
+	servePort         string
+	serveWebUIDir     string
+	serveUnsafe       bool
+	lobsterMode       bool
 
 	acpPermissionTimeout string
 	acpQuestionTimeout   string
@@ -135,6 +138,9 @@ func cliUseName() string {
 }
 
 func runCLICommand(args []string, flags *cliFlags, runFn func([]string, runOptions) error) error {
+	if flags.listSessions {
+		return listRecentSessions(os.Stdout, flags.listSessionsLimit, flags.listSessionsCwd)
+	}
 	if flags.initA2AMaster {
 		path, err := a2a.InitA2AMasterConfig(flags.force)
 		if err != nil {
@@ -176,6 +182,9 @@ func newACPCommand(flags *cliFlags, acpRunFn func(acp.RunOptions) error) *cobra.
 func registerRootFlags(fs *pflag.FlagSet, flags *cliFlags) {
 	registerSharedProviderFlags(fs, flags)
 	fs.BoolVarP(&flags.continueSession, "continue", "c", false, "Continue most recent session")
+	fs.BoolVar(&flags.listSessions, "list-sessions", false, "List recent sessions across all working directories")
+	fs.IntVar(&flags.listSessionsLimit, "list-sessions-limit", listSessionsDefaultLimit, "How many sessions --list-sessions prints")
+	fs.StringVar(&flags.listSessionsCwd, "list-sessions-cwd", "", "Only list sessions of this working directory")
 	fs.StringVarP(&flags.resume, "resume", "r", "", "Resume session by ID or path")
 	fs.StringVar(&flags.session, "session", "", "Use specific session file or ID")
 	fs.StringVar(&flags.expert, "expert", "", "Bind an expert bundle to this session (switching an existing expert requires a fork)")

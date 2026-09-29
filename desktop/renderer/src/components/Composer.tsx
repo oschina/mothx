@@ -34,10 +34,11 @@ import {
   modelCapability,
   removeAttachment,
   sendPrompt,
+  visibleConfigOptions,
 } from '@/core/composer';
 import { t } from '@/core/i18n';
 import { changeSessionWorkingDirectory, chooseWorkingDirectory } from '@/core/sessions';
-import { currentConfigOptions, currentModelLabel, currentProviderLabel, state, type SessionConfigOptionShape } from '@/core/state';
+import { currentConfigOptions, currentModelLabel, currentProviderLabel, isSessionRunning, state, type SessionConfigOptionShape } from '@/core/state';
 import { formatBytes } from '@/core/transcript';
 import { applyWorkspacePickerTarget } from '@/core/workspace-picker';
 import { worktreeSupported } from '@/core/worktrees';
@@ -270,7 +271,7 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
     }
   }, [autoGrow, source, value]);
 
-  const configOptions = currentConfigOptions();
+  const configOptions = visibleConfigOptions(currentConfigOptions());
   const providerOption = configOptions.find((option) => option.id === 'provider');
   const modelOption = configOptions.find((option) => option.id === 'model');
   const modeOption = configOptions.find((option) => option.id === 'mode');
@@ -294,8 +295,9 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
   const workspaceContext = appState.activeSessionId ? t('composer.workspaceSession') : t('composer.workspaceNew');
   const workspaceTitle = `${workspaceContext}: ${workspace}`;
 
-  const runningHere = appState.promptInFlight && appState.runningSessionId === appState.activeSessionId;
-  const sendDisabled = source === 'chat' ? runningHere : appState.promptInFlight;
+  // 只有当前任务自己的 Run 才占用输入区;后台任务运行时仍可新建/发送另一个任务。
+  const runningHere = isSessionRunning(appState.activeSessionId);
+  const sendDisabled = source === 'chat' && runningHere;
 
   const isHome = source === 'home';
   const provider = providerOption?.currentValue || '';

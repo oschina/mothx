@@ -140,7 +140,10 @@ func (m *Manager) Reload() error {
 	return nil
 }
 
-// ContinueRecent continues the most recent session for a directory, or creates new.
+// ContinueRecent continues the session a person last used in a directory, or
+// creates a new one. "Most recent" means last activity, not newest creation, so
+// continuing an old but active session does not silently switch to an empty one
+// created afterwards.
 func ContinueRecent(cwd, sessionDir string) (*Manager, error) {
 	if sessionDir == "" {
 		sessionDir = platform.SessionDir()
@@ -152,8 +155,9 @@ func ContinueRecent(cwd, sessionDir string) (*Manager, error) {
 	}
 
 	if len(sessions) > 0 {
-		// Most recent
-		sort.Slice(sessions, func(i, j int) bool {
+		// ListForDir already orders by last activity; sort again so the choice
+		// stays correct for callers that reorder the result themselves.
+		sort.SliceStable(sessions, func(i, j int) bool {
 			return sessions[i].ModTime.After(sessions[j].ModTime)
 		})
 		return Open(sessions[0].Path)
@@ -180,8 +184,13 @@ func OpenByPathOrID(cwd, sessionDir, value string) (*Manager, error) {
 
 // SessionInfo contains metadata about a session file.
 type SessionInfo struct {
-	Path            string
+	Path string
+	// ModTime is when the session was last used (its newest persisted entry),
+	// which is what every listing orders and displays. CreatedAt keeps the
+	// creation timestamp separately; it names the session handle and never
+	// stands in for activity.
 	ModTime         time.Time
+	CreatedAt       time.Time
 	Name            string
 	Cwd             string
 	ChannelType     string
@@ -304,7 +313,10 @@ func virtualSessionFile(sessionDir, id string, ts time.Time) string {
 	return filepath.Join(sessionDir, fmt.Sprintf("%s_%s.db", ts.Format("20060102-150405"), id))
 }
 
-// ListForDir lists session files for a given working directory.
+// ListForDir lists session files for a given working directory. The returned
+// sessions carry their last activity time, not just their creation time, so a
+// caller that continues "the most recent session" continues the one a person
+// actually last worked in.
 func ListForDir(cwd, sessionDir string) ([]SessionInfo, error) {
 	if sessionDir == "" {
 		sessionDir = platform.SessionDir()
@@ -315,23 +327,46 @@ func ListForDir(cwd, sessionDir string) ([]SessionInfo, error) {
 		return nil, err
 	}
 
-	records, err := dao.NewSessionDAO(db.Bun()).ListForDir(context.Background(), cwd)
+	records, err := dao.NewSessionDAO(db.Bun()).ListForDir(context.Background(), cwd, sessionCWDFilter())
 	if err != nil {
 		return nil, err
 	}
+	return sessionInfosFromRecords(sessionDir, records), nil
+}
+
+// sessionCWDFilter reports whether a stored working directory must be matched
+// case-insensitively. Windows and macOS paths are case-insensitive file
+// systems, so the same directory can arrive spelled differently from a shell, a
+// native directory picker, or another entry point. Matching it exactly would
+// hide a session from the directory it belongs to.
+func sessionCWDFilter() dao.SessionCWDFilter {
+	if platform.IsWindows() || platform.IsMacOS() {
+		return dao.SessionCWDCaseInsensitive
+	}
+	return dao.SessionCWDExact
+}
+
+// sessionInfosFromRecords projects session rows into SessionInfo. The virtual
+// handle path stays keyed by creation time so a session keeps one stable
+// identity, while ModTime carries the last activity time every listing already
+// treats as "last used".
+func sessionInfosFromRecords(sessionDir string, records []dao.SessionRecord) []SessionInfo {
 	var sessions []SessionInfo
 	for _, record := range records {
-		ts := parseSessionTimestamp(record.Timestamp)
-
+		created := parseSessionTimestamp(record.Timestamp)
+		lastActive := parseSessionTimestamp(record.LastActiveAt)
+		if lastActive.IsZero() {
+			lastActive = created
+		}
 		// Create a virtual file path in the sessionDir directory
-		virtualFile := virtualSessionFile(sessionDir, record.ID, ts)
+		virtualFile := virtualSessionFile(sessionDir, record.ID, created)
 
 		sessions = append(sessions, SessionInfo{
-			Path: virtualFile, ModTime: ts, Cwd: record.CWD, ChannelType: record.ChannelType, ChannelID: record.ChannelID,
+			Path: virtualFile, ModTime: lastActive, CreatedAt: created, Cwd: record.CWD, ChannelType: record.ChannelType, ChannelID: record.ChannelID,
 			ParentSession: stringValue(record.ParentSession), ForkBoundarySeq: record.ForkBoundarySeq, SeedLength: record.SeedLength, ForkKind: record.ForkKind, ExpertID: record.ExpertID,
 		})
 	}
-	return sessions, nil
+	return sessions
 }
 
 // ListAll lists session files across all working directories.
@@ -350,19 +385,11 @@ func ListAll(sessionDir string, opts ...ListOption) ([]SessionInfo, error) {
 		return nil, err
 	}
 
-	records, err := dao.NewSessionDAO(db.Bun()).List(context.Background(), dao.SessionListFilter{Search: opt.search, MessagesOnly: opt.messagesOnly, Limit: opt.limit, Offset: opt.offset})
+	records, err := dao.NewSessionDAO(db.Bun()).List(context.Background(), dao.SessionListFilter{Search: opt.search, MessagesOnly: opt.messagesOnly, Limit: opt.limit, Offset: opt.offset, CWDFilter: sessionCWDFilter()})
 	if err != nil {
 		return nil, err
 	}
-	var sessions []SessionInfo
-	for _, record := range records {
-		ts := parseSessionTimestamp(record.Timestamp)
-		sessions = append(sessions, SessionInfo{
-			Path: virtualSessionFile(sessionDir, record.ID, ts), ModTime: ts, Cwd: record.CWD, ChannelType: record.ChannelType, ChannelID: record.ChannelID,
-			ParentSession: stringValue(record.ParentSession), ForkBoundarySeq: record.ForkBoundarySeq, SeedLength: record.SeedLength, ForkKind: record.ForkKind, ExpertID: record.ExpertID,
-		})
-	}
-	return sessions, nil
+	return sessionInfosFromRecords(sessionDir, records), nil
 }
 
 // CountWithMessages returns the number of sessions that contain at least one

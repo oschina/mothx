@@ -32,6 +32,28 @@
   - 摘要子 Agent 的上限保持为 3，作为偶发"幽灵工具调用"轮次的安全余量（其工具集始终为空）；误导性的 `tool result summarization returned empty result` 错误文案也更名为 `summarization returned empty result`。
   - 新增回归测试覆盖：1 次迭代预算内的空响应与输出上限恢复、摘要子 Agent 在空响应后正常恢复。
 
+- **Desktop 任务可并行运行与自由切换**
+  - Desktop 之前用一个全局 `promptInFlight` 标志描述"有任务在跑"，因此任务 A 运行期间无法新建任务 B，新建任务输入区被禁用，点侧边栏其他任务只会得到"当前任务还在运行"，必须再点一次"新建任务"才恢复。Run 状态改为按会话投影（`runningSessions`）：后台任务不会让当前任务显示为忙碌、不再阻塞任务切换、也不会覆盖当前任务的运行状态；重新打开仍在运行的任务会保持"执行中"，而不会卡在加载态。
+  - 流式内容的路由收敛为唯一规则——内容属于拥有该转录的会话——因此在另一任务流式输出期间新建的任务不会再把两段对话混进同一个视图，当前会话的失败也一定会写进自己的转录，而不是只变一下左上角状态点。
+  - 发送改为单飞：回车连按（或按键重复）不再并发创建两个会话，也不会把同一条消息发两次。
+
+- **Desktop 任务列表不再残留已删除的会话**
+  - 删除任务后会先把该会话从所有已缓存投影中驱逐，再执行刷新；当新的列表请求正在进行时，排队中的那次请求会被串接执行，而不是复用仍在飞行中的旧响应，因此已删除（或已改组/重命名）的会话不会再留在展开的项目分支里。任务列表刷新失败现在会弹出提示，而不是悄悄把列表冻结在旧数据上。
+  - `session/delete` 与 `mothx/session/delete` 变为幂等：删除一个已被移除的会话会成功返回，而不是报 `session "…" not registered in DB`。
+
+- **任务输入区的供应商选择器只显示可用供应商并按使用排序**
+  - Desktop 任务输入区此前忽略了 `mothx/manage/providers/list` 已经投影的 `apiKeyConfigured`，于是没有配置 API Key 的供应商与可用的供应商并列出现在新建任务与会话内的选择器里。现在两个选择器都只渲染 Runtime 报告为已配置的供应商；当投影里没有任何已配置供应商（或旧运行时没有该字段）时，菜单仍保留可选项而不会被清空。
+  - 供应商顺序改为单一权威投影，取代原本写死的厂商优先级列表：`mothx/manage/providers/list` 按"默认供应商 → 最近一次实际请求 → 从未使用者的稳定目录优先级"排序，并为每个条目附加 `usageCount`/`lastUsedAt`。以最近活跃为主序，是因为刚添加的供应商通常也正是刚开始使用的那一个，而纯按请求次数会把新供应商永远埋在长期老 favourite 之后。Desktop 选择器直接消费该顺序，会话内选择器与新建任务选择器展示相同的优先供应商。
+
+- **`mothx --continue` 能恢复最近真正使用过的会话**
+  - `sessions.cwd` 此前按字节精确比较，因此通过 Desktop 目录选择器创建（记录磁盘上的真实大小写）的会话，在 shell 里用另一种大小写书写同一目录时就查不到，`mothx --continue` 会静默地续接了另一个会话。现在会话列表在 Windows 与 macOS 上按大小写不敏感匹配工作目录，在大小写敏感的文件系统上仍保持精确匹配。
+  - "最近"此前指"最近创建"：`SessionInfo.ModTime`（所有列表都按"最后使用"语义消费它——TUI 的时间列、Serve 的 `LastUsed`、Desktop 的 `updatedAt`）填的却是创建时间。它现在承载最新一条持久化 entry 的时间，`CreatedAt` 单独保留创建时间，虚拟会话句柄仍以创建时间命名，会话身份保持不变。于是 `--continue` 会续接真正最近使用过的会话。
+  - **新增 `mothx --list-sessions`。** 跨全部工作目录列举最近会话（ID、最后使用时间、消息数、工作目录、标题），用于找回从 Desktop、Serve 或消息渠道发起的对话。`--list-sessions-limit` 控制输出条数（默认 20），`--list-sessions-cwd` 可只看某个目录。
+
+- **文档：说明 ChatGPT/Codex 订阅能否在 MothX 中使用**
+  - 新增 FAQ 条目与配置章节：ChatGPT Plus/Pro 订阅**不能**直接接到 MothX。它由 Codex 内部后端（`chatgpt.com/backend-api/codex/responses`）提供服务、使用 ChatGPT OAuth access token 并由 OpenAI 控制刷新节奏，两者都与 MothX 的 provider 凭据模型（明文 / `${ENV}` / `!command`）不兼容，且把订阅接入第三方客户端不符合其服务条款。文档同时说明了为什么 Codex CLI 自身可以把 ChatGPT 登录态发往自定义 `base_url`，以及推荐的两条替代路径：使用按 token 计费的 OpenAI API（内置 `openai` provider 已按 Codex 模型系列配置好，含 Responses API 与 Codex User-Agent），或把 MothX 指向任意兼容 OpenAI Responses API 的自建/企业网关。
+  - 配置文档新增「指向自建或网关端点」小节，说明 `api: "openai-responses"` + `baseUrl` 的网关用法、显式声明 `models`、凭据形式与 `openai-chat` 回退，以及用 `mothx doctor`/`mothx speedtest` 验证网关。
+
 ## v1.3.102
 
 ### 💥 破坏性变更

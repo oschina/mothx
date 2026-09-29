@@ -44,7 +44,7 @@ import {
   ungroupedSessions,
 } from '@/core/sessions';
 import { openSettingsTab } from '@/core/settings-nav';
-import { hasFeature, sessionTitle, state, type ListedSessionShape, type ProjectShape } from '@/core/state';
+import { hasFeature, isSessionRunning, sessionTitle, state, type ListedSessionShape, type ProjectShape } from '@/core/state';
 import { applyTheme } from '@/core/theme';
 import { switchView } from '@/core/views';
 import { useAppState } from '@/hooks/useAppState';
@@ -80,7 +80,8 @@ function sessionStatus(session: ListedSessionShape): string {
     if (lastRun.active || lastRun.status === 'running') return 'working';
     return lastRun.status || 'idle';
   }
-  if (state.activeSessionId === session.sessionId && state.promptInFlight) return 'working';
+  // 每个任务各自投影自己的 Run:后台任务运行时,当前任务不会显示为“执行中”。
+  if (isSessionRunning(session.sessionId)) return 'working';
   return 'idle';
 }
 

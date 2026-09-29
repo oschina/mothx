@@ -87,7 +87,7 @@ func suggestFlag(cmd *cobra.Command, name string, shorthand bool) string {
 }
 
 func validateRootArgs(cmd *cobra.Command, args []string, flags *cliFlags) error {
-	if len(args) == 0 || flags.print || flags.initServe || flags.initA2AMaster {
+	if len(args) == 0 || flags.print || flags.initServe || flags.initA2AMaster || flags.listSessions {
 		return nil
 	}
 

@@ -8,6 +8,9 @@ import test from 'node:test';
 
 import { state } from './state.ts';
 import {
+  deleteSession,
+  evictSessionFromPages,
+  recentSessions,
   refreshSessions,
   sessionPage,
   setSessionProject,
@@ -16,6 +19,7 @@ import {
   toggleProjectExpanded,
   ungroupedSessions,
 } from './sessions.ts';
+import { registerUiHost } from './ui-host.ts';
 
 interface FakeSession {
   sessionId: string;
@@ -79,6 +83,12 @@ async function fakeInvoke(method: string, params?: unknown): Promise<{ ok: true;
           })),
         },
       };
+    }
+    case 'session/delete': {
+      const request = (params || {}) as Record<string, unknown>;
+      const index = fakeSessions.findIndex((entry) => entry.sessionId === String(request.sessionId));
+      if (index >= 0) fakeSessions.splice(index, 1);
+      return { ok: true, result: {} };
     }
     default:
       return { ok: true, result: {} };
@@ -178,6 +188,53 @@ try {
     assert.ok(!page.sessions.some((session) => session.sessionId === 's1'), 'project page must drop the removed session');
     assert.ok(sessionPage(taskUngroupedPageKey()).loaded, 'ungrouped page must stay loaded');
     assert.equal(projectOf('s1'), null);
+  });
+
+  // 删除回归:会话从所有已缓存投影中消失,项目展开的分支也不能再留着它。
+  await test('deleting a session removes it from every cached projection', async () => {
+    const unregister = registerUiHost({
+      toast: () => undefined,
+      prompt: async () => null,
+      confirm: async () => true,
+      previewImage: () => undefined,
+    });
+    try {
+      await setSessionProject('s1', 'p1');
+      await toggleProjectExpanded('p1');
+      await refreshSessions();
+      assert.ok(sessionPage(taskProjectPageKey('p1')).sessions.some((session) => session.sessionId === 's1'));
+
+      await deleteSession('s1');
+
+      const visible = [
+        ...sessionPage(taskProjectPageKey('p1')).sessions,
+        ...sessionPage(taskUngroupedPageKey()).sessions,
+        ...recentSessions(),
+        ...ungroupedSessions(),
+        ...state.sessions,
+      ];
+      assert.ok(
+        !visible.some((session) => session.sessionId === 's1'),
+        'a deleted session must disappear from the project branch and every task list',
+      );
+      assert.equal(projectOf('s1'), null, 'the durable session must be gone');
+    } finally {
+      unregister();
+    }
+  });
+
+  // 即使某个已缓存页面仍然持有旧行(例如在删除前就加载过),主动驱逐也必须
+  // 清掉它:删除是 Runtime 的持久事实,不能依赖某一次刷新恰好成功。
+  await test('evictSessionFromPages drops the row from a page cached before the delete', async () => {
+    await setSessionProject('s2', 'p1');
+    await toggleProjectExpanded('p1');
+    assert.ok(sessionPage(taskProjectPageKey('p1')).sessions.some((session) => session.sessionId === 's2'));
+
+    evictSessionFromPages('s2');
+
+    assert.ok(!sessionPage(taskProjectPageKey('p1')).sessions.some((session) => session.sessionId === 's2'));
+    assert.ok(!state.sessions.some((session) => session.sessionId === 's2'));
+    assert.ok(!recentSessions().some((session) => session.sessionId === 's2'));
   });
 } finally {
   (globalThis as { window?: unknown }).window = previousWindow;

@@ -32,7 +32,8 @@ test('provider, model, workspace and expert labels truncate cleanly', () => {
 test('both composer surfaces share one implementation with home/chat variants', () => {
   assert.match(composer, /export function Composer\(\{ source \}: \{ source: 'home' \| 'chat' \}\)/, 'one component must serve both toolbars');
   assert.match(composer, /isHome \? t\('home\.composerPlaceholder'\) : t\('chat\.inputPlaceholder'\)/, 'placeholders must stay scenario-specific');
-  assert.match(composer, /const sendDisabled = source === 'chat' \? runningHere : appState\.promptInFlight;/, 'send gating must match the previous per-view semantics');
+  assert.match(composer, /const runningHere = isSessionRunning\(appState\.activeSessionId\);/, 'send gating must follow the active session run, not a global flag');
+  assert.match(composer, /const sendDisabled = source === 'chat' && runningHere;/, 'a background task must never disable the new-task composer');
   assert.match(composer, /source === 'chat' && runningHere/, 'the stop control belongs to the active chat run only');
   assert.match(composer, /cancelRun\(\)/, 'stop must cancel through the canonical run action');
 });

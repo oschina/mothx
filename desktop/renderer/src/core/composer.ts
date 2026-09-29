@@ -13,8 +13,11 @@ import {
   emit,
   hasFeature,
   isReady,
+  isSessionRunning,
   newSessionWorkspace,
-  setSessionStatus,
+  sessionOwnsTranscript,
+  sessionRunStatus,
+  setSessionRunStatus,
   state,
   type AttachmentDraft,
   type SessionConfigOptionShape,
@@ -129,7 +132,7 @@ export function buildPromptBlocks(text: string): ContentBlock[] {
 const pendingConfig: { provider?: string; model?: string; mode?: string; expert?: string; thinking_level?: string } = {};
 
 interface ProviderCatalogResult {
-  providers?: { name?: string }[];
+  providers?: { name?: string; isDefault?: boolean; apiKeyConfigured?: boolean }[];
   models?: { id?: string; name?: string; provider?: string; reasoning?: boolean; input?: string[] }[];
   defaultProvider?: string;
   defaultModel?: string;
@@ -152,6 +155,26 @@ export interface ModelChoice {
 // model choices without inventing local resolution rules.
 let draftModelsByProvider: Record<string, ModelChoice[]> = {};
 let catalogCapabilities = new Map<string, ModelChoice>();
+// ACP 的 providers/list 投影给出的供应商事实:哪些已配置密钥,以及权威顺序
+// (默认供应商 → 最近使用 → 未使用的目录优先级)。任务输入区只按它渲染菜单,
+// 不自己判断可用性或重排优先级。
+let configuredProviders = new Set<string>();
+let providerOrder: string[] = [];
+
+// providerIsConfigured reports whether the ACP provider projection marked a
+// usable API key. Providers the projection does not know about stay visible so
+// an older runtime never loses its picker.
+export function providerIsConfigured(name: string): boolean {
+  if (!configuredProviders.size) return true;
+  return configuredProviders.has(name);
+}
+
+// providerRank is the ACP-projected picker position of a provider. Unknown
+// providers keep their projected order at the end of the menu.
+function providerRank(name: string): number {
+  const index = providerOrder.indexOf(name);
+  return index >= 0 ? index : providerOrder.length;
+}
 
 export function draftModelChoices(provider: string): ModelChoice[] {
   return draftModelsByProvider[provider] || [];
@@ -159,6 +182,25 @@ export function draftModelChoices(provider: string): ModelChoice[] {
 
 export function modelCapability(provider: string, modelId: string): ModelChoice | undefined {
   return catalogCapabilities.get(`${provider}:${modelId}`);
+}
+
+// visibleConfigOptions narrows and orders only the provider menu of an ACP
+// config option catalog, using the projected provider order so a session picker
+// shows the same providers first as the next-task picker. Option semantics
+// (values, current value, mode, expert, model list, …) stay as projected.
+export function visibleConfigOptions(options: SessionConfigOptionShape[]): SessionConfigOptionShape[] {
+  return options.map((option) => {
+    if (option.id !== 'provider' || !option.options || option.options.length === 0) return option;
+    const usable = option.options.filter((choice) => providerIsConfigured(choice.value));
+    // Never hide every provider: a runtime that projects no usable key at all
+    // must still leave a selectable menu.
+    if (usable.length === 0) return option;
+    const ordered = providerOrder.length
+      ? [...usable].sort((left, right) => providerRank(left.value) - providerRank(right.value))
+      : usable;
+    if (ordered.length === option.options.length && ordered.every((choice, index) => choice === option.options?.[index])) return option;
+    return { ...option, options: ordered };
+  });
 }
 
 // Populate the next-task model picker from ACP's provider factory projection.
@@ -169,11 +211,16 @@ export async function refreshDraftConfigOptions(): Promise<void> {
   if (!isReady() || !hasFeature('manageProviders')) return;
   try {
     const result = await invoke<ProviderCatalogResult>('mothx/manage/providers/list', {});
-    const providerChoices = (result.providers || [])
+    const projected = result.providers || [];
+    configuredProviders = new Set(projected.filter((provider) => provider.apiKeyConfigured !== false).map((provider) => String(provider.name || '')));
+    // 顺序完全采用 Runtime 的权威投影(默认供应商 → 最近使用 → 未使用)。
+    providerOrder = projected.map((provider) => String(provider.name || '')).filter(Boolean);
+    const defaultProvider = String(result.defaultProvider || '');
+    const providerChoices = projected
       .map((provider) => ({ value: String(provider.name || ''), name: String(provider.name || '') }))
-      .filter((provider) => provider.value !== '');
+      .filter((provider) => provider.value !== '' && providerIsConfigured(provider.value));
     const existingProvider = state.draftConfigOptions.find((option) => option.id === 'provider')?.currentValue;
-    const preferredProvider = pendingConfig.provider || existingProvider || result.defaultProvider || '';
+    const preferredProvider = pendingConfig.provider || existingProvider || defaultProvider;
     const provider = providerChoices.some((choice) => choice.value === preferredProvider) ? preferredProvider : providerChoices[0]?.value || '';
     draftModelsByProvider = {};
     catalogCapabilities = new Map();
@@ -302,6 +349,11 @@ async function flushPendingConfig(sessionId: string): Promise<void> {
 }
 
 // sendPrompt 返回 true 表示请求已发出(调用方应清空输入框)。
+// 整个“创建会话 + 发送”是单飞临界区:回车连按(或按键重复)不能并发创建两个
+// 会话、也不能把同一条消息发两次。运行期由每个会话自己的 Run 状态投影负责,
+// 因此后台任务运行时仍然可以新建并发送另一个任务。
+let sending = false;
+
 export async function sendPrompt(text: string, source: 'home' | 'chat'): Promise<boolean> {
   const trimmed = text.trim();
   if (!trimmed && state.attachments.length === 0) {
@@ -312,10 +364,19 @@ export async function sendPrompt(text: string, source: 'home' | 'chat'): Promise
     toast(t('prompt.notConnected'));
     return false;
   }
-  if (state.promptInFlight && state.runningSessionId === state.activeSessionId) {
+  if (sending || isSessionRunning(state.activeSessionId)) {
     toast(t('prompt.busy'));
     return false;
   }
+  sending = true;
+  try {
+    return await dispatchPrompt(trimmed, source);
+  } finally {
+    sending = false;
+  }
+}
+
+async function dispatchPrompt(trimmed: string, source: 'home' | 'chat'): Promise<boolean> {
   let sessionId = state.activeSessionId;
   if (!sessionId) {
     // 新建对话先确认工作目录(用户取消则放弃发送)。
@@ -347,22 +408,16 @@ export async function sendPrompt(text: string, source: 'home' | 'chat'): Promise
   state.pendingUserKey = localKey;
   state.transcript.push({ kind: 'user', key: localKey, text: trimmed || attachmentNote });
   state.currentPlanKey = null;
-  state.promptInFlight = true;
-  state.runningSessionId = sessionId;
-  state.runStatus = state.currentMode === 'plan' ? 'planning' : 'working';
-  setSessionStatus(sessionId, 'working');
+  setSessionRunStatus(sessionId, state.currentMode === 'plan' ? 'planning' : 'working');
   emit();
   requestChatScroll(true);
 
   const cwd = activeSessionWorkspace();
   if (!cwd) {
     const message = t('prompt.sessionWorkspaceUnavailable');
-    state.runStatus = 'failed';
-    setSessionStatus(sessionId, 'failed');
+    setSessionRunStatus(sessionId, 'failed');
     state.transcript.push({ kind: 'error', key: `error-prompt:${Date.now()}`, message });
     terminalizePendingDecisions();
-    state.promptInFlight = false;
-    state.runningSessionId = null;
     emit();
     return true;
   }
@@ -374,23 +429,20 @@ export async function sendPrompt(text: string, source: 'home' | 'chat'): Promise
   })
     .then((result) => {
       const reason = String(result?.stopReason || 'end_turn');
-      if (state.runStatus === 'failed' || state.runStatus === 'cancelled') return;
-      state.runStatus = reason === 'cancelled' || reason === 'aborted' ? 'cancelled' : 'completed';
-      setSessionStatus(promptSessionId, state.runStatus);
+      const current = sessionRunStatus(promptSessionId);
+      if (current === 'failed' || current === 'cancelled') return;
+      setSessionRunStatus(promptSessionId, reason === 'cancelled' || reason === 'aborted' ? 'cancelled' : 'completed');
     })
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      state.runStatus = 'failed';
-      setSessionStatus(promptSessionId, 'failed');
-      state.transcript.push({ kind: 'error', key: `error-prompt:${Date.now()}`, message });
+      setSessionRunStatus(promptSessionId, 'failed');
+      if (sessionOwnsTranscript(promptSessionId)) {
+        state.transcript.push({ kind: 'error', key: `error-prompt:${Date.now()}`, message });
+      }
       terminalizePendingDecisions();
     })
     .finally(() => {
-      if (state.runningSessionId === promptSessionId) {
-        state.promptInFlight = false;
-        state.runningSessionId = null;
-      }
-      state.currentPlanKey = null;
+      if (sessionOwnsTranscript(promptSessionId)) state.currentPlanKey = null;
       emit();
       requestChatScroll();
     });
@@ -406,12 +458,12 @@ async function refreshSidebarAfterCreate(sessionId: string): Promise<void> {
 }
 
 export function cancelRun(): void {
-  const target = state.runningSessionId || state.activeSessionId;
-  if (!target) return;
+  // 只取消当前任务自己的 Run;后台任务继续运行。
+  const target = state.activeSessionId;
+  if (!target || !isSessionRunning(target)) return;
   acp.notify('session/cancel', { sessionId: target });
-  if (target === state.activeSessionId) state.runStatus = 'cancelled';
+  setSessionRunStatus(target, 'cancelled');
   terminalizePendingDecisions();
-  setSessionStatus(target, 'cancelled');
   emit();
 }
 

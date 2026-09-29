@@ -129,6 +129,48 @@ nslookup api.deepseek.com
 mothx --provider openai --model gpt-4o
 ```
 
+### Q: 能否在 MothX 里使用我的 ChatGPT/Codex 订阅？
+
+**简短回答：** ChatGPT Plus/Pro 订阅无法直接接到 MothX。请使用 OpenAI API key（按 token 计费），或把 MothX 指向你自己已有的、兼容 OpenAI Responses API 的网关。
+
+**为什么订阅不行？** 三个互相独立的原因：
+
+| 原因 | 说明 |
+|------|------|
+| 端点不同 | ChatGPT 订阅由 Codex 的内部后端（`chatgpt.com/backend-api/codex/responses`）提供服务，而不是公开的 OpenAI API。它是 Responses API 的未公开、Codex 专用变体，可能随时变更。 |
+| 认证方式不同 | 它使用 ChatGPT OAuth access token 加 ChatGPT account ID 认证，且 token 会过期并由 OpenAI 按自己的节奏刷新。MothX 的 provider 凭据只有明文值、`${ENV}`、`!command` 三种，没有可接入的 OAuth 刷新流程。 |
+| 服务条款 | 把订阅访问接入第三方客户端并不是订阅的售卖用途。 |
+
+这与 **Codex CLI** 自身的情况不同：Codex CLI 可以把 ChatGPT 登录态的请求发往自定义 `base_url`（不设置 `env_key` 时它会自行附带 OAuth token）。那是 Codex 在访问自己的后端，因此在那里可行、在这里不可行。
+
+**替代做法**
+
+1. *使用 OpenAI API。* 内置 `openai` provider 已按 Codex 模型系列配置好（Responses API + Codex User-Agent），只需一个 key：
+
+   ```bash
+   export OPENAI_API_KEY=sk-...
+   mothx --provider openai --model gpt-5.3-codex
+   ```
+
+2. *使用你自己掌控的网关。* 任何实现 OpenAI Responses API 的端点都可以作为 provider：
+
+   ```json
+   {
+     "providers": {
+       "my-gateway": {
+         "baseUrl": "http://127.0.0.1:8787/v1",
+         "apiKey": "${MY_GATEWAY_TOKEN}",
+         "api": "openai-responses",
+         "models": [
+           { "id": "gpt-5.3-codex", "name": "GPT-5.3 Codex (gateway)", "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 }
+         ]
+       }
+     }
+   }
+   ```
+
+   如果你想通过自建网关获得类似订阅的访问体验，OAuth 刷新与协议翻译由该网关负责；MothX 只看到一个普通的 Responses 兼容端点。完整字段列表见 [configuration.md → providers](configuration.md#providers)。
+
 ---
 
 ## 💰 成本与计费

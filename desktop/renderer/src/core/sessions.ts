@@ -7,13 +7,18 @@ import { requestChatScroll, requestComposerFocus } from './bus';
 import { t } from './i18n';
 import {
   emit,
+  forgetSessionRun,
   hasFeature,
+  isSessionRunning,
   newSessionWorkspace,
+  sessionRunStatus,
+  setSessionRunStatus,
   setSessionStatus,
   state,
   type ListedSessionShape,
   type NewSessionResultShape,
   type ProjectShape,
+  type RunStatus,
   type SessionListScope,
   type SessionPageState,
   type TranscriptPageShape,
@@ -99,10 +104,24 @@ function rebuildSessionCache(): void {
 // 分页加载不再清空旧数据:加载期间保留现有条目(仅标记 loading),成功后
 // 一次性原子替换 page 并 emit,避免列表清空重填造成的闪烁。
 const pageRequests = new Map<string, Promise<void>>();
+// Reset loads that arrived while an older request for the same page was still
+// in flight. The newer request must win: a stale response must never resurrect
+// a page the caller already knows is out of date (for example right after a
+// session was grouped, deleted, or renamed).
+const chainedResets = new Set<string>();
 
 async function runPageLoad(key: string, options: SessionListOptions, reset: boolean): Promise<void> {
   const existingRequest = pageRequests.get(key);
-  if (existingRequest) return existingRequest;
+  if (existingRequest) {
+    if (reset && !chainedResets.has(key)) {
+      chainedResets.add(key);
+      void existingRequest.finally(() => {
+        if (!chainedResets.delete(key)) return;
+        void runPageLoad(key, options, true);
+      });
+    }
+    return existingRequest;
+  }
   const request = (async () => {
     const base = state.sessionPages[key];
     if (!reset && base) {
@@ -132,6 +151,10 @@ async function runPageLoad(key: string, options: SessionListOptions, reset: bool
     } catch (error) {
       desktop.log(`mothx/session/listAll failed: ${error instanceof Error ? error.message : String(error)}`);
       state.sessionPages = { ...state.sessionPages, [key]: { ...loadingPage, loading: false } };
+      emit();
+      // A failed page load must be visible, not silently frozen on stale rows.
+      toast(t('session.listFailed', { e: error instanceof Error ? error.message : String(error) }));
+      return;
     }
     emit();
   })();
@@ -253,18 +276,18 @@ export function sessionWorkingDirectory(sessionId: string): string {
   return '';
 }
 
+// openSession switches the visible task. Another session may keep running:
+// the Runtime owns concurrent Runs, so switching away must never be blocked by
+// a background task, and a session that is still running is reattached rather
+// than refused.
 export async function openSession(sessionId: string): Promise<void> {
   const cwd = sessionWorkingDirectory(sessionId);
   if (!cwd || !sessionId) return;
-  if (state.promptInFlight && state.activeSessionId && state.activeSessionId !== sessionId) {
-    toast(t('prompt.busy'));
-    return;
-  }
   clearTranscript(sessionId);
   state.activeSessionId = sessionId;
   state.activeSessionCwd = cwd;
   state.activeTitle = sessionById(sessionId)?.title || sessionId.slice(0, 8);
-  state.runStatus = 'loading';
+  setSessionRunStatus(sessionId, isSessionRunning(sessionId) ? sessionRunStatus(sessionId) : 'loading');
   switchView('chat');
   emit();
   try {
@@ -277,9 +300,12 @@ export async function openSession(sessionId: string): Promise<void> {
     const result = await invoke<NewSessionResultShape>('session/load', params);
     applySessionResult(result);
     const remembered = state.store.sessionStatus[sessionId];
-    state.runStatus = remembered === 'failed' ? 'failed' : remembered === 'pending' ? 'pending' : 'completed';
+    if (!isSessionRunning(sessionId)) {
+      const restored: RunStatus = remembered === 'failed' ? 'failed' : remembered === 'pending' ? 'pending' : 'completed';
+      setSessionRunStatus(sessionId, restored);
+    }
   } catch (error) {
-    state.runStatus = 'failed';
+    setSessionRunStatus(sessionId, 'failed');
     toast(t('session.loadFailed', { e: error instanceof Error ? error.message : String(error) }));
   }
   requestChatScroll(true);
@@ -338,8 +364,6 @@ function resetTaskState(): void {
   state.activeSessionId = null;
   state.activeSessionCwd = '';
   state.activeTitle = '';
-  state.runStatus = 'idle';
-  state.promptInFlight = false;
   state.attachments = [];
   state.dirConfirmed = false;
   clearTranscript(null);
@@ -392,7 +416,7 @@ export async function createIsolatedWorktree(): Promise<void> {
     return;
   }
   const targetSession = state.activeSessionId;
-  if (targetSession && state.promptInFlight) {
+  if (targetSession && isSessionRunning(targetSession)) {
     toast(t('prompt.busy'));
     return;
   }
@@ -436,7 +460,7 @@ async function refreshTaskLibrary(): Promise<void> {
 export async function changeSessionWorkingDirectory(sessionId: string): Promise<void> {
   const current = sessionWorkingDirectory(sessionId);
   if (!current || !sessionId) return;
-  if (state.promptInFlight && state.activeSessionId === sessionId) {
+  if (isSessionRunning(sessionId)) {
     toast(t('prompt.busy'));
     return;
   }
@@ -460,10 +484,30 @@ export async function changeSessionWorkingDirectory(sessionId: string): Promise<
   }
 }
 
+// evictSessionFromPages drops one session from every cached task projection.
+// Deletion is a durable Runtime fact: the row must disappear from the sidebar
+// even if a concurrent page load or a failed refresh would otherwise leave a
+// stale entry behind.
+export function evictSessionFromPages(sessionId: string): void {
+  const pages: Record<string, SessionPageState> = {};
+  for (const [key, page] of Object.entries(state.sessionPages)) {
+    if (!page.sessions.some((session) => session.sessionId === sessionId)) {
+      pages[key] = page;
+      continue;
+    }
+    pages[key] = { ...page, sessions: page.sessions.filter((session) => session.sessionId !== sessionId) };
+  }
+  state.sessionPages = pages;
+  state.sessions = state.sessions.filter((session) => session.sessionId !== sessionId);
+}
+
 export async function deleteSession(sessionId: string): Promise<void> {
+  if (!sessionId) return;
   if (!await confirmDanger(t('chat.confirmDelete'))) return;
-  const cwd = sessionWorkingDirectory(sessionId);
-  if (!hasWorkingDirectory(cwd)) return;
+  if (isSessionRunning(sessionId)) {
+    toast(t('prompt.busy'));
+    return;
+  }
   await invoke('session/close', { sessionId }).catch(() => undefined);
   try {
     await invoke('session/delete', { sessionId });
@@ -475,6 +519,10 @@ export async function deleteSession(sessionId: string): Promise<void> {
       return;
     }
   }
+  // The durable row is gone. Drop every cached projection before refreshing so
+  // the deleted task can never stay visible in a project branch or list.
+  evictSessionFromPages(sessionId);
+  forgetSessionRun(sessionId);
   if (state.activeSessionId === sessionId) void startNewTask(false);
   toast(t('session.deleted'));
   await refreshTaskLibrary();
@@ -613,6 +661,7 @@ export async function deleteProject(id: string): Promise<void> {
   }
 }
 
+// 记住某个会话最近一次 Run 状态(侧边栏状态点的持久记忆)。
 export function rememberActiveStatus(status: string): void {
   if (state.activeSessionId) setSessionStatus(state.activeSessionId, status);
 }

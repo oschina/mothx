@@ -151,6 +151,89 @@ func manageFindProvider(t *testing.T, result map[string]any, name string) map[st
 	return nil
 }
 
+func manageProviderNames(t *testing.T, result map[string]any) []string {
+	t.Helper()
+	entries, _ := result["providers"].([]any)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		view, _ := entry.(map[string]any)
+		name, _ := view["name"].(string)
+		names = append(names, name)
+	}
+	return names
+}
+
+// The provider picker must show what a person actually runs: the default
+// provider first, then providers ordered by their most recent recorded
+// request, then never-used providers in the stable catalog order. Without
+// recorded usage the projection degrades to the catalog order.
+func TestManageProvidersListOrdersProvidersByRecordedUsage(t *testing.T) {
+	configDir := t.TempDir()
+	settings := writeManageSettings(t, configDir, func(s *config.Settings) {
+		s.Providers["manage-recent"] = &config.ProviderConfig{
+			APIKey:  "sk-recent-SUPERSECRET-222222",
+			BaseURL: "https://recent.example.com/v1",
+			API:     "openai-chat",
+			Models:  []config.ModelConfig{{ID: "recent-model", Name: "Recent Model"}},
+		}
+	})
+	output := &syncedBuffer{}
+	srv := newManageFixtureServer(output, configDir)
+
+	catalogOrder := manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/providers/list", map[string]any{}))
+	catalogNames := manageProviderNames(t, catalogOrder)
+	if catalogNames[0] != "manage-alpha" {
+		t.Fatalf("catalog order without usage = %#v, want the default provider first", catalogNames)
+	}
+	brokenBeforeUsage := -1
+	for index, name := range catalogNames {
+		if name == "manage-broken" {
+			brokenBeforeUsage = index
+		}
+	}
+	if brokenBeforeUsage < 0 {
+		t.Fatalf("catalog order = %#v, want manage-broken", catalogNames)
+	}
+
+	// Record one request for a provider that is neither the default nor first in
+	// the catalog order, through the normal usage-recording path.
+	mgr := session.New(t.TempDir(), settings.SessionDir)
+	if err := mgr.InitWithID("usage-ordering"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RecordUsage("manage-recent", "openai-chat", "recent-model", 10, 5, 15, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	used := manageFixtureResult(t, callManageFixture(t, srv, output, 2, "mothx/manage/providers/list", map[string]any{}))
+	names := manageProviderNames(t, used)
+	if len(names) < 3 || names[0] != "manage-alpha" || names[1] != "manage-recent" {
+		t.Fatalf("usage order = %#v, want the default provider first and the recently used provider next", names)
+	}
+	recentIndex, brokenIndex := -1, -1
+	for index, name := range names {
+		switch name {
+		case "manage-recent":
+			recentIndex = index
+		case "manage-broken":
+			brokenIndex = index
+		}
+	}
+	if recentIndex < 0 || brokenIndex < 0 || recentIndex > brokenIndex {
+		t.Fatalf("usage order = %#v, want the never-used provider after the used one", names)
+	}
+	if recentIndex >= brokenBeforeUsage {
+		t.Fatalf("usage order moved manage-recent to %d but the unused catalog order put it at %d", recentIndex, brokenBeforeUsage)
+	}
+	view := manageFindProvider(t, used, "manage-recent")
+	if view["usageCount"] != float64(1) || view["lastUsedAt"] == nil {
+		t.Fatalf("usage projection = %#v, want a recorded usage count and last-used stamp", view)
+	}
+	if manageFindProvider(t, used, "manage-broken")["usageCount"] != float64(0) {
+		t.Fatalf("unused provider projection = %#v, want a zero usage count", manageFindProvider(t, used, "manage-broken"))
+	}
+}
+
 // --- secret masking helpers ----------------------------------------------------
 
 func TestManageMaskSecretShapes(t *testing.T) {

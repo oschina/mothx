@@ -19,7 +19,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { t } from '@/core/i18n';
 import { deleteSession, forkSession, renameSession } from '@/core/sessions';
-import { hasFeature } from '@/core/state';
+import { activeRunStatus, hasFeature } from '@/core/state';
 import { STATUS_VARIANT, type PlanItem } from '@/core/transcript';
 import { worktreeSupported } from '@/core/worktrees';
 import { useAppBackground } from '@/hooks/useAppBackground';
@@ -52,7 +52,7 @@ export function ChatView() {
           background.app && 'border-b-transparent bg-transparent'
         )}
       >
-        <StatusChip variant={STATUS_VARIANT[appState.runStatus] || 'idle'} label={t(`status.${appState.runStatus}`)} />
+        <StatusChip variant={STATUS_VARIANT[activeRunStatus()] || 'idle'} label={t(`status.${activeRunStatus()}`)} />
         <div className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-strong">
           {appState.activeTitle || t('chat.newTask')}
         </div>

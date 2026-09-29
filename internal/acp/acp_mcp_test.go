@@ -963,6 +963,29 @@ func TestDeleteSessionRemovesPersistedSession(t *testing.T) {
 	}
 }
 
+// A second delete of an already removed session must succeed: Desktop drops the
+// session from its cached task pages optimistically and may retry the request,
+// so an absent durable row is the requested end state, not an error.
+func TestDeleteSessionIsIdempotentForAnAlreadyRemovedSession(t *testing.T) {
+	dir := t.TempDir()
+	cwd := t.TempDir()
+	newTestSession(t, cwd, dir, "delete-twice", 1)
+
+	var out bytes.Buffer
+	s := &server{settings: &config.Settings{SessionDir: dir}, w: &out}
+	for attempt := 1; attempt <= 2; attempt++ {
+		out.Reset()
+		s.handleDeleteSession(rpcRequest{
+			ID:     json.RawMessage(fmt.Sprintf("%d", attempt)),
+			Params: json.RawMessage(`{"sessionId":"delete-twice"}`),
+		})
+		response := jsonLines(t, &out)
+		if len(response) != 1 || response[0]["error"] != nil {
+			t.Fatalf("delete attempt %d response = %#v, want success", attempt, response)
+		}
+	}
+}
+
 func TestNewSessionMCPFailureRollsBackPersistedSession(t *testing.T) {
 	dir := t.TempDir()
 	cwd := t.TempDir()

@@ -3345,7 +3345,11 @@ func (s *server) handleDeleteSession(req rpcRequest) {
 	}
 	mgr, err := session.OpenByIDExact(s.settings.GetSessionDir(), in.SessionID)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		// Deletion is idempotent: an already removed session is the requested
+		// end state, not a failure. "not registered in DB" is the session-layer
+		// wording for an absent durable row (same reading as the Serve chat
+		// handler), so a repeated delete must not surface as an error.
+		if acpSessionAbsentError(err) {
 			s.writeResponse(req.ID, map[string]any{}, nil)
 			return
 		}
@@ -3391,6 +3395,17 @@ func (s *server) handleDeleteSession(req rpcRequest) {
 		}
 	}
 	s.writeResponse(req.ID, map[string]any{}, nil)
+}
+
+// acpSessionAbsentError reports whether an error only means "this session is
+// no longer registered". It keeps the absent-session wording of the session
+// layer in one place instead of repeating string matching per handler.
+func acpSessionAbsentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "not found") || strings.Contains(text, "not registered in db")
 }
 
 func (s *server) handleSetSessionTitle(req rpcRequest) {

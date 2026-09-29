@@ -171,7 +171,11 @@ export interface AppState {
   dirConfirmed: boolean;
   activeSessionId: string | null;
   activeTitle: string;
-  runStatus: RunStatus;
+  // Per-session run projection. The Runtime may run several sessions at once,
+  // so Desktop keeps one status per session instead of a single global flag:
+  // a background task must never make the active task look busy, block task
+  // switching, or overwrite the active task's run status.
+  runningSessions: Record<string, RunStatus>;
   transcript: TranscriptItem[];
   transcriptSessionId: string | null;
 	// Ephemeral ACP transcript paging projection. This never becomes Desktop
@@ -188,8 +192,6 @@ export interface AppState {
   usage: { used: number; size: number; cost?: number; cache?: UsageCacheProjection } | null;
   attachments: AttachmentDraft[];
   pendingUserKey: string | null;
-  promptInFlight: boolean;
-  runningSessionId: string | null;
   currentPlanKey: string | null;
   artifactRunCount: number;
 }
@@ -213,7 +215,7 @@ export const state: AppState = {
   dirConfirmed: false,
   activeSessionId: null,
   activeTitle: '',
-  runStatus: 'idle',
+  runningSessions: {},
   transcript: [],
   transcriptSessionId: null,
 	  transcriptNextCursor: '',
@@ -225,8 +227,6 @@ export const state: AppState = {
   usage: null,
   attachments: [],
   pendingUserKey: null,
-  promptInFlight: false,
-  runningSessionId: null,
   currentPlanKey: null,
   artifactRunCount: 0,
 };
@@ -302,6 +302,52 @@ export function currentConfigOptions(): SessionConfigOptionShape[] {
 export function sessionTitle(sessionId: string): string {
   const session = state.sessions.find((entry) => entry.sessionId === sessionId);
   return session?.title || sessionId.slice(0, 8);
+}
+
+// Live run statuses are the non-terminal ones. A session holding one of them
+// owns an unfinished Run and must not be sent a second prompt, retargeted, or
+// reconfigured until it reaches a terminal status. "loading" is a read-side
+// projection (session/load in flight), not a Run, so it never blocks input.
+const LIVE_RUN_STATUSES: RunStatus[] = ['planning', 'working', 'pending'];
+
+export function sessionRunStatus(sessionId: string | null | undefined): RunStatus {
+  if (!sessionId) return 'idle';
+  return state.runningSessions[sessionId] || 'idle';
+}
+
+export function isSessionRunning(sessionId: string | null | undefined): boolean {
+  return LIVE_RUN_STATUSES.includes(sessionRunStatus(sessionId));
+}
+
+export function activeRunStatus(): RunStatus {
+  return sessionRunStatus(state.activeSessionId);
+}
+
+// sessionOwnsTranscript is the single transcript routing rule: streamed content
+// belongs to the session that owns the transcript. A draft (no bound session)
+// owns nothing, so a background run can never mix into the next task.
+export function sessionOwnsTranscript(sessionId: string | null | undefined): boolean {
+  return !!state.transcriptSessionId && state.transcriptSessionId === sessionId;
+}
+
+export function anySessionRunning(): boolean {
+  return Object.values(state.runningSessions).some((status) => LIVE_RUN_STATUSES.includes(status));
+}
+
+// setSessionRunStatus records the canonical run projection of one session and
+// mirrors it into the remembered sidebar dot. It never touches another
+// session, so a background task finishing cannot restate the active task.
+export function setSessionRunStatus(sessionId: string | null | undefined, status: RunStatus): void {
+  if (!sessionId) return;
+  state.runningSessions = { ...state.runningSessions, [sessionId]: status };
+  setSessionStatus(sessionId, status);
+}
+
+export function forgetSessionRun(sessionId: string | null | undefined): void {
+  if (!sessionId || !state.runningSessions[sessionId]) return;
+  const next = { ...state.runningSessions };
+  delete next[sessionId];
+  state.runningSessions = next;
 }
 
 export function setSessionStatus(sessionId: string, status: string): void {

@@ -286,6 +286,48 @@ The built-in `volcengine` provider uses the Ark OpenAI-compatible endpoint and s
 }
 ```
 
+#### Pointing MothX at a self-hosted or gateway endpoint
+
+Any endpoint that speaks the OpenAI **Responses** API can be used as a provider by setting `api` to `"openai-responses"` and pointing `baseUrl` at it. This is the supported way to put a gateway, a corporate proxy, or your own translation shim in front of a model:
+
+```json
+{
+  "providers": {
+    "my-gateway": {
+      "baseUrl": "http://127.0.0.1:8787/v1",
+      "apiKey": "${MY_GATEWAY_TOKEN}",
+      "api": "openai-responses",
+      "httpProxy": "http://127.0.0.1:7890",
+      "headers": {
+        "X-Request-Source": "mothx"
+      },
+      "models": [
+        { "id": "gpt-5.3-codex", "name": "GPT-5.3 Codex (gateway)", "reasoning": true, "contextWindow": 400000, "maxTokens": 128000, "input": ["text", "image"] }
+      ]
+    }
+  },
+  "defaultProvider": "my-gateway"
+}
+```
+
+Notes for gateway setups:
+
+- `apiKey` is the credential the **gateway** expects. MothX supports a plain string, `${ENV_VAR}`, and `!command` (with `VIBECODING_ALLOW_SHELL_CONFIG=1`), so a gateway that reads a token from disk or a secret manager works the same way a direct provider does.
+- Declare the models explicitly. A gateway that does not implement `/v1/models` still works, because MothX uses the `models` list you configure.
+- Use `"openai-chat"` instead of `"openai-responses"` when the gateway only implements Chat Completions. Reasoning models then need a `thinkingFormat` that the upstream understands.
+- Verify the gateway with `mothx doctor` or the `mothx speedtest` command before starting a long run.
+
+#### Using OpenAI Codex models
+
+The built-in `openai` provider is already configured for the Codex model family: it uses the Responses API (`"openai-responses"`), points at `https://api.openai.com/v1`, and sends the Codex CLI user agent its endpoint expects. The Codex models (`gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.2-codex`, `gpt-5.3-codex`, …) are part of the built-in model list, so no settings change is needed beyond an API key:
+
+```bash
+export OPENAI_API_KEY=sk-...
+mothx --provider openai --model gpt-5.3-codex
+```
+
+**This uses the OpenAI API, billed per token.** It is not covered by a ChatGPT Plus/Pro subscription. See the FAQ entry "Can I use my ChatGPT/Codex subscription in MothX?" for why a ChatGPT subscription cannot be pointed at MothX directly.
+
 ### webSearch
 
 Hosted web search settings. This is disabled by default.

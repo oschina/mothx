@@ -58,6 +58,27 @@ type StatsRecord struct {
 	DurationMs   int     `bun:"duration_ms"`
 }
 
+// ProviderUsageRecord is the per-provider usage aggregate returned by
+// ProviderUsage.
+type ProviderUsageRecord struct {
+	Provider   string `bun:"provider"`
+	Requests   int    `bun:"requests"`
+	LastUsedAt string `bun:"last_used_at"`
+}
+
+// ProviderUsage aggregates request_stats per provider: how many requests it
+// served and when it was last used. It backs the Desktop-facing provider pick
+// order from recorded usage instead of a second usage table.
+func (d *StatsDAO) ProviderUsage(ctx context.Context, filter StatsFilter) ([]ProviderUsageRecord, error) {
+	var records []ProviderUsageRecord
+	query := d.db.NewSelect().Model(&records).ModelTableExpr("request_stats").
+		ColumnExpr("provider, COUNT(*) AS requests, MAX(timestamp) AS last_used_at").
+		Group("provider").OrderExpr("MAX(timestamp) DESC, requests DESC")
+	applyStatsFilter(query, filter)
+	err := query.Scan(ctx)
+	return records, err
+}
+
 // StatsDAO provides Bun-backed access to request_stats.
 type StatsDAO struct {
 	db *bun.DB

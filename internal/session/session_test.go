@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/oschina/mothx/internal/platform"
 	"github.com/oschina/mothx/internal/provider"
 	_ "modernc.org/sqlite"
 )
@@ -787,6 +788,110 @@ func TestContinueRecentDefaultDir(t *testing.T) {
 
 	if m == nil {
 		t.Fatal("expected non-nil manager")
+	}
+}
+
+// A session a person last used must stay reachable from its own directory even
+// when the path arrives spelled differently. Desktop records the real on-disk
+// casing from a native directory picker while a shell keeps whatever the person
+// typed, so an exact comparison hides the session from `mothx --continue`.
+func TestListForDirMatchesStoredWorkingDirectoryCaseInsensitively(t *testing.T) {
+	if !platform.IsWindows() && !platform.IsMacOS() {
+		t.Skip("case-insensitive working directories are a Windows/macOS file-system property")
+	}
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	workDir := filepath.Join(t.TempDir(), "CrystalPlasticity")
+	mgr := New(workDir, sessionDir)
+	if err := mgr.InitWithID("case-session"); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+
+	sessions, err := ListForDir(strings.ToUpper(workDir), sessionDir)
+	if err != nil {
+		t.Fatalf("list for re-cased working directory: %v", err)
+	}
+	if len(sessions) != 1 || sessionFileID(sessions[0].Path) != "case-session" {
+		t.Fatalf("sessions = %#v, want the session recorded under the same directory", sessions)
+	}
+
+	continued, err := ContinueRecent(strings.ToUpper(workDir), sessionDir)
+	if err != nil {
+		t.Fatalf("continue recent: %v", err)
+	}
+	if continued.GetHeader().ID != "case-session" {
+		t.Fatalf("continued session = %q, want case-session", continued.GetHeader().ID)
+	}
+}
+
+// The DAO keeps the platform policy out of its SQL: a case-sensitive filesystem
+// still compares working directories byte-for-byte.
+func TestListForDirKeepsCaseSensitiveMatchingOnCaseSensitivePlatforms(t *testing.T) {
+	if platform.IsWindows() || platform.IsMacOS() {
+		t.Skip("case-insensitive working directories are a Windows/macOS file-system property")
+	}
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	workDir := filepath.Join(t.TempDir(), "CrystalPlasticity")
+	mgr := New(workDir, sessionDir)
+	if err := mgr.InitWithID("case-session"); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+
+	sessions, err := ListForDir(strings.ToUpper(workDir), sessionDir)
+	if err != nil {
+		t.Fatalf("list for re-cased working directory: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("sessions = %#v, want no match on a case-sensitive file system", sessions)
+	}
+}
+
+// Continuing "the most recent session" must mean the session that was last
+// used, not the newest one that happens to exist: an older but active session
+// has to win over an empty session created afterwards.
+func TestContinueRecentPrefersTheLastUsedSessionOverTheNewestOne(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "sessions")
+	workDir := filepath.Join(tmpDir, "project")
+
+	active := New(workDir, sessionDir)
+	if err := active.InitWithID("active-session"); err != nil {
+		t.Fatalf("init active session: %v", err)
+	}
+	// A newer session exists but was never used.
+	time.Sleep(5 * time.Millisecond)
+	unused := New(workDir, sessionDir)
+	if err := unused.InitWithID("unused-session"); err != nil {
+		t.Fatalf("init unused session: %v", err)
+	}
+	// The older session becomes the most recently used one.
+	if _, err := active.AppendMessage(provider.NewUserMessage("still working here")); err != nil {
+		t.Fatalf("append message: %v", err)
+	}
+
+	sessions, err := ListForDir(workDir, sessionDir)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("sessions = %#v, want both project sessions", sessions)
+	}
+	if sessions[0].ModTime.Before(sessions[1].ModTime) {
+		t.Fatalf("sessions are not ordered by last activity: %#v", sessions)
+	}
+	listed := map[string]SessionInfo{}
+	for _, info := range sessions {
+		listed[sessionFileID(info.Path)] = info
+	}
+	if !listed["active-session"].CreatedAt.Before(listed["unused-session"].CreatedAt) {
+		t.Fatalf("fixture is wrong: the unused session must be the newer one: %#v", listed)
+	}
+
+	continued, err := ContinueRecent(workDir, sessionDir)
+	if err != nil {
+		t.Fatalf("continue recent: %v", err)
+	}
+	if continued.GetHeader().ID != "active-session" {
+		t.Fatalf("continued session = %q, want the last used session", continued.GetHeader().ID)
 	}
 }
 

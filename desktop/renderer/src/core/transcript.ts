@@ -5,7 +5,9 @@
 import { acp, desktop, invoke } from './api';
 import { requestChatScroll } from './bus';
 import { getLocale, t } from './i18n';
-import { emit, setSessionStatus, state, type ToolCallContentShape, type TranscriptItem, type UsageCacheProjection } from './state';
+import { emit, isSessionRunning, sessionOwnsTranscript, setSessionRunStatus, setSessionStatus, state, type RunStatus, type ToolCallContentShape, type TranscriptItem, type UsageCacheProjection } from './state';
+
+const RUN_STATUS_VALUES = new Set<string>(['idle', 'loading', 'planning', 'working', 'pending', 'completed', 'failed', 'cancelled']);
 import { previewImage, toast } from './ui-host';
 
 export type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>;
@@ -105,8 +107,10 @@ function findItem(key: string): TranscriptItem | undefined {
 // ===== session/update 投影 =====
 
 export function applySessionUpdate(sessionId: string, update: Record<string, unknown>): void {
-  if (state.transcriptSessionId && state.transcriptSessionId !== sessionId) {
-    // 非当前转录会话的事件只维护侧边栏/标题等元数据。
+  if (!sessionOwnsTranscript(sessionId)) {
+    // 非当前转录会话的事件只维护侧边栏/标题等元数据。草稿态
+    // (transcriptSessionId 为空) 同样不属于任何会话:后台任务的流式内容
+    // 绝不能落进正在起草的新任务里。
     applyMetaOnlyUpdate(sessionId, update);
     return;
   }
@@ -333,10 +337,12 @@ export function applySessionEvent(event: Record<string, unknown>): void {
   const sessionId = String(event.sessionId || '');
   const name = String(event.event || '');
   if (name === 'run_status') {
-    // Phase 1.1:run 生命周期投影,侧边栏状态点的协议源。
+    // Phase 1.1:run 生命周期投影,侧边栏状态点的协议源。每个会话各自记录,
+    // 因此后台任务的 run 状态变化不会写进当前任务的运行状态。
     const status = String(event.status || '');
     const mapped = status === 'running' ? 'working' : status;
-    if (mapped) setSessionStatus(sessionId, mapped);
+    if (mapped && RUN_STATUS_VALUES.has(mapped)) setSessionRunStatus(sessionId, mapped as RunStatus);
+    else if (mapped) setSessionStatus(sessionId, mapped);
     emit();
     return;
   }
@@ -376,21 +382,14 @@ export function applySessionEvent(event: Record<string, unknown>): void {
   }
   if (name === 'terminal') {
     const status = String(event.status || 'completed');
-    if (state.runningSessionId && state.runningSessionId === sessionId) {
-      state.promptInFlight = false;
-      state.runningSessionId = null;
-    } else {
-      state.promptInFlight = false;
-    }
+    // The terminal state belongs to the session that finished. Only the active
+    // session's transcript may be cleared and only its plan key is dropped.
     if (status === 'completed') {
-      state.runStatus = 'completed';
-      setSessionStatus(sessionId, 'completed');
+      setSessionRunStatus(sessionId, 'completed');
     } else if (status === 'cancelled') {
-      state.runStatus = 'cancelled';
-      setSessionStatus(sessionId, 'cancelled');
+      setSessionRunStatus(sessionId, 'cancelled');
     } else {
-      state.runStatus = 'failed';
-      setSessionStatus(sessionId, 'failed');
+      setSessionRunStatus(sessionId, 'failed');
       const info = event.errorInfo as { code?: string; message?: string; retryable?: boolean } | undefined;
       if (matchesTranscript(sessionId)) {
         upsert({
@@ -400,15 +399,14 @@ export function applySessionEvent(event: Record<string, unknown>): void {
           code: info?.code,
           retryable: info?.retryable,
         });
-        emit();
       }
     }
-    state.currentPlanKey = null;
+    if (sessionOwnsTranscript(sessionId)) state.currentPlanKey = null;
     emit();
     requestChatScroll();
     return;
   }
-  if (!matchesTranscript(sessionId)) return;
+  if (!sessionOwnsTranscript(sessionId)) return;
   if (name === 'status') {
     upsert({ kind: 'status', key: `status:${sessionId}:${Date.now()}`, text: String(event.message || ''), spin: true });
     emit();
@@ -429,7 +427,7 @@ export function applySessionEvent(event: Record<string, unknown>): void {
 }
 
 function matchesTranscript(sessionId: string): boolean {
-  return !state.transcriptSessionId || state.transcriptSessionId === sessionId;
+  return sessionOwnsTranscript(sessionId);
 }
 
 // ===== 反向请求(审批/提问) =====
@@ -441,8 +439,7 @@ export function applyReverseRequest(id: number | string, method: string, params:
     const options = (params.options || []) as { optionId: string; name: string; kind: string }[];
     const sessionId = String(params.sessionId || state.activeSessionId || '');
     if (!matchesTranscript(sessionId)) return;
-    state.runStatus = 'pending';
-    setSessionStatus(sessionId, 'pending');
+    setSessionRunStatus(sessionId, 'pending');
     upsert({
       kind: 'permission',
       key: `permission:${requestId}`,
@@ -466,10 +463,10 @@ export function applyReverseRequest(id: number | string, method: string, params:
     const options = rawOptions.map((option) =>
       typeof option === 'string' ? { id: option, label: option } : { id: String(option.id ?? option.label ?? ''), label: String(option.label ?? option.id ?? '') },
     );
-    state.runStatus = 'pending';
-    setSessionStatus(sessionId, 'pending');
+    setSessionRunStatus(sessionId, 'pending');
     upsert({
       kind: 'question',
+
       key: `question:${requestId}`,
       requestId,
       sessionId,
@@ -515,8 +512,9 @@ function finishDecision(sessionId: string): void {
     (entry) => ((entry.kind === 'permission' || entry.kind === 'question') && !entry.resolved) && entry.sessionId === sessionId,
   );
   if (!stillPending) {
-    state.runStatus = state.promptInFlight ? 'working' : 'completed';
-    if (sessionId) setSessionStatus(sessionId, state.promptInFlight ? 'working' : 'completed');
+    // The decision only unblocks its own session; another session's run stays
+    // exactly as the Runtime reported it.
+    setSessionRunStatus(sessionId, isSessionRunning(sessionId) ? 'working' : 'completed');
   }
 }
 

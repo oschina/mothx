@@ -286,6 +286,48 @@ TUI 专用状态行命令配置。启用后，MothX 会在交互式 TUI 中把�
 }
 ```
 
+#### 指向自建或网关端点
+
+任何实现 OpenAI **Responses** API 的端点都可以作为 provider 使用：把 `api` 设为 `"openai-responses"`，并让 `baseUrl` 指向它。这是把网关、企业代理或自研转换层放到模型前方的受支持方式：
+
+```json
+{
+  "providers": {
+    "my-gateway": {
+      "baseUrl": "http://127.0.0.1:8787/v1",
+      "apiKey": "${MY_GATEWAY_TOKEN}",
+      "api": "openai-responses",
+      "httpProxy": "http://127.0.0.1:7890",
+      "headers": {
+        "X-Request-Source": "mothx"
+      },
+      "models": [
+        { "id": "gpt-5.3-codex", "name": "GPT-5.3 Codex (gateway)", "reasoning": true, "contextWindow": 400000, "maxTokens": 128000, "input": ["text", "image"] }
+      ]
+    }
+  },
+  "defaultProvider": "my-gateway"
+}
+```
+
+网关配置注意事项：
+
+- `apiKey` 是**网关**要求的凭据。MothX 支持明文字符串、`${ENV_VAR}` 与 `!command`（需 `VIBECODING_ALLOW_SHELL_CONFIG=1`），因此从磁盘或密钥管理器读取 token 的网关与直连 provider 用法一致。
+- 需要显式声明 `models`。即使网关没有实现 `/v1/models`，MothX 会以你配置的模型列表为准。
+- 当网关只实现 Chat Completions 时，把 `api` 改为 `"openai-chat"`；此时推理模型需要上游能识别的 `thinkingFormat`。
+- 开始长任务前，先用 `mothx doctor` 或 `mothx speedtest` 验证网关。
+
+#### 使用 OpenAI Codex 模型
+
+内置 `openai` provider 已按 Codex 模型系列配置好：使用 Responses API（`"openai-responses"`），指向 `https://api.openai.com/v1`，并发送其端点所期望的 Codex CLI User-Agent。Codex 模型（`gpt-5-codex`、`gpt-5.1-codex`、`gpt-5.2-codex`、`gpt-5.3-codex` 等）本来就在内置模型列表里，因此除了 API key 之外无需修改任何配置：
+
+```bash
+export OPENAI_API_KEY=sk-...
+mothx --provider openai --model gpt-5.3-codex
+```
+
+**这里使用的是按 token 计费的 OpenAI API**，不由 ChatGPT Plus/Pro 订阅覆盖。ChatGPT 订阅为何不能直接接到 MothX，见 FAQ 条目「能否在 MothX 里使用我的 ChatGPT/Codex 订阅？」。
+
 ### webSearch
 
 Hosted web search 设置。默认关闭。

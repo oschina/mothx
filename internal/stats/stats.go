@@ -123,6 +123,33 @@ func (s *DB) ByProvider(q Query) ([]Aggregate, error) {
 	return results, nil
 }
 
+// ProviderUsage is one provider's recorded usage: how many requests it served
+// and when it was last used.
+type ProviderUsage struct {
+	Provider   string    `json:"provider"`
+	Requests   int       `json:"requests"`
+	LastUsedAt time.Time `json:"lastUsedAt"`
+}
+
+// ProviderUsage returns the per-provider usage aggregates backing the provider
+// pick order. A provider without recorded requests is simply absent.
+func (s *DB) ProviderUsage(q Query) ([]ProviderUsage, error) {
+	records, err := s.statsDAO.ProviderUsage(context.Background(), statsFilter(q))
+	if err != nil {
+		return nil, err
+	}
+	results := make([]ProviderUsage, 0, len(records))
+	for _, record := range records {
+		usage := ProviderUsage{Provider: record.Provider, Requests: record.Requests}
+		usage.LastUsedAt, _ = time.Parse(time.RFC3339Nano, record.LastUsedAt)
+		if usage.LastUsedAt.IsZero() {
+			usage.LastUsedAt, _ = time.Parse(time.RFC3339, record.LastUsedAt)
+		}
+		results = append(results, usage)
+	}
+	return results, nil
+}
+
 // ByModel returns stats grouped by model.
 func (s *DB) ByModel(q Query) ([]Aggregate, error) {
 	records, err := s.statsDAO.ByModel(context.Background(), statsFilter(q))

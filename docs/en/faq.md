@@ -129,6 +129,48 @@ nslookup api.deepseek.com
 mothx --provider openai --model gpt-4o
 ```
 
+### Q: Can I use my ChatGPT/Codex subscription in MothX?
+
+**Short answer:** a ChatGPT Plus/Pro subscription cannot be pointed at MothX. Use an OpenAI API key (per-token billing), or point MothX at any OpenAI-Responses-compatible gateway you already operate.
+
+**Why not the subscription?** Three independent reasons:
+
+| Reason | Detail |
+|--------|--------|
+| Different endpoint | A ChatGPT subscription is served by Codex's internal backend (`chatgpt.com/backend-api/codex/responses`), not by the public OpenAI API. It is an undocumented, Codex-specific variant of the Responses API, so it can change without notice. |
+| Different authentication | It authenticates with a ChatGPT OAuth access token plus a ChatGPT account ID, and the token expires and refreshes on OpenAI's schedule. MothX provider credentials are a static value, `${ENV}`, or `!command` — there is no OAuth refresh flow to plug into. |
+| Terms of service | Routing subscription access into a third-party client is not what the subscription is sold for. |
+
+This is a different situation from **Codex CLI** itself: the Codex CLI can send a ChatGPT-login request to a custom `base_url` (leave `env_key` unset and it attaches its own OAuth token). That is Codex talking to its own backend, which is why it works there and not here.
+
+**What to do instead**
+
+1. *Use the OpenAI API.* The built-in `openai` provider is already configured for the Codex model family (Responses API + Codex user agent), so it works with just a key:
+
+   ```bash
+   export OPENAI_API_KEY=sk-...
+   mothx --provider openai --model gpt-5.3-codex
+   ```
+
+2. *Use a gateway you control.* Any endpoint that speaks the OpenAI Responses API can back a provider:
+
+   ```json
+   {
+     "providers": {
+       "my-gateway": {
+         "baseUrl": "http://127.0.0.1:8787/v1",
+         "apiKey": "${MY_GATEWAY_TOKEN}",
+         "api": "openai-responses",
+         "models": [
+           { "id": "gpt-5.3-codex", "name": "GPT-5.3 Codex (gateway)", "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 }
+         ]
+       }
+     }
+   }
+   ```
+
+   If you want subscription-style access through your own gateway, that gateway is responsible for the OAuth refresh and any protocol translation; MothX only sees an ordinary Responses-compatible endpoint. See [configuration.md → providers](configuration.md#providers) for the full field list.
+
 ---
 
 ## 💰 Cost & Billing

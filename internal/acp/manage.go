@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -403,6 +404,11 @@ type manageProviderView struct {
 	ModelCount       int     `json:"modelCount"`
 	APIKeyConfigured bool    `json:"apiKeyConfigured"`
 	IsDefault        bool    `json:"isDefault,omitempty"`
+	// UsageCount and LastUsedAt are additive recorded-usage projections. They
+	// let a picker order providers by what the user actually runs instead of
+	// asking every adapter to invent its own usage table.
+	UsageCount int    `json:"usageCount"`
+	LastUsedAt string `json:"lastUsedAt,omitempty"`
 }
 
 // manageProviderConfigView is the editable, non-secret part of one provider
@@ -498,6 +504,86 @@ func manageProviderViews(settings *config.Settings) []manageProviderView {
 		})
 	}
 	return views
+}
+
+// manageProviderUsageByName indexes recorded provider usage for the settings
+// this request resolved. A missing stats database projects an empty map so the
+// provider list still renders in the stable catalog order.
+func manageProviderUsageByName(settings *config.Settings) map[string]stats.ProviderUsage {
+	usage := map[string]stats.ProviderUsage{}
+	db, exists, err := openManageStatsDB(settings)
+	if err != nil || !exists {
+		return usage
+	}
+	defer db.Close()
+	records, err := db.ProviderUsage(stats.Query{})
+	if err != nil {
+		log.Printf("[acp] provider usage: %v", err)
+		return usage
+	}
+	for _, record := range records {
+		usage[record.Provider] = record
+	}
+	return usage
+}
+
+// manageOrderProviderViews ranks the provider list for pickers by real usage:
+// the default provider first, then providers ordered by their most recent
+// recorded request, then providers that were never used in the stable catalog
+// priority order. Recency leads because a provider the user just added is also
+// the one they just started running, while a request count alone would bury a
+// newly added provider behind long-lived favourites.
+func manageOrderProviderViews(views []manageProviderView, usage map[string]stats.ProviderUsage) []manageProviderView {
+	ordered := make([]manageProviderView, len(views))
+	copy(ordered, views)
+	rank := make(map[string]int, len(usage))
+	index := 0
+	for _, record := range sortedProviderUsage(usage) {
+		rank[record.Provider] = index
+		index++
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].IsDefault != ordered[j].IsDefault {
+			return ordered[i].IsDefault
+		}
+		left, leftUsed := rank[ordered[i].Name]
+		right, rightUsed := rank[ordered[j].Name]
+		if leftUsed != rightUsed {
+			return leftUsed
+		}
+		if leftUsed {
+			return left < right
+		}
+		return false
+	})
+	for i := range ordered {
+		if record, ok := usage[ordered[i].Name]; ok {
+			ordered[i].UsageCount = record.Requests
+			if !record.LastUsedAt.IsZero() {
+				ordered[i].LastUsedAt = record.LastUsedAt.UTC().Format(time.RFC3339)
+			}
+		}
+	}
+	return ordered
+}
+
+// sortedProviderUsage orders usage by most recent request first, breaking ties
+// by request count and then name so the ranking is deterministic.
+func sortedProviderUsage(usage map[string]stats.ProviderUsage) []stats.ProviderUsage {
+	records := make([]stats.ProviderUsage, 0, len(usage))
+	for _, record := range usage {
+		records = append(records, record)
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		if !records[i].LastUsedAt.Equal(records[j].LastUsedAt) {
+			return records[i].LastUsedAt.After(records[j].LastUsedAt)
+		}
+		if records[i].Requests != records[j].Requests {
+			return records[i].Requests > records[j].Requests
+		}
+		return records[i].Provider < records[j].Provider
+	})
+	return records
 }
 
 // manageSettingsView assembles the settings view model shared by
@@ -791,7 +877,10 @@ func manageDecodeProviderDraft(raw json.RawMessage) (config.ProviderConfig, map[
 }
 
 func (s *server) manageProvidersCatalog(settings *config.Settings) (map[string]any, error) {
-	views := manageProviderViews(settings)
+	// The provider list is ordered by recorded usage so every picker shows the
+	// providers a person actually runs first. The model list follows the same
+	// order, keeping a provider's models next to its provider entry.
+	views := manageOrderProviderViews(manageProviderViews(settings), manageProviderUsageByName(settings))
 	configs, err := manageProviderConfigs(settings)
 	if err != nil {
 		return nil, err
@@ -1967,10 +2056,17 @@ func manageStatsQuery(in manageStatsRequest) (stats.Query, *mcp.RPCError) {
 // result reports whether the database exists; a missing database projects
 // empty stats exactly like the serve stats endpoint.
 func (s *server) manageStatsDB() (*stats.DB, bool, error) {
-	if s.settings == nil {
+	return openManageStatsDB(s.settings)
+}
+
+// openManageStatsDB is the settings-driven form used by projections that resolve
+// settings per request (for example mothx/manage/providers/list) instead of
+// reading the startup snapshot.
+func openManageStatsDB(settings *config.Settings) (*stats.DB, bool, error) {
+	if settings == nil {
 		return nil, false, errors.New("ACP settings are unavailable")
 	}
-	dbPath := filepath.Join(s.settings.GetSessionDir(), "sessions.db")
+	dbPath := filepath.Join(settings.GetSessionDir(), "sessions.db")
 	if _, err := os.Stat(dbPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil, false, nil
