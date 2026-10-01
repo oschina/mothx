@@ -22,7 +22,7 @@
     "e2e": "node scripts/e2e-smoke.mjs",
     "verify:phase1": "node scripts/phase1-verify.mjs",
     "verify:phase3": "node scripts/phase3-verify.mjs",
-    "test": "node --test scripts/resolve-version.test.cjs scripts/binary-arch.test.cjs scripts/e2e-smoke.test.mjs scripts/dev.test.mjs && tsx --test \"main/*.test.ts\" \"renderer/src/**/*.test.ts\"",
+    "test": "node --test scripts/resolve-version.test.cjs scripts/binary-arch.test.cjs scripts/e2e-smoke.test.mjs scripts/dev.test.mjs && tsx --test \"scripts/*.test.ts\" \"main/*.test.ts\" \"renderer/src/**/*.test.ts\"",
     "start": "npm run version:set && npm run ensure:electron && npm run build:runtime && npm run build && electron .",
     "ensure:electron": "node scripts/ensure-electron.cjs",
     "dist": "npm run version:set && npm run ensure:electron && npm run build:runtime && npm run build && electron-builder --config electron-builder.yml",

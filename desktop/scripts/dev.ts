@@ -6,6 +6,14 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { build as viteBuild, type Plugin } from 'vite';
 
+import { displayFailureHelp, displayProblem, looksLikeDisplayFailure } from './dev-environment.ts';
+import {
+  createShutdownController,
+  DEV_SHUTDOWN_SIGNALS,
+  killProcessTree,
+  type DevShutdownSignal,
+} from './dev-shutdown.ts';
+
 /**
  * Bounded development runner for MothX Desktop.
  *
@@ -16,6 +24,9 @@ import { build as viteBuild, type Plugin } from 'vite';
  * - Spawns Electron in explicit dev mode (`MOTHX_DESKTOP_DEV=1`), which enables
  *   DevTools, a localhost-only Chrome remote debugging port, and auto-reload
  *   when the renderer-ready signal appears.
+ * - Owns shutdown: Ctrl+C closes the renderer watcher and terminates the whole
+ *   Electron process tree, escalating to a forced kill if Electron does not
+ *   exit, so nothing survives the runner.
  *
  * The renderer is still served as static `file://` assets; this script does not
  * start an HTTP server and the renderer does not call local APIs.
@@ -101,7 +112,20 @@ function electronCommand(): { command: string; args: string[] } {
   };
 }
 
+/**
+ * Desktop is a graphical client, so it needs a display server. On Linux without
+ * a usable display, Chromium aborts during platform initialization and dies on
+ * SIGSEGV, which the user only ever sees as a white, frameless window followed by
+ * a crash line. See scripts/dev-environment.ts.
+ */
+
 async function run(): Promise<void> {
+  const problem = displayProblem({ platform: process.platform, env: process.env });
+  if (problem) {
+    console.error(`[desktop-dev] ${problem}`);
+    process.exit(1);
+  }
+
   await buildMainAndPreload();
   const rendererWatcher = await buildRenderer();
 
@@ -109,27 +133,52 @@ async function run(): Promise<void> {
   const child = spawn(electronBin, electronArgs, {
     cwd: root,
     env: { ...process.env, MOTHX_DESKTOP_DEV: '1' },
-    stdio: 'inherit',
+    // stdout stays on the terminal (DevTools and renderer output); stderr is
+    // piped so a display that exists but cannot be connected to is recognised
+    // from Chromium's own diagnostic and explained instead of only crashing.
+    stdio: ['inherit', 'inherit', 'pipe'],
     shell: process.platform === 'win32',
+    // Lead a dedicated process group so shutdown can terminate Electron's
+    // renderer/GPU/utility children as a unit instead of orphaning them, and so
+    // this runner — not the terminal — decides when Electron receives a signal.
+    detached: process.platform !== 'win32',
   });
 
-  let exited = false;
-  function cleanup(signal: NodeJS.Signals): void {
-    if (exited) return;
-    exited = true;
-    child.kill(signal);
+  explainDisplayFailure(child.stderr);
+
+  const shutdown = createShutdownController({
+    closeWatcher: rendererWatcher.close,
+    sendSignal: (escalation) => {
+      if (child.pid === undefined) return;
+      killProcessTree({ pid: child.pid, platform: process.platform, escalation });
+    },
+    exit: (code) => process.exit(code),
+  });
+
+  for (const signal of DEV_SHUTDOWN_SIGNALS) {
+    process.on(signal, () => shutdown.request(signal as DevShutdownSignal));
   }
 
-  process.on('SIGINT', () => cleanup('SIGTERM'));
-  process.on('SIGTERM', () => cleanup('SIGTERM'));
+  child.on('exit', (code) => shutdown.childExited(code));
+  child.on('error', (error) => shutdown.childFailed(error));
+}
 
-  child.on('exit', async (code) => {
-    console.log(`[desktop-dev] Electron exited with code ${code ?? 0}`);
-    if (!exited) {
-      exited = true;
-      await rendererWatcher.close();
-      process.exit(code ?? 0);
-    }
+/**
+ * Forward Electron's stderr to the terminal unchanged, and once a display
+ * failure is recognised, print what to do about it. A display that is set but
+ * unusable (stale `:0`, dead X server, X11 forwarding that never connected)
+ * cannot be detected from the environment, so Chromium's message is the
+ * diagnosis.
+ */
+function explainDisplayFailure(stderr: NodeJS.ReadableStream | null): void {
+  if (!stderr) return;
+  let reported = false;
+  stderr.on('data', (chunk: Buffer | string) => {
+    const text = chunk.toString();
+    process.stderr.write(text);
+    if (reported || !looksLikeDisplayFailure(text)) return;
+    reported = true;
+    console.error(`[desktop-dev] ${displayFailureHelp()}`);
   });
 }
 

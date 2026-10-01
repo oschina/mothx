@@ -94,6 +94,22 @@ DevTools（以独立外部窗口打开，不嵌入主窗口），并将 Chrome D
 覆盖该目录。它不启动 `mothx serve`，也不会向 renderer 增加 HTTP/API
 通道。
 
+退出方式：终端里按一次 Ctrl+C 即可结束。dev runner 会关闭 Vite 监听、终止
+Electron 的整个进程树（主进程与 renderer/GPU 子进程），并在 4 秒宽限期后对
+未退出的进程强制结束，因此不会残留后台 Electron，也不会留下挂住的
+`npm run dev`。重复按 Ctrl+C 可以立即强制退出；关闭终端窗口（`SIGHUP`）
+同样会触发完整的清理流程。
+
+Desktop 是图形客户端，Linux 主机必须有可用显示服务器，否则 Chromium 在
+平台初始化阶段直接退出（`Missing X server or $DISPLAY` /
+`The platform failed to initialize` / SIGSEGV），现象是一个白色无边框窗口后
+接一段段错误。此时 `npm run dev` 会在 1 秒内打印可执行的说明并以退出码 1
+结束（完全没有 `DISPLAY` 时连构建都不会跑）；`DISPLAY` 存在但连不上
+（`ssh` 未开 X11 转发、X 服务已退出等）时，Chromium 自己的报错会被原样保留
+并附加同一段说明。可行方案：本机真实桌面会话、`ssh -X` 转发、Xvfb
+（`Xvfb :99 & export DISPLAY=:99`，可再叠 VNC/x11vnc），或者在无显示器的
+主机上改用 TUI（`mothx`）/ `mothx serve` + 本地浏览器 Web UI。
+
 ## 发布打包
 
 Desktop `package.json` 保持占位版本；`npm run version:set` 与打包脚本从

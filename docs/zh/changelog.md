@@ -54,6 +54,14 @@
   - 新增 FAQ 条目与配置章节：ChatGPT Plus/Pro 订阅**不能**直接接到 MothX。它由 Codex 内部后端（`chatgpt.com/backend-api/codex/responses`）提供服务、使用 ChatGPT OAuth access token 并由 OpenAI 控制刷新节奏，两者都与 MothX 的 provider 凭据模型（明文 / `${ENV}` / `!command`）不兼容，且把订阅接入第三方客户端不符合其服务条款。文档同时说明了为什么 Codex CLI 自身可以把 ChatGPT 登录态发往自定义 `base_url`，以及推荐的两条替代路径：使用按 token 计费的 OpenAI API（内置 `openai` provider 已按 Codex 模型系列配置好，含 Responses API 与 Codex User-Agent），或把 MothX 指向任意兼容 OpenAI Responses API 的自建/企业网关。
   - 配置文档新增「指向自建或网关端点」小节，说明 `api: "openai-responses"` + `baseUrl` 的网关用法、显式声明 `models`、凭据形式与 `openai-chat` 回退，以及用 `mothx doctor`/`mothx speedtest` 验证网关。
 
+- **`make desktop-dev` 现在能被 Ctrl+C 彻底关闭**
+  - dev runner 原本只在 Electron「先退出」的情况下关闭 Vite renderer 监听；Ctrl+C 时它已把自己标记为退出中，于是该分支被跳过 —— 监听一直开着，`npm run dev` 以及等待它的 `make` 进程永远不退出。现在所有退出路径（包含中断路径）都会关闭监听，并在退出前等待关闭完成，避免 `process.exit` 把关闭过程截断。
+  - 关闭逻辑改为显式的、有界状态机，取代单次 `child.kill()`：第一次中断终止 Electron 并启动 4 秒宽限期，超时仍未退出则强制结束，再次按 Ctrl+C 则跳过等待立刻退出。spawn 失败也走同一条路径上报，而不是抛出未处理的 `error` 事件。退出码遵循 128 + 信号约定（130/143/129），让 `make` 正确报告中断。
+  - POSIX 下 Electron 以独立进程组启动并按整棵树终止（向进程组发 `SIGTERM`/`SIGKILL`，Windows 用 `taskkill /T` 与 `taskkill /T /F`），因此 renderer/GPU/utility 子进程不再残留为无窗口后台进程。`SIGHUP`（关闭终端窗口）与其他中断一视同仁处理。
+
+- **Desktop 开发运行器在缺少显示服务器时给出说明，而不是白屏**
+  - 在没有可用显示服务器的 Linux 主机上（SSH 会话、X 服务已退出、X11 转发未连通），Chromium 会在平台初始化阶段直接退出并因 SIGSEGV 崩溃。由于窗口是无边框且背景为白色，用户能看到的现象只有一个白色窗口加一段段错误提示，而且还要先等完整构建。`npm run dev` 现在会先检查显示服务器，1 秒内打印可执行的说明并以退出码 1 结束（完全不做构建）；当 `DISPLAY` 有值但连不上时（环境检查无法预判的情况），改为识别 Chromium 自己的 stderr 报错并附加同一段说明。Chromium 原始诊断信息仍原样输出，说明中列出可行方案：本机真实桌面会话、`ssh -X` 转发、虚拟显示器（`Xvfb`，可再叠 VNC/x11vnc），或在无显示器主机上改用 TUI / `mothx serve` Web UI。
+
 ## v1.3.102
 
 ### 💥 破坏性变更
