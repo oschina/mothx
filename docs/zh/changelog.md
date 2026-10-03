@@ -26,6 +26,15 @@
 
 ### 🐛 问题修复
 
+- **ACP 不再因默认供应商缺 key 而整体不可用**
+  - 此前 `mothx acp` 在启动时把“默认供应商不可用（缺 API key / 未知供应商 / 无可用模型）”当作致命错误：进程直接以结构化启动错误退出，initialize、会话、管理面（`mothx/manage/*`）全部不可用，Desktop 等客户端连“配置供应商”这条路都走不通。
+  - 现在 ACP 会正常启动并只提供一条 stderr 警告；管理、设置、会话历史、技能/知识库等全部可用，仅 `session/new`、`session/prompt` 等执行入口返回带 `code`/`fix` 的结构化 RPC 错误（如 `provider_unusable`：“default provider x has no API key”）。已绑定其它可用供应商的会话不受影响。
+  - 管理面写入（`mothx/manage/providers/save`、`providers/delete`、涉及 `defaultProvider`/`defaultModel`/`providers` 的 `settings/patch`）会在运行中的进程内即时重建供应商目录：配好 key 后无需重启 ACP 即可开始执行。
+
+- **Desktop 首页背景图大图不再静默不生效**
+  - 选定背景此前以 base64 data URL 注入壳层 CSS 变量 `--app-user-image`，而 Chromium 会静默丢弃超过 2MiB 的 CSS 自定义属性值：大于约 1.5MB 的壁纸编码后超限，`background-image` 落空且无任何报错；首页 logo 走 `<img src>` 不受该限制，因此表现为“logo 生效、背景不生效”。
+  - 渲染器现在把授权读取到的 data URL 转换为 `blob:` object URL 后再注入 CSS 变量（注入值始终是短字符串，图片字节以 Blob 驻留内存），并在背景替换或清除时 revoke 旧 object URL 避免泄漏；新增回归测试断言该转换与 revoke 路径。
+
 - **上下文压缩不再以 "max iterations (1) exceeded" 失败**
   - 压缩摘要是通过一个 `MaxIterations: 1`（只允许一次 LLM 轮次）的子 Agent 生成的。agent loop 内的恢复重试（空响应重试、输出上限升级与续写、内容拒绝恢复、上下文溢出恢复、Responses 远端状态重放）每次都会重新发起一次供应商请求，却不消耗逻辑迭代计数，于是任何一次恢复都会用掉唯一的迭代，整个压缩以 `generate summary: max iterations (1) exceeded` 中止；而压缩失败后超大的上下文原样保留，错误便会在后续每一轮反复出现。
   - 这些恢复尝试现在不再消耗逻辑迭代预算——每条路径都保留自己的有界重试计数（空响应 2 次、输出续写 3 次、内容拒绝 2 个阶段）——因此 `MaxIterations` 现在表示"产出性 LLM 轮次"，摘要子 Agent 遇到空响应或截断也能正常恢复而不是报错终止。这与既有的传输层恢复规则以及"恢复不得消耗迭代预算"的共享原则保持一致。

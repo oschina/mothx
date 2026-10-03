@@ -794,6 +794,9 @@ func (s *server) handleManageSettingsPatch(req rpcRequest) {
 			manageRedactSecrets(err.Error(), settings), nil))
 		return
 	}
+	if providersTouched || updates["defaultProvider"] != nil || updates["defaultModel"] != nil {
+		s.refreshProviderCatalog()
+	}
 	view, err := s.manageSettingsView()
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "settings_unavailable", err.Error(), nil))
@@ -999,6 +1002,7 @@ func (s *server) handleManageProvidersSave(req rpcRequest) {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "settings_save_failed", manageRedactSecrets(err.Error(), settings), nil))
 		return
 	}
+	s.refreshProviderCatalog()
 	refreshed, err := s.manageSettings()
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "settings_unavailable", err.Error(), nil))
@@ -1061,6 +1065,7 @@ func (s *server) handleManageProvidersDelete(req rpcRequest) {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "settings_save_failed", manageRedactSecrets(err.Error(), settings), nil))
 		return
 	}
+	s.refreshProviderCatalog()
 	refreshed, err := s.manageSettings()
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "settings_unavailable", err.Error(), nil))

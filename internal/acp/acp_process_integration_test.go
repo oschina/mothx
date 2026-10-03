@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -188,7 +189,7 @@ func TestACPStdioProcessInitializeDoctorWithoutSession(t *testing.T) {
 	}
 }
 
-func TestACPStartupFailureEmitsStructuredErrorLine(t *testing.T) {
+func TestACPMissingProviderKeyKeepsManagementAvailable(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("MOTHX_DIR", configDir)
 	settings := config.DefaultSettings()
@@ -206,35 +207,69 @@ func TestACPStartupFailureEmitsStructuredErrorLine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestACPStartupFailureProcessHelper$")
-	cmd.Dir = t.TempDir()
-	cmd.Env = append(os.Environ(), "MOTHX_ACP_STARTUP_FAILURE_HELPER=1", "MOTHX_DIR="+configDir)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	workDir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestACPProviderGateProcessHelper$")
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(), "MOTHX_ACP_PROVIDER_GATE_HELPER=1", "MOTHX_DIR="+configDir)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("ACP startup stdout = %q, want empty", stdout.String())
+	reader := bufio.NewReader(stdout)
+
+	// A missing default-provider key must not stop the ACP host: initialize
+	// succeeds and the management plane stays callable so clients can
+	// configure the provider through it.
+	sendACPRequest(t, stdin, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": 1}})
+	initialize := assertACPResponseID(t, reader, 1)
+	if _, ok := initialize["result"]; !ok {
+		t.Fatalf("initialize response = %#v, want result", initialize)
 	}
-	line := strings.TrimSpace(stderr.String())
-	if !strings.HasPrefix(line, "MOTHX_ACP_ERROR ") || strings.Contains(line, "\n") {
-		t.Fatalf("ACP startup stderr = %q, want one structured line", line)
+
+	// Execution entry points project the structured provider reason instead.
+	sendACPRequest(t, stdin, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{"cwd": workDir}})
+	newSession := readACPResponseID(t, reader, 2)
+	rpcErr, ok := newSession["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("session/new response = %#v, want structured error", newSession)
 	}
-	var payload struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-		Fix     string `json:"fix"`
+	data, _ := rpcErr["data"].(map[string]any)
+	if data == nil || data["code"] != "provider_unusable" || strings.TrimSpace(fmt.Sprint(data["fix"])) == "" {
+		t.Fatalf("session/new error = %#v, want provider_unusable with fix", rpcErr)
 	}
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "MOTHX_ACP_ERROR ")), &payload); err != nil {
+	if message := fmt.Sprint(rpcErr["message"]); !strings.Contains(message, "no API key") {
+		t.Fatalf("session/new message = %q, want the doctor wording", message)
+	}
+
+	sendACPRequest(t, stdin, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "mothx/manage/settings/get", "params": map[string]any{}})
+	manage := assertACPResponseID(t, reader, 3)
+	if _, ok := manage["result"]; !ok {
+		t.Fatalf("manage settings/get response = %#v, want result", manage)
+	}
+
+	if err := stdin.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Code != "provider_unusable" || !strings.Contains(payload.Message, "no API key") || payload.Fix == "" {
-		t.Fatalf("startup payload = %#v", payload)
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(line, "${DOCTOR_MISSING_KEY}") {
-		t.Fatalf("startup payload exposes configured key reference: %q", line)
+	if strings.Contains(stderr.String(), "MOTHX_ACP_ERROR") {
+		t.Fatalf("ACP stderr = %q, want no fatal startup error", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Warning:") {
+		t.Fatalf("ACP stderr = %q, want one provider warning", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "${DOCTOR_MISSING_KEY}") {
+		t.Fatalf("ACP stderr exposes configured key reference: %q", stderr.String())
 	}
 }
 
@@ -264,13 +299,13 @@ func TestACPStdioProcessHelper(t *testing.T) {
 	}
 }
 
-func TestACPStartupFailureProcessHelper(t *testing.T) {
-	if os.Getenv("MOTHX_ACP_STARTUP_FAILURE_HELPER") != "1" {
+func TestACPProviderGateProcessHelper(t *testing.T) {
+	if os.Getenv("MOTHX_ACP_PROVIDER_GATE_HELPER") != "1" {
 		return
 	}
-	// Run writes the structured startup line before returning. Returning from
-	// the test would add Go's PASS output to stdout, which is not part of the
-	// real ACP executable's contract.
+	// Serve stdio until the client closes it. Returning from the test would
+	// add Go's PASS output to stdout, which is not part of the real ACP
+	// executable's contract.
 	_ = Run(RunOptions{})
 	os.Exit(0)
 }
@@ -289,6 +324,17 @@ func sendACPRequest(t *testing.T, stdin interface{ Write([]byte) (int, error) },
 
 func assertACPResponseID(t *testing.T, reader *bufio.Reader, id float64) map[string]any {
 	t.Helper()
+	message := readACPResponseID(t, reader, id)
+	if rpcErr := message["error"]; rpcErr != nil {
+		t.Fatalf("ACP response %v error: %#v", id, rpcErr)
+	}
+	return message
+}
+
+// readACPResponseID returns the raw JSON-RPC envelope for id, including
+// structured error responses that a scenario explicitly expects.
+func readACPResponseID(t *testing.T, reader *bufio.Reader, id float64) map[string]any {
+	t.Helper()
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
@@ -299,9 +345,6 @@ func assertACPResponseID(t *testing.T, reader *bufio.Reader, id float64) map[str
 			t.Fatal(err)
 		}
 		if got, ok := message["id"].(float64); ok && got == id {
-			if rpcErr := message["error"]; rpcErr != nil {
-				t.Fatalf("ACP response %v error: %#v", id, rpcErr)
-			}
 			return message
 		}
 	}

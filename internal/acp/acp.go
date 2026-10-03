@@ -128,6 +128,13 @@ type server struct {
 	m            *provider.Model
 	providers    map[string]provider.Provider
 
+	// providerStartup records why the resolved default provider could not be
+	// constructed (missing API key, unknown provider, no usable model). It
+	// never blocks the ACP host: management and configuration stay available
+	// so clients can fix the provider, and execution entry points project it
+	// as a structured RPC error until refreshProviderCatalog succeeds.
+	providerStartup *startupError
+
 	mode          string
 	thinkingLevel provider.ThinkingLevel
 	sbMgr         *sandbox.Manager
@@ -990,11 +997,6 @@ func Run(opts RunOptions) (runErr error) {
 	if err != nil {
 		return classifyACPStartupError(err)
 	}
-	if selection := doctor.ValidateProvider(preflightSettings, providerName, modelID); len(selection) > 0 {
-		if err := startupErrorFromDoctor(doctor.Response{Checks: selection}); err != nil {
-			return err
-		}
-	}
 
 	settings, err := config.LoadSettings()
 	if err != nil {
@@ -1062,17 +1064,25 @@ func Run(opts RunOptions) (runErr error) {
 	// session runtimes so in-flight job runs are cancelled first.
 	defer srv.stopManageCron()
 
-	p, model, err := createProvider(settings, providerName, modelID)
-	if err != nil {
-		return classifyACPStartupError(err)
-	}
-	srv.p = p
 	srv.providerName = providerName
 	if srv.providerName == "" {
 		srv.providerName = settings.DefaultProvider
 	}
-	srv.m = model
-	srv.providers = map[string]provider.Provider{srv.providerName: p}
+	srv.providers = map[string]provider.Provider{}
+	if p, model, startup := resolveDefaultProvider(settings, srv.providerName, modelID); startup != nil {
+		// An unusable default provider (missing API key, unknown provider, no
+		// usable model) must not take the whole ACP host down: clients need the
+		// running management plane precisely to configure that provider. Record
+		// the structured reason, warn once, and let execution entry points
+		// project it until refreshProviderCatalog observes a usable config.
+		srv.providerStartup = startup
+		provider.DebugLogf("ACP default provider %q unavailable: %v", srv.providerName, startup.Cause)
+		fmt.Fprintf(os.Stderr, "Warning: ACP starts without a usable default provider: %s (fix: %s)\n", startup.Message, startup.Fix)
+	} else {
+		srv.p = p
+		srv.m = model
+		srv.providers[srv.providerName] = p
+	}
 	// Build the provider catalog once so ACP can advertise all usable configured
 	// providers and switch a session without restarting the process. A provider
 	// that cannot be constructed is omitted and will produce a structured
@@ -1155,10 +1165,12 @@ func Run(opts RunOptions) (runErr error) {
 		ExtraContext: srv.extraContext, RuleContent: srv.ruleContent,
 		Providers: srv.providers, ArtifactEnabled: srv.artifact,
 	}
-	// Agent manager backs multi-agent and delegate workflows.
-	if opts.MultiAgent || opts.Delegate || opts.Workflows {
+	// Agent manager backs multi-agent and delegate workflows. It needs a usable
+	// provider; without one the execution gate already rejects runs, so the
+	// manager stays absent until a provider becomes configured.
+	if (opts.MultiAgent || opts.Delegate || opts.Workflows) && srv.p != nil {
 		mgr, err := agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
-			Runtime: srv.runtime, Provider: p, Model: model, Settings: settings,
+			Runtime: srv.runtime, Provider: srv.p, Model: srv.m, Settings: settings,
 			ProviderName: srv.providerName, Allow: srv.allow, MultiAgentEnabled: true,
 			DelegateEnabled: opts.Delegate, WorkflowsEnabled: opts.Workflows,
 			Worktree: srv.worktrees, WorktreePerChild: settings.WorktreePerChildSubagents(),
@@ -1350,6 +1362,103 @@ func createProvider(settings *config.Settings, providerName, modelID string) (pr
 	})
 }
 
+// resolveDefaultProvider constructs the default provider only when the shared
+// doctor considers the selection usable. The provider factory accepts an
+// unresolved "${ENV}" key literal, so doctor — not construction — is the
+// authoritative "unusable provider" check; executing with such a provider
+// would otherwise fail later with an opaque authentication error.
+func resolveDefaultProvider(settings *config.Settings, providerName, modelID string) (provider.Provider, *provider.Model, *startupError) {
+	if selection := doctor.ValidateProvider(settings, providerName, modelID); len(selection) > 0 {
+		if err := startupErrorFromDoctor(doctor.Response{Checks: selection}); err != nil {
+			var startup *startupError
+			if errors.As(err, &startup) && startup != nil {
+				return nil, nil, startup
+			}
+		}
+	}
+	p, model, err := createProvider(settings, providerName, modelID)
+	if err != nil {
+		return nil, nil, classifyACPStartupError(err)
+	}
+	return p, model, nil
+}
+
+// providerUnavailable reports whether startup or the last catalog refresh
+// found the default provider unusable. Servers that never resolved a provider
+// catalog (unit fixtures) stay unbound instead of gated, and sessions bound to
+// another usable catalog provider keep executing.
+func (s *server) providerUnavailable() bool {
+	return s != nil && s.p == nil && s.providerStartup != nil
+}
+
+// sessionBoundProvider returns the provider a session runtime is bound to, or
+// nil when the session is unbound because the default provider is unusable.
+func (s *server) sessionBoundProvider(sessionID string) provider.Provider {
+	rt := s.sessionRuntime(sessionID)
+	if rt == nil || rt.runtime == nil {
+		return nil
+	}
+	p, _, _, _, _ := rt.runtime.ConfigSnapshot()
+	return p
+}
+
+// providerGateError projects the stored startup reason as a structured RPC
+// error for execution entry points while no provider is usable.
+func (s *server) providerGateError() *mcp.RPCError {
+	code := "provider_unusable"
+	message := "no usable provider is configured"
+	fix := "Configure a provider and its API key through settings"
+	if s != nil && s.providerStartup != nil {
+		code, message = s.providerStartup.Code, s.providerStartup.Message
+		if s.providerStartup.Fix != "" {
+			fix = s.providerStartup.Fix
+		}
+	}
+	return acpStructuredRPCError(-32000, code, message, map[string]any{"fix": fix})
+}
+
+// refreshProviderCatalog re-resolves the default provider and the switchable
+// catalog after a management-plane write, so a newly configured API key or a
+// changed default takes effect in the running process without an ACP restart.
+func (s *server) refreshProviderCatalog() {
+	if s == nil || s.settings == nil {
+		return
+	}
+	fresh, err := config.LoadSettings()
+	if err != nil {
+		return
+	}
+	name := strings.TrimSpace(fresh.DefaultProvider)
+	modelID := strings.TrimSpace(fresh.DefaultModel)
+	providers := map[string]provider.Provider{}
+	defaultProvider, defaultModel, startup := resolveDefaultProvider(fresh, name, modelID)
+	if defaultProvider != nil {
+		providers[name] = defaultProvider
+	} else {
+		provider.DebugLogf("ACP default provider %q still unavailable: %v", name, startup.Cause)
+	}
+	for candidate := range fresh.Providers {
+		if strings.EqualFold(candidate, name) {
+			continue
+		}
+		if p, _, err := createProvider(fresh, candidate, ""); err == nil {
+			providers[candidate] = p
+		}
+	}
+	s.settings.Providers = fresh.Providers
+	s.settings.DefaultProvider = fresh.DefaultProvider
+	s.settings.DefaultModel = fresh.DefaultModel
+	s.providers = providers
+	s.providerName = name
+	s.p = defaultProvider
+	s.m = defaultModel
+	if defaultProvider == nil {
+		s.providerStartup = startup
+		return
+	}
+	s.providerStartup = nil
+}
+
 func (s *server) providerFor(name, modelID string) (provider.Provider, *provider.Model, error) {
 	if s == nil {
 		return nil, nil, fmt.Errorf("ACP server is required")
@@ -1373,6 +1482,11 @@ func (s *server) providerFor(name, modelID string) (provider.Provider, *provider
 	}
 	if s.settings == nil {
 		return nil, nil, fmt.Errorf("ACP settings are required to construct provider %q", name)
+	}
+	if s.providerStartup != nil && strings.EqualFold(name, s.providerName) {
+		// The factory would happily construct the default provider with an
+		// unresolved key literal; surface the structured reason instead.
+		return nil, nil, s.providerStartup
 	}
 	candidate, model, err := createProvider(s.settings, name, modelID)
 	if err != nil {
@@ -1480,7 +1594,7 @@ func (s *server) configureSessionBindings(runtime *agentruntime.SessionRuntime, 
 	// Some unit fixtures exercise session replay without constructing an ACP
 	// provider catalog. Leave those runtimes unbound; production ACP servers
 	// always initialize the catalog before accepting session requests.
-	if s == nil || s.p == nil {
+	if s == nil {
 		return nil
 	}
 	providerName := s.providerName
@@ -1495,6 +1609,12 @@ func (s *server) configureSessionBindings(runtime *agentruntime.SessionRuntime, 
 	var p provider.Provider
 	var model *provider.Model
 	var err error
+	if s.p == nil && !hasModel {
+		// The default provider is unusable and the session carries no persisted
+		// selection: keep it unbound so history and management stay available;
+		// execution entry points gate with the structured provider reason.
+		return nil
+	}
 	if !hasModel && strings.EqualFold(providerName, s.providerName) && s.p != nil && s.m != nil {
 		p, model = s.p, s.m
 	} else {
@@ -1503,6 +1623,11 @@ func (s *server) configureSessionBindings(runtime *agentruntime.SessionRuntime, 
 	if err != nil {
 		if hasModel && !strings.EqualFold(providerName, s.providerName) {
 			return &sessionProviderMismatchError{SessionProvider: providerName, SessionModel: modelID, CurrentProvider: s.providerName, Cause: err}
+		}
+		if s.providerStartup != nil && strings.EqualFold(providerName, s.providerName) {
+			// Never fail session load/new because the default provider is
+			// unusable; the execution gate explains it with the same reason.
+			return nil
 		}
 		return err
 	}
@@ -2106,6 +2231,10 @@ func (s *server) handleNewSession(req rpcRequest) {
 	}
 	if cwd == "" {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "cwd is required"})
+		return
+	}
+	if s.providerUnavailable() {
+		s.writeResponse(req.ID, nil, s.providerGateError())
 		return
 	}
 	mgr, err := agentruntime.CreateSession(agentruntime.CreateSessionOptions{WorkDir: cwd, SessionDir: s.settings.GetSessionDir()})
@@ -2737,6 +2866,10 @@ func (s *server) handlePrompt(req rpcRequest) {
 	}
 	if rt.runtime == nil {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: "session runtime is unavailable"})
+		return
+	}
+	if s.providerUnavailable() && s.sessionBoundProvider(in.SessionID) == nil {
+		s.writeResponse(req.ID, nil, s.providerGateError())
 		return
 	}
 	workspaceCwd, workspaceAdditional, err := s.resolveWorkspace(in.Meta, rt.runtime.WorkDir)
@@ -4386,6 +4519,14 @@ func acpFailureInfo(err error, observed *agentruntime.ErrorInfo, phase agentrunt
 }
 
 func acpFailureRPCError(err error, observed *agentruntime.ErrorInfo, phase agentruntime.RunPhase) *mcp.RPCError {
+	var startup *startupError
+	if errors.As(err, &startup) && startup != nil {
+		extra := map[string]any{}
+		if startup.Fix != "" {
+			extra["fix"] = startup.Fix
+		}
+		return acpStructuredRPCError(-32000, startup.Code, startup.Message, extra)
+	}
 	var mismatch *sessionProviderMismatchError
 	if errors.As(err, &mismatch) {
 		return &mcp.RPCError{Code: -32002, Message: "session provider mismatch", Data: map[string]any{

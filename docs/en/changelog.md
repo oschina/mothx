@@ -26,6 +26,15 @@
 
 ### 🐛 Bug Fixes
 
+- **ACP no longer becomes wholly unusable when the default provider lacks a key**
+  - `mothx acp` used to treat an unusable default provider (missing API key, unknown provider, no usable model) as a fatal startup error: the process exited with the structured startup line, so initialize, sessions, and the entire management plane (`mothx/manage/*`) were unavailable — clients such as Desktop could not even reach the settings needed to configure a provider.
+  - ACP now starts normally with a single stderr warning; management, settings, session history, skills, and knowledge bases stay available, and only execution entry points (`session/new`, `session/prompt`) return structured RPC errors carrying `code`/`fix` (for example `provider_unusable`: "default provider x has no API key"). Sessions bound to another usable provider keep working.
+  - Management writes (`mothx/manage/providers/save`, `providers/delete`, and `settings/patch` touching `defaultProvider`/`defaultModel`/`providers`) now rebuild the provider catalog inside the running process, so configuring a key takes effect without restarting ACP.
+
+- **Desktop home background no longer silently fails for large images**
+  - The selected background used to be injected into the shell CSS variable `--app-user-image` as a base64 data URL, but Chromium silently drops CSS custom-property values larger than 2MiB: any wallpaper above ~1.5MB encoded past the limit and left `background-image` empty without any error, while the Home logo (rendered through `<img src>`) was unaffected — exactly the "logo works, background doesn't" symptom.
+  - The renderer now converts the authorized data URL into a `blob:` object URL before injecting it into the CSS variable, keeping the injected value a short string regardless of image size, and revokes the previous object URL whenever the background is replaced or cleared. A regression test asserts the conversion and revocation path.
+
 - **Context Compaction No Longer Fails with "max iterations (1) exceeded"**
   - Compaction summarizes the conversation through a child Agent built with `MaxIterations: 1` — exactly one LLM turn for the summary. Recovery retries inside the loop (empty-response retry, output-limit escalation and continuation, content rejection, context-overflow recovery, and Responses remote-state replay) each issued a fresh provider request without spending the logical iteration counter, so any single recovery consumed the only iteration and the whole compaction aborted with `generate summary: max iterations (1) exceeded`. Because a failed compaction leaves the oversized context in place, the error then repeated on every subsequent turn.
   - These recovery attempts no longer consume the logical iteration budget — each path keeps its own bounded retry counter (2 empty-response retries, 3 output continuations, 2 content-rejection stages), so `MaxIterations` now means "productive LLM turns" and a summarizer survives empty or truncated provider responses instead of dying. This aligns the loop with the existing transport-recovery rule and the shared principle that recovery must not consume the iteration budget.
