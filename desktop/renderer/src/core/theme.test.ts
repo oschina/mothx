@@ -24,6 +24,14 @@ test('background image errors are surfaced as bilingual toast strings instead of
   assert.match(theme, /settings\.homeBackgroundUnauthorized/);
 });
 
+test('large background data URLs become blob object URLs before CSS injection', () => {
+  // Chromium drops CSS custom-property values above 2MiB, so injecting the raw
+  // base64 data URL into --app-user-image silently loses multi-MB wallpapers.
+  assert.match(theme, /dataUrlToObjectUrl\(result\.dataUrl\)/, 'authorized image bytes must be converted before CSS injection');
+  assert.match(theme, /URL\.createObjectURL\(new Blob\(\[bytes\]/, 'conversion must produce a short blob: URL');
+  assert.match(theme, /URL\.revokeObjectURL\(backgroundImageSource\)/, 'replaced or cleared object URLs must be revoked');
+});
+
 test('Home logo settings project visibility and custom image selection through the Desktop bridge', () => {
   assert.match(homeView, /useHomeLogo\(\)/);
   assert.match(homeView, /<HomeLogo logo=\{logo\}/);

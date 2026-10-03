@@ -42,6 +42,27 @@ let backgroundImagePath = '';
 let backgroundImageSource = '';
 let backgroundImageErrorPath = '';
 
+// Chromium silently drops CSS custom-property values larger than 2MiB, so a
+// multi-megabyte base64 data URL injected into `--app-user-image` never reaches
+// `background-image` (the home logo keeps working because <img src> has no such
+// limit). Convert the authorized data URL into a blob: object URL: the CSS
+// value stays a tiny string while the bytes live in memory, and revoke the
+// previous object URL whenever the source is replaced or cleared.
+export function dataUrlToObjectUrl(dataUrl: string): string {
+  const comma = dataUrl.indexOf(',');
+  const mime = /^data:([^;]+);base64$/.exec(dataUrl.slice(0, comma))?.[1] || 'application/octet-stream';
+  const binary = atob(dataUrl.slice(comma + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: mime }));
+}
+
+function setBackgroundSource(next: string): void {
+  if (backgroundImageSource === next) return;
+  if (backgroundImageSource.startsWith('blob:')) URL.revokeObjectURL(backgroundImageSource);
+  backgroundImageSource = next;
+}
+
 // Home imagery is a Desktop-only visual preference. Keep the file path in the
 // local UI store rather than copying the image into session or ACP storage.
 export function applyHomeBackground(root: HTMLElement | null): void {
@@ -49,7 +70,7 @@ export function applyHomeBackground(root: HTMLElement | null): void {
   const path = state.store.homeBackgroundImage.trim();
   if (!path) {
     backgroundImagePath = '';
-    backgroundImageSource = '';
+    setBackgroundSource('');
     root.classList.remove('has-app-background');
     root.classList.remove('has-home-background');
     for (const property of ['--app-user-image', '--app-user-image-opacity', '--app-user-image-blur', '--app-user-image-size', '--app-user-image-repeat', '--app-user-image-position', '--app-background-veil', '--app-surface-veil', '--app-surface-blur']) root.style.removeProperty(property);
@@ -64,14 +85,22 @@ export function applyHomeBackground(root: HTMLElement | null): void {
       // flight. Never apply stale image data to the current shell.
       if (backgroundImagePath !== path || state.store.homeBackgroundImage.trim() !== path || !root.isConnected) return;
       if (result.ok) {
-        backgroundImageSource = result.dataUrl;
+        let source = '';
+        try {
+          source = dataUrlToObjectUrl(result.dataUrl);
+        } catch {
+          // Only reachable for malformed payloads; small images still render
+          // through the raw data URL, large ones degrade as before.
+          source = result.dataUrl;
+        }
+        setBackgroundSource(source);
         backgroundImageErrorPath = '';
       } else {
         if (backgroundImageErrorPath !== path) {
           backgroundImageErrorPath = path;
           toast(t(homeBackgroundErrorKey(result.reason), { s: '20MB' }));
         }
-        backgroundImageSource = '';
+        setBackgroundSource('');
       }
       applyHomeBackground(root);
     }).catch(() => {
