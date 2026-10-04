@@ -1094,6 +1094,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			a.finalizeForQuit()
+			a.stopPrintLoop()
 			return a, tea.Quit
 		case tea.KeyEsc:
 			if a.isThinking || a.waitingForApproval || a.waitingForQuestion {
@@ -1730,6 +1731,13 @@ func (a *App) retireEventStream() {
 // recovered as failed instead of the cancellation the user asked for.
 func (a *App) finalizeForQuit() {
 	a.abortActiveESMAgent()
+	if a.manualCompactionActive && a.agent != nil {
+		// Manual compaction runs on a background context; the agent abort
+		// channel is the only cancellation signal compact() observes. Raise it
+		// here so quitting does not leave the compaction goroutine streaming
+		// and writing session data during process teardown.
+		a.agent.Abort()
+	}
 	if a.run != nil {
 		a.finalizeAbortedRun()
 		run := a.run

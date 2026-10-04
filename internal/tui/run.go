@@ -184,9 +184,7 @@ func (r *tuiRun) finish(state agentruntime.RunState) {
 	if r == nil || r.execution == nil {
 		return
 	}
-	if r != nil {
-		r.clearDecisions(decisionTerminalStatus(state))
-	}
+	r.clearDecisions(decisionTerminalStatus(state))
 	if r.sessionID != "" {
 		_ = r.execution.FinishDurableWithRetry(context.Background(), r.id, state, "", agentruntime.RunEvent{SessionID: r.sessionID, RunID: r.id, EventType: "finished", Source: "tui", Status: string(state), Model: r.model, Mode: r.mode, Timestamp: time.Now()})
 	} else {

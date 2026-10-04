@@ -88,6 +88,7 @@ var legacyTestAllowlist = map[string]string{
 	"internal/serve/openaiapi/server_test.go":                     "builds low-level agents to drive focused server handlers",
 	"internal/tui/cache_test.go":                                  "builds a low-level agent to drive the /compact command path",
 	"internal/tui/decision_resolution_test.go":                    "builds a low-level agent to drive decision resolution",
+	"internal/tui/quit_finalize_test.go":                          "builds a low-level agent to verify quit aborts active compaction",
 }
 
 func sortedAllowlist() []string {

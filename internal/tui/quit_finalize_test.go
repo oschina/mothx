@@ -8,10 +8,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/provider"
 	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 func newAbortTestApp(t *testing.T) (*App, *session.Manager, string, string) {
@@ -133,5 +135,44 @@ func TestFinalizeForQuitTerminalizesRun(t *testing.T) {
 	}
 	if status := durableRunStatus(t, sessionDir, sessionID, run.id); status != "cancelled" {
 		t.Fatalf("durable run status = %q, want cancelled", status)
+	}
+}
+
+// TestFinalizeForQuitAbortsActiveCompaction guards the quit-during-compaction
+// path: CompactForced only observes the agent abort channel, so finalizeForQuit
+// must raise it or the compaction goroutine keeps streaming and writing session
+// data during process teardown.
+func TestFinalizeForQuitAbortsActiveCompaction(t *testing.T) {
+	app, _, _, _ := newAbortTestApp(t)
+	compactAgent := agent.New(agent.Config{ID: "agent-main", Mode: "agent"}, tools.NewRegistry(t.TempDir(), nil))
+	app.agent = compactAgent
+	app.manualCompactionActive = true
+
+	app.finalizeForQuit()
+
+	if !compactAgent.Aborted() {
+		t.Fatal("finalizeForQuit did not abort the active compaction agent")
+	}
+	if app.manualCompactionActive {
+		t.Fatal("finalizeForQuit left the compaction flag active")
+	}
+}
+
+// TestCtrlCQuitStopsPrintLoop guards the main Ctrl+C quit path: every quit path
+// must stop the deferred print pump, otherwise the goroutine outlives teardown
+// and can print into a terminal Bubble Tea has already exited.
+func TestCtrlCQuitStopsPrintLoop(t *testing.T) {
+	app, _, _, _ := newAbortTestApp(t)
+
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("Ctrl+C returned no quit command")
+	}
+
+	app.printMu.Lock()
+	stopped := app.printStop
+	app.printMu.Unlock()
+	if !stopped {
+		t.Fatal("Ctrl+C quit path did not stop the print loop")
 	}
 }
