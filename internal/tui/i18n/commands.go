@@ -9,6 +9,7 @@ const (
 	MsgCommandSettingsDescription      MessageID = "commands.settings.description"
 	MsgCommandTUILangDescription       MessageID = "commands.tuilang.description"
 	MsgCommandSkillsDescription        MessageID = "commands.skills.description"
+	MsgCommandSkillMgrDescription      MessageID = "commands.skillmgr.description"
 	MsgCommandSkillHubDescription      MessageID = "commands.skillhub.description"
 	MsgCommandEnvDescription           MessageID = "commands.env.description"
 	MsgCommandSkillDescription         MessageID = "commands.skill.description"

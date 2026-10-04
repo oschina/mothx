@@ -343,6 +343,12 @@ const (
 	MsgSkillNotFound                      MessageID = "skills.not_found"
 	MsgSkillAlreadyActive                 MessageID = "skills.already_active"
 	MsgSkillActivated                     MessageID = "skills.activated"
+	MsgSkillMgrBusy                       MessageID = "skillmgr.busy"
+	MsgSkillMgrLocked                     MessageID = "skillmgr.locked"
+	MsgSkillMgrAppliedOn                  MessageID = "skillmgr.applied_on"
+	MsgSkillMgrAppliedOff                 MessageID = "skillmgr.applied_off"
+	MsgSkillMgrAppliedBoth                MessageID = "skillmgr.applied_both"
+	MsgSkillMgrNoChange                   MessageID = "skillmgr.no_change"
 	MsgAllowEditPathTitle                 MessageID = "alloweditpath.title"
 	MsgAllowEditPathAlready               MessageID = "alloweditpath.already"
 	MsgAllowEditPathNotFound              MessageID = "alloweditpath.not_found"
@@ -478,6 +484,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandSettingsDescription:         "Configure settings.json groups, including providers",
 		MsgCommandTUILangDescription:          "Set the TUI language (global by default)",
 		MsgCommandSkillsDescription:           "List available skills",
+		MsgCommandSkillMgrDescription:         "Activate skills for this session",
 		MsgCommandSkillHubDescription:         "Browse, search and install marketplace skills",
 		MsgCommandEnvDescription:              "Manage extra environment variables",
 		MsgCommandSkillDescription:            "Activate a skill",
@@ -549,6 +556,12 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgSkillNotFound:                      "Skill not found: %s",
 		MsgSkillAlreadyActive:                 "Skill '%s' is already active.",
 		MsgSkillActivated:                     "✅ Skill '%s' activated (%s): %s",
+		MsgSkillMgrBusy:                       "Cannot manage skills while the agent is running.",
+		MsgSkillMgrLocked:                     "Skill '%s' is controlled by a feature flag and cannot be toggled here.",
+		MsgSkillMgrAppliedOn:                  "✅ Activated skills: %s",
+		MsgSkillMgrAppliedOff:                 "Deactivated skills: %s",
+		MsgSkillMgrAppliedBoth:                "✅ Activated: %s ｜ Deactivated: %s",
+		MsgSkillMgrNoChange:                   "No skill changes.",
 		MsgAllowEditPathTitle:                 "Auto-edit path whitelist (agent mode):",
 		MsgAllowEditPathAlready:               "Already in whitelist: %s",
 		MsgAllowEditPathNotFound:              "Not in whitelist: %s",
@@ -895,6 +908,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandSettingsDescription:         "配置 settings.json 设置组，包括 Provider",
 		MsgCommandTUILangDescription:          "设置 TUI 语言（默认全局）",
 		MsgCommandSkillsDescription:           "列出可用 Skill",
+		MsgCommandSkillMgrDescription:         "为当前会话启用 Skill",
 		MsgCommandSkillHubDescription:         "浏览、搜索并安装市场 Skill",
 		MsgCommandEnvDescription:              "管理额外环境变量",
 		MsgCommandSkillDescription:            "启用 Skill",
@@ -966,6 +980,12 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgSkillNotFound:                      "未找到 Skill：%s",
 		MsgSkillAlreadyActive:                 "Skill '%s' 已经启用。",
 		MsgSkillActivated:                     "✅ Skill '%s' 已启用（%s）：%s",
+		MsgSkillMgrBusy:                       "Agent 运行时无法管理 Skill。",
+		MsgSkillMgrLocked:                     "Skill '%s' 由功能开关控制，无法在此切换。",
+		MsgSkillMgrAppliedOn:                  "✅ 已启用 Skill：%s",
+		MsgSkillMgrAppliedOff:                 "已停用 Skill：%s",
+		MsgSkillMgrAppliedBoth:                "✅ 已启用：%s ｜ 已停用：%s",
+		MsgSkillMgrNoChange:                   "未改动 Skill。",
 		MsgAllowEditPathTitle:                 "自动编辑路径白名单（agent 模式）：",
 		MsgAllowEditPathAlready:               "白名单中已经存在：%s",
 		MsgAllowEditPathNotFound:              "白名单中不存在：%s",

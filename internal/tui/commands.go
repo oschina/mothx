@@ -636,7 +636,7 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 		if skillName != "" {
 			a.activateSkill(skillName)
 		} else {
-			a.listSkills()
+			a.openSkillMgr()
 		}
 		return nil
 	}
@@ -737,8 +737,8 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 		}
 	case "/tuilang":
 		a.handleTUILangCommand(parts)
-	case "/skills":
-		a.listSkills()
+	case "/skillmgr", "/skills":
+		a.openSkillMgr()
 	case "/env":
 		a.handleEnvCommand(parts)
 	case "/skillhub":
@@ -749,7 +749,7 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 		if len(parts) > 1 {
 			a.activateSkill(parts[1])
 		} else {
-			a.listSkills()
+			a.openSkillMgr()
 		}
 	case "/paste-image":
 		a.handlePasteImageCommand()
@@ -859,30 +859,6 @@ func (a *App) handleTUILangCommand(parts []string) {
 
 func (a *App) handleEnvCommand(parts []string) {
 	a.openEnvDialog()
-}
-
-func (a *App) listSkills() {
-	if a.skillsMgr == nil {
-		a.addCommandStatus(a.translator.Text(i18n.MsgSkillsUnavailable))
-		return
-	}
-	skillList := a.skillsMgr.List()
-	if len(skillList) == 0 {
-		a.addCommandStatus(a.translator.Text(i18n.MsgSkillsEmpty))
-		return
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Available skills:\n")
-	for _, s := range skillList {
-		marker := " "
-		if _, ok := a.activeSkills[s.Name]; ok {
-			marker = "*"
-		}
-		sb.WriteString(fmt.Sprintf("  [%s] %s (%s): %s\n", marker, s.Name, s.Source, s.Description))
-	}
-	sb.WriteString("\nUse /skill <name> or /skill:<name> to activate a skill.")
-	a.addCommandStatus(sb.String())
 }
 
 // activateSkill loads a skill's content into the extra context.

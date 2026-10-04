@@ -28,7 +28,7 @@ func commandSuggestionItems(translators ...i18n.Translator) []suggest.Item {
 func (a *App) updateCommandSuggestions() {
 	value := a.input.Value()
 	items, query, ok := commandSuggestionItemsForInputWithTranslator(value, a.translator)
-	if a.auth.Open || a.envDialog.Open || a.defaultModelDialog.Open || a.modelDialog.Open || a.sessionsDialog.Open || a.toolModalOpen || a.statsOverlayOpen || a.skillHubOpen || a.esmPanelOpen || a.waitingForApproval || a.waitingForQuestion || !ok {
+	if a.auth.Open || a.envDialog.Open || a.defaultModelDialog.Open || a.modelDialog.Open || a.sessionsDialog.Open || a.toolModalOpen || a.statsOverlayOpen || a.skillHubOpen || a.skillMgrOpen || a.esmPanelOpen || a.waitingForApproval || a.waitingForQuestion || !ok {
 		a.suggest = a.suggest.SetItems(commandSuggestionItems(a.translator))
 		a.suggest = a.suggest.Update("")
 		return

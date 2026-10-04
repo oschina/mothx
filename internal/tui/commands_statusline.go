@@ -228,5 +228,3 @@ func saveStatusLineSettings(scope string, s *config.Settings) error {
 		return config.SaveProjectSettings(s)
 	}
 }
-
-// listSkills displays all available skills.

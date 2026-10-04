@@ -21,7 +21,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "/defaultModel", Value: "/defaultModel ", Usage: "/defaultModel [project|global]", Description: i18n.MsgCommandDefaultModelDescription},
 	{Name: "/env", Value: "/env ", Usage: "/env [list|set KEY VALUE|unset KEY|clear]", Description: i18n.MsgCommandEnvDescription},
 	{Name: "/skillhub", Value: "/skillhub", Usage: "/skillhub [search <q>]", Description: i18n.MsgCommandSkillHubDescription},
-	{Name: "/skills", Value: "/skills", Usage: "/skills", Description: i18n.MsgCommandSkillsDescription},
+	{Name: "/skillmgr", Value: "/skillmgr", Usage: "/skillmgr", Description: i18n.MsgCommandSkillMgrDescription},
 	{Name: "/skill", Value: "/skill ", Usage: "/skill <name>", Description: i18n.MsgCommandSkillDescription},
 	{Name: "/paste-image", Value: "/paste-image", Usage: "/paste-image", Description: i18n.MsgCommandPasteImageDescription},
 	{Name: "/clear", Value: "/clear", Usage: "/clear", Description: i18n.MsgCommandClearDescription},

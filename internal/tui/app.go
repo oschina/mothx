@@ -256,6 +256,16 @@ type App struct {
 	skillHubInstalling     bool
 	skillHubMessage        string
 
+	// Skill manager overlay: the merged /skills + /skill panel. Space toggles a
+	// skill's activation; Enter applies the pending set through the existing
+	// TUI activation path (activeSkills -> rebuildExtraContext -> resetAgent).
+	skillMgrOpen     bool
+	skillMgrItems    []*skills.Skill
+	skillMgrCursor   int
+	skillMgrSelected map[string]bool
+	skillMgrLocked   map[string]bool
+	skillMgrMessage  string
+
 	// /btw side-question floating layer
 	btwOpen       bool
 	btwActive     bool   // a /btw sub-agent is currently running
@@ -969,6 +979,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.skillHubOpen {
 			return a, a.handleSkillHubKey(msg)
 		}
+		if a.skillMgrOpen {
+			return a, a.handleSkillMgrKey(msg)
+		}
 		if a.esmPanelOpen {
 			switch {
 			case msg.Type == tea.KeyCtrlC:
@@ -1616,6 +1629,9 @@ func (a *App) View() string {
 	if !a.waitingForApproval && a.skillHubOpen {
 		return a.renderFixedHeight(lipgloss.JoinVertical(lipgloss.Left, a.renderSkillHub(), footer))
 	}
+	if !a.waitingForApproval && a.skillMgrOpen {
+		return a.renderFixedHeight(lipgloss.JoinVertical(lipgloss.Left, a.renderSkillMgr(), footer))
+	}
 	if !a.waitingForApproval && a.esmPanelOpen {
 		panelFooter := footer
 		if a.height > 0 && a.height < 8 {
@@ -1777,6 +1793,9 @@ func (a *App) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	if a.skillHubOpen {
+		return nil
+	}
+	if a.skillMgrOpen {
 		return nil
 	}
 	if a.toolModalOpen {
