@@ -54,6 +54,24 @@ const (
 
 // handleManageRequest routes the mothx/manage/* extension family. Unknown
 // management methods receive a structured manage_method_not_found error.
+// manageAsyncMethods lists the read-only, network-bound mothx/manage/*
+// projections that the transport dispatches on their own goroutine so a slow
+// upstream cannot head-of-line block the NDJSON read loop (see the dispatch
+// site in Run). Membership requirement: the handler resolves all state from
+// fresh on-disk settings (manageSettings) or under s.mu (sessionRuntime) and
+// never mutates server or session state. Mutating methods (settings/patch,
+// providers/save, skillhub install/activate/uninstall, ...) must stay off this
+// set to preserve FIFO ordering and the single-writer invariant that
+// refreshProviderCatalog relies on.
+var manageAsyncMethods = map[string]bool{
+	"mothx/manage/providers/discover":  true,
+	"mothx/manage/providers/test":      true,
+	"mothx/manage/skillhub/categories": true,
+	"mothx/manage/skillhub/official":   true,
+	"mothx/manage/skillhub/search":     true,
+	"mothx/manage/skillhub/detail":     true,
+}
+
 func (s *server) handleManageRequest(req rpcRequest) {
 	switch req.Method {
 	case "mothx/manage/settings/get":

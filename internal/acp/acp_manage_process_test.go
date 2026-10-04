@@ -359,6 +359,57 @@ func TestACPStdioProcessManageSettingsProvidersAndSecrets(t *testing.T) {
 		"sk-wire-PLAINKEY-abcdef123456", "sk-down-DOWNKEY-777666", "sk-rot-ROTKEY-999888")
 }
 
+// TestACPStdioProcessManageNetworkDoesNotBlockTransport pins the read-loop
+// dispatch contract: a slow read-only network manage call (providers/test
+// against a held HTTP response) must not head-of-line block the transport. A
+// synchronous settings/get sent while the probe is in flight must be answered
+// first; otherwise $/cancel_request and the client's responses to reverse
+// approval/question requests would be stranded for the whole probe duration.
+func TestACPStdioProcessManageNetworkDoesNotBlockTransport(t *testing.T) {
+	configDir := t.TempDir()
+	workDir := t.TempDir()
+	release := make(chan struct{})
+	released := false
+	releaseProbe := func() {
+		if !released {
+			released = true
+			close(release)
+		}
+	}
+	defer releaseProbe()
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		acpSSEText(w, "chatcmpl-manage-slow", "pong")
+	}))
+	defer providerServer.Close()
+	writeManageWireSettings(t, configDir, providerServer.URL+"/v1", nil)
+
+	process := startManageProcess(t, configDir, workDir)
+	defer process.closeAndWait(t)
+	process.send(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": 1}})
+	process.result(t, 1)
+
+	// providers/test is dispatched off the read loop and blocks on the held
+	// HTTP response.
+	process.send(t, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "mothx/manage/providers/test", "params": map[string]any{"provider": "manage-wire"}})
+	// settings/get stays synchronous on the read loop and must overtake the
+	// in-flight probe.
+	process.send(t, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "mothx/manage/settings/get", "params": map[string]any{}})
+
+	message := process.read(t)
+	if got, _ := message["id"].(float64); got != 3 {
+		t.Fatalf("first response while providers/test is in flight = %#v, want the id 3 settings/get response", message)
+	}
+	if errObj := message["error"]; errObj != nil {
+		t.Fatalf("settings/get during in-flight probe failed: %#v", errObj)
+	}
+	releaseProbe()
+	result := process.result(t, 2)
+	if result["ok"] != true {
+		t.Fatalf("providers/test after release = %#v, want ok", result)
+	}
+}
+
 // --- skills / mcp / memory / stats over the wire ----------------------------------
 
 func TestACPStdioProcessManageMCPProjectScope(t *testing.T) {

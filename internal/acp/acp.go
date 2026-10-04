@@ -216,7 +216,10 @@ type sessionRuntime struct {
 	runID            string
 	closed           bool
 	terminalNotified bool
-	cancelMu         sync.Mutex
+	// Lock ordering: server.mu is always acquired before cancelMu (e.g.
+	// handleCancelRequest scans sessions under s.mu); code holding cancelMu
+	// must never acquire s.mu.
+	cancelMu sync.Mutex
 	// ACP message IDs group streamed chunks into logical messages. A single
 	// prompt can contain several model turns when tools are used, so IDs must
 	// advance at each Agent turn. Otherwise text emitted after a tool is merged
@@ -1304,7 +1307,23 @@ func Run(opts RunOptions) (runErr error) {
 			srv.handleSetMode(req)
 		default:
 			if strings.HasPrefix(req.Method, "mothx/manage/") {
-				srv.handleManageRequest(req)
+				if manageAsyncMethods[req.Method] {
+					// Read-only network-bound manage projections run off the
+					// read loop so a slow or hung upstream cannot head-of-line
+					// block the transport: $/cancel_request and the client's
+					// responses to reverse approval/question requests are read
+					// on this loop and must stay reachable while a probe is in
+					// flight. Concurrent dispatch is race-free for exactly
+					// these methods: they resolve state from fresh on-disk
+					// settings (manageSettings) or under s.mu (sessionRuntime),
+					// mutate neither server nor session state, and write under
+					// wmu. Mutating manage methods stay synchronous on this
+					// loop to preserve FIFO order and the single-writer
+					// invariant refreshProviderCatalog relies on.
+					go srv.handleManageRequest(req)
+				} else {
+					srv.handleManageRequest(req)
+				}
 			} else if len(req.ID) > 0 {
 				srv.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32601, Message: "method not found"})
 			}
