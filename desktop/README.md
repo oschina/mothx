@@ -45,8 +45,9 @@ renderer (desktop/renderer)          main (desktop/main)                runtime
 （从 `publish_artifact` 工具调用投影制品卡片）。审批/提问超时通过环境变量
 `MOTHX_ACP_PERMISSION_TIMEOUT` / `MOTHX_ACP_QUESTION_TIMEOUT` 注入（P0-3）。
 
-主题/语言/置顶任务/工作区历史等 ACP 不拥有的 UI 状态保存在 userData 的
-`desktop-store.json`（`main/store.ts`），绝不复制会话权威数据。运行时二进制
+主题/语言/工作区历史等 ACP 不拥有的 UI 状态保存在 userData 的
+`desktop-store.json`（`main/store.ts`），绝不复制会话权威数据（置顶/分组等会话
+元数据是 ACP `mothx/session/setMeta` 的 canonical 状态，不落本地）。运行时二进制
 选择（内置/自定义）也属于客户端外壳的启动状态，同样只存在于该文件。
 
 ## 开发与构建

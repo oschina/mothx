@@ -65,7 +65,6 @@ export interface StoreData {
   runtimeBinaryPath: string;
   lastWorkspace: string;
   recentWorkspaces: string[];
-  pinnedSessions: string[];
   sessionStatus: Record<string, string>;
 }
 

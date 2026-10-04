@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Desktop-local persistence for UI state that ACP intentionally does not own
-// (theme, locale, default-new-session directory history, pinned tasks,
+// (theme, locale, default-new-session directory history,
 // observed run statuses, and which local `mothx` executable this client
 // spawns as its ACP runtime). `lastWorkspace` remains the on-disk
 // compatibility field name; it is not a process-wide workspace or session
@@ -29,7 +29,6 @@ export interface DesktopStoreData {
   runtimeBinaryPath: string;
   lastWorkspace: string;
   recentWorkspaces: string[];
-  pinnedSessions: string[];
   sessionStatus: Record<string, string>;
 }
 
@@ -48,7 +47,6 @@ const DEFAULTS: DesktopStoreData = {
   runtimeBinaryPath: '',
   lastWorkspace: '',
   recentWorkspaces: [],
-  pinnedSessions: [],
   sessionStatus: {},
 };
 
@@ -106,9 +104,6 @@ export class DesktopStore {
         recentWorkspaces: Array.isArray(parsed.recentWorkspaces)
           ? parsed.recentWorkspaces.filter((entry): entry is string => typeof entry === 'string' && entry !== '')
           : [],
-        pinnedSessions: Array.isArray(parsed.pinnedSessions)
-          ? parsed.pinnedSessions.filter((entry): entry is string => typeof entry === 'string' && entry !== '')
-          : [],
         sessionStatus:
           parsed.sessionStatus && typeof parsed.sessionStatus === 'object' && !Array.isArray(parsed.sessionStatus)
             ? (parsed.sessionStatus as Record<string, string>)
@@ -144,11 +139,6 @@ export class DesktopStore {
       this.data.recentWorkspaces = patch.recentWorkspaces
         .filter((entry): entry is string => typeof entry === 'string' && entry !== '')
         .slice(0, MAX_RECENT_WORKSPACES);
-    }
-    if (Array.isArray(patch.pinnedSessions)) {
-      this.data.pinnedSessions = patch.pinnedSessions
-        .filter((entry): entry is string => typeof entry === 'string' && entry !== '')
-        .slice(0, MAX_STATUS_ENTRIES);
     }
     if (patch.sessionStatus && typeof patch.sessionStatus === 'object') {
       for (const [key, value] of Object.entries(patch.sessionStatus)) {
