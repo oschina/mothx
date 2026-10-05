@@ -445,17 +445,78 @@ func (r *Registry) ResolvePath(path string) (string, error) {
 
 	// Validate: path must stay within the base or a session-granted root.
 	workDir = filepath.Clean(workDir)
-	rel, err := filepath.Rel(workDir, path)
-	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return path, nil
+	roots := append([]string{workDir}, additionalDirs...)
+	if !pathWithinRoots(path, roots) {
+		return "", fmt.Errorf("path %s escapes session workspace roots", path)
 	}
-	for _, root := range additionalDirs {
-		rel, relErr := filepath.Rel(filepath.Clean(root), path)
-		if relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return path, nil
+
+	// Symlink fence: a lexical check alone can be defeated by a symlink inside
+	// the workspace that points outside of it (e.g. one created by a sandboxed
+	// shell command). Canonicalize the path and the roots, then re-check
+	// containment so callers never operate through an escaping symlink.
+	resolved, err := canonicalizePath(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlinks for %s: %w", path, err)
+	}
+	resolvedRoots := make([]string, 0, len(roots))
+	for _, root := range roots {
+		resolvedRoot, rootErr := canonicalizePath(root)
+		if rootErr != nil {
+			continue
+		}
+		resolvedRoots = append(resolvedRoots, resolvedRoot)
+	}
+	if !pathWithinRoots(resolved, resolvedRoots) {
+		return "", fmt.Errorf("path %s escapes session workspace roots", path)
+	}
+	return resolved, nil
+}
+
+// pathWithinRoots reports whether path is lexically contained in any root.
+func pathWithinRoots(path string, roots []string) bool {
+	for _, root := range roots {
+		rel, err := filepath.Rel(filepath.Clean(root), path)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
 		}
 	}
-	return "", fmt.Errorf("path %s escapes session workspace roots", path)
+	return false
+}
+
+// canonicalizePath resolves symlinks for path. When path (or its tail) does
+// not exist yet, it canonicalizes the longest existing parent and re-appends
+// the missing suffix, mirroring sandbox.canonicalSandboxPath.
+func canonicalizePath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	var suffix []string
+	parent := path
+	for {
+		if _, err := os.Lstat(parent); err == nil {
+			resolved, err := filepath.EvalSymlinks(parent)
+			if err != nil {
+				return "", err
+			}
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return resolved, nil
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return "", fmt.Errorf("no existing parent for %s", path)
+		}
+		suffix = append(suffix, filepath.Base(parent))
+		parent = next
+	}
 }
 
 // SetSandbox updates the sandbox used by tools.

@@ -523,8 +523,8 @@ func parseReferences(content, skillDir string, fsys fs.FS) []*SkillReference {
 			if pathStart > 0 && pathEnd > pathStart {
 				path := line[pathStart+1 : pathEnd]
 				if strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".txt") {
-					fullPath := skillReferencePath(skillDir, path, fsys)
-					if !seen[path] {
+					fullPath, ok := skillReferencePath(skillDir, path, fsys)
+					if ok && !seen[path] {
 						seen[path] = true
 						label := strings.TrimPrefix(line, "#")
 						label = strings.TrimSpace(label)
@@ -555,8 +555,11 @@ func parseReferences(content, skillDir string, fsys fs.FS) []*SkillReference {
 			if linkStart > 0 && linkEnd > 0 {
 				path := line[linkStart+2 : linkStart+2+linkEnd]
 				if (strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".txt")) && !seen[path] {
+					fullPath, ok := skillReferencePath(skillDir, path, fsys)
+					if !ok {
+						continue
+					}
 					seen[path] = true
-					fullPath := skillReferencePath(skillDir, path, fsys)
 					// Extract label
 					labelStart := strings.Index(line, "[")
 					label := ""
@@ -580,11 +583,27 @@ func parseReferences(content, skillDir string, fsys fs.FS) []*SkillReference {
 	return refs
 }
 
-func skillReferencePath(skillDir, referencePath string, fsys fs.FS) string {
+// skillReferencePath resolves a reference path from SKILL.md content against
+// the skill directory. It reports false when the path is absolute or escapes
+// the skill directory, mirroring the containment check in LoadReference so
+// auto-loaded references cannot read arbitrary files outside the skill.
+func skillReferencePath(skillDir, referencePath string, fsys fs.FS) (string, bool) {
 	if fsys != nil {
-		return path.Join(skillDir, filepath.ToSlash(referencePath))
+		refPath := path.Clean(filepath.ToSlash(referencePath))
+		if refPath == "." || refPath == ".." || strings.HasPrefix(refPath, "../") || path.IsAbs(refPath) {
+			return "", false
+		}
+		return path.Join(skillDir, refPath), true
 	}
-	return filepath.Join(skillDir, referencePath)
+	if filepath.IsAbs(referencePath) {
+		return "", false
+	}
+	fullPath := filepath.Clean(filepath.Join(skillDir, referencePath))
+	rel, relErr := filepath.Rel(filepath.Clean(skillDir), fullPath)
+	if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return fullPath, true
 }
 
 // BuildAllSkillsContext returns a summary of all available skills for the system prompt.

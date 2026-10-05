@@ -573,7 +573,7 @@ The following capabilities are integrated into the current runtime; actual avail
 - **MCP**: Supports stdio, streamable HTTP, and legacy SSE.
 - **Parallel tool execution**: Local function and custom tool calls within one agent turn run through a bounded parallel worker pool. Call starts are reported in the model's declared order without blocking execution, so calls still overlap and only the completion order is unrestricted. The `toolExecution` setting controls `mode` (`parallel`/`sequential`) and `maxConcurrency` (default `10`). Shared by TUI, WebUI, Serve, channels, ACP, and sub-agents.
  Global and project `mcp.json` files can be edited and are loaded into new Serve sessions.
-- **Messaging channels**: Supports WeChat, Feishu, and Webhooks. Background runs persist events and can deliver results after reconnect or restart. WebSocket `/ws/runs` and `/ws/logs` are Web UI event streams, not standalone messaging channels.
+- **Messaging channels**: Supports WeChat and Feishu. Background runs persist events and can deliver results after reconnect or restart. WebSocket `/ws/runs` and `/ws/logs` are Web UI event streams, not standalone messaging channels.
 - **Project state files**: Current project state is under `.mothx/`, including `settings.json`, `serve.json`, `allow.json`, `memory.md`, and skill directories. Legacy `.vibe` paths are no longer migrated automatically.
 - **Model capability validation**: Images, attachments, Responses hosted tools, and reasoning parameters are validated against the selected model before requests are sent; unsupported combinations fail early.
 

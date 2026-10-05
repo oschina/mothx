@@ -2,6 +2,10 @@
 
 ## v1.3.103
 
+### 💥 Breaking Changes
+
+- **Inbound webhook support removed.** The serve inbound webhook feature (`channels.webhooks` configuration, `/webhook/*` routing, and its agent-task handler) has been removed entirely; webhook events are no longer accepted, and a `webhooks` section in existing configuration files is ignored. Use the OpenAI-compatible API or the WeChat/Feishu messaging channels instead.
+
 ### ✨ New Features
 
 - **Knowledge Base Usability Completion**
@@ -70,6 +74,15 @@
 
 - **Desktop dev runner explains a missing display instead of showing a white window**
   - On a Linux host without a usable display (an SSH session, a stopped X server, X11 forwarding that never connected), Chromium aborts during platform initialization and dies on SIGSEGV. Because the window is frameless with a white background, the only symptom was a blank white window followed by a crash line, after waiting through a full build. `npm run dev` now checks for a display server first and exits within a second with an actionable explanation, without building anything, and recognises the same failure from Chromium's own stderr when `DISPLAY` is set but cannot be connected to — a case no environment check can predict. Chromium's original diagnostics are still printed unchanged, and the message lists the ways forward: a real desktop session, `ssh -X`, a virtual display (`Xvfb`, optionally under VNC/x11vnc), or the TUI / `mothx serve` Web UI for terminal-only work on a headless host.
+
+- **Skill references can no longer escape the skill directory**
+  - Reference paths parsed from SKILL.md content (`### Label (path) [已加载]` headers or Markdown links) were joined onto the skill directory without a containment check, so a third-party or skillhub-installed skill could auto-load arbitrary `.md`/`.txt` files from outside the skill directory (for example `../../../…`) into the system prompt. Parsed references now go through the same containment check as on-demand `skill_ref` loading; absolute paths and escaping paths are rejected.
+
+- **File-tool path resolution now enforces a symlink fence**
+  - `read`/`write`/`edit`/`insert`/`grep`/`find`/`ls` validated workspace containment lexically only, so a symlink inside the workspace pointing outside the session roots passed the check and let the unsandboxed host process read or write beyond the fence. `ResolvePath` now canonicalizes symlinks for both the target path and the session roots (including the not-yet-existing tail of new files) and re-checks containment on the canonical paths.
+
+- **In-stream SSE error events now go through the provider retry loop**
+  - A provider stream that emits an in-band error event/chunk mid-stream (Anthropic `event: error` such as `overloaded_error`, Google `error` chunks such as `UNAVAILABLE`/`RESOURCE_EXHAUSTED`, OpenAI-compatible `{"error":…}` chunks) previously terminated the run immediately — OpenAI chat streams even silently ignored error chunks and reported the truncated stream as a normal completion. These errors are now returned to the caller's retry classification: they are retried with bounded backoff while no visible output has been produced, and surface as a regular stream error otherwise. `IsRetryable` additionally matches `unavailable`, `resource_exhausted`, and `internal error` substrings.
 
 ## v1.3.102
 

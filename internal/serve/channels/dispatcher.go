@@ -1020,8 +1020,8 @@ func channelSafeSubAgentEvent(ev agent.Event) agent.Event {
 	return ev
 }
 
-// HandleMessage is retained for text-only callers such as existing SDK and
-// webhook integrations. Channel transports use HandleDelivery so native media
+// HandleMessage is retained for text-only callers such as existing SDK
+// integrations. Channel transports use HandleDelivery so native media
 // operations are projected from the same canonical run result.
 func (d *Dispatcher) HandleMessage(ctx context.Context, msg messaging.InboundMessage) (string, error) {
 	response, err := d.HandleDelivery(ctx, msg)

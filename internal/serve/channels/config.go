@@ -22,7 +22,6 @@ type Config struct {
 	Sandbox         bool           `json:"sandbox,omitempty"`
 	Wechat          WechatConfig   `json:"wechat"`
 	Feishu          FeishuConfig   `json:"feishu"`
-	Webhooks        WebhookConfig  `json:"webhooks"`
 	Cron            CronConfig     `json:"cron"`
 	Memory          MemoryConfig   `json:"memory"`
 	Security        SecurityConfig `json:"security"`
@@ -45,22 +44,6 @@ type FeishuConfig struct {
 	AppID     string `json:"app_id"`
 	AppSecret string `json:"app_secret"`
 	WorkDir   string `json:"work_dir"`
-}
-
-// WebhookConfig defines inbound webhook settings.
-type WebhookConfig struct {
-	Enabled bool           `json:"enabled"`
-	Secret  string         `json:"secret"`
-	Routes  []WebhookRoute `json:"routes"`
-}
-
-// WebhookRoute maps an inbound webhook path to an agent skill + delivery.
-type WebhookRoute struct {
-	Path           string   `json:"path"`
-	Events         []string `json:"events"`
-	Skill          string   `json:"skill"`
-	Delivery       string   `json:"delivery"`
-	DeliveryTarget string   `json:"delivery_target,omitempty"`
 }
 
 // CronConfig defines cron scheduler settings.
@@ -202,7 +185,6 @@ func (c *Config) GetWechatCredPath() string {
 func (c *Config) resolveEnvVars() {
 	c.Feishu.AppID = resolveEnv(c.Feishu.AppID)
 	c.Feishu.AppSecret = resolveEnv(c.Feishu.AppSecret)
-	c.Webhooks.Secret = resolveEnv(c.Webhooks.Secret)
 }
 
 // GetDefaultProvider returns the effective default provider.

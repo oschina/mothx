@@ -147,6 +147,76 @@ func TestGoogleDoesNotRetryStreamReadErrorAfterVisibleOutput(t *testing.T) {
 	}
 }
 
+func TestGoogleRetriesInStreamErrorChunk(t *testing.T) {
+	attempts := 0
+	p := NewGeminiProviderWithModels("fake-key", "https://generativelanguage.googleapis.com/v1beta/models", []*provider.Model{{ID: "mock"}})
+	p.SetRetryConfig(&provider.RetryConfig{Enabled: true, MaxRetries: 1, BaseDelayMs: 1})
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		var body io.ReadCloser
+		if attempts == 1 {
+			body = io.NopCloser(strings.NewReader("data: {\"error\":{\"status\":\"UNAVAILABLE\",\"message\":\"Service unavailable\"}}\n"))
+		} else {
+			body = io.NopCloser(strings.NewReader("data: [DONE]\n"))
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: r}, nil
+	})}
+
+	events := chatAndCollect(t, p, provider.ChatParams{ModelID: "mock", Messages: []provider.Message{provider.NewUserMessage("hi")}, Abort: make(chan struct{})})
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	var sawRetry, sawDone bool
+	for _, e := range events {
+		switch e.Type {
+		case provider.StreamRetry:
+			sawRetry = true
+		case provider.StreamDone:
+			sawDone = true
+		case provider.StreamError:
+			t.Fatalf("unexpected StreamError: %v", e.Error)
+		}
+	}
+	if !sawRetry || !sawDone {
+		t.Fatalf("sawRetry=%v sawDone=%v, want both true", sawRetry, sawDone)
+	}
+}
+
+func TestGoogleDoesNotRetryInStreamErrorChunkAfterVisibleOutput(t *testing.T) {
+	attempts := 0
+	p := NewGeminiProviderWithModels("fake-key", "https://generativelanguage.googleapis.com/v1beta/models", []*provider.Model{{ID: "mock"}})
+	p.SetRetryConfig(&provider.RetryConfig{Enabled: true, MaxRetries: 1, BaseDelayMs: 1})
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		body := io.NopCloser(strings.NewReader(
+			"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hello\"}]}}]}\n" +
+				"data: {\"error\":{\"status\":\"UNAVAILABLE\",\"message\":\"Service unavailable\"}}\n"))
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: r}, nil
+	})}
+
+	events := chatAndCollect(t, p, provider.ChatParams{ModelID: "mock", Messages: []provider.Message{provider.NewUserMessage("hi")}, Abort: make(chan struct{})})
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	var sawText, sawError bool
+	for _, e := range events {
+		switch e.Type {
+		case provider.StreamTextDelta:
+			sawText = e.TextDelta == "hello"
+		case provider.StreamRetry:
+			t.Fatal("unexpected StreamRetry after visible output")
+		case provider.StreamError:
+			sawError = true
+			if e.Error == nil || !strings.Contains(e.Error.Error(), "UNAVAILABLE") {
+				t.Fatalf("error = %v, want UNAVAILABLE", e.Error)
+			}
+		}
+	}
+	if !sawText || !sawError {
+		t.Fatalf("sawText=%v sawError=%v, want both true", sawText, sawError)
+	}
+}
+
 func TestResolveAPIKeyShellCommandRequiresOptIn(t *testing.T) {
 	t.Setenv("VIBECODING_ALLOW_SHELL_CONFIG", "")
 	if got := resolveAPIKey(&config.ProviderConfig{APIKey: "!printf secret"}); got != "!printf secret" {

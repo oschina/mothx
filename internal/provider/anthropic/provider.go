@@ -659,8 +659,10 @@ func (p *Provider) parseSSE(ctx context.Context, body io.Reader, ch chan<- provi
 					errMsg = event.Error.Type + ": " + errMsg
 				}
 			}
-			ch <- provider.StreamEvent{Type: provider.StreamError, Error: fmt.Errorf("%s", errMsg), StopReason: "error"}
-			return true, nil
+			// Return the error instead of emitting a terminal StreamError so the
+			// caller's retry loop can classify it (e.g. overloaded_error) and
+			// retry while no visible output has been produced yet.
+			return visibleOutput, fmt.Errorf("%s", errMsg)
 		}
 	}
 

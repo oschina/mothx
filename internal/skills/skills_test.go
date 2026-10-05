@@ -517,6 +517,30 @@ func TestParseReferencesDedup(t *testing.T) {
 	}
 }
 
+func TestParseReferencesRejectsEscapingPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	content := `# Skill
+### 1. Escape (../../../etc/passwd.md) [已加载]
+### 2. Abs (/etc/shadow.md) [已加载]
+### 3. OK (references/base.md) [已加载]
+- [Escape Link](../../secret.txt)
+- [OK Link](references/overview.md)
+`
+	refs := parseReferences(content, tmpDir, nil)
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 references (escaping paths rejected), got %d", len(refs))
+	}
+	for _, ref := range refs {
+		if !strings.HasPrefix(ref.FullPath, filepath.Clean(tmpDir)+string(filepath.Separator)) {
+			t.Errorf("reference %q escapes skill dir: %q", ref.Path, ref.FullPath)
+		}
+	}
+	if refs[0].Path != "references/base.md" || refs[1].Path != "references/overview.md" {
+		t.Errorf("unexpected surviving refs: %q, %q", refs[0].Path, refs[1].Path)
+	}
+}
+
 func TestParseReferencesEmpty(t *testing.T) {
 	refs := parseReferences("# No references here", "/tmp", nil)
 	if len(refs) != 0 {

@@ -63,12 +63,7 @@ mothx serve init-config project  # 生成 .mothx/serve.json
   "channels": {
     "artifact": false,
     "wechat": { "enabled": false },
-    "feishu": { "enabled": false },
-    "webhooks": {
-      "enabled": false,
-      "secret": "生产环境请使用环境变量",
-      "routes": []
-    }
+    "feishu": { "enabled": false }
   },
   "webUI": {
     "enabled": true
@@ -158,10 +153,6 @@ mothx serve init-config project  # 生成 .mothx/serve.json
 
 - 支持 appId/appSecret/workspace/allowedUsers 配置
 - 自动消息路由和会话持久化
-
-### Webhook
-
-Serve 可以接收入站 webhook 事件，将其分派给 agent skill，然后把结果投递到已配置目标。配置 `channels.webhooks.enabled`、可选的 `secret`，以及包含 `path`、`events`、`skill`、`delivery` 和可选 `delivery_target` 的路由。将 webhook 对外暴露前，应保持 loopback 绑定或通过认证/secret 校验进行保护。
 
 ### WebSocket 事件流
 

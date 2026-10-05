@@ -572,7 +572,7 @@ MothX 会通过 npm registry 检测是否有新版本，并在有可用更新时
 - **MCP**：支持 stdio、streamable HTTP 和 legacy SSE
 - **并行工具执行**：单个 agent 回合内的多个本地函数/自定义工具调用通过有界并行工作池执行。调用的启动按模型声明的顺序上报，且不阻塞执行，因此调用之间仍然并发重叠，只有完成顺序不受限制。`toolExecution` 设置控制 `mode`（`parallel`/`sequential`）和 `maxConcurrency`（默认 `10`）。TUI、WebUI、Serve、channels、ACP 及子 Agent 统一使用。
 ；可编辑全局与项目级 `mcp.json`，并在新 Serve 会话中加载。
-- **消息通道**：支持微信、飞书和 Webhook；后台运行会持久化事件，断线或重启后可补投结果。WebSocket `/ws/runs`、`/ws/logs` 是 Web UI 事件流，不是独立消息通道。
+- **消息通道**：支持微信和飞书；后台运行会持久化事件，断线或重启后可补投结果。WebSocket `/ws/runs`、`/ws/logs` 是 Web UI 事件流，不是独立消息通道。
 - **项目状态文件**：当前项目级状态统一位于 `.mothx/`，包括 `settings.json`、`serve.json`、`allow.json`、`memory.md` 和技能目录。旧 `.vibe` 路径不再自动迁移。
 - **模型能力校验**：图片、附件、Responses hosted tools 和 reasoning 参数会按当前模型兼容性校验，不支持的组合会在请求前报错。
 

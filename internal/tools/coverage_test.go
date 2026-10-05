@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -167,6 +169,72 @@ func TestRegistryResolvePath(t *testing.T) {
 	_, err = r.ResolvePath("~")
 	// This is expected to fail if home dir is outside workdir
 	_ = err
+}
+
+// TestRegistryResolvePathSymlinkEscape verifies the symlink fence: a symlink
+// inside the workspace must not resolve to a target outside the roots.
+func TestRegistryResolvePathSymlinkEscape(t *testing.T) {
+	base := t.TempDir()
+	workDir := filepath.Join(base, "project")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(outside, "secret.md")
+	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry(workDir, sandbox.NewNoneSandbox())
+
+	// Symlink escaping the workspace must be rejected.
+	if err := os.Symlink(secret, filepath.Join(workDir, "escape.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ResolvePath("escape.md"); err == nil {
+		t.Error("expected error for symlink escaping workspace")
+	}
+
+	// Symlinked directory that escapes must be rejected for children too.
+	if err := os.Symlink(outside, filepath.Join(workDir, "escape-dir")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ResolvePath("escape-dir/secret.md"); err == nil {
+		t.Error("expected error for path through escaping directory symlink")
+	}
+
+	// Symlink staying inside the workspace must still resolve.
+	inside := filepath.Join(workDir, "real.md")
+	if err := os.WriteFile(inside, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(inside, filepath.Join(workDir, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := r.ResolvePath("link.md")
+	if err != nil {
+		t.Fatalf("unexpected error for internal symlink: %v", err)
+	}
+	wantResolved, err := canonicalizePath(inside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != wantResolved {
+		t.Errorf("expected %s, got %s", wantResolved, resolved)
+	}
+
+	// Non-existent path under a granted additional root still resolves.
+	extra := filepath.Join(base, "extra")
+	if err := os.MkdirAll(extra, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.SetAdditionalDirectories([]string{extra})
+	if _, err := r.ResolvePath(filepath.Join(extra, "new-file.md")); err != nil {
+		t.Errorf("unexpected error for new file in additional root: %v", err)
+	}
 }
 
 // TestSetSandbox tests SetSandbox.

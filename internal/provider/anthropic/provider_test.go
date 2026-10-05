@@ -149,6 +149,76 @@ func TestAnthropicDoesNotRetryStreamReadErrorAfterVisibleOutput(t *testing.T) {
 	}
 }
 
+func TestAnthropicRetriesInStreamErrorEvent(t *testing.T) {
+	attempts := 0
+	p := NewProviderWithModels("fake-key", "https://api.anthropic.com", []*provider.Model{{ID: "mock"}})
+	p.SetRetryConfig(&provider.RetryConfig{Enabled: true, MaxRetries: 1, BaseDelayMs: 1})
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		var body io.ReadCloser
+		if attempts == 1 {
+			body = io.NopCloser(strings.NewReader("data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n"))
+		} else {
+			body = io.NopCloser(strings.NewReader("data: {\"type\":\"message_stop\"}\n"))
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: r}, nil
+	})}
+
+	events := chatAndCollect(t, p, provider.ChatParams{Messages: []provider.Message{provider.NewUserMessage("hi")}, Abort: make(chan struct{})})
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	var sawRetry, sawDone bool
+	for _, e := range events {
+		switch e.Type {
+		case provider.StreamRetry:
+			sawRetry = true
+		case provider.StreamDone:
+			sawDone = true
+		case provider.StreamError:
+			t.Fatalf("unexpected StreamError: %v", e.Error)
+		}
+	}
+	if !sawRetry || !sawDone {
+		t.Fatalf("sawRetry=%v sawDone=%v, want both true", sawRetry, sawDone)
+	}
+}
+
+func TestAnthropicDoesNotRetryInStreamErrorEventAfterVisibleOutput(t *testing.T) {
+	attempts := 0
+	p := NewProviderWithModels("fake-key", "https://api.anthropic.com", []*provider.Model{{ID: "mock"}})
+	p.SetRetryConfig(&provider.RetryConfig{Enabled: true, MaxRetries: 1, BaseDelayMs: 1})
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		body := io.NopCloser(strings.NewReader(
+			"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n" +
+				"data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n"))
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: r}, nil
+	})}
+
+	events := chatAndCollect(t, p, provider.ChatParams{Messages: []provider.Message{provider.NewUserMessage("hi")}, Abort: make(chan struct{})})
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	var sawText, sawError bool
+	for _, e := range events {
+		switch e.Type {
+		case provider.StreamTextDelta:
+			sawText = e.TextDelta == "hello"
+		case provider.StreamRetry:
+			t.Fatal("unexpected StreamRetry after visible output")
+		case provider.StreamError:
+			sawError = true
+			if e.Error == nil || !strings.Contains(e.Error.Error(), "overloaded_error") {
+				t.Fatalf("error = %v, want overloaded_error", e.Error)
+			}
+		}
+	}
+	if !sawText || !sawError {
+		t.Fatalf("sawText=%v sawError=%v, want both true", sawText, sawError)
+	}
+}
+
 func TestAnthropicProviderHTTPProxy(t *testing.T) {
 	p, err := NewProviderWithModelsAndProxy("fake-key", "https://api.anthropic.com", "http://127.0.0.1:7890", []*provider.Model{{ID: "m1"}})
 	if err != nil {

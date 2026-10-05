@@ -425,6 +425,14 @@ type openAIResponse struct {
 	Model   string               `json:"model"`
 	Choices []openAIChoice       `json:"choices"`
 	Usage   *openAIUsageResponse `json:"usage,omitempty"`
+	Error   *openAIStreamError   `json:"error,omitempty"`
+}
+
+// openAIStreamError is the in-band error payload some OpenAI-compatible
+// gateways emit as an SSE chunk instead of failing the HTTP response.
+type openAIStreamError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
 }
 
 type openAIChoice struct {
@@ -729,6 +737,20 @@ func (p *Provider) parseSSE(ctx context.Context, body io.Reader, ch chan<- provi
 		var chunk openAIResponse
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
+		}
+
+		// In-band gateway error chunk: return the error instead of treating the
+		// stream as a normal completion so the caller's retry loop can classify
+		// it and retry while no visible output has been produced yet.
+		if chunk.Error != nil {
+			errMsg := chunk.Error.Message
+			if errMsg == "" {
+				errMsg = "stream error"
+			}
+			if chunk.Error.Type != "" {
+				errMsg = chunk.Error.Type + ": " + errMsg
+			}
+			return visibleOutput, fmt.Errorf("%s", errMsg)
 		}
 
 		if chunk.Usage != nil {

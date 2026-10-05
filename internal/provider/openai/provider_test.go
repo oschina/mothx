@@ -284,6 +284,82 @@ func TestOpenAIDoesNotRetryStreamReadErrorAfterVisibleOutput(t *testing.T) {
 	}
 }
 
+func TestOpenAIRetriesInStreamErrorChunk(t *testing.T) {
+	attempts := 0
+	p := NewProviderWithModels("fake-key", "https://api.test/v1", []*provider.Model{{ID: "mock"}})
+	p.SetRetryConfig(&provider.RetryConfig{Enabled: true, MaxRetries: 1, BaseDelayMs: 1})
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		var body io.ReadCloser
+		if attempts == 1 {
+			body = io.NopCloser(strings.NewReader("data: {\"error\":{\"type\":\"server_error\",\"message\":\"boom\"}}\n"))
+		} else {
+			body = io.NopCloser(strings.NewReader("data: [DONE]\n"))
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: r}, nil
+	})}
+
+	events := chatAndCollect(t, p, provider.ChatParams{
+		Messages: []provider.Message{provider.NewUserMessage("hi")},
+		Abort:    make(chan struct{}),
+	})
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	var sawRetry, sawDone bool
+	for _, e := range events {
+		switch e.Type {
+		case provider.StreamRetry:
+			sawRetry = true
+		case provider.StreamDone:
+			sawDone = true
+		case provider.StreamError:
+			t.Fatalf("unexpected StreamError: %v", e.Error)
+		}
+	}
+	if !sawRetry || !sawDone {
+		t.Fatalf("sawRetry=%v sawDone=%v, want both true", sawRetry, sawDone)
+	}
+}
+
+func TestOpenAIDoesNotRetryInStreamErrorChunkAfterVisibleOutput(t *testing.T) {
+	attempts := 0
+	p := NewProviderWithModels("fake-key", "https://api.test/v1", []*provider.Model{{ID: "mock"}})
+	p.SetRetryConfig(&provider.RetryConfig{Enabled: true, MaxRetries: 1, BaseDelayMs: 1})
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		body := io.NopCloser(strings.NewReader(
+			"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n" +
+				"data: {\"error\":{\"type\":\"server_error\",\"message\":\"boom\"}}\n"))
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: r}, nil
+	})}
+
+	events := chatAndCollect(t, p, provider.ChatParams{
+		Messages: []provider.Message{provider.NewUserMessage("hi")},
+		Abort:    make(chan struct{}),
+	})
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	var sawText, sawError bool
+	for _, e := range events {
+		switch e.Type {
+		case provider.StreamTextDelta:
+			sawText = e.TextDelta == "hello"
+		case provider.StreamRetry:
+			t.Fatal("unexpected StreamRetry after visible output")
+		case provider.StreamError:
+			sawError = true
+			if e.Error == nil || !strings.Contains(e.Error.Error(), "server_error") {
+				t.Fatalf("error = %v, want server_error", e.Error)
+			}
+		}
+	}
+	if !sawText || !sawError {
+		t.Fatalf("sawText=%v sawError=%v, want both true", sawText, sawError)
+	}
+}
+
 func TestOpenAIProviderHTTPProxy(t *testing.T) {
 	p, err := NewProviderWithModelsAndProxy("fake-key", "https://api.test/v1", "http://127.0.0.1:7890", []*provider.Model{{ID: "m1"}})
 	if err != nil {

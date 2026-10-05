@@ -63,12 +63,7 @@ The project config overlays the global config.
   "channels": {
     "artifact": false,
     "wechat": { "enabled": false },
-    "feishu": { "enabled": false },
-    "webhooks": {
-      "enabled": false,
-      "secret": "use-an-environment-variable-in-production",
-      "routes": []
-    }
+    "feishu": { "enabled": false }
   },
   "webUI": {
     "enabled": true
@@ -158,10 +153,6 @@ The list shows user-authored tasks only. One Runtime-owned maintenance job (`mot
 
 - Supports appId/appSecret/workspace/allowedUsers configuration
 - Automatic message routing and session persistence
-
-### Webhooks
-
-Serve can accept inbound webhook events and dispatch them to an agent skill, then deliver the result to a configured target. Configure `channels.webhooks.enabled`, an optional `secret`, and one or more routes with `path`, `events`, `skill`, `delivery`, and optional `delivery_target`. Keep webhook routes bound to loopback or protect them with authentication/secret validation before exposing them to a network.
 
 ### WebSocket event streams
 

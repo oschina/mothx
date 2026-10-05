@@ -58,7 +58,7 @@
 | **🔄 工作流** | JavaScript DSL 实现多阶段、并行、多 Agent 编排 |
 | **💻 IDE 集成** | ACP 协议支持 VS Code、Zed、JetBrains — 原生编辑器集成 |
 | **🌐 网关模式** | OpenAI Chat/Responses 兼容 API、Web UI、MCP、审批与持久后台运行 |
-| **📱 消息平台** | 微信、飞书、Webhook、WebSocket 事件流，支持持久会话与后台运行 |
+| **📱 消息平台** | 微信、飞书、WebSocket 事件流，支持持久会话与后台运行 |
 | **🤝 多 Agent** | `--multi-agent` 异步子 Agent、`--delegate` 阻塞式委托，以及 A2A Master 模式 |
 | **🎨 丰富 TUI** | Markdown 渲染、语法高亮、思考显示、工具弹窗、多行输入 |
 | **🔒 安全可控** | 项目级 bash 自动审批规则、bashBlacklist 优先于白名单、交互式审批对话框 |

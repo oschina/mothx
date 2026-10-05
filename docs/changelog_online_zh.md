@@ -4,6 +4,10 @@
 
 ## v1.3.103
 
+### 💥 破坏性变更
+
+- **移除入站 Webhook 支持。** Serve 的入站 webhook 功能（`channels.webhooks` 配置、`/webhook/*` 路由及其 agent 任务处理器）已彻底移除；不再接收 webhook 事件，现有配置文件中的 `webhooks` 段将被忽略。请改用 OpenAI 兼容 API 或微信/飞书消息通道。
+
 ### ✨ 新功能
 
 - **知识库可用性完善**
@@ -73,3 +77,12 @@
 
 - **Desktop 开发运行器在缺少显示服务器时给出说明，而不是白屏**
   - 在没有可用显示服务器的 Linux 主机上（SSH 会话、X 服务已退出、X11 转发未连通），Chromium 会在平台初始化阶段直接退出并因 SIGSEGV 崩溃。由于窗口是无边框且背景为白色，用户能看到的现象只有一个白色窗口加一段段错误提示，而且还要先等完整构建。`npm run dev` 现在会先检查显示服务器，1 秒内打印可执行的说明并以退出码 1 结束（完全不做构建）；当 `DISPLAY` 有值但连不上时（环境检查无法预判的情况），改为识别 Chromium 自己的 stderr 报错并附加同一段说明。Chromium 原始诊断信息仍原样输出，说明中列出可行方案：本机真实桌面会话、`ssh -X` 转发、虚拟显示器（`Xvfb`，可再叠 VNC/x11vnc），或在无显示器主机上改用 TUI / `mothx serve` Web UI。
+
+- **技能引用不再能逃逸技能目录**
+  - 从 SKILL.md 内容解析的引用路径（`### 标签 (路径) [已加载]` 标题或 Markdown 链接）此前直接拼接到技能目录、没有围栏检查，第三方或 skillhub 安装的技能可以通过 `../../../…` 之类的引用把技能目录之外的任意 `.md`/`.txt` 文件自动注入系统提示词。现在解析出的引用与 `skill_ref` 按需加载执行相同的目录围栏检查，绝对路径与逃逸路径会被拒绝。
+
+- **文件工具路径解析增加符号链接围栏**
+  - `read`/`write`/`edit`/`insert`/`grep`/`find`/`ls` 的工作区围栏检查此前只做词法校验，工作区内指向会话根目录之外的符号链接可以通过检查，让未沙箱化的宿主进程读写围栏之外的文件。`ResolvePath` 现在会对目标路径与会话根目录做符号链接规范化（新建文件尚不存在的尾部路径也能正确处理），并在规范路径上重新做围栏检查。
+
+- **SSE 流内错误事件现在纳入 provider 重试**
+  - provider 在流中途发出带内错误事件/分片时（Anthropic 的 `event: error`（如 `overloaded_error`）、Google 的 `error` 分片（如 `UNAVAILABLE`、`RESOURCE_EXHAUSTED`）、OpenAI 兼容网关的 `{"error":…}` 分片），此前会立即终止 run——OpenAI chat 流甚至会静默忽略错误分片、把被截断的流当正常完成上报。现在这些错误会返回给调用方的重试分类逻辑：在尚未产生可见输出时按有界退避策略重试，否则作为普通流错误呈现。`IsRetryable` 同时新增了 `unavailable`、`resource_exhausted`、`internal error` 子串匹配。

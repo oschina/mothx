@@ -662,8 +662,11 @@ func (p *Provider) parseSSE(ctx context.Context, body io.Reader, ch chan<- provi
 			continue
 		}
 		if chunk.Error != nil {
-			ch <- provider.StreamEvent{Type: provider.StreamError, Error: fmt.Errorf("%s: %s", chunk.Error.Status, chunk.Error.Message), StopReason: "error"}
-			return true, nil
+			// Return the error instead of emitting a terminal StreamError so the
+			// caller's retry loop can classify transient in-stream failures
+			// (UNAVAILABLE, RESOURCE_EXHAUSTED, INTERNAL, ...) and retry while no
+			// visible output has been produced yet.
+			return visibleOutput, fmt.Errorf("%s: %s", chunk.Error.Status, chunk.Error.Message)
 		}
 		if chunk.UsageMetadata != nil {
 			usage = convertUsage(chunk.UsageMetadata)
