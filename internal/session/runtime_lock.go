@@ -150,6 +150,22 @@ func hasLiveRuntimeLease(sessionDir string, record *dao.RuntimeLeaseRecord) bool
 	return !lease.released && lease.ownerID == record.OwnerID && lease.epoch == record.Epoch && lease.tokenHash == record.TokenHash
 }
 
+// RuntimeLeaseHeldByCurrentProcess reports whether this process currently
+// holds a live (not released, not lost) runtime lease for the session. It is
+// an in-process diagnostic/wait signal only: durable authority still comes
+// exclusively from the fenced owner/epoch/token CAS in SQLite.
+func RuntimeLeaseHeldByCurrentProcess(sessionDir, sessionID string) bool {
+	activeRuntimeLeases.Lock()
+	lease := activeRuntimeLeases.leases[runtimeLockKey(sessionDir, sessionID)]
+	activeRuntimeLeases.Unlock()
+	if lease == nil {
+		return false
+	}
+	lease.bindingMu.RLock()
+	defer lease.bindingMu.RUnlock()
+	return !lease.released
+}
+
 // RuntimeLeaseLost returns the loss signal for the current process lease. It
 // is intentionally read-only; callers use it to cancel work while every
 // durable write still performs its own epoch/token fence check.

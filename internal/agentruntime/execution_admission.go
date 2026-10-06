@@ -23,7 +23,12 @@ type ExecutionAdmissionOptions struct {
 // AcquireExecutionAdmission obtains the explicit admission lease for a new
 // Run. If a stale durable Run blocks admission, this operation reconciles it
 // through the same lease-first Runtime recovery path and retries. A valid
-// local or external owner is never displaced.
+// local or external owner is never displaced. A busy lease still held by this
+// process for an execution that already selected its terminal state is
+// draining, not contended: admission waits for the Runtime-owned terminal
+// persistence to release it (bounded by ctx) so a queued same-process
+// successor keeps the session in this process instead of failing with a
+// misleading cross-process busy error.
 func AcquireExecutionAdmission(ctx context.Context, sessionDir, sessionID string, options ExecutionAdmissionOptions) (*session.RuntimeLeaseGuard, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -53,7 +58,7 @@ func AcquireExecutionAdmission(ctx context.Context, sessionDir, sessionID string
 				return nil, session.ErrRuntimeLeaseBusy
 			}
 		case errors.Is(err, session.ErrRuntimeLeaseBusy):
-			if !options.Wait {
+			if !options.Wait && !localExecutionDraining(sessionDir, sessionID) {
 				return nil, err
 			}
 		default:
@@ -103,7 +108,7 @@ func AcquireSessionMutation(ctx context.Context, sessionDir, sessionID string, o
 				return nil, session.ErrRuntimeLeaseBusy
 			}
 		case errors.Is(err, session.ErrRuntimeLeaseBusy):
-			if !options.Wait {
+			if !options.Wait && !localExecutionDraining(sessionDir, sessionID) {
 				return nil, err
 			}
 		default:

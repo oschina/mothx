@@ -520,6 +520,20 @@ func (r *ExecutionRuntime) FinishDurableWithRetry(ctx context.Context, runID str
 	}
 }
 
+// terminalSelected reports whether this execution has already chosen its
+// terminal state. A run in this state is draining: only fenced terminal
+// persistence (and its Runtime-owned retry) remains before the retained
+// execution lease is released, so same-process admission waits for it instead
+// of treating the still-held lease as contention.
+func (r *ExecutionRuntime) terminalSelected() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.terminalEventSet
+}
+
 func (r *ExecutionRuntime) canRetryTerminalPersistence(runID string, state RunState) bool {
 	if r == nil {
 		return false

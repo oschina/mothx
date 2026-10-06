@@ -183,6 +183,34 @@ func (r *ExecutionRuntime) unregisterLocalExecution() {
 	}
 }
 
+// localExecutionDraining reports whether this process still holds the
+// session's runtime lease only because a locally registered execution has
+// already selected its terminal state and is waiting for the fenced terminal
+// persistence to complete. Such a lease is draining, not contended: a queued
+// successor admission in the same process must wait for the release instead of
+// failing with a misleading cross-process busy error, and ownership stays with
+// this process throughout.
+func localExecutionDraining(sessionDir, sessionID string) bool {
+	if strings.TrimSpace(sessionDir) == "" || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	if !session.RuntimeLeaseHeldByCurrentProcess(sessionDir, sessionID) {
+		return false
+	}
+	dbIdentity := session.RuntimeDatabaseIdentity(sessionDir)
+	localExecutionRegistry.RLock()
+	defer localExecutionRegistry.RUnlock()
+	for _, entry := range localExecutionRegistry.entries {
+		if entry.binding.SessionID != sessionID || entry.binding.DatabaseIdentity != dbIdentity {
+			continue
+		}
+		if entry.runtime.terminalSelected() {
+			return true
+		}
+	}
+	return false
+}
+
 func registeredLocalExecution(databaseIdentity string, run session.SessionRun, lease session.RuntimeLeaseSnapshot) (*ExecutionRuntime, bool) {
 	binding := session.RuntimeLeaseBinding{
 		DatabaseIdentity: databaseIdentity,

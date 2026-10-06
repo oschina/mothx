@@ -73,3 +73,52 @@ func TestAcquireExecutionAdmissionRetainsVerifiedRemoteRun(t *testing.T) {
 		t.Fatalf("remote admission error = %v, want detached remote", err)
 	}
 }
+
+func TestAcquireExecutionAdmissionQueuesBehindSameProcessDrainingLease(t *testing.T) {
+	sessionDir := t.TempDir()
+	initRecoveryTestSession(t, sessionDir, "admission-drain")
+
+	// Simulate the drain window: the predecessor run reached its terminal
+	// state, but the Runtime-owned terminal persistence retry still holds the
+	// execution lease for this process.
+	owner, err := session.AcquireExecutionAdmission(sessionDir, "admission-drain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := owner.Binding()
+	binding.RunID = "drain-run"
+	binding.Purpose = session.RuntimeLeasePurposeExecution
+	draining := &ExecutionRuntime{runID: "drain-run"}
+	draining.terminalEventSet = true
+	key := executionRegistrationKey(binding)
+	localExecutionRegistry.Lock()
+	localExecutionRegistry.entries[key] = localExecutionRegistration{binding: binding, runtime: draining}
+	localExecutionRegistry.Unlock()
+	t.Cleanup(func() {
+		localExecutionRegistry.Lock()
+		delete(localExecutionRegistry.entries, key)
+		localExecutionRegistry.Unlock()
+		owner.Release()
+	})
+
+	// A queued same-process successor must not fail fast with a misleading
+	// cross-process busy error while the lease is draining; it waits (here
+	// bounded by the ctx deadline).
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := AcquireExecutionAdmission(ctx, sessionDir, "admission-drain", ExecutionAdmissionOptions{PollInterval: 5 * time.Millisecond}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("draining admission error = %v, want deadline while queued", err)
+	}
+
+	// Once the drain completes (registration retired, lease released), the
+	// successor admission succeeds and the session stays in this process.
+	localExecutionRegistry.Lock()
+	delete(localExecutionRegistry.entries, key)
+	localExecutionRegistry.Unlock()
+	owner.Release()
+	guard, err := AcquireExecutionAdmission(t.Context(), sessionDir, "admission-drain", ExecutionAdmissionOptions{PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatalf("successor admission after drain: %v", err)
+	}
+	guard.Release()
+}

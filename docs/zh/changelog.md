@@ -83,6 +83,9 @@
 
 - **SSE 流内错误事件现在纳入 provider 重试**
   - provider 在流中途发出带内错误事件/分片时（Anthropic 的 `event: error`（如 `overloaded_error`）、Google 的 `error` 分片（如 `UNAVAILABLE`、`RESOURCE_EXHAUSTED`）、OpenAI 兼容网关的 `{"error":…}` 分片），此前会立即终止 run——OpenAI chat 流甚至会静默忽略错误分片、把被截断的流当正常完成上报。现在这些错误会返回给调用方的重试分类逻辑：在尚未产生可见输出时按有界退避策略重试，否则作为普通流错误呈现。`IsRetryable` 同时新增了 `unavailable`、`resource_exhausted`、`internal error` 子串匹配。
+- **修复 TUI 排队提示词误报“lease is held by another process”**
+  - run 进入终态后，如果带围栏的终态持久化写入需要重试，Runtime 会（按设计）继续持有执行租约并在后台重试；此时 TUI 中排队的提示词会立即尝试下一次 admission，并被 `session runtime lease is held by another process` 拒绝——这实际是同进程的收尾窗口，却被误报为跨进程占用错误，排队的输入还会被丢弃。
+  - 共享执行 admission 现在能区分“正在收尾”与“被占用”：如果 busy 的租约仍由当前进程持有、且该执行已选定终态，排队的后继请求（admission 与会话 mutation）会等待 Runtime 自行释放租约，会话因此保留在本进程内，排队输入正常执行。对同进程内真正活跃的执行或其他进程持有的租约，未开启等待的调用方仍然立即失败。
 
 ## v1.3.102
 

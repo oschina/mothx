@@ -84,6 +84,10 @@
 - **In-stream SSE error events now go through the provider retry loop**
   - A provider stream that emits an in-band error event/chunk mid-stream (Anthropic `event: error` such as `overloaded_error`, Google `error` chunks such as `UNAVAILABLE`/`RESOURCE_EXHAUSTED`, OpenAI-compatible `{"error":…}` chunks) previously terminated the run immediately — OpenAI chat streams even silently ignored error chunks and reported the truncated stream as a normal completion. These errors are now returned to the caller's retry classification: they are retried with bounded backoff while no visible output has been produced, and surface as a regular stream error otherwise. `IsRetryable` additionally matches `unavailable`, `resource_exhausted`, and `internal error` substrings.
 
+- **Queued TUI prompts no longer fail with "lease is held by another process"**
+  - When a run reached its terminal state and the fenced terminal-persistence write needed a retry, the Runtime kept the execution lease (by design) while it retried in the background; a TUI prompt queued behind that run immediately tried its admission and was rejected with `session runtime lease is held by another process` — a misleading cross-process error for a same-process drain window, and the queued input was dropped.
+  - Shared execution admission now distinguishes draining from contention: a busy lease still held by the current process for an execution that already selected its terminal state makes queued successors (admission and session mutation) wait for the Runtime-owned release, so the session stays in this process and the queued input runs. A genuinely active same-process execution or another process's lease still fails fast for callers that did not opt into waiting.
+
 ## v1.3.102
 
 ### 💥 Breaking Changes
