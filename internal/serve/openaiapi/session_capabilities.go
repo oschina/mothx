@@ -1,9 +1,23 @@
 package openaiapi
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/session"
 )
+
+// IsSessionCapabilityMutationBusy lets the HTTP adapter map Runtime lease
+// contention on a capability/runtime patch to the same 409 semantic used by
+// other session mutations.
+func IsSessionCapabilityMutationBusy(err error) bool {
+	return errors.Is(err, session.ErrRuntimeLeaseBusy) ||
+		errors.Is(err, session.ErrSessionRunActive) ||
+		errors.Is(err, session.ErrSessionRecoveryRequired) ||
+		errors.Is(err, agentruntime.ErrDetachedRemoteExecution)
+}
 
 // patchActiveSessionCapabilities updates an already locked active session for
 // slash commands. Registry synchronization remains capability-owned: a mode

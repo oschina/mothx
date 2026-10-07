@@ -122,3 +122,107 @@ func TestAcquireExecutionAdmissionQueuesBehindSameProcessDrainingLease(t *testin
 	}
 	guard.Release()
 }
+
+func TestAcquireSessionMutationUnlessHeldSkipsHeldLease(t *testing.T) {
+	sessionDir := t.TempDir()
+	initRecoveryTestSession(t, sessionDir, "mutation-unless-held")
+
+	// An in-run lease held by this process is the authority: the helper must
+	// not attempt a second acquisition (which would report a false busy).
+	owner, err := session.AcquireExecutionAdmission(sessionDir, "mutation-unless-held")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := AcquireSessionMutationUnlessHeld(t.Context(), sessionDir, "mutation-unless-held", ExecutionAdmissionOptions{})
+	if err != nil {
+		t.Fatalf("unless-held while a local lease is live: %v", err)
+	}
+	if guard != nil {
+		guard.Release()
+		t.Fatal("expected a nil guard while this process holds the lease")
+	}
+	owner.Release()
+
+	// With no held lease the helper acquires the shared mutation lease and
+	// reclaims the released tombstone row through the fenced epoch bump.
+	guard, err = AcquireSessionMutationUnlessHeld(t.Context(), sessionDir, "mutation-unless-held", ExecutionAdmissionOptions{})
+	if err != nil {
+		t.Fatalf("unless-held after release: %v", err)
+	}
+	if guard == nil {
+		t.Fatal("expected an acquired mutation guard after the held lease was released")
+	}
+	if binding := guard.Binding(); binding.Purpose != session.RuntimeLeasePurposeMutation {
+		t.Fatalf("mutation binding = %+v", binding)
+	}
+	guard.Release()
+}
+
+func TestAcquireSessionMutationRecoversOrphanRun(t *testing.T) {
+	sessionDir := t.TempDir()
+	initRecoveryTestSession(t, sessionDir, "mutation-orphan")
+	if err := (RunStore{SessionDir: sessionDir}).Create(DurableRun{
+		ID: "stale-mutation", SessionID: "mutation-orphan", Source: "tui", Status: "running", StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	guard, err := AcquireSessionMutation(t.Context(), sessionDir, "mutation-orphan", ExecutionAdmissionOptions{})
+	if err != nil {
+		t.Fatalf("mutation admission with an orphan run: %v", err)
+	}
+	defer guard.Release()
+	stale, err := session.GetSessionRun(sessionDir, "stale-mutation")
+	if err != nil || stale == nil || stale.Status != "failed" {
+		t.Fatalf("stale run = %#v, err=%v", stale, err)
+	}
+}
+
+func TestAcquireSessionMutationGroupDedupesSortsAndReleases(t *testing.T) {
+	sessionDir := t.TempDir()
+	initRecoveryTestSession(t, sessionDir, "group-a")
+	initRecoveryTestSession(t, sessionDir, "group-b")
+
+	group, err := AcquireSessionMutationGroup(t.Context(), sessionDir, []string{"group-b", "", "group-a", "group-a"}, ExecutionAdmissionOptions{})
+	if err != nil {
+		t.Fatalf("group acquisition: %v", err)
+	}
+	if group.Guard("group-a") == nil || group.Guard("group-b") == nil {
+		t.Fatal("expected one guard per deduplicated session")
+	}
+	if group.Guard("missing") != nil {
+		t.Fatal("unexpected guard for an unknown session")
+	}
+	if _, err := AcquireSessionMutation(t.Context(), sessionDir, "group-b", ExecutionAdmissionOptions{}); !errors.Is(err, session.ErrRuntimeLeaseBusy) {
+		t.Fatalf("competing mutation while grouped = %v, want busy", err)
+	}
+	group.Release()
+	group.Release() // idempotent
+
+	again, err := AcquireSessionMutation(t.Context(), sessionDir, "group-b", ExecutionAdmissionOptions{})
+	if err != nil {
+		t.Fatalf("mutation after group release: %v", err)
+	}
+	again.Release()
+}
+
+func TestAcquireSessionMutationGroupReleasesEarlierSessionsOnFailure(t *testing.T) {
+	sessionDir := t.TempDir()
+	initRecoveryTestSession(t, sessionDir, "group-ok")
+	initRecoveryTestSession(t, sessionDir, "group-blocked")
+	blocker, err := session.AcquireExecutionAdmission(sessionDir, "group-blocked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Release()
+
+	if _, err := AcquireSessionMutationGroup(t.Context(), sessionDir, []string{"group-ok", "group-blocked"}, ExecutionAdmissionOptions{}); !errors.Is(err, session.ErrRuntimeLeaseBusy) {
+		t.Fatalf("group error = %v, want busy", err)
+	}
+	// The earlier (sorted-first) group-ok lease must have been released by the
+	// failed group instead of stranding the session.
+	guard, err := AcquireSessionMutation(t.Context(), sessionDir, "group-ok", ExecutionAdmissionOptions{})
+	if err != nil {
+		t.Fatalf("reacquire group-ok after failed group: %v", err)
+	}
+	guard.Release()
+}

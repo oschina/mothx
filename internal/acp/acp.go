@@ -339,7 +339,10 @@ func (s *server) acquirePromptAdmission(rt *sessionRuntime) (func(), error) {
 	}
 	guard, err := agentruntime.AcquireExecutionAdmission(context.Background(), s.settings.GetSessionDir(), rt.id, agentruntime.ExecutionAdmissionOptions{})
 	if err != nil {
-		return nil, errACPActiveSessionRun
+		// Keep the underlying ownership reason (lease busy, recovery required,
+		// detached remote execution) inspectable in the projected RPC error
+		// instead of collapsing every admission failure into one opaque message.
+		return nil, fmt.Errorf("%w: %w", errACPActiveSessionRun, err)
 	}
 	rt.cancelMu.Lock()
 	localActive := rt.cancel != nil
@@ -583,6 +586,11 @@ type newSessionResult struct {
 	Modes           *sessionModeState                  `json:"modes,omitempty"`
 	ConfigOptions   []agentruntime.SessionConfigOption `json:"configOptions,omitempty"`
 	History         *transcriptPageResult              `json:"history,omitempty"`
+	// Execution is the additive cross-process execution projection (feature
+	// key sessionExecutionState): the canonical Runtime snapshot, present only
+	// when the loaded session is not idle. Clients without the feature key can
+	// ignore it; it never changes standard ACP load semantics.
+	Execution *agentruntime.SessionExecutionSnapshot `json:"execution,omitempty"`
 }
 
 type transcriptPageRequest struct {
@@ -1050,11 +1058,14 @@ func Run(opts RunOptions) (runErr error) {
 	}
 	// Other Runtime hosts publish only advisory UDP lease-bus wake-ups. ACP
 	// re-reads the durable Run before projecting its standard run_status event;
-	// it never trusts notification fields as execution state.
+	// it never trusts notification fields as execution state. The coalescer
+	// bounds the receive side: one in-flight projection per session plus one
+	// trailing re-run, never one goroutine per datagram.
+	externalRuns := session.NewSessionWakeCoalescer(srv.notifyExternalRunStatus)
 	stopLeaseNotifications := session.SubscribeRuntimeLeaseNotifications(func(notification session.RuntimeLeaseNotification) {
 		switch notification.Type {
 		case "acquired", "released", "lost", "state_changed":
-			go srv.notifyExternalRunStatus(notification.SessionID)
+			externalRuns.Wake(notification.SessionID)
 		}
 	})
 	defer stopLeaseNotifications()
@@ -1713,16 +1724,22 @@ func (s *server) withSessionMutationLease(sessionID string, mutate func() error)
 		return mutate()
 	}
 	sessionDir := s.settings.GetSessionDir()
-	// A prompt in this process already owns the authoritative lease. Its
-	// persistence writes still validate that lease's epoch and token.
-	if session.RuntimeLeaseLost(sessionDir, sessionID) != nil {
-		return mutate()
-	}
-	guard, err := session.AcquireMutation(sessionDir, sessionID)
+	// A prompt in this process already owns the authoritative lease; the shared
+	// unless-held helper skips the second acquisition and its persistence writes
+	// still validate that lease's epoch and token. Otherwise reconcile through
+	// the shared mutation lease so an orphaned run left by a crashed owner does
+	// not permanently block administrative mutations.
+	guard, err := agentruntime.AcquireSessionMutationUnlessHeld(context.Background(), sessionDir, sessionID, agentruntime.ExecutionAdmissionOptions{})
 	if err != nil {
-		return errACPActiveSessionRun
+		if errors.Is(err, session.ErrRuntimeLeaseBusy) || errors.Is(err, session.ErrSessionRunActive) ||
+			errors.Is(err, session.ErrSessionRecoveryRequired) || errors.Is(err, agentruntime.ErrDetachedRemoteExecution) {
+			return fmt.Errorf("%w: %w", errACPActiveSessionRun, err)
+		}
+		return err
 	}
-	defer guard.Release()
+	if guard != nil {
+		defer guard.Release()
+	}
 	return mutate()
 }
 
@@ -1817,6 +1834,10 @@ func (s *server) handleInitialize(req rpcRequest) {
 				"artifactProjection",
 				"attachmentFetch",
 				"runStatus",
+				// sessionExecutionState advertises the additive execution
+				// projection (canonical cross-process ownership snapshot) on
+				// session/load, session/resume, and session list _meta.
+				"sessionExecutionState",
 				"sessionMeta",
 				"projects",
 				"workspaceExtend",
@@ -2383,7 +2404,7 @@ func (s *server) handleLoadSession(req rpcRequest) {
 			return
 		}
 		s.replayGeneratedArtifacts(in.SessionID)
-		s.writeResponse(req.ID, newSessionResult{SessionID: in.SessionID, Modes: sessionModes(existing.runtime), ConfigOptions: s.sessionConfigOptions(in.SessionID), History: history}, nil)
+		s.writeResponse(req.ID, newSessionResult{SessionID: in.SessionID, Modes: sessionModes(existing.runtime), ConfigOptions: s.sessionConfigOptions(in.SessionID), History: history, Execution: s.sessionExecutionProjection(in.SessionID)}, nil)
 		_ = s.notifyAvailableCommands(in.SessionID)
 		return
 	}
@@ -2406,8 +2427,24 @@ func (s *server) handleLoadSession(req rpcRequest) {
 		return
 	}
 	s.replayGeneratedArtifacts(in.SessionID)
-	s.writeResponse(req.ID, newSessionResult{SessionID: in.SessionID, Modes: sessionModes(rt.runtime), ConfigOptions: s.sessionConfigOptions(in.SessionID), History: history}, nil)
+	s.writeResponse(req.ID, newSessionResult{SessionID: in.SessionID, Modes: sessionModes(rt.runtime), ConfigOptions: s.sessionConfigOptions(in.SessionID), History: history, Execution: s.sessionExecutionProjection(in.SessionID)}, nil)
 	_ = s.notifyAvailableCommands(in.SessionID)
+}
+
+// sessionExecutionProjection projects the canonical cross-process execution
+// state for additive ACP responses (feature key sessionExecutionState). Idle
+// sessions and inspection failures are omitted: the projection is
+// informational and must never fail a load/resume or invent adapter-local
+// ownership semantics.
+func (s *server) sessionExecutionProjection(sessionID string) *agentruntime.SessionExecutionSnapshot {
+	if s == nil || s.settings == nil || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	snapshot, err := agentruntime.InspectSessionExecution(s.settings.GetSessionDir(), sessionID)
+	if err != nil || snapshot.State == agentruntime.SessionExecutionIdle {
+		return nil
+	}
+	return &snapshot
 }
 
 // handleSessionHistory returns one earlier transcript page for an already
@@ -2462,7 +2499,7 @@ func (s *server) handleResumeSession(req rpcRequest) {
 			return
 		}
 		s.replayGeneratedArtifacts(in.SessionID)
-		s.writeResponse(req.ID, newSessionResult{SessionID: in.SessionID, Modes: sessionModes(existing.runtime), ConfigOptions: s.sessionConfigOptions(in.SessionID)}, nil)
+		s.writeResponse(req.ID, newSessionResult{SessionID: in.SessionID, Modes: sessionModes(existing.runtime), ConfigOptions: s.sessionConfigOptions(in.SessionID), Execution: s.sessionExecutionProjection(in.SessionID)}, nil)
 		_ = s.notifyAvailableCommands(in.SessionID)
 		return
 	}
@@ -2479,7 +2516,7 @@ func (s *server) handleResumeSession(req rpcRequest) {
 	rt.registry.SetAdditionalDirectories(rt.runtime.AdditionalDirectoriesSnapshot())
 	s.installSessionRuntime(rt)
 	s.replayGeneratedArtifacts(in.SessionID)
-	s.writeResponse(req.ID, newSessionResult{SessionID: in.SessionID, Modes: sessionModes(rt.runtime), ConfigOptions: s.sessionConfigOptions(in.SessionID)}, nil)
+	s.writeResponse(req.ID, newSessionResult{SessionID: in.SessionID, Modes: sessionModes(rt.runtime), ConfigOptions: s.sessionConfigOptions(in.SessionID), Execution: s.sessionExecutionProjection(in.SessionID)}, nil)
 	_ = s.notifyAvailableCommands(in.SessionID)
 }
 
@@ -3534,7 +3571,7 @@ func (s *server) handleDeleteSession(req rpcRequest) {
 			return
 		}
 	}
-	leaseGroup, err := session.AcquireMutations(s.settings.GetSessionDir(), targets)
+	leaseGroup, err := agentruntime.AcquireSessionMutationGroup(context.Background(), s.settings.GetSessionDir(), targets, agentruntime.ExecutionAdmissionOptions{})
 	if err != nil {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: "cannot delete an active session"})
 		return
@@ -3855,6 +3892,10 @@ func (s *server) writeSessionList(req rpcRequest, details []session.SessionDetai
 	// through Runtime/session read-only projections.
 	lastRuns := s.sessionListLastRun(pageIDs)
 	pageMetadata := s.sessionListMetadata(pageIDs)
+	// Additive cross-process execution projection (feature key
+	// sessionExecutionState) for the current page only; idle sessions carry no
+	// execution key and unreadable sessions are omitted (unknown, never idle).
+	pageExecutions := agentruntime.InspectSessionExecutions(s.settings.GetSessionDir(), pageIDs)
 	result := listSessionsResult{Sessions: make([]listedSession, 0, end-offset)}
 	for _, detail := range details[offset:end] {
 		title := detail.Name
@@ -3890,6 +3931,9 @@ func (s *server) writeSessionList(req rpcRequest, details []session.SessionDetai
 		// Sessions without any durable Run carry no lastRun key at all.
 		if lastRun, ok := lastRuns[detail.ID]; ok {
 			meta["lastRun"] = lastRun
+		}
+		if snapshot, ok := pageExecutions[detail.ID]; ok && snapshot.State != agentruntime.SessionExecutionIdle {
+			meta["execution"] = snapshot
 		}
 		result.Sessions = append(result.Sessions, listedSession{
 			SessionID: detail.ID,

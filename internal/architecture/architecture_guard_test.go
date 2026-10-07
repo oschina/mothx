@@ -174,6 +174,8 @@ func productionArchitectureViolations(root string) ([]string, error) {
 				violations = append(violations, fmt.Sprintf("%s: direct session.%s; use agentruntime durable query boundary", rel, selector.Sel.Name))
 			case pkgPath == "github.com/oschina/mothx/internal/session" && isLegacyRuntimeLeaseAPI(selector.Sel.Name) && !legacyRuntimeLeaseBridgeFiles[filepath.ToSlash(rel)]:
 				violations = append(violations, fmt.Sprintf("%s: new use of legacy session.%s; use an explicit admission/execution/recovery/mutation lease API", rel, selector.Sel.Name))
+			case pkgPath == "github.com/oschina/mothx/internal/session" && isAdapterMutationLeaseAPI(selector.Sel.Name) && !adapterMutationLeaseBridgeFiles[relSlash]:
+				violations = append(violations, fmt.Sprintf("%s: direct session.%s from an adapter; use agentruntime.AcquireSessionMutation/AcquireSessionMutationGroup so orphan-run reconciliation stays unified", rel, selector.Sel.Name))
 			case isLegacyAttachmentDeliveryAPI(selector.Sel.Name):
 				violations = append(violations, fmt.Sprintf("%s: new use of legacy attachment delivery API %s; use DeliveryCoordinator/DeliveryOperation", rel, selector.Sel.Name))
 			}
@@ -297,6 +299,26 @@ var legacyRuntimeLeaseBridgeFiles = map[string]bool{}
 func isLegacyRuntimeLeaseAPI(name string) bool {
 	switch name {
 	case "TryLockRuntime", "LockRuntime", "TryLockRuntimes":
+		return true
+	default:
+		return false
+	}
+}
+
+// Adapter-level mutation leases must go through agentruntime so every entry
+// point shares the orphan-run reconciliation and draining-wait policy instead
+// of growing per-adapter defaults. The bridge file below deliberately
+// serializes Responses admin writes with a live execution monitor without
+// triggering recovery (its run reconciliation is owned by the session stop
+// endpoint); each call site carries an inline justification. Remove the entry
+// when the call sites migrate.
+var adapterMutationLeaseBridgeFiles = map[string]bool{
+	"internal/serve/openaiapi/responses_run_api.go": true,
+}
+
+func isAdapterMutationLeaseAPI(name string) bool {
+	switch name {
+	case "AcquireMutation", "AcquireMutations":
 		return true
 	default:
 		return false
@@ -466,6 +488,15 @@ import sessiondb "github.com/oschina/mothx/internal/session"
 func reserve() { _, _ = sessiondb.TryLockRuntime("", "session") }
 `,
 			want: "new use of legacy session.TryLockRuntime",
+		},
+		{
+			name: "adapter-level mutation lease",
+			path: "internal/serve/new_adapter.go",
+			src: `package serve
+import sessiondb "github.com/oschina/mothx/internal/session"
+func reserve() { _, _ = sessiondb.AcquireMutation("", "session") }
+`,
+			want: "direct session.AcquireMutation from an adapter",
 		},
 		{
 			name: "legacy attachment delivery",

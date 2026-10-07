@@ -10,6 +10,15 @@
 
 ### ✨ 新功能
 
+- **TUI 排队消息在运行期间现在可见渲染**
+  - 在会话被当前 run 占有时提交输入一直会按序排队，但队列此前完全不可见：输入框清空后没有任何反馈，直到运行结束。现在 live view 会在 spinner 下方渲染带样式的“⏸ 已排队 N 条”区块，逐条预览待发送内容（最多显示 3 条，超出以“+N …”提示；多行输入压平并按终端宽度截断）。队列排空后区块自动消失，每条消息真正开始时仍渲染标准的“你：” transcript 行——指示器是纯 managed-view 状态，不进入终端 scrollback 也不写入会话历史。
+  - 标题通过既有 i18n 目录提供中英双语；新渲染逻辑有聚焦单元测试覆盖（空队列、计数/预览、可见上限、宽度约束）。
+
+- **TUI 与 ACP 现在在准入失败前就能看到跨进程会话所有权**
+  - TUI 和 ACP 此前只取消本进程内的 run；被其他存活进程持有的会话、崩溃 owner 遗留的孤儿 run、分离的远程 run 都不可见，直到下一次 prompt 准入被拒才暴露。两个适配器现在都投影共享 Runtime 快照（`agentruntime.InspectSessionExecution`），而不是自建本地所有权状态。
+  - TUI：会话对话框与 `/sessions` 列表逐会话渲染紧凑的所有权徽标（运行中 / 他进程运行中 / 已中断 / 远程运行 / 已预留 / 恢复失败）；激活会话时对非 idle 的跨进程状态打印一条说明（已知时附 owner PID）。新增有界批量投影 `agentruntime.InspectSessionExecutions` 支撑列表/分页视图；不可读会话降级为“未知”而不是让整个列表失败。
+  - ACP：新增可加性 feature key `sessionExecutionState`。`session/load` 与 `session/resume` 响应在会话非 idle 时携带可选 `execution` 快照；`session/list`/`listAll` 分页仅对非 idle 会话附加 `_meta.execution`。标准 ACP 语义不变，未声明该 key 的客户端可直接忽略。Desktop 对该 key 的消费为后续工作。
+
 - **知识库可用性完善**
   - **忽略规则与发现诊断。** 知识库新增 `ignoreGlobs` 列表，与固定忽略目录以及从源目录根读取的 `.gitignore`/`.mothxignore` 建议规则（只读）合并生效。每次扫描会在快照上记录有界的发现投影（`discovered`/`ignored`/`skipped` 及逐路径原因），因此“静默未索引”变为可解释。超大、二进制/非 UTF-8 或不可读的文件标记为 `skipped` 并给出原因，且不会交给模型。
   - **增量差异摘要。** 每次重建的快照都会持久化 `added`/`modified`/`removed`/`unchanged` 投影（含有限路径样本）；完全未变化的扫描保留既有的快照复用事件，并在事件数据中携带全 0 差异。
@@ -32,6 +41,23 @@
 
 
 ### 🐛 问题修复
+
+- **建议性 UDP 总线加固：重建通知收窄、接收端合并与更廉价的发布路径**
+  - 未认证的 loopback 租约总线此前对任意路径都接受 `database_rebuilt` 通知，伪造或过期的数据包可让每个对端进程执行 close/checkpoint 尝试，并对一个从未打开过的文件弹出面向用户的“数据库已被替换”警告。现在 watcher 只处理在 `internal/db` 中确实持有缓存连接的路径（新增 `IsCached` 探测）；真实被重建的文件仍照旧淘汰连接，本进程从未打开过的文件则静默忽略。
+  - wire 校验器不再接受 `renewed` 类型：心跳续期从未被发布过，保留该死条目会诱使未来的发布者无声地重新引入“每会话每个心跳 tick 一次广播”。回归测试钉住了这两个行为；Windows socket 变体现在注明 `SO_REUSEADDR` 端口劫持最坏只会使建议性总线降级为 SQLite 持久化轮询。
+  - 接收端放大现在有界：serve 与 ACP 的唤醒处理器统一走共享的 `session.SessionWakeCoalescer`，每会话至多一个在飞投影外加一次尾部重跑（突发仍能收敛到最新持久化状态），而不是每个数据包都派生一个 goroutine 并做一次全量 DB 重读。
+  - 发布不再每条消息新建 UDP socket：每个广播地址缓存一个发送 socket，附 200ms 写超时与 5s 拨号退避，使租约释放/run 终态持久化不再暴露在病态延迟路径上，同时保留同步、退出不丢包以及进程内有序的投递语义。
+
+- **ACP 与 serve 的会话所有权 mutation 策略统一为同一条共享路径**
+  - 此前管理类变更存在分叉：serve 的专家/能力补丁通过 `agentruntime.AcquireSessionMutation` 调和孤儿 run，而 ACP（`withSessionMutationLease`、级联删除）与 serve 的会话 Delete/Bind/Unbind/Transfer 直接调用裸 `session.AcquireMutation(s)`。因此前一个持有者崩溃后遗留孤儿 run（活跃 run 行、无存活租约）的会话，在一条 WebUI 路径上会自动恢复，而在 ACP 配置变更与 WebUI 删除/绑定/解绑/转移上却永久报 "session already has an active run" / `session_running` 冲突。
+  - 这些调用点现在统一使用共享 Runtime 包装——包括新增的 `agentruntime.AcquireSessionMutationUnlessHeld`（“本进程已持有活跃租约即为权威”的跳过判断收归单一 owner，此前在 ACP 与 serve 各自手写）与 `AcquireSessionMutationGroup`（排序防死锁的多会话获取，逐会话孤儿调和）——所有入口应用同一套 fenced 接管与恢复策略。`responses_run_api.go` 的 Responses run 管理路径保留为文档化桥接：cancel/abandon 绝不能触发对自己目标 run 的恢复。
+  - ACP prompt 准入与管理变更错误不再把所有原因坑塌为单一的 "session already has an active run"；底层原因（lease busy、recovery required、detached remote execution）在包装错误中保留。
+  - 架构护栏现在拒绝桥接文档之外新增的适配层直接 `session.AcquireMutation`/`AcquireMutations` 调用；回归测试覆盖 unless-held 获取、删除时孤儿 run 恢复、以及分组获取/释放语义。
+
+- **WebUI 对曾属于其他进程的会话设置 mode/能力不再报 "session runtime lease was lost"**
+  - 能力持久化（`SaveSessionCapabilities`）及其变更事件是受租约围栏的写入。曾被其他进程执行过的会话——例如在 TUI 中创建并运行后关闭 TUI——会在 `session_runtime_leases` 中留下已释放/过期的租约行，此后 WebUI 的冷路径 PATCH（`/api/sessions/{id}/capabilities`、`/api/sessions/{id}/runtime`）在没有进程持有租约的情况下校验围栏，必然失败并提示 `session runtime lease was lost`。
+  - 空闲会话的能力补丁现在通过共享 Runtime mutation 租约（`agentruntime.AcquireSessionMutation`，与专家绑定补丁相同的 fenced epoch 接管机制）回收会话，因此 TUI/serve 交接后补丁可正常生效，而活跃的外部持有者仍会以竞争错误浮现。当前进程已持有租约时（运行中补丁），该租约仍是权威，不会重复获取。
+  - 这些端点上的租约竞争现在映射为 HTTP 409 而非 500，并新增回归测试覆盖“前一持有者已释放租约后再补丁”的场景。
 
 - **ACP 不再因默认供应商缺 key 而整体不可用**
   - 此前 `mothx acp` 在启动时把“默认供应商不可用（缺 API key / 未知供应商 / 无可用模型）”当作致命错误：进程直接以结构化启动错误退出，initialize、会话、管理面（`mothx/manage/*`）全部不可用，Desktop 等客户端连“配置供应商”这条路都走不通。

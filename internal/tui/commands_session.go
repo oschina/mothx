@@ -26,6 +26,9 @@ type sessionsDialogState struct {
 	Cwd     string
 	Error   string
 	Message string
+	// Execution projects the canonical cross-process execution state per listed
+	// session ID. A missing entry is unknown (unreadable), never idle.
+	Execution map[string]agentruntime.SessionExecutionSnapshot
 }
 
 var sessionsDialogStyle = lipgloss.NewStyle().
@@ -152,6 +155,7 @@ func (a *App) openSessionsDialog() {
 		Items: details,
 		Cwd:   cwd,
 	}
+	state.Execution = a.sessionsExecutionStates(details)
 	if err != nil {
 		state.Error = a.translator.Text(i18n.MsgSessionsErrorListing, err)
 	}
@@ -171,6 +175,71 @@ func (a *App) closeSessionsDialog() {
 	a.sessionsDialog = sessionsDialogState{}
 	a.input = a.input.Focus()
 	a.scheduleRender()
+}
+
+// sessionsExecutionStates projects the canonical Runtime execution snapshot
+// for a listed page of sessions. It is a read-only projection: unreadable
+// sessions are omitted (unknown, never idle) and must not fail the listing.
+func (a *App) sessionsExecutionStates(details []session.SessionDetail) map[string]agentruntime.SessionExecutionSnapshot {
+	if len(details) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(details))
+	for _, d := range details {
+		ids = append(ids, d.ID)
+	}
+	return agentruntime.InspectSessionExecutions(a.getSessionDir(), ids)
+}
+
+// sessionExecutionBadge renders the compact ownership badge for one projected
+// snapshot. The zero snapshot (unreadable/absent) renders no badge.
+func (a *App) sessionExecutionBadge(snapshot agentruntime.SessionExecutionSnapshot) string {
+	switch snapshot.State {
+	case agentruntime.SessionExecutionLocal:
+		return a.translator.Text(i18n.MsgSessionStateRunning)
+	case agentruntime.SessionExecutionExternal:
+		return a.translator.Text(i18n.MsgSessionStateExternal)
+	case agentruntime.SessionExecutionOrphaned:
+		return a.translator.Text(i18n.MsgSessionStateOrphaned)
+	case agentruntime.SessionExecutionDetached:
+		return a.translator.Text(i18n.MsgSessionStateDetached)
+	case agentruntime.SessionExecutionReserved:
+		return a.translator.Text(i18n.MsgSessionStateReserved)
+	case agentruntime.SessionExecutionRecoveryFailed:
+		return a.translator.Text(i18n.MsgSessionStateRecoveryFailed)
+	default:
+		return ""
+	}
+}
+
+// notifySessionExecutionState surfaces cross-process ownership right after a
+// session becomes current, so an externally owned, orphaned, detached, or
+// reserved session is visible before the next admission decision instead of
+// only through its error. It is a pure projection of the canonical snapshot.
+func (a *App) notifySessionExecutionState(sessionID string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	snapshot, err := agentruntime.InspectSessionExecution(a.getSessionDir(), sessionID)
+	if err != nil {
+		return
+	}
+	switch snapshot.State {
+	case agentruntime.SessionExecutionExternal:
+		detail := ""
+		if snapshot.LeaseOwnerPID > 0 {
+			detail = fmt.Sprintf(" (PID %d)", snapshot.LeaseOwnerPID)
+		}
+		a.addCommandStatus(a.translator.Text(i18n.MsgSessionOwnedElsewhere, detail))
+	case agentruntime.SessionExecutionOrphaned:
+		a.addCommandStatus(a.translator.Text(i18n.MsgSessionOrphanedRun))
+	case agentruntime.SessionExecutionDetached:
+		a.addCommandStatus(a.translator.Text(i18n.MsgSessionDetachedRun))
+	case agentruntime.SessionExecutionReserved:
+		a.addCommandStatus(a.translator.Text(i18n.MsgSessionReserved))
+	case agentruntime.SessionExecutionRecoveryFailed:
+		a.addCommandStatus(a.translator.Text(i18n.MsgSessionRecoveryFailed))
+	}
 }
 
 func (a *App) moveSessionsCursor(delta int) {
@@ -281,6 +350,7 @@ func (a *App) sessionsList() {
 
 	currentID := a.getCurrentSessionID()
 
+	executions := a.sessionsExecutionStates(details)
 	var sb strings.Builder
 	sb.WriteString(a.translator.Text(i18n.MsgSessionsListTitle) + "\n\n")
 	for _, d := range details {
@@ -293,8 +363,12 @@ func (a *App) sessionsList() {
 		if d.Preview != "" {
 			preview = " - " + d.Preview
 		}
-		sb.WriteString(fmt.Sprintf("  [%s] %s  %d msgs  %s%s\n",
-			marker, d.ID, d.MessageCount, age, preview))
+		badge := a.sessionExecutionBadge(executions[d.ID])
+		if badge != "" {
+			badge = "  " + badge
+		}
+		sb.WriteString(fmt.Sprintf("  [%s] %s  %d msgs  %s%s%s\n",
+			marker, d.ID, d.MessageCount, age, badge, preview))
 	}
 	sb.WriteString("\n" + a.translator.Text(i18n.MsgSessionsListHint))
 	a.addCommandStatus(sb.String())
@@ -589,7 +663,11 @@ func (a *App) renderSessionsDialog() string {
 			if preview != "" {
 				preview = " - " + strings.ReplaceAll(preview, "\n", " ")
 			}
-			line := fmt.Sprintf("%s%s%s  %d msgs  %s%s", cursor, marker, d.ID, d.MessageCount, formatAgeWithTranslator(a.translator, d.ModTime), preview)
+			badge := a.sessionExecutionBadge(a.sessionsDialog.Execution[d.ID])
+			if badge != "" {
+				badge = "  " + badge
+			}
+			line := fmt.Sprintf("%s%s%s  %d msgs  %s%s%s", cursor, marker, d.ID, d.MessageCount, formatAgeWithTranslator(a.translator, d.ModTime), badge, preview)
 			if xansi.StringWidth(line) > width-4 {
 				line = xansi.Truncate(line, width-4, "…")
 			}

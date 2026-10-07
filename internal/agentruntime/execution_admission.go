@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/oschina/mothx/internal/session"
@@ -124,4 +126,81 @@ func AcquireSessionMutation(ctx context.Context, sessionDir, sessionID string, o
 		case <-timer.C:
 		}
 	}
+}
+
+// AcquireSessionMutationUnlessHeld acquires the shared mutation lease unless
+// this process already holds a live lease for the session (for example an
+// in-run administrative patch): the held lease already fences the durable
+// writes, and a second acquisition would trip the process-local lock with a
+// false busy. A nil guard with a nil error means "proceed under the
+// already-held lease"; the caller must release a non-nil guard.
+func AcquireSessionMutationUnlessHeld(ctx context.Context, sessionDir, sessionID string, options ExecutionAdmissionOptions) (*session.RuntimeLeaseGuard, error) {
+	if session.RuntimeLeaseHeldByCurrentProcess(sessionDir, sessionID) {
+		return nil, nil
+	}
+	return AcquireSessionMutation(ctx, sessionDir, sessionID, options)
+}
+
+// MutationLeaseGroup owns mutation leases across several sessions for one
+// coordinated mutation. Guard resolves the lease acquired for one session ID;
+// Release relinquishes every lease in reverse acquisition order and is
+// idempotent.
+type MutationLeaseGroup struct {
+	entries []mutationLeaseEntry
+	once    sync.Once
+}
+
+type mutationLeaseEntry struct {
+	sessionID string
+	guard     *session.RuntimeLeaseGuard
+}
+
+func (g *MutationLeaseGroup) Guard(sessionID string) *session.RuntimeLeaseGuard {
+	if g == nil {
+		return nil
+	}
+	for _, entry := range g.entries {
+		if entry.sessionID == sessionID {
+			return entry.guard
+		}
+	}
+	return nil
+}
+
+func (g *MutationLeaseGroup) Release() {
+	if g == nil {
+		return
+	}
+	g.once.Do(func() {
+		for i := len(g.entries) - 1; i >= 0; i-- {
+			g.entries[i].guard.Release()
+		}
+	})
+}
+
+// AcquireSessionMutationGroup acquires mutation leases for every given session
+// in the same stable sorted order as session.AcquireMutations, so a
+// cross-session operation cannot deadlock another caller taking the same set,
+// while applying the shared orphan-run reconciliation per session. Earlier
+// leases are released when a later acquisition fails.
+func AcquireSessionMutationGroup(ctx context.Context, sessionDir string, sessionIDs []string, options ExecutionAdmissionOptions) (*MutationLeaseGroup, error) {
+	ids := append([]string(nil), sessionIDs...)
+	sort.Strings(ids)
+	ordered := ids[:0]
+	for _, id := range ids {
+		if id == "" || (len(ordered) > 0 && ordered[len(ordered)-1] == id) {
+			continue
+		}
+		ordered = append(ordered, id)
+	}
+	group := &MutationLeaseGroup{}
+	for _, id := range ordered {
+		guard, err := AcquireSessionMutation(ctx, sessionDir, id, options)
+		if err != nil {
+			group.Release()
+			return nil, err
+		}
+		group.entries = append(group.entries, mutationLeaseEntry{sessionID: id, guard: guard})
+	}
+	return group, nil
 }

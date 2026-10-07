@@ -2043,6 +2043,10 @@ func (rt *channelRuntime) handleSessionByID(sessions activeSessionManager) http.
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 					return
 				}
+				if openaiapi.IsSessionCapabilityMutationBusy(err) {
+					writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+					return
+				}
 				if err != nil {
 					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 					return
@@ -2092,6 +2096,10 @@ func (rt *channelRuntime) handleSessionByID(sessions activeSessionManager) http.
 				}
 				if errors.Is(err, openaiapi.ErrInvalidCapability) {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+				if openaiapi.IsSessionCapabilityMutationBusy(err) {
+					writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 					return
 				}
 				if err != nil {

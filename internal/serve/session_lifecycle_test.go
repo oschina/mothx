@@ -137,3 +137,34 @@ func TestSessionLifecycleRotateForcePastBusyRun(t *testing.T) {
 		t.Fatal("forced rotate did not rebind the identity")
 	}
 }
+
+// TestSessionLifecycleDeleteRecoversOrphanRun pins the unified ownership
+// policy: deleting a session whose previous owner crashed (active run row, no
+// live lease) must reconcile the orphan through the shared Runtime recovery
+// instead of failing with a permanent session_running conflict.
+func TestSessionLifecycleDeleteRecoversOrphanRun(t *testing.T) {
+	sessionDir := t.TempDir()
+	mgr := session.New(t.TempDir(), sessionDir)
+	if err := mgr.InitWithID("orphan-delete"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := session.SaveSessionRun(sessionDir, session.SessionRun{
+		ID: "orphan-run", SessionID: "orphan-delete", Status: "running", StartedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &lifecycleTestSessions{deleted: true}
+	service := NewSessionLifecycleService(fake, nil, sessionDir, nil)
+	deleted, err := service.Delete(context.Background(), "orphan-delete")
+	if err != nil || !deleted {
+		t.Fatalf("delete with orphan run = %v/%v, want success via shared recovery", deleted, err)
+	}
+	if fake.deletedID != "orphan-delete" {
+		t.Fatalf("deleted id = %q, want orphan-delete", fake.deletedID)
+	}
+	run, err := session.GetSessionRun(sessionDir, "orphan-run")
+	if err != nil || run == nil || run.Status != "failed" {
+		t.Fatalf("orphan run = %#v, err=%v, want terminalized failed", run, err)
+	}
+}

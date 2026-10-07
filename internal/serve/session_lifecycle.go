@@ -19,6 +19,17 @@ type lifecycleConflict struct {
 
 func (e *lifecycleConflict) Error() string { return e.Message }
 
+// lifecycleMutationBusy reports whether a shared mutation-lease failure means
+// the session is owned or active elsewhere (a 409-class conflict) rather than
+// an infrastructure error that must surface unchanged.
+func lifecycleMutationBusy(err error) bool {
+	return errors.Is(err, session.ErrRuntimeLeaseBusy) ||
+		errors.Is(err, session.ErrSessionRunActive) ||
+		errors.Is(err, session.ErrSessionRecoveryRequired) ||
+		errors.Is(err, session.ErrRuntimeSessionNotFound) ||
+		errors.Is(err, agentruntime.ErrDetachedRemoteExecution)
+}
+
 // SessionLifecycleService is the single coordinator for session persistence,
 // API pool state and dispatcher cache state. Database helpers remain in the
 // session package; this service owns the cross-runtime lock and ordering.
@@ -72,12 +83,15 @@ func (s *SessionLifecycleService) Delete(ctx context.Context, sessionID string) 
 	if s.sessionDir == "" {
 		return s.sessions.DeleteActiveSession(sessionID)
 	}
-	guard, err := session.AcquireMutation(s.sessionDir, sessionID)
+	guard, err := agentruntime.AcquireSessionMutation(ctx, s.sessionDir, sessionID, agentruntime.ExecutionAdmissionOptions{})
 	if errors.Is(err, session.ErrRuntimeSessionNotFound) {
 		return s.sessions.DeleteActiveSession(sessionID)
 	}
 	if err != nil {
-		return false, &lifecycleConflict{Code: "session_running", Message: "session has an active run"}
+		if lifecycleMutationBusy(err) {
+			return false, &lifecycleConflict{Code: "session_running", Message: "session has an active run"}
+		}
+		return false, err
 	}
 	defer guard.Release()
 	releaseData := session.LockSessionData(s.sessionDir, sessionID)
@@ -105,9 +119,12 @@ func (s *SessionLifecycleService) Bind(ctx context.Context, sessionID, channelTy
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	runtimeGuard, err := session.AcquireMutation(s.sessionDir, sessionID)
+	runtimeGuard, err := agentruntime.AcquireSessionMutation(ctx, s.sessionDir, sessionID, agentruntime.ExecutionAdmissionOptions{})
 	if err != nil {
-		return &lifecycleConflict{Code: "session_running", Message: "target session has an active run"}
+		if lifecycleMutationBusy(err) {
+			return &lifecycleConflict{Code: "session_running", Message: "target session has an active run"}
+		}
+		return err
 	}
 	defer runtimeGuard.Release()
 	releaseIdentity := s.identityMux.Lock(channelType, channelID)
@@ -129,9 +146,12 @@ func (s *SessionLifecycleService) Unbind(ctx context.Context, sessionID string) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	runtimeGuard, err := session.AcquireMutation(s.sessionDir, sessionID)
+	runtimeGuard, err := agentruntime.AcquireSessionMutation(ctx, s.sessionDir, sessionID, agentruntime.ExecutionAdmissionOptions{})
 	if err != nil {
-		return nil, &lifecycleConflict{Code: "session_running", Message: "session has an active run"}
+		if lifecycleMutationBusy(err) {
+			return nil, &lifecycleConflict{Code: "session_running", Message: "session has an active run"}
+		}
+		return nil, err
 	}
 	defer runtimeGuard.Release()
 	binding, err := session.FindBindingBySessionID(s.sessionDir, sessionID)
@@ -169,9 +189,12 @@ func (s *SessionLifecycleService) Transfer(ctx context.Context, channelType, cha
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	runtimeGroup, err := session.AcquireMutations(s.sessionDir, []string{fromSessionID, toSessionID})
+	runtimeGroup, err := agentruntime.AcquireSessionMutationGroup(ctx, s.sessionDir, []string{fromSessionID, toSessionID}, agentruntime.ExecutionAdmissionOptions{})
 	if err != nil {
-		return &lifecycleConflict{Code: "session_running", Message: "source and target sessions must be idle"}
+		if lifecycleMutationBusy(err) {
+			return &lifecycleConflict{Code: "session_running", Message: "source and target sessions must be idle"}
+		}
+		return err
 	}
 	defer runtimeGroup.Release()
 	releaseIdentity := s.identityMux.Lock(channelType, channelID)

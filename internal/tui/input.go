@@ -458,6 +458,10 @@ func (a *App) processInput(input string) tea.Cmd {
 		resources := a.pendingInputResources
 		a.pendingInputResources = nil
 		a.queuedPrompts = append(a.queuedPrompts, queuedPrompt{text: input, resources: resources})
+		// Surface the queue immediately: the live view renders a styled
+		// "N queued" section with per-message previews until the run finishes
+		// and each prompt is submitted in order.
+		a.scheduleRender()
 		return nil
 	}
 
@@ -727,6 +731,9 @@ func (a *App) activateSession(sess *session.Manager) error {
 	// keeping the previous one when it is empty) would recreate the divergence
 	// this ordering exists to prevent.
 	a.cwd = sess.GetHeader().Cwd
+	// Project cross-process ownership for the freshly activated session (an
+	// idle snapshot stays silent). Pure Runtime projection, no local state.
+	a.notifySessionExecutionState(sess.GetHeader().ID)
 	return nil
 }
 

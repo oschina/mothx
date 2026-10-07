@@ -1550,6 +1550,24 @@ func (s *Server) PatchSessionCapabilities(id string, patch SessionCapabilityPatc
 	if sess == nil {
 		return nil, ErrSessionNotFound
 	}
+	// Capability rows and their change events are lease-fenced writes. An idle
+	// session previously owned by another process (for example a closed TUI)
+	// still carries a released/expired lease row, so this cold patch must
+	// reclaim that row through the shared Runtime mutation lease (epoch bump)
+	// instead of failing the fenced validate with ErrRuntimeLeaseLost. The
+	// shared unless-held helper keeps an in-run patch under the already-held
+	// lease, which remains the authority.
+	if s.settings != nil {
+		guard, leaseErr := agentruntime.AcquireSessionMutationUnlessHeld(context.Background(), s.settings.GetSessionDir(), id, agentruntime.ExecutionAdmissionOptions{})
+		// A not-yet-persisted runtime-only session has no durable lease row, so
+		// ErrRuntimeSessionNotFound keeps the legacy unfenced compatibility path.
+		if leaseErr != nil && !errors.Is(leaseErr, session.ErrRuntimeSessionNotFound) {
+			return nil, leaseErr
+		}
+		if guard != nil {
+			defer guard.Release()
+		}
+	}
 	if !s.pool.Pin(sess) {
 		return nil, ErrSessionNotFound
 	}

@@ -62,6 +62,15 @@ var (
 			Foreground(lipgloss.Color("240")).
 			Italic(true)
 
+	// queuedPromptStyle renders the live "N queued" indicator shown while a run
+	// owns the session; the item style keeps previews dimmer than the header.
+	queuedPromptStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("214")).
+				Italic(true)
+
+	queuedPromptItemStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245"))
+
 	footerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240")).
 			BorderTop(true).
@@ -1667,6 +1676,12 @@ func (a *App) View() string {
 	// 3. Loading indicator (spinner + timer + tokens when thinking)
 	if loading := renderLoadingIndicator(a.translator, a.isThinking, a.spinnerIndex, a.timer.Elapsed(), 0, a.width); loading != "" {
 		parts = append(parts, loading)
+	}
+	// Queued submissions waiting for the active run: typing during a run must
+	// be visibly acknowledged instead of silently disappearing until the run
+	// finishes.
+	if queued := a.renderQueuedPrompts(a.width); queued != "" {
+		parts = append(parts, queued)
 	}
 	if activity := a.renderActivitySummary(a.width); activity != "" {
 		parts = append(parts, activity)

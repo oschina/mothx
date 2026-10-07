@@ -418,14 +418,18 @@ func Run(opts RunOptions, version string) error {
 	// explicit execution entry points.
 	// Other local entry points (CLI, TUI, ACP) publish only advisory UDP
 	// wake-ups after durable state changes. Re-read SQLite before broadcasting so
-	// a lost, duplicated, or forged datagram can never change runtime state.
+	// a lost, duplicated, or forged datagram can never change runtime state. The
+	// coalescer keeps one in-flight external sync per session plus one trailing
+	// re-sync, so a spoofed or chatty flood cannot spawn a goroutine (and a full
+	// DB re-read) per datagram.
+	externalSync := session.NewSessionWakeCoalescer(srv.PublishExternalSessionUpdate)
 	stopLeaseNotifications := session.SubscribeRuntimeLeaseNotifications(func(notification session.RuntimeLeaseNotification) {
 		switch notification.Type {
 		case "acquired", "released", "lost", "state_changed":
 			if srv.recoveryCoordinator != nil {
 				srv.recoveryCoordinator.Wake()
 			}
-			go srv.PublishExternalSessionUpdate(notification.SessionID)
+			externalSync.Wake(notification.SessionID)
 		}
 	})
 	defer stopLeaseNotifications()

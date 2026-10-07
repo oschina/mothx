@@ -216,3 +216,30 @@ func TestReattachDurableRunPromotesRecoveryLeaseAndRegistersLocal(t *testing.T) 
 		t.Fatal(err)
 	}
 }
+
+func TestInspectSessionExecutionsProjectsBatchAndOmitsUnreadable(t *testing.T) {
+	sessionDir := t.TempDir()
+	initRecoveryTestSession(t, sessionDir, "batch-idle")
+	initRecoveryTestSession(t, sessionDir, "batch-orphan")
+	if err := (RunStore{SessionDir: sessionDir}).Create(DurableRun{
+		ID: "batch-orphan-run", SessionID: "batch-orphan", Source: "tui", Status: "running", StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	results := InspectSessionExecutions(sessionDir, []string{"batch-idle", "batch-orphan", "batch-idle", "", "batch-missing"})
+	if got := results["batch-idle"].State; got != SessionExecutionIdle {
+		t.Fatalf("idle state = %q, want idle", got)
+	}
+	if got := results["batch-orphan"].State; got != SessionExecutionOrphaned {
+		t.Fatalf("orphan state = %q, want orphaned", got)
+	}
+	if _, ok := results[""]; ok {
+		t.Fatal("empty session ID must be skipped")
+	}
+	// A missing session still projects (SessionExists=false, unknown state) so
+	// adapters render "no badge" instead of treating it as idle.
+	if missing, ok := results["batch-missing"]; !ok || missing.SessionExists || missing.State == SessionExecutionIdle {
+		t.Fatalf("missing session projection = %+v (present=%v)", missing, ok)
+	}
+}

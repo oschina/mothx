@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -46,8 +47,10 @@ func TestAcquirePromptAdmissionHoldsSharedRuntimeLock(t *testing.T) {
 		t.Fatalf("acquire admission: %v", err)
 	}
 	defer release()
-	if _, err := s.acquirePromptAdmission(rt); err != errACPActiveSessionRun {
-		t.Fatalf("second admission error = %v, want %v", err, errACPActiveSessionRun)
+	if _, err := s.acquirePromptAdmission(rt); !errors.Is(err, errACPActiveSessionRun) {
+		t.Fatalf("second admission error = %v, want wrapped %v", err, errACPActiveSessionRun)
+	} else if !errors.Is(err, session.ErrRuntimeLeaseBusy) {
+		t.Fatalf("second admission error = %v, want the busy cause preserved", err)
 	}
 	if rt.cancel != nil {
 		t.Fatal("admission unexpectedly installed a local cancel function")

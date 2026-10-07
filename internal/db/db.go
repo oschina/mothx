@@ -167,6 +167,21 @@ func CloseAll() error {
 	return errors.Join(errs...)
 }
 
+// IsCached reports whether this process currently holds a cached connection
+// for the database file at path. Advisory consumers (the UDP lease bus
+// database_rebuilt watcher) use it to ignore notices for files they never
+// opened, so a forged or stale packet cannot trigger a close/checkpoint of an
+// unrelated database.
+func IsCached(path string) bool {
+	canonical, err := CanonicalPath(path)
+	if err != nil {
+		return false
+	}
+	state.Lock()
+	defer state.Unlock()
+	return state.dbs[canonical] != nil
+}
+
 // Close releases one process-owned SQLite connection. It is used by resource
 // stores that own a whole database file and need to remove that exact file
 // after their data has been deleted. General callers should normally keep

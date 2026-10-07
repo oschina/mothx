@@ -79,6 +79,14 @@ func handlePeerDatabaseRebuilt(path string, onNotice func(DatabaseRecovery)) {
 	if path == "" {
 		return
 	}
+	// The bus is unauthenticated, so act only on files this process actually
+	// holds a cached connection for. A forged or stale notice for a database
+	// we never opened must not trigger a close/checkpoint or a user-facing
+	// recovery warning; a genuinely rebuilt file we have not opened yet is
+	// picked up fresh on the next access anyway.
+	if !database.IsCached(path) {
+		return
+	}
 	recovery := DatabaseRecovery{Path: path, Peer: true, At: time.Now()}
 	// Retire the cached handle first so the notice is only reported once the
 	// connection is actually gone; a close failure is reported instead of

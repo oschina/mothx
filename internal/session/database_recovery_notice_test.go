@@ -122,3 +122,37 @@ func TestPeerDatabaseRebuildIgnoresEmptyPath(t *testing.T) {
 		t.Fatalf("an empty path produced a notice: %#v", notices)
 	}
 }
+
+// TestPeerDatabaseRebuildIgnoresUncachedPath pins the unauthenticated-bus
+// hardening: a forged or stale rebuild notice for a database file this process
+// never opened must not record a user-facing recovery notice or touch any
+// connection; only paths with a live cached handle are acted on.
+func TestPeerDatabaseRebuildIgnoresUncachedPath(t *testing.T) {
+	TakeDatabaseRecoveries()
+	noticed := false
+	handlePeerDatabaseRebuilt(filepath.Join(t.TempDir(), "never-opened.db"), func(DatabaseRecovery) {
+		noticed = true
+	})
+	if noticed {
+		t.Fatal("an uncached path must not reach the notice callback")
+	}
+	if notices := TakeDatabaseRecoveries(); len(notices) != 0 {
+		t.Fatalf("an uncached path produced a notice: %#v", notices)
+	}
+}
+
+// TestRuntimeLeaseBusRejectsRenewedType keeps heartbeat renewals off the wire:
+// the validator must not accept the dead "renewed" type, or a future publisher
+// could silently reintroduce one broadcast per session every heartbeat tick.
+func TestRuntimeLeaseBusRejectsRenewedType(t *testing.T) {
+	notification := RuntimeLeaseNotification{
+		Version:          runtimeLeaseBusVersion,
+		MessageID:        "message-renewed",
+		Type:             "renewed",
+		SessionID:        "renewed-session",
+		OriginInstanceID: "instance-1",
+	}
+	if validRuntimeLeaseNotification(notification) {
+		t.Fatal("renewed notifications must not be valid; heartbeats are never broadcast")
+	}
+}

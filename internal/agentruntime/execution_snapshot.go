@@ -420,3 +420,26 @@ func leaseOwnerScope(sessionDir string, lease session.RuntimeLeaseSnapshot) stri
 	}
 	return "external"
 }
+
+// InspectSessionExecutions projects the canonical execution state for a
+// bounded batch of sessions, intended for adapter list/page views (TUI session
+// dialog, ACP session list). Sessions whose facts cannot be read are omitted
+// so one unreadable session degrades to "no badge" instead of failing the
+// whole listing; adapters must treat a missing entry as unknown, never idle.
+func InspectSessionExecutions(sessionDir string, sessionIDs []string) map[string]SessionExecutionSnapshot {
+	results := make(map[string]SessionExecutionSnapshot, len(sessionIDs))
+	for _, id := range sessionIDs {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		if _, exists := results[id]; exists {
+			continue
+		}
+		snapshot, err := InspectSessionExecution(sessionDir, id)
+		if err != nil {
+			continue
+		}
+		results[id] = snapshot
+	}
+	return results
+}

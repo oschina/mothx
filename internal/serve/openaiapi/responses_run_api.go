@@ -92,6 +92,10 @@ func (s *Server) HandleResponsesRunAPI(w http.ResponseWriter, r *http.Request) {
 		// A durable remote cancel mutates response lineage and must serialize
 		// with lifecycle deletion/transfer. A live local monitor owns this lock;
 		// callers should use the session stop endpoint first in that window.
+		// Deliberately the bare mutation lease (documented architecture-guard
+		// bridge), not agentruntime.AcquireSessionMutation: a cancel must never
+		// trigger orphan-run recovery/terminalization of the very run it
+		// targets; orphan reconciliation is owned by the session stop endpoint.
 		guard, err := session.AcquireMutation(s.settings.GetSessionDir(), sessionID)
 		if err != nil {
 			status, info := s.executionAdmissionError(sessionID, err)
@@ -178,6 +182,9 @@ func (s *Server) recoverResponsesRun(w http.ResponseWriter, r *http.Request, ses
 		writeError(w, http.StatusConflict, "response run must be terminal before tool recovery", "conflict_error")
 		return
 	}
+	// Bare mutation lease (documented bridge): tool recovery requires an
+	// already-terminal run and must not trigger orphan-run recovery; the stop
+	// endpoint owns run reconciliation.
 	guard, err := session.AcquireMutation(s.settings.GetSessionDir(), sessionID)
 	if err != nil {
 		writeError(w, http.StatusConflict, "response run is still active", "conflict_error")
@@ -380,7 +387,9 @@ func (s *Server) abandonResponsesRun(w http.ResponseWriter, r *http.Request, man
 	}
 
 	// Serializing with the background coordinator prevents abandoning a tool
-	// while a live execution can still write a successful result.
+	// while a live execution can still write a successful result. Bare
+	// mutation lease (documented bridge): abandoning interrupted tools must
+	// not trigger orphan-run recovery; the stop endpoint owns reconciliation.
 	guard, err := session.AcquireMutation(s.settings.GetSessionDir(), sessionID)
 	if err != nil {
 		writeError(w, http.StatusConflict, "response run is still active; cancel it before abandoning interrupted tools", "conflict_error")

@@ -2978,6 +2978,41 @@ func TestSessionCapabilitiesGetAndPatch(t *testing.T) {
 	}
 }
 
+// TestPatchSessionCapabilitiesAfterForeignLeaseRelease reproduces the
+// TUI-then-serve handoff: a session whose runtime lease was acquired and
+// released by a previous owner still carries a fenced lease row, and a later
+// WebUI mode patch must reclaim it through the shared mutation lease instead
+// of failing with ErrRuntimeLeaseLost.
+func TestPatchSessionCapabilitiesAfterForeignLeaseRelease(t *testing.T) {
+	srv := newTestServer(t)
+	workDir := t.TempDir()
+	mgr := session.New(workDir, srv.settings.GetSessionDir())
+	if err := mgr.InitWithID("caps-tombstone-sess"); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+	guard, err := session.AcquireExecutionAdmission(srv.settings.GetSessionDir(), "caps-tombstone-sess")
+	if err != nil {
+		t.Fatalf("simulate prior owner lease: %v", err)
+	}
+	guard.Release()
+
+	mode := "agent"
+	updated, err := srv.PatchSessionCapabilities("caps-tombstone-sess", SessionCapabilityPatch{Mode: &mode})
+	if err != nil {
+		t.Fatalf("patch mode after foreign lease release: %v", err)
+	}
+	if updated.Mode != "agent" {
+		t.Fatalf("updated mode = %q, want agent", updated.Mode)
+	}
+	stored, ok, err := session.LoadSessionCapabilities(srv.settings.GetSessionDir(), "caps-tombstone-sess")
+	if err != nil || !ok {
+		t.Fatalf("load persisted capabilities: ok=%v err=%v", ok, err)
+	}
+	if stored.Mode != "agent" {
+		t.Fatalf("persisted mode = %q, want agent", stored.Mode)
+	}
+}
+
 func TestUsageEventDataIncludesCacheTokens(t *testing.T) {
 	data := usageEventData(CompletionUsage{
 		PromptTokens:     100,

@@ -21,10 +21,11 @@ import (
 // checked). This is acceptable because notifications are advisory only; every
 // receiver re-validates against the authoritative SQLite lease and Run rows
 // before acting, so a forged packet can at most trigger a redundant database
-// re-read (or, for a rebuild notice, retire a cached connection and log a
-// warning), never an ownership or content change. The bus is deliberately
-// host-only: it is a directed broadcast on the loopback network, so it never
-// reaches another machine.
+// re-read (or, for a rebuild notice, retire a cached connection this process
+// actually holds for the named file and log a warning; notices for databases
+// it never opened are ignored), never an ownership or content change. The bus
+// is deliberately host-only: it is a directed broadcast on the loopback
+// network, so it never reaches another machine.
 type RuntimeLeaseNotification struct {
 	Version   int    `json:"version"`
 	MessageID string `json:"messageId"`
@@ -249,7 +250,10 @@ func validRuntimeLeaseNotification(notification RuntimeLeaseNotification) bool {
 		return false
 	}
 	switch notification.Type {
-	case "acquired", "renewed", "released", "lost", "state_changed":
+	// "renewed" is deliberately absent: heartbeat renewals must never be
+	// broadcast (that would be one packet per session every 3s); only ownership
+	// transitions and durable run state changes wake peers.
+	case "acquired", "released", "lost", "state_changed":
 		return true
 	default:
 		return false
@@ -272,21 +276,75 @@ func publishRuntimeLeaseNotification(notification RuntimeLeaseNotification) {
 	if err != nil || len(payload) > 1024 {
 		return
 	}
-	dialer := net.Dialer{Timeout: 200 * time.Millisecond, Control: runtimeLeaseBusSenderControl}
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
 	_, broadcastAddress := runtimeLeaseBusAddresses()
-	conn, err := dialer.DialContext(ctx, "udp4", broadcastAddress)
+	conn, err := runtimeLeaseBusSenderConn(broadcastAddress)
 	if err != nil {
 		runtimeLeaseBusLogf("[udp] send failed type=%s session=%q origin=%s origin_instance=%s message=%s error=%v", notification.Type, notification.SessionID, notification.Origin, notification.OriginInstanceID, notification.MessageID, err)
 		return
 	}
-	defer conn.Close()
+	// A write deadline keeps a saturated socket buffer from stalling the
+	// publisher's hot path (lease release, run terminalization); loopback UDP
+	// normally never blocks because the kernel drops instead.
+	_ = conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
 	if _, err := conn.Write(payload); err != nil {
+		dropRuntimeLeaseBusSenderConn(conn)
 		runtimeLeaseBusLogf("[udp] send failed type=%s session=%q origin=%s origin_instance=%s message=%s error=%v", notification.Type, notification.SessionID, notification.Origin, notification.OriginInstanceID, notification.MessageID, err)
 		return
 	}
 	runtimeLeaseBusLogf("[udp] sent type=%s session=%q origin=%s origin_instance=%s message=%s epoch=%d", notification.Type, notification.SessionID, notification.Origin, notification.OriginInstanceID, notification.MessageID, notification.Epoch)
+}
+
+// runtimeLeaseBusSender caches one connected UDP socket for the loopback
+// directed broadcast address. Publishing stays synchronous (a process exiting
+// right after a lease release must not lose the datagram), but the per-message
+// dial cost and its pathological 200ms ceiling are paid at most once per
+// address change; after a dial failure further attempts back off briefly so a
+// host without usable loopback routing degrades to near-free skips instead of
+// stalling every lease event.
+var runtimeLeaseBusSender = struct {
+	sync.Mutex
+	addr       string
+	conn       net.Conn
+	nextDialAt time.Time
+}{}
+
+const runtimeLeaseBusDialBackoff = 5 * time.Second
+
+func runtimeLeaseBusSenderConn(address string) (net.Conn, error) {
+	runtimeLeaseBusSender.Lock()
+	defer runtimeLeaseBusSender.Unlock()
+	if runtimeLeaseBusSender.conn != nil && runtimeLeaseBusSender.addr == address {
+		return runtimeLeaseBusSender.conn, nil
+	}
+	if runtimeLeaseBusSender.conn != nil {
+		_ = runtimeLeaseBusSender.conn.Close()
+		runtimeLeaseBusSender.conn = nil
+		runtimeLeaseBusSender.addr = ""
+	}
+	if now := time.Now(); now.Before(runtimeLeaseBusSender.nextDialAt) {
+		return nil, fmt.Errorf("runtime lease bus sender is backing off until %s", runtimeLeaseBusSender.nextDialAt.Format(time.RFC3339))
+	}
+	dialer := net.Dialer{Timeout: 200 * time.Millisecond, Control: runtimeLeaseBusSenderControl}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	conn, err := dialer.DialContext(ctx, "udp4", address)
+	if err != nil {
+		runtimeLeaseBusSender.nextDialAt = time.Now().Add(runtimeLeaseBusDialBackoff)
+		return nil, err
+	}
+	runtimeLeaseBusSender.addr = address
+	runtimeLeaseBusSender.conn = conn
+	return conn, nil
+}
+
+func dropRuntimeLeaseBusSenderConn(conn net.Conn) {
+	runtimeLeaseBusSender.Lock()
+	defer runtimeLeaseBusSender.Unlock()
+	if runtimeLeaseBusSender.conn == conn {
+		runtimeLeaseBusSender.conn = nil
+		runtimeLeaseBusSender.addr = ""
+	}
+	_ = conn.Close()
 }
 
 // NotifyRuntimeStateChanged wakes local observers after a durable Run state
