@@ -8,6 +8,10 @@
 
 ### ✨ New Features
 
+- **Cross-process session ownership is now synchronized across local processes over the lease bus**
+  - The loopback UDP `SessionLeaseBus` no longer only wakes peers: notifications carry a canonical `DatabaseIdentity`, a per-origin `Seq`, and the owner PID/run, and every process keeps a global in-memory ownership view keyed by `(DatabaseIdentity, sessionId)`. Owners re-announce held leases every 10s (`ownership_snapshot`) so a lost acquire self-heals and an otherwise-silent owner stays fresh within a 30s liveness window. Receivers drop duplicate/out-of-order messages via `Seq`, mark an origin's entries uncertain on a sequence gap or an epoch conflict, and fall back to SQLite on any miss, staleness, or uncertainty — notifications never authorize admission or cancellation.
+  - `agentruntime.InspectSessionExecution` now answers a fresh, remote execution lease from the synchronized cache (marked `source: "cache"`) and otherwise reads SQLite and refreshes the view; the snapshot projection is a single shared function so the two paths cannot diverge. `session.RuntimeLeaseBusMetrics()` exposes sent/send-failed/received/invalid/self-skipped/duplicate/applied/gap/uncertain counters. The wire version is 3 and the datagram limit 4096 bytes.
+
 - **Knowledge Base Usability Completion**
   - **Ignore rules and discovery diagnostics.** A knowledge base now accepts an `ignoreGlobs` list, merged with the fixed ignore directories and the suggested patterns read from the source root's `.gitignore`/`.mothxignore` (read-only). Every scan records a bounded discovery projection (`discovered`/`ignored`/`skipped` with per-path reasons) on the snapshot, so a file that is never indexed is explained instead of silently dropped. Files that are oversized, binary/non-UTF-8, or unreadable are marked `skipped` with a reason and are not handed to the model.
   - **Incremental diff summary.** Each rebuilt snapshot persists an `added`/`modified`/`removed`/`unchanged` projection with bounded path samples; a fully unchanged scan keeps the existing snapshot-reuse event and now carries the all-zero diff in its event data.
@@ -29,6 +33,9 @@
   - **Runtime binary setting.** The desktop settings (运行时 → MothX 运行时二进制) let the user switch between the bundled `mothx` executable (default) and a custom `mothx` binary path. Selection and validation live in the privileged Electron main process, the ACP runtime restarts on the switch, an unavailable custom path falls back to the bundled runtime with a visible notice, and a custom binary that fails to start rolls the selection back so the client stays usable. The `MOTHX_BINARY` environment variable remains the highest-priority development override.
 
 ### 🐛 Bug Fixes
+
+- **Runtime lease bus listener no longer disables itself after a last-subscriber race**
+  - When the final subscriber unsubscribed while the UDP listener was still binding, the listener returned before its deferred cleanup, leaving its `started`/`listening` state set and the closed socket cached, so the process silently stopped hearing cross-process ownership events until restart. The early return now resets the listener state so the next subscription rebinds.
 
 - **ACP no longer becomes wholly unusable when the default provider lacks a key**
   - `mothx acp` used to treat an unusable default provider (missing API key, unknown provider, no usable model) as a fatal startup error: the process exited with the structured startup line, so initialize, sessions, and the entire management plane (`mothx/manage/*`) were unavailable — clients such as Desktop could not even reach the settings needed to configure a provider.

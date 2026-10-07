@@ -204,7 +204,7 @@ func (r *ExecutionRuntime) beginDurableWithStart(parent context.Context, run Dur
 		if projector, ok := r.eventSink().(RunEventProjector); ok {
 			_ = projector.Project(event, event.ID)
 		}
-		session.NotifyRuntimeStateChanged(run.SessionID, run.Source)
+		session.NotifyRuntimeStateChanged(r.runtimeSessionDir(), run.SessionID, run.Source)
 		return ctx, nil
 	}
 	if err := create(); err != nil {
@@ -242,7 +242,7 @@ func (r *ExecutionRuntime) beginDurableWithStart(parent context.Context, run Dur
 		}
 		return nil, fmt.Errorf("record run start event: %w", err)
 	}
-	session.NotifyRuntimeStateChanged(run.SessionID, run.Source)
+	session.NotifyRuntimeStateChanged(r.runtimeSessionDir(), run.SessionID, run.Source)
 	return ctx, nil
 }
 
@@ -816,7 +816,7 @@ func (r *ExecutionRuntime) finishDurableLocked(runID string, state RunState, mes
 	r.mu.Unlock()
 	r.closeDone(done)
 	if durableRun.SessionID != "" {
-		session.NotifyRuntimeStateChanged(durableRun.SessionID, durableRun.Source)
+		session.NotifyRuntimeStateChanged(r.runtimeSessionDir(), durableRun.SessionID, durableRun.Source)
 	}
 	r.notifyTerminalObserver(runID, state)
 	return nil

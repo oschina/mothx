@@ -47,8 +47,12 @@ type ExecutionRuntime struct {
 	finished     bool
 	events       RunEventSink
 	store        DurableRunStore
-	done         chan struct{}
-	durable      *DurableRun
+	// sessionDir is the canonical session directory of the attached durable run
+	// store, captured so this process can stamp cross-process ownership
+	// notifications with the database identity.
+	sessionDir string
+	done       chan struct{}
+	durable    *DurableRun
 	// durablePersisted is distinct from durable metadata: BeginDurable sets
 	// the metadata before Create, but only a successful Create means terminal
 	// transitions must go through the durable store.
@@ -361,7 +365,7 @@ func (r *ExecutionRuntime) notifyDurableStateChanged() {
 	}
 	r.mu.Unlock()
 	if sessionID != "" {
-		session.NotifyRuntimeStateChanged(sessionID, source)
+		session.NotifyRuntimeStateChanged(r.runtimeSessionDir(), sessionID, source)
 	}
 }
 
@@ -413,7 +417,24 @@ func (r *ExecutionRuntime) SetRunStore(store DurableRunStore) {
 	}
 	r.mu.Lock()
 	r.store = store
+	switch typed := store.(type) {
+	case RunStore:
+		r.sessionDir = typed.SessionDir
+	case *RunStore:
+		r.sessionDir = typed.SessionDir
+	}
 	r.mu.Unlock()
+}
+
+// runtimeSessionDir returns the canonical session directory of the attached
+// durable run store, used to scope cross-process ownership notifications.
+func (r *ExecutionRuntime) runtimeSessionDir() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.sessionDir
 }
 
 // SetEventSink attaches the durable event sink used by adapter-neutral run

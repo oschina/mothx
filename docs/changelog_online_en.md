@@ -10,6 +10,10 @@ This file contains the changes for the **current version only**. The full histor
 
 ### ✨ New Features
 
+- **Cross-process session ownership is now synchronized across local processes over the lease bus**
+  - The loopback UDP `SessionLeaseBus` no longer only wakes peers: notifications carry a canonical `DatabaseIdentity`, a per-origin `Seq`, and the owner PID/run, and every process keeps a global in-memory ownership view keyed by `(DatabaseIdentity, sessionId)`. Owners re-announce held leases every 10s (`ownership_snapshot`) so a lost acquire self-heals and an otherwise-silent owner stays fresh within a 30s liveness window. Receivers drop duplicate/out-of-order messages via `Seq`, mark an origin's entries uncertain on a sequence gap or an epoch conflict, and fall back to SQLite on any miss, staleness, or uncertainty — notifications never authorize admission or cancellation.
+  - `agentruntime.InspectSessionExecution` now answers a fresh, remote execution lease from the synchronized cache (marked `source: "cache"`) and otherwise reads SQLite and refreshes the view; the snapshot projection is a single shared function so the two paths cannot diverge. `session.RuntimeLeaseBusMetrics()` exposes sent/send-failed/received/invalid/self-skipped/duplicate/applied/gap/uncertain counters. The wire version is 3 and the datagram limit 4096 bytes.
+
 - **TUI queued messages are now visibly rendered while a run is active**
   - Submitting input while a run owns the session has always queued it for ordered delivery, but the queue was invisible: the input box cleared with zero feedback until the run finished. The live view now renders a styled "⏸ N queued" section below the spinner with a one-line preview per pending submission (at most 3 shown, overflow as "+N …"; multi-line input is flattened and truncated to the terminal width). The section disappears as the queue drains, and each prompt still renders its canonical "You:" transcript line when it actually starts — the indicator is pure managed-view state and never enters scrollback or session history.
   - The header is bilingual (zh/en) through the existing i18n catalog, and the new rendering is covered by focused unit tests (empty queue, counts/previews, visible cap, width bounding).
@@ -41,6 +45,9 @@ This file contains the changes for the **current version only**. The full histor
 
 
 ### 🐛 Bug Fixes
+
+- **Runtime lease bus listener no longer disables itself after a last-subscriber race**
+  - When the final subscriber unsubscribed while the UDP listener was still binding, the listener returned before its deferred cleanup, leaving its `started`/`listening` state set and the closed socket cached, so the process silently stopped hearing cross-process ownership events until restart. The early return now resets the listener state so the next subscription rebinds.
 
 - **Advisory UDP bus hardening: rebuild-notice scoping, receive-side coalescing, and a cheaper publish path**
   - The unauthenticated loopback lease bus accepted `database_rebuilt` notices for any path, so a forged or stale packet could make every peer process run a close/checkpoint attempt and surface a user-facing "database was replaced" warning for a file it never opened. The watcher now acts only on paths with a live cached connection in `internal/db` (new `IsCached` probe); genuinely rebuilt files are still retired exactly as before, and files this process never opened are ignored silently.

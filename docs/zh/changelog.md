@@ -8,6 +8,10 @@
 
 ### ✨ 新功能
 
+- **跨进程会话归属现通过租约总线在本机多进程间同步**
+  - loopback UDP `SessionLeaseBus` 不再只是唤醒：通知带上规范化的 `DatabaseIdentity`、每来源 `Seq` 以及属主 PID/run，每个进程维护以 `(DatabaseIdentity, sessionId)` 为键的全局内存归属视图。属主每 10s 重播持有的租约（`ownership_snapshot`），使丢失的 acquire 自愈、静默属主在 30s 存活窗口内保持新鲜。接收端用 `Seq` 丢弃重复/乱序，遇序号缺口或 epoch 冲突则将该来源条目标为不确定，任何缺失、过期或不确定都回落 SQLite——通知永不授权准入或取消。
+  - `agentruntime.InspectSessionExecution` 现在对“新鲜、远端、execution”租约直接由同步缓存作答（标记 `source: "cache"`），否则读 SQLite 并回填视图；快照投影为单一共享函数，两条路径不会漂移。`session.RuntimeLeaseBusMetrics()` 暴露发送/发送失败/接收/非法/自身跳过/去重/应用/缺口/不确定计数。报文版本 3，单包上限 4096 字节。
+
 - **知识库可用性完善**
   - **忽略规则与发现诊断。** 知识库新增 `ignoreGlobs` 列表，与固定忽略目录以及从源目录根读取的 `.gitignore`/`.mothxignore` 建议规则（只读）合并生效。每次扫描会在快照上记录有界的发现投影（`discovered`/`ignored`/`skipped` 及逐路径原因），因此“静默未索引”变为可解释。超大、二进制/非 UTF-8 或不可读的文件标记为 `skipped` 并给出原因，且不会交给模型。
   - **增量差异摘要。** 每次重建的快照都会持久化 `added`/`modified`/`removed`/`unchanged` 投影（含有限路径样本）；完全未变化的扫描保留既有的快照复用事件，并在事件数据中携带全 0 差异。
@@ -29,6 +33,9 @@
   - **运行时二进制设置。** 桌面设置（运行时 → MothX 运行时二进制）可在内置 `mothx` 可执行文件（默认）与自定义 `mothx` 二进制路径之间切换。选择与校验都在特权的 Electron 主进程完成，切换后自动重启 ACP 运行时；自定义路径不可用时回退到内置运行时并给出可见提示，自定义二进制无法启动时回滚选择，保证客户端始终可用。`MOTHX_BINARY` 环境变量仍是优先级最高的开发覆盖项。
 
 ### 🐛 问题修复
+
+- **Runtime 租约总线监听器不再因最后一个订阅者的竞态而自我禁用**
+  - 当最后一个订阅者在 UDP 监听器仍在 bind 时退订，监听器在延迟清理前提前 return，导致 `started`/`listening` 仍为真、已关闭的 socket 仍被缓存，进程此后静默听不到跨进程归属事件直到重启。现在提前 return 会复位监听状态，下次订阅即可重新 bind。
 
 - **ACP 不再因默认供应商缺 key 而整体不可用**
   - 此前 `mothx acp` 在启动时把“默认供应商不可用（缺 API key / 未知供应商 / 无可用模型）”当作致命错误：进程直接以结构化启动错误退出，initialize、会话、管理面（`mothx/manage/*`）全部不可用，Desktop 等客户端连“配置供应商”这条路都走不通。

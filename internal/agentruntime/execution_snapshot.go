@@ -65,6 +65,10 @@ type SessionExecutionSnapshot struct {
 	RemoteRunID          string                `json:"remoteRunId,omitempty"`
 	RemoteProvider       string                `json:"remoteProvider,omitempty"`
 	RemoteState          string                `json:"remoteState,omitempty"`
+	// Source records how the projection was produced ("db" from a SQLite read or
+	// "cache" from the synchronized ownership view). It is a projection-authority
+	// marker, never an authorization input.
+	Source string `json:"source,omitempty"`
 }
 
 type durableExecutionOwnershipStore interface {
@@ -239,18 +243,24 @@ func sameLeaseIdentity(binding session.RuntimeLeaseBinding, lease session.Runtim
 // trusting adapter-local maps. Database read failures return an unknown
 // snapshot together with the error so callers remain conservatively busy.
 func InspectSessionExecution(sessionDir, sessionID string) (SessionExecutionSnapshot, error) {
-	snapshot := SessionExecutionSnapshot{
-		SessionID:         sessionID,
-		State:             SessionExecutionUnknown,
-		Busy:              true,
-		LinkageState:      "none",
-		RecoveryAction:    "none",
-		DisplayOwnerScope: "unknown",
+	identity := session.RuntimeDatabaseIdentity(sessionDir)
+	if snapshot, ok := inspectSessionExecutionFromOwnershipCache(sessionDir, sessionID, identity); ok {
+		return snapshot, nil
 	}
 	facts, err := session.ReadSessionExecutionFacts(sessionDir, sessionID)
 	if err != nil {
-		return snapshot, err
+		return newSessionExecutionSnapshot(sessionID), err
 	}
+	session.PrimeRuntimeOwnership(identity, sessionID, facts.Lease, sessionExecutionRunID(facts), sessionExecutionRunStatus(facts))
+	return projectSessionExecutionFromFacts(sessionDir, sessionID, facts)
+}
+
+// projectSessionExecutionFromFacts is the single Runtime-owned projection of
+// durable execution facts. Both the SQLite read path and the synchronized
+// ownership cache path funnel through it so their projections cannot diverge.
+func projectSessionExecutionFromFacts(sessionDir, sessionID string, facts session.SessionExecutionFacts) (SessionExecutionSnapshot, error) {
+	snapshot := newSessionExecutionSnapshot(sessionID)
+	snapshot.Source = snapshotSourceDatabase
 	snapshot.SessionExists = facts.SessionExists
 	if !facts.SessionExists {
 		snapshot.Phase = "missing"

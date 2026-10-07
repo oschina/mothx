@@ -12,42 +12,64 @@ import (
 	"time"
 )
 
-// RuntimeLeaseNotification is a best-effort local-process wake-up signal.
-// SQLite leases and durable Run rows remain the sole authority: receivers must
-// always re-read the database before projecting any state to a client.
+// RuntimeLeaseNotification is a local-process wake-up signal and an ownership
+// synchronization hint. SQLite leases and durable Run rows remain the sole
+// authority for admission, cancellation, and ownership: receivers re-read the
+// database whenever the synchronized in-memory view is missing, stale, or
+// uncertain, and never authorize, cancel, or terminalize from a notification.
 //
 // Threat model: the UDP bus is unauthenticated. Any process on the same host
 // can send spoofed notifications (only the loopback source address is
-// checked). This is acceptable because notifications are advisory only; every
-// receiver re-validates against the authoritative SQLite lease and Run rows
-// before acting, so a forged packet can at most trigger a redundant database
-// re-read (or, for a rebuild notice, retire a cached connection this process
-// actually holds for the named file and log a warning; notices for databases
-// it never opened are ignored), never an ownership or content change. The bus
-// is deliberately host-only: it is a directed broadcast on the loopback
-// network, so it never reaches another machine.
+// checked). This is acceptable because a notification can at most refresh or
+// clear a process-local ownership hint and schedule a database re-read; it can
+// never grant ownership, cancel a run, or change content. A forged
+// database_rebuilt notice can retire a cached connection this process actually
+// holds for the named file and log a warning; notices for databases it never
+// opened are ignored. The bus is deliberately host-only: a directed broadcast
+// on the loopback network, so it never reaches another machine.
 type RuntimeLeaseNotification struct {
 	Version   int    `json:"version"`
 	MessageID string `json:"messageId"`
 	Type      string `json:"type"`
 	SessionID string `json:"sessionId,omitempty"`
+	// DatabaseIdentity names the canonical session database this notification is
+	// scoped to (see RuntimeDatabaseIdentity). Global-scope ownership
+	// synchronization keys its in-memory view by (DatabaseIdentity, SessionID),
+	// so producers that know the session directory must stamp it. Notifications
+	// published without one are still valid; receivers then fall back to SQLite.
+	DatabaseIdentity string `json:"databaseIdentity,omitempty"`
 	// Path names the database file for the database_rebuilt wake-up; lease
 	// notifications leave it empty because they are session-scoped.
 	Path             string `json:"path,omitempty"`
 	Origin           string `json:"origin,omitempty"`
 	OriginInstanceID string `json:"originInstanceId"`
 	OwnerInstanceID  string `json:"ownerInstanceId,omitempty"`
+	OwnerPID         int    `json:"ownerPid,omitempty"`
+	RunID            string `json:"runId,omitempty"`
 	Epoch            int64  `json:"epoch,omitempty"`
 	ExpiresAt        int64  `json:"expiresAt,omitempty"`
+	// Seq is a per-OriginInstanceID monotonic sequence. Receivers use it to drop
+	// out-of-order duplicates and to detect a gap (a jump means a lost datagram),
+	// which schedules a coalesced SQLite re-read. It never authorizes anything.
+	Seq uint64 `json:"seq,omitempty"`
+	// RunStatus and Phase are optional projection hints carried by state_changed
+	// events; receivers still re-read the durable Run before projecting it.
+	RunStatus string `json:"runStatus,omitempty"`
+	Phase     string `json:"phase,omitempty"`
 }
 
 const (
 	// A directed broadcast on the loopback /8 network. It never leaves the
 	// host, unlike a LAN broadcast such as 255.255.255.255.
 	runtimeLeaseBusDefaultPort = "49371"
-	runtimeLeaseBusVersion     = 2
+	runtimeLeaseBusVersion     = 3
 	runtimeLeaseBusDedupeTTL   = 10 * time.Second
 	runtimeLeaseBusDedupeLimit = 4096
+	// runtimeLeaseBusPayloadLimit bounds one datagram. It is larger than the
+	// session-scoped lease events so a bounded ownership snapshot batch fits;
+	// larger payloads are dropped rather than fragmented (batches, not UDP
+	// fragmentation, keep multi-session sync within the limit).
+	runtimeLeaseBusPayloadLimit = 4096
 )
 
 var runtimeLeaseBus = struct {
@@ -61,6 +83,11 @@ var runtimeLeaseBus = struct {
 }{handlers: make(map[uint64]func(RuntimeLeaseNotification)), seen: make(map[string]time.Time)}
 
 var runtimeLeaseBusMessageSequence atomic.Uint64
+
+// runtimeLeaseBusSeq is the per-process OriginInstanceID sequence stamped on
+// every published ownership notification. Receivers drop older/duplicate
+// messages and detect gaps with it; it is never an authorization token.
+var runtimeLeaseBusSeq atomic.Uint64
 
 var runtimeLeaseBusLogs = struct {
 	sync.Mutex
@@ -158,15 +185,23 @@ func runRuntimeLeaseBus() {
 	// The last handler may have unsubscribed while the socket was still
 	// binding, before conn was stored where the unsubscribe path could close
 	// it. Close now so the goroutine exits instead of reading forever with no
-	// subscribers; the deferred cleanup resets state and restarts if a handler
-	// subscribed in the meantime.
+	// subscribers. This return happens before the deferred cleanup is installed,
+	// so reset every field here too: leaving started=true (with a closed conn and
+	// listening still true) would make a later subscriber skip starting a new
+	// goroutine and silently disable the bus for the rest of the process.
 	if len(runtimeLeaseBus.handlers) == 0 {
+		runtimeLeaseBus.listening = false
+		runtimeLeaseBus.conn = nil
+		runtimeLeaseBus.started = false
 		runtimeLeaseBus.Unlock()
 		_ = conn.Close()
 		return
 	}
 	runtimeLeaseBus.Unlock()
+	snapshotStop := make(chan struct{})
+	go runtimeOwnershipSnapshotLoop(snapshotStop)
 	defer func() {
+		close(snapshotStop)
 		_ = conn.Close()
 		runtimeLeaseBus.Lock()
 		runtimeLeaseBus.listening = false
@@ -181,7 +216,7 @@ func runRuntimeLeaseBus() {
 		}
 	}()
 	runtimeLeaseBusLogf("[udp] listener started address=%s", listenAddress)
-	buf := make([]byte, 1024)
+	buf := make([]byte, runtimeLeaseBusPayloadLimit)
 	for {
 		n, source, readErr := conn.ReadFrom(buf)
 		if readErr != nil {
@@ -193,16 +228,19 @@ func runRuntimeLeaseBus() {
 		}
 		var notification RuntimeLeaseNotification
 		if json.Unmarshal(buf[:n], &notification) != nil || !validRuntimeLeaseNotification(notification) {
+			runtimeLeaseMetrics.invalid.Add(1)
 			continue
 		}
 		if notification.OriginInstanceID == runtimeOwnerID() {
 			// This process has already published the corresponding canonical
 			// event directly. Ignoring its loopback copy avoids duplicate WebUI
 			// projections while other processes still receive the broadcast.
+			runtimeLeaseMetrics.selfSkipped.Add(1)
 			continue
 		}
 		runtimeLeaseBus.Lock()
 		if !rememberRuntimeLeaseMessageLocked(notification.MessageID, time.Now()) {
+			runtimeLeaseMetrics.duplicates.Add(1)
 			runtimeLeaseBus.Unlock()
 			continue
 		}
@@ -211,6 +249,10 @@ func runRuntimeLeaseBus() {
 			handlers = append(handlers, handler)
 		}
 		runtimeLeaseBus.Unlock()
+		runtimeLeaseMetrics.received.Add(1)
+		// Update the process-wide ownership view for every accepted notification,
+		// independent of which adapters are subscribed: the view is global-scope.
+		ingestRuntimeOwnership(notification)
 		runtimeLeaseBusLogf("[udp] received type=%s session=%q origin=%s origin_instance=%s message=%s epoch=%d source=%s", notification.Type, notification.SessionID, notification.Origin, notification.OriginInstanceID, notification.MessageID, notification.Epoch, source)
 		for _, handler := range handlers {
 			handler(notification)
@@ -253,7 +295,7 @@ func validRuntimeLeaseNotification(notification RuntimeLeaseNotification) bool {
 	// "renewed" is deliberately absent: heartbeat renewals must never be
 	// broadcast (that would be one packet per session every 3s); only ownership
 	// transitions and durable run state changes wake peers.
-	case "acquired", "released", "lost", "state_changed":
+	case "acquired", "released", "lost", "state_changed", runtimeLeaseBusOwnershipSnapshot:
 		return true
 	default:
 		return false
@@ -266,6 +308,11 @@ func publishRuntimeLeaseNotification(notification RuntimeLeaseNotification) {
 	}
 	notification.Version = runtimeLeaseBusVersion
 	notification.OriginInstanceID = runtimeOwnerID()
+	if notification.Seq == 0 {
+		// A caller that batches several entries under one generation stamp sets
+		// Seq itself; otherwise every notification gets the next per-origin value.
+		notification.Seq = runtimeLeaseBusSeq.Add(1)
+	}
 	if strings.TrimSpace(notification.Origin) == "" {
 		notification.Origin = "runtime"
 	}
@@ -273,12 +320,14 @@ func publishRuntimeLeaseNotification(notification RuntimeLeaseNotification) {
 		notification.MessageID = fmt.Sprintf("%s-%d-%d", notification.OriginInstanceID, time.Now().UnixNano(), runtimeLeaseBusMessageSequence.Add(1))
 	}
 	payload, err := json.Marshal(notification)
-	if err != nil || len(payload) > 1024 {
+	if err != nil || len(payload) > runtimeLeaseBusPayloadLimit {
+		runtimeLeaseMetrics.sendFailures.Add(1)
 		return
 	}
 	_, broadcastAddress := runtimeLeaseBusAddresses()
 	conn, err := runtimeLeaseBusSenderConn(broadcastAddress)
 	if err != nil {
+		runtimeLeaseMetrics.sendFailures.Add(1)
 		runtimeLeaseBusLogf("[udp] send failed type=%s session=%q origin=%s origin_instance=%s message=%s error=%v", notification.Type, notification.SessionID, notification.Origin, notification.OriginInstanceID, notification.MessageID, err)
 		return
 	}
@@ -287,10 +336,12 @@ func publishRuntimeLeaseNotification(notification RuntimeLeaseNotification) {
 	// normally never blocks because the kernel drops instead.
 	_ = conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
 	if _, err := conn.Write(payload); err != nil {
+		runtimeLeaseMetrics.sendFailures.Add(1)
 		dropRuntimeLeaseBusSenderConn(conn)
 		runtimeLeaseBusLogf("[udp] send failed type=%s session=%q origin=%s origin_instance=%s message=%s error=%v", notification.Type, notification.SessionID, notification.Origin, notification.OriginInstanceID, notification.MessageID, err)
 		return
 	}
+	runtimeLeaseMetrics.published.Add(1)
 	runtimeLeaseBusLogf("[udp] sent type=%s session=%q origin=%s origin_instance=%s message=%s epoch=%d", notification.Type, notification.SessionID, notification.Origin, notification.OriginInstanceID, notification.MessageID, notification.Epoch)
 }
 
@@ -347,10 +398,86 @@ func dropRuntimeLeaseBusSenderConn(conn net.Conn) {
 	_ = conn.Close()
 }
 
+// runtimeLeaseBusOwnershipSnapshot re-announces a held lease. It is the
+// repair/refresh path: receivers treat it like an acquire, and it keeps an
+// otherwise-silent owner (heartbeat renewals are not broadcast) fresh within
+// runtimeOwnershipLivenessWindow.
+const runtimeLeaseBusOwnershipSnapshot = "ownership_snapshot"
+
+// runtimeOwnershipSnapshotInterval is shorter than runtimeOwnershipLivenessWindow
+// so a live owner keeps peers' views fresh and repairs a lost acquire event.
+const runtimeOwnershipSnapshotInterval = 10 * time.Second
+
+// runtimeOwnershipSnapshotIntervalValue returns the effective anti-entropy
+// interval, honoring a test override. Production always uses the constant.
+func runtimeOwnershipSnapshotIntervalValue() time.Duration {
+	if value := strings.TrimSpace(os.Getenv("MOTHX_RUNTIME_SNAPSHOT_INTERVAL")); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return runtimeOwnershipSnapshotInterval
+}
+
+// publishOwnershipSnapshots re-announces every lease this process still holds.
+// Each lease is its own datagram so a multi-session process stays inside the
+// payload limit without UDP fragmentation.
+func publishOwnershipSnapshots() {
+	activeRuntimeLeases.Lock()
+	leases := make([]*runtimeLease, 0, len(activeRuntimeLeases.leases))
+	for _, lease := range activeRuntimeLeases.leases {
+		leases = append(leases, lease)
+	}
+	activeRuntimeLeases.Unlock()
+	for _, lease := range leases {
+		if lease == nil {
+			continue
+		}
+		lease.bindingMu.RLock()
+		if lease.released {
+			lease.bindingMu.RUnlock()
+			continue
+		}
+		notification := RuntimeLeaseNotification{
+			Type: runtimeLeaseBusOwnershipSnapshot, SessionID: lease.sessionID,
+			DatabaseIdentity: runtimeDatabaseIdentity(lease.sessionDir), Origin: lease.purpose,
+			OwnerInstanceID: lease.ownerID, OwnerPID: os.Getpid(), RunID: lease.runID, Epoch: lease.epoch,
+			RunStatus: runtimeLeaseRunStatusHint(lease.purpose),
+		}
+		if !lease.expiresAt.IsZero() {
+			notification.ExpiresAt = lease.expiresAt.Unix()
+		}
+		lease.bindingMu.RUnlock()
+		publishRuntimeLeaseNotification(notification)
+	}
+}
+
+func runtimeOwnershipSnapshotLoop(stop <-chan struct{}) {
+	// Announce immediately so a process that just started (or a peer that just
+	// subscribed) converges without waiting a full interval.
+	publishOwnershipSnapshots()
+	ticker := time.NewTicker(runtimeOwnershipSnapshotIntervalValue())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			publishOwnershipSnapshots()
+		}
+	}
+}
+
 // NotifyRuntimeStateChanged wakes local observers after a durable Run state
-// transition. It never carries Run content and never changes ownership.
-func NotifyRuntimeStateChanged(sessionID, origin string) {
-	publishRuntimeLeaseNotification(RuntimeLeaseNotification{Type: "state_changed", SessionID: sessionID, Origin: origin})
+// transition. It never carries Run content and never changes ownership. An
+// empty sessionDir publishes an unscoped notification (receivers then fall back
+// to SQLite); a non-empty one scopes it to the canonical database identity.
+func NotifyRuntimeStateChanged(sessionDir, sessionID, origin string) {
+	notification := RuntimeLeaseNotification{Type: "state_changed", SessionID: sessionID, Origin: origin}
+	if strings.TrimSpace(sessionDir) != "" {
+		notification.DatabaseIdentity = runtimeDatabaseIdentity(sessionDir)
+	}
+	publishRuntimeLeaseNotification(notification)
 }
 
 // runtimeLeaseBusDatabaseRebuilt is the advisory wake-up published after a
