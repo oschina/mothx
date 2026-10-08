@@ -12,7 +12,7 @@ test('titlebar keeps its normal inactive styling and drag semantics', () => {
   assert.match(titlebar, /titlebar-no-drag/, 'window controls must stay non-draggable');
   assert.match(styles, /\.titlebar-drag \{[\s\S]*?-webkit-app-region: drag/, 'drag region must be declared in the component layer');
   assert.match(styles, /\.titlebar-drag button,\s*\.titlebar-no-drag \{[\s\S]*?-webkit-app-region: no-drag/, 'buttons must opt out of dragging');
-  assert.match(styles, /body\.platform-darwin \.titlebar-drag \{[\s\S]*?padding-left: 78px/, 'macOS must keep room for native traffic lights');
+  assert.match(styles, /@layer utilities \{[\s\S]*?body\.platform-darwin \.titlebar-drag \{[\s\S]*?padding-left: 78px/, 'macOS traffic-light offset must live in the utilities layer so it beats the `pl-3` utility');
 });
 
 test('macOS hides custom window controls while Windows/Linux keep them', () => {

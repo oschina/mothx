@@ -97,6 +97,13 @@
   .app-shell.has-app-background .app-surface-veil {
     background: rgb(var(--home-image-overlay-rgb) / var(--app-surface-veil, 0.52));
   }
+
+  /* macOS 原生红绿灯占据标题栏左上角约 78px。标题栏的 Tailwind 工具类
+     `pl-3` 位于 utilities 层,会覆盖同名的组件层规则,因此这条让位规则
+     必须留在 utilities 层,才能盖过 `pl-3` 的 12px 左内边距。 */
+  body.platform-darwin .titlebar-drag {
+    padding-left: 78px;
+  }
 }
 
 [data-theme="dark"] {
@@ -358,7 +365,7 @@
     white-space: nowrap;
   }
 
-  /* ---- 标题栏拖拽区域(macOS 使用原生红绿灯,左移让位) ---- */
+  /* ---- 标题栏拖拽区域(macOS 红绿灯让位规则见 utilities 层) ---- */
   .titlebar-drag {
     user-select: none;
     -webkit-app-region: drag;
@@ -367,10 +374,6 @@
   .titlebar-no-drag {
     -webkit-app-region: no-drag;
   }
-  body.platform-darwin .titlebar-drag {
-    padding-left: 78px;
-  }
-
   /* ---- 应用背景图系统:runtime 通过 CSS 变量注入用户图片 ---- */
   .app-shell {
     position: relative;
