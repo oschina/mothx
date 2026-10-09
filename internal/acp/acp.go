@@ -155,6 +155,15 @@ type server struct {
 	sessions map[string]*sessionRuntime
 	pending  map[string]chan json.RawMessage
 
+	// inflight tracks the cancellable admission context of in-flight
+	// session/prompt requests, keyed by the prompt request key. It lets
+	// $/cancel_request and session/cancel abort a prompt that is still waiting for
+	// (or assembling before) admission — before rt.promptID/rt.cancel exist, which
+	// is the window a fully async prompt opens. Ownership still belongs to the
+	// Runtime; this is only the adapter's cancellation projection.
+	inflightMu sync.Mutex
+	inflight   map[string]*promptInflight
+
 	// ops serializes session-scoped request handling per session so a slow
 	// lifecycle operation cannot head-of-line block the read loop. A nil value
 	// runs jobs inline, keeping direct handler invocations synchronous.
@@ -338,11 +347,18 @@ var errACPActiveSessionRun = errors.New("session already has an active run")
 // checks the durable row before attempting the unique active-run insert. The
 // database check is still needed for a run owned by another process; the
 // shared runtime lock covers concurrent local adapters and prompt requests.
-func (s *server) acquirePromptAdmission(rt *sessionRuntime) (func(), error) {
+//
+// ctx scopes the wait: a cancelled ctx aborts the same-process draining wait
+// immediately instead of polling until the lease is released, so a client
+// cancel reaches a prompt that has not been admitted yet.
+func (s *server) acquirePromptAdmission(ctx context.Context, rt *sessionRuntime) (func(), error) {
 	if s == nil || s.settings == nil || rt == nil || strings.TrimSpace(rt.id) == "" {
 		return nil, fmt.Errorf("ACP session runtime is unavailable")
 	}
-	guard, err := agentruntime.AcquireExecutionAdmission(context.Background(), s.settings.GetSessionDir(), rt.id, agentruntime.ExecutionAdmissionOptions{})
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	guard, err := agentruntime.AcquireExecutionAdmission(ctx, s.settings.GetSessionDir(), rt.id, agentruntime.ExecutionAdmissionOptions{})
 	if err != nil {
 		// Keep the underlying ownership reason (lease busy, recovery required,
 		// detached remote execution) inspectable in the projected RPC error
@@ -1053,6 +1069,7 @@ func Run(opts RunOptions) (runErr error) {
 		artifactOverride: opts.Artifact,
 		sessions:         make(map[string]*sessionRuntime),
 		pending:          make(map[string]chan json.RawMessage),
+		inflight:         make(map[string]*promptInflight),
 		ops:              newSessionOpLanes(),
 		toolTitles:       make(map[string]string),
 		mcpNotify:        make(map[string]bool),
@@ -1287,7 +1304,30 @@ func (s *server) dispatchRequest(req rpcRequest) {
 	case "session/fork":
 		s.dispatchSessionOp(req, sessionOpKey(req.Params), func() { s.handleForkSession(req) })
 	case "session/prompt":
-		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handlePrompt(req) })
+		// Always off the read loop: a prompt may block on execution admission
+		// (including the same-process draining wait) and then assemble the Run.
+		// The admission context is registered synchronously so a cancel that
+		// arrives before the run registers rt.promptID/rt.cancel still aborts
+		// the prompt instead of starting a Run the client already cancelled.
+		key := mcp.RawIDKey(req.ID)
+		sessionID := sessionOpKey(req.Params)
+		ctx, cancel := context.WithCancel(context.Background())
+		s.trackPromptInflight(key, sessionID, cancel)
+		if !s.ops.dispatch(sessionID, func() {
+			defer func() {
+				cancel()
+				s.clearPromptInflight(key)
+			}()
+			s.handlePromptContext(ctx, req)
+		}) {
+			// Lanes are draining (shutdown): the job never runs, so release the
+			// admission context and its tracking entry here.
+			cancel()
+			s.clearPromptInflight(key)
+			if len(req.ID) > 0 {
+				s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: "server is shutting down"})
+			}
+		}
 	case "session/cancel":
 		s.handleCancel(req)
 	case "$/cancel_request":
@@ -2924,7 +2964,14 @@ func (s *server) activateSkillPrompt(rt *sessionRuntime, text string) (bool, err
 	return true, nil
 }
 
+// handlePrompt runs a prompt with a background admission context. Direct callers
+// (tests, embedded use) get the same behavior as the read loop; the read loop
+// uses handlePromptContext with a per-request cancellable context.
 func (s *server) handlePrompt(req rpcRequest) {
+	s.handlePromptContext(context.Background(), req)
+}
+
+func (s *server) handlePromptContext(admissionCtx context.Context, req rpcRequest) {
 	var in promptRequest
 	if err := json.Unmarshal(req.Params, &in); err != nil {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid params"})
@@ -3015,8 +3062,15 @@ func (s *server) handlePrompt(req rpcRequest) {
 	// collide with runs persisted by earlier processes. Keep the request ID
 	// for readability but append a random suffix for durable uniqueness.
 	runID := "acp_" + promptKey + "_" + session.GenerateID()
-	runtimeRelease, admissionErr := s.acquirePromptAdmission(rt)
+	runtimeRelease, admissionErr := s.acquirePromptAdmission(admissionCtx, rt)
 	if admissionErr != nil {
+		// A cancelled request context is a client cancellation, not an admission
+		// failure: answer with the ACP cancelled stop reason the Run goroutine
+		// would have produced, and leave no durable state behind.
+		if errors.Is(admissionErr, context.Canceled) || errors.Is(admissionErr, context.DeadlineExceeded) {
+			s.writeResponse(req.ID, promptResult{StopReason: "cancelled"}, nil)
+			return
+		}
 		s.writeResponse(req.ID, nil, acpFailureRPCError(admissionErr, nil, agentruntime.PhaseAdmission))
 		return
 	}
@@ -3026,6 +3080,13 @@ func (s *server) handlePrompt(req rpcRequest) {
 			runtimeRelease()
 		}
 	}()
+	// Admission is the only blocking step; a cancel that arrived after it but
+	// before the Run is registered must still abort here instead of starting a
+	// Run the client already cancelled.
+	if admissionCtx.Err() != nil {
+		s.writeResponse(req.ID, promptResult{StopReason: "cancelled"}, nil)
+		return
+	}
 	if rt.execution == nil {
 		rt.execution = &agentruntime.ExecutionRuntime{}
 		rt.execution.SetRunStore(agentruntime.RunStore{SessionDir: s.settings.GetSessionDir()})
@@ -3104,12 +3165,25 @@ func (s *server) handlePrompt(req rpcRequest) {
 		})
 		s.notifyRunStatus(rt.id, runID, acpRunStatus(string(state)))
 	}
+	// A cancel that arrived while the Run was being admitted/persisted still
+	// aborts: terminalize the freshly begun Run as cancelled and answer.
+	if admissionCtx.Err() != nil {
+		finishEarly(agentruntime.RunStateCancelled, "")
+		s.writeResponse(req.ID, promptResult{StopReason: "cancelled"}, nil)
+		return
+	}
 	// Publication is a Runtime capability, not an ACP-local output convention.
 	// It must be installed before BuildAgent freezes the tool registry.
 	artifacts, err := rt.runtime.BeginArtifactCollection(runID)
 	if err != nil {
 		finishEarly(agentruntime.RunStateFailed, err.Error())
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhaseAdmission))
+		return
+	}
+	if admissionCtx.Err() != nil {
+		artifacts.Close()
+		finishEarly(agentruntime.RunStateCancelled, "")
+		s.writeResponse(req.ID, promptResult{StopReason: "cancelled"}, nil)
 		return
 	}
 	// Project generated artifacts to the client as canonical session/update
@@ -3352,6 +3426,9 @@ func (s *server) handleCancel(req rpcRequest) {
 		}
 		rt.cancelMu.Unlock()
 	}
+	// A prompt that has not registered rt.cancel yet (still in admission) is
+	// aborted through its request context.
+	s.cancelPromptInflightForSession(strings.TrimSpace(in.SessionID))
 	if len(req.ID) > 0 {
 		s.writeResponse(req.ID, map[string]any{}, nil)
 	}
@@ -3390,6 +3467,9 @@ func (s *server) handleCancelRequest(req rpcRequest) {
 	} else if cancel != nil {
 		cancel()
 	}
+	// A prompt still in admission has no rt.promptID/rt.cancel yet; abort it
+	// through its request context.
+	s.cancelPromptInflight(key)
 }
 
 func (s *server) handleCloseSession(req rpcRequest) {
@@ -3423,8 +3503,17 @@ func (s *server) handleCloseSession(req rpcRequest) {
 				}
 			}
 		}
-		if _, err := s.closeSessionRuntime(target); err != nil {
-			s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
+		// The requested session already runs on its own lane; a descendant is
+		// closed on its own lane so a concurrent prompt for that descendant —
+		// which shares the lane — cannot interleave with its shutdown.
+		var closeErr error
+		if target == in.SessionID {
+			_, closeErr = s.closeSessionRuntime(target)
+		} else {
+			s.runSessionLaneJob(target, func() { _, closeErr = s.closeSessionRuntime(target) })
+		}
+		if closeErr != nil {
+			s.writeResponse(req.ID, nil, acpFailureRPCError(closeErr, nil, agentruntime.PhasePersistence))
 			return
 		}
 	}

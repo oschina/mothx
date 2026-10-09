@@ -1,12 +1,17 @@
 package db
 
-import "sort"
+import (
+	"path/filepath"
+	"sort"
+)
 
 // DatabasePoolStat reports one open database's connection-pool counters. Every
 // managed connection uses SetMaxOpenConns(1), so WaitCount/WaitDuration is the
 // direct measure of how often and how long a transaction or query had to queue
 // for the single connection: a growing value under concurrent sessions is the
 // baseline that would justify (or rule out) a separate read connection pool.
+// Path is the database file's base name so the local /debug/vars surface does
+// not expose absolute filesystem paths.
 type DatabasePoolStat struct {
 	Path               string `json:"path"`
 	MaxOpenConnections int    `json:"maxOpenConnections"`
@@ -30,7 +35,7 @@ func PoolStats() []DatabasePoolStat {
 	for path, connection := range state.dbs {
 		raw := connection.Stats()
 		stats = append(stats, DatabasePoolStat{
-			Path:               path,
+			Path:               filepath.Base(path),
 			MaxOpenConnections: raw.MaxOpenConnections,
 			OpenConnections:    raw.OpenConnections,
 			InUse:              raw.InUse,

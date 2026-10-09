@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func TestAcquirePromptAdmissionRecoversDurableOrphan(t *testing.T) {
 	}
 
 	s := &server{settings: &config.Settings{SessionDir: sessionDir}}
-	release, err := s.acquirePromptAdmission(&sessionRuntime{id: mgr.GetHeader().ID})
+	release, err := s.acquirePromptAdmission(context.Background(), &sessionRuntime{id: mgr.GetHeader().ID})
 	if err != nil {
 		t.Fatalf("admission error = %v", err)
 	}
@@ -42,12 +43,12 @@ func TestAcquirePromptAdmissionHoldsSharedRuntimeLock(t *testing.T) {
 	}
 	s := &server{settings: &config.Settings{SessionDir: sessionDir}}
 	rt := &sessionRuntime{id: mgr.GetHeader().ID}
-	release, err := s.acquirePromptAdmission(rt)
+	release, err := s.acquirePromptAdmission(context.Background(), rt)
 	if err != nil {
 		t.Fatalf("acquire admission: %v", err)
 	}
 	defer release()
-	if _, err := s.acquirePromptAdmission(rt); !errors.Is(err, errACPActiveSessionRun) {
+	if _, err := s.acquirePromptAdmission(context.Background(), rt); !errors.Is(err, errACPActiveSessionRun) {
 		t.Fatalf("second admission error = %v, want wrapped %v", err, errACPActiveSessionRun)
 	} else if !errors.Is(err, session.ErrRuntimeLeaseBusy) {
 		t.Fatalf("second admission error = %v, want the busy cause preserved", err)

@@ -89,7 +89,7 @@ admission(intent + run + started event + turn + lease binding)与 terminal(run u
 ### 4.1 指标
 
 1. **busy 重试**:命中次数、累计等待时间、按进程实例打标签(已落地:`internal/db/busy.go` 的 atomic 计数器 + `BusyRetryStats()` 快照,经 `internal/db/stats.go` 发布到 expvar,`--debug` pprof 服务器的 `/debug/vars` 提供;按进程标签即每进程暴露自己的端点)。
-2. **begin 等待分布**:p50/p99/max,按进程打标签——这是跨进程排队的直接度量(已落地:`BeginWaitStats()` 提供次数/累计/单次最大等待,`BeginWaitQuantiles()` 提供固定桶近似的 p50/p99,均经 `mothx_sqlite` 暴露;分位数为桶上界,是保守估计)。
+2. **begin 等待分布**:p50/p99/max,按进程打标签——这是跨进程排队的直接度量(已落地:`BeginWaitStats()` 提供次数/累计/单次最大等待,`BeginWaitQuantiles()` 提供固定桶近似的 p50/p99,均经 `mothx_sqlite` 暴露;分位数为桶上界(溢出桶取观测最大值),是保守估计)。
 3. **事务计数与 commit 延迟**:`RunInTx` 计时,按调用方标签分类(entry/run/lease/stats/event)。
 4. **WAL 大小与 checkpoint**:`internal/db.WalStats()` 按进程内已打开的库上报 `-wal` 文件大小,`CheckpointStats()` 上报 `Close`/`CloseAll` 的 checkpoint 次数与 (busy, log, checkpointed) 帧计数,均经 `mothx_sqlite` 暴露。持续增长而不收缩的 WAL 是写压力超过 checkpoint 的直接信号;`wal_autocheckpoint` 阈值仍需该数据决定是否调整。
 5. **围栏健康**:`internal/session.LeaseLostCount()` 统计本进程因围栏被顶替而丢失的租约(应恒为 0,出现即围栏被破坏),并经 `mothx_runtime_lease` 暴露;同处还暴露每库心跳健康(`LeaseHeartbeatHealthStats()`:最近尝试/成功时间、连续失败次数、尝试/失败次数、最大续约耗时)——心跳失败是可用性问题,不是所有权丢失。

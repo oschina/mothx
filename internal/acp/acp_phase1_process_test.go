@@ -264,13 +264,21 @@ func TestACPStdioProcessRunStatusProjectionAndEvents(t *testing.T) {
 	process.send(t, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/new", "params": map[string]any{"cwd": workDir}})
 	sessionB := acpNewSessionID(t, process.respond(t, 3))
 
-	// Start a run that blocks in the provider, then list while it is active.
+	// Start a run that blocks in the provider. The prompt is dispatched off the
+	// read loop (reactor), so wait for its begin projection — the durable Run —
+	// to be observable before listing; otherwise session/list may be processed
+	// before the Run exists.
 	process.send(t, map[string]any{
 		"jsonrpc": "2.0", "id": 4, "method": "session/prompt",
 		"params": map[string]any{"sessionId": sessionA, "prompt": []map[string]any{{"type": "text", "text": "run now"}}},
 	})
+	var activeNotifications []map[string]any
+	for len(findACPSessionEvents(activeNotifications, "run_status")) == 0 {
+		activeNotifications = append(activeNotifications, process.readMessage(t))
+	}
 	process.send(t, map[string]any{"jsonrpc": "2.0", "id": 5, "method": "session/list", "params": map[string]any{"cwd": workDir}})
-	listActive, activeNotifications := process.respondCollecting(t, 5)
+	listActive, listNotifications := process.respondCollecting(t, 5)
+	activeNotifications = append(activeNotifications, listNotifications...)
 
 	metaA := acpListedSessionByMeta(t, listActive, sessionA)
 	lastRun, ok := metaA["lastRun"].(map[string]any)

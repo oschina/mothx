@@ -2,6 +2,7 @@ package db
 
 import (
 	"os"
+	"path/filepath"
 	"sort"
 	"sync/atomic"
 )
@@ -52,6 +53,8 @@ func CheckpointStats() (attempts, failures uint64, busyFrames, logFrames, checkp
 }
 
 // DatabaseWalStat reports one cached database's on-disk write-ahead log size.
+// Path is the database file's base name: the /debug/vars endpoint is a local
+// diagnostic surface, so it does not expose absolute filesystem paths.
 type DatabaseWalStat struct {
 	Path     string `json:"path"`
 	WalBytes int64  `json:"walBytes"`
@@ -75,7 +78,7 @@ func WalStats() []DatabaseWalStat {
 		if info, err := os.Stat(path + "-wal"); err == nil {
 			size = info.Size()
 		}
-		stats = append(stats, DatabaseWalStat{Path: path, WalBytes: size})
+		stats = append(stats, DatabaseWalStat{Path: filepath.Base(path), WalBytes: size})
 	}
 	return stats
 }

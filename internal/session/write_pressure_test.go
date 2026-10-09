@@ -72,7 +72,7 @@ func walBytesForDir(sessionDir string) int64 {
 		return 0
 	}
 	for _, stat := range database.WalStats() {
-		if stat.Path == target {
+		if stat.Path == filepath.Base(target) {
 			return stat.WalBytes
 		}
 	}
@@ -85,7 +85,7 @@ func poolStatsForDir(sessionDir string) (waitCount, waitMs int64, maxOpen int) {
 		return 0, 0, 0
 	}
 	for _, stat := range database.PoolStats() {
-		if stat.Path == target {
+		if stat.Path == filepath.Base(target) {
 			return stat.WaitCount, stat.WaitDurationMillis, stat.MaxOpenConnections
 		}
 	}

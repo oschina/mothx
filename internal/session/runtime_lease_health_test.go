@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"expvar"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -14,13 +15,16 @@ func TestLeaseHeartbeatHealthTracksSuccessAndFailure(t *testing.T) {
 
 	var found *LeaseHeartbeatHealth
 	for _, stat := range LeaseHeartbeatHealthStats() {
-		if stat.DatabaseIdentity == dirKey {
+		if stat.DatabaseIdentity == filepath.Base(dirKey) {
 			copy := stat
 			found = &copy
 		}
 	}
 	if found == nil {
 		t.Fatalf("no health row for %s", dirKey)
+	}
+	if filepath.IsAbs(found.DatabaseIdentity) {
+		t.Fatalf("databaseIdentity %q must be a base name, not an absolute path", found.DatabaseIdentity)
 	}
 	if found.Attempts != 2 || found.Failures != 1 {
 		t.Fatalf("attempts/failures = %d/%d, want 2/1", found.Attempts, found.Failures)
@@ -38,7 +42,7 @@ func TestLeaseHeartbeatHealthTracksSuccessAndFailure(t *testing.T) {
 	// A following success clears the consecutive-failure streak.
 	recordHeartbeatSuccess(dirKey, time.Millisecond)
 	for _, stat := range LeaseHeartbeatHealthStats() {
-		if stat.DatabaseIdentity != dirKey {
+		if stat.DatabaseIdentity != filepath.Base(dirKey) {
 			continue
 		}
 		if stat.ConsecutiveFailures != 0 {
@@ -58,7 +62,7 @@ func TestRecordLeaseFenceLossIncrementsCounter(t *testing.T) {
 		t.Fatalf("lease lost count = %d, want %d", got, before+1)
 	}
 	for _, stat := range LeaseHeartbeatHealthStats() {
-		if stat.DatabaseIdentity == dirKey {
+		if stat.DatabaseIdentity == filepath.Base(dirKey) {
 			if stat.FenceLosses == 0 {
 				t.Fatal("fence loss not attributed to the database row")
 			}

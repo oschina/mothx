@@ -2,6 +2,7 @@ package session
 
 import (
 	"expvar"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -20,7 +21,8 @@ const leaseHealthExpvarKey = "mothx_runtime_lease"
 // heartbeat (ConsecutiveFailures > 0 with a stale LastSuccessAt) is an
 // availability problem to retry, not ownership loss. A non-zero FenceLosses
 // means a renewal actually ran and the CAS no longer matched, i.e. another
-// process took the session over.
+// process took the session over. DatabaseIdentity is the session database's
+// base name: the local /debug/vars surface does not expose absolute paths.
 type LeaseHeartbeatHealth struct {
 	DatabaseIdentity    string        `json:"databaseIdentity"`
 	LastAttemptAt       time.Time     `json:"lastAttemptAt,omitempty"`
@@ -116,7 +118,7 @@ func LeaseHeartbeatHealthStats() []LeaseHeartbeatHealth {
 	stats := make([]LeaseHeartbeatHealth, 0, len(leaseHeartbeatHealth.byDir))
 	for dirKey, entry := range leaseHeartbeatHealth.byDir {
 		stats = append(stats, LeaseHeartbeatHealth{
-			DatabaseIdentity:    dirKey,
+			DatabaseIdentity:    filepath.Base(dirKey),
 			LastAttemptAt:       entry.lastAttempt,
 			LastSuccessAt:       entry.lastSuccess,
 			ConsecutiveFailures: entry.consecutive,

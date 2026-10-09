@@ -35,8 +35,8 @@ func TestBeginQuantileReturnsBucketUpperBound(t *testing.T) {
 		cumulative[3]++ // all samples in the 1ms bucket
 		total++
 	}
-	p50 := beginQuantile(cumulative, total, 0.50)
-	p99 := beginQuantile(cumulative, total, 0.99)
+	p50 := beginQuantile(cumulative, total, 0.50, 0)
+	p99 := beginQuantile(cumulative, total, 0.99, 0)
 	if p50 != beginWaitBuckets[3] || p99 != beginWaitBuckets[3] {
 		t.Fatalf("quantiles = (%s, %s), want both %s", p50, p99, beginWaitBuckets[3])
 	}
@@ -46,13 +46,33 @@ func TestBeginQuantileReturnsBucketUpperBound(t *testing.T) {
 	mixed := make([]uint64, len(beginWaitBuckets)+1)
 	mixed[0] = 90 // 100us
 	mixed[6] = 10 // 10ms
-	p50 = beginQuantile(mixed, 100, 0.50)
+	p50 = beginQuantile(mixed, 100, 0.50, 0)
 	if p50 != beginWaitBuckets[0] {
 		t.Fatalf("p50 = %s, want %s (90%% of samples are faster)", p50, beginWaitBuckets[0])
 	}
-	p99 = beginQuantile(mixed, 100, 0.99)
+	p99 = beginQuantile(mixed, 100, 0.99, 0)
 	if p99 != beginWaitBuckets[6] {
 		t.Fatalf("p99 = %s, want %s", p99, beginWaitBuckets[6])
+	}
+}
+
+// TestBeginQuantileOverflowUsesObservedMaximum pins that a quantile landing in
+// the overflow bucket reports the observed maximum (an upper bound) instead of
+// being capped at the last bounded bucket's upper bound, which would understate
+// the slow tail.
+func TestBeginQuantileOverflowUsesObservedMaximum(t *testing.T) {
+	overflow := make([]uint64, len(beginWaitBuckets)+1)
+	overflow[len(beginWaitBuckets)] = 100 // every sample slower than the last bound
+	observedMax := 20 * time.Second
+	if got := beginQuantile(overflow, 100, 0.50, observedMax); got != observedMax {
+		t.Fatalf("p50 = %s, want the observed maximum %s", got, observedMax)
+	}
+	if got := beginQuantile(overflow, 100, 0.99, observedMax); got != observedMax {
+		t.Fatalf("p99 = %s, want the observed maximum %s", got, observedMax)
+	}
+	// A stale/absent maximum must not understate: fall back to the last bound.
+	if got := beginQuantile(overflow, 100, 0.99, 0); got != beginWaitBuckets[len(beginWaitBuckets)-1] {
+		t.Fatalf("p99 = %s, want the last bound %s", got, beginWaitBuckets[len(beginWaitBuckets)-1])
 	}
 }
 
@@ -93,13 +113,16 @@ func TestWalStatsReportsOpenDatabase(t *testing.T) {
 	}
 	var found *DatabaseWalStat
 	for _, stat := range WalStats() {
-		if stat.Path == canonical {
+		if stat.Path == filepath.Base(canonical) {
 			copy := stat
 			found = &copy
 		}
 	}
 	if found == nil {
 		t.Fatalf("WalStats did not report the open database %s", canonical)
+	}
+	if filepath.IsAbs(found.Path) {
+		t.Fatalf("WalStats path %q must be a base name, not an absolute path", found.Path)
 	}
 	if found.WalBytes <= 0 {
 		t.Fatalf("walBytes = %d, want the committed write to leave WAL frames", found.WalBytes)
@@ -130,13 +153,16 @@ func TestPoolStatsReportsSingleConnectionModel(t *testing.T) {
 	}
 	var found *DatabasePoolStat
 	for _, stat := range PoolStats() {
-		if stat.Path == canonical {
+		if stat.Path == filepath.Base(canonical) {
 			copy := stat
 			found = &copy
 		}
 	}
 	if found == nil {
 		t.Fatalf("PoolStats did not report the open database %s", canonical)
+	}
+	if filepath.IsAbs(found.Path) {
+		t.Fatalf("PoolStats path %q must be a base name, not an absolute path", found.Path)
 	}
 	if found.MaxOpenConnections != 1 {
 		t.Fatalf("maxOpenConnections = %d, want 1 (the single-writer connection model)", found.MaxOpenConnections)

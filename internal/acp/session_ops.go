@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -143,4 +144,100 @@ func (s *server) runSessionOp(req rpcRequest, key string, job func()) {
 		return
 	}
 	job()
+}
+
+// promptInflight is the cancellable admission context of one in-flight
+// session/prompt request. It exists so a cancel that arrives before the Run
+// registers rt.promptID/rt.cancel still aborts the prompt: the request key and
+// the owning session are enough for $/cancel_request and session/cancel to find
+// it. It carries no ownership — it only cancels the adapter's admission wait.
+type promptInflight struct {
+	sessionID string
+	cancel    context.CancelFunc
+}
+
+func (s *server) trackPromptInflight(key, sessionID string, cancel context.CancelFunc) {
+	if s == nil || cancel == nil {
+		return
+	}
+	s.inflightMu.Lock()
+	if s.inflight == nil {
+		s.inflight = make(map[string]*promptInflight)
+	}
+	s.inflight[key] = &promptInflight{sessionID: sessionID, cancel: cancel}
+	s.inflightMu.Unlock()
+}
+
+func (s *server) clearPromptInflight(key string) {
+	if s == nil {
+		return
+	}
+	s.inflightMu.Lock()
+	delete(s.inflight, key)
+	s.inflightMu.Unlock()
+}
+
+// cancelPromptInflight cancels the admission context of one prompt request by
+// its request key. It reports whether an entry existed.
+func (s *server) cancelPromptInflight(key string) bool {
+	if s == nil {
+		return false
+	}
+	s.inflightMu.Lock()
+	entry := s.inflight[key]
+	s.inflightMu.Unlock()
+	if entry == nil {
+		return false
+	}
+	entry.cancel()
+	return true
+}
+
+// cancelPromptInflightForSession cancels every in-flight prompt admission for a
+// session. A session normally has at most one, but cancelling all matching
+// entries is safe and makes session/cancel deterministic when a prompt is
+// queued behind another.
+func (s *server) cancelPromptInflightForSession(sessionID string) bool {
+	if s == nil {
+		return false
+	}
+	s.inflightMu.Lock()
+	var entries []*promptInflight
+	for _, entry := range s.inflight {
+		if entry.sessionID == sessionID {
+			entries = append(entries, entry)
+		}
+	}
+	s.inflightMu.Unlock()
+	for _, entry := range entries {
+		entry.cancel()
+	}
+	return len(entries) > 0
+}
+
+// runSessionLaneJob runs fn serialized on key's lane and waits for it. It is how
+// a cascade command (session/close) reaches a descendant session: the descendant
+// is shut down on its own lane, so a concurrent prompt for that descendant —
+// which shares the lane — can never interleave with its shutdown. It must never
+// be called with the key whose lane is currently executing the caller, or it
+// deadlocks; session/close closes the requested session inline for that reason.
+//
+// Lanes that run jobs inline (nil receiver) and a draining (shutting down) lane
+// run fn directly, so cleanup always happens.
+func (s *server) runSessionLaneJob(key string, fn func()) {
+	if s == nil || s.ops == nil || fn == nil {
+		if fn != nil {
+			fn()
+		}
+		return
+	}
+	done := make(chan struct{})
+	if !s.ops.dispatch(key, func() {
+		defer close(done)
+		fn()
+	}) {
+		fn()
+		return
+	}
+	<-done
 }

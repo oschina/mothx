@@ -65,8 +65,11 @@ func TestSQLiteStatsPublishedViaExpvar(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if stat["path"] == path && stat["walBytes"] != nil {
+		if stat["path"] == filepath.Base(path) && stat["walBytes"] != nil {
 			found = true
+		}
+		if reported, ok := stat["path"].(string); ok && filepath.IsAbs(reported) {
+			t.Fatalf("wal path %q must be a base name, not an absolute path", reported)
 		}
 	}
 	if !found {

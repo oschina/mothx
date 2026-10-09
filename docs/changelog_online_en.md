@@ -46,6 +46,10 @@ This file contains the changes for the **current version only**. The full histor
 
 ### 🐛 Bug Fixes
 
+- **ACP keeps cancel reachable while a session is loading and serializes a cascaded close against a child prompt**
+  - Session-scoped ACP requests run on an async per-session lane, so a slow `session/new`/`load`/`fork` no longer head-of-line blocks the JSON-RPC read loop and `$/cancel_request`/`session/cancel` stay reachable. `session/prompt` now runs on that lane too; because it can block on execution admission (including the same-process draining wait) before the Run registers its cancel handle, its admission context is registered synchronously and is cancellable, so a cancel arriving before or during admission aborts the prompt instead of starting a Run the client already cancelled.
+  - `session/close` now closes each cascaded descendant session on that session's own lane, so a concurrent prompt for a descendant cannot interleave with its shutdown. Note the response ordering: `session/prompt` is answered asynchronously, so a request issued immediately after a prompt (including `session/list`) is no longer guaranteed to observe the just-started Run — use the `run_status` event or retry.
+
 - **Runtime lease bus listener no longer disables itself after a last-subscriber race**
   - When the final subscriber unsubscribed while the UDP listener was still binding, the listener returned before its deferred cleanup, leaving its `started`/`listening` state set and the closed socket cached, so the process silently stopped hearing cross-process ownership events until restart. The early return now resets the listener state so the next subscription rebinds.
 

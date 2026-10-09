@@ -145,9 +145,11 @@ func beginWaitBucket(elapsed time.Duration) int {
 }
 
 // BeginWaitQuantiles returns bucket-approximated p50 and p99 transaction begin
-// waits: each value is the inclusive upper bound of the bucket containing the
-// quantile, so it is a conservative (never-understated) estimate. Both are zero
-// until the first begin is recorded.
+// waits. A quantile in a bounded bucket reports that bucket's inclusive upper
+// bound, so the value is never an understatement; a quantile in the overflow
+// bucket (a single begin slower than the last bound) reports the observed
+// maximum rather than the last bound, so the slow tail is not understated
+// either. Both are zero until the first begin is recorded.
 func BeginWaitQuantiles() (p50, p99 time.Duration) {
 	cumulative := make([]uint64, len(beginWaitCounters.histogram))
 	var total uint64
@@ -158,10 +160,16 @@ func BeginWaitQuantiles() (p50, p99 time.Duration) {
 	if total == 0 {
 		return 0, 0
 	}
-	return beginQuantile(cumulative, total, 0.50), beginQuantile(cumulative, total, 0.99)
+	// The observed maximum is the tightest available upper bound for the
+	// overflow bucket; it is never smaller than any overflow sample.
+	overflow := time.Duration(beginWaitCounters.maxNs.Load())
+	return beginQuantile(cumulative, total, 0.50, overflow), beginQuantile(cumulative, total, 0.99, overflow)
 }
 
-func beginQuantile(cumulative []uint64, total uint64, q float64) time.Duration {
+// beginQuantile returns the bucket-approximated q-quantile. Bounded buckets use
+// their inclusive upper bound; the overflow bucket uses overflowBound so the
+// estimate stays an upper bound instead of being capped at the last bucket.
+func beginQuantile(cumulative []uint64, total uint64, q float64, overflowBound time.Duration) time.Duration {
 	target := uint64(float64(total) * q)
 	if target == 0 {
 		target = 1
@@ -171,12 +179,24 @@ func beginQuantile(cumulative []uint64, total uint64, q float64) time.Duration {
 		running += count
 		if running >= target {
 			if i >= len(beginWaitBuckets) {
-				return beginWaitBuckets[len(beginWaitBuckets)-1]
+				return overflowQuantileBound(overflowBound)
 			}
 			return beginWaitBuckets[i]
 		}
 	}
-	return beginWaitBuckets[len(beginWaitBuckets)-1]
+	return overflowQuantileBound(overflowBound)
+}
+
+// overflowQuantileBound returns the tightest available upper bound for the
+// overflow bucket: the observed maximum, or the last bounded bucket's upper
+// bound when the maximum is not yet visible (a benign skew between the
+// histogram update and the max counter in recordBeginWait).
+func overflowQuantileBound(observedMax time.Duration) time.Duration {
+	last := beginWaitBuckets[len(beginWaitBuckets)-1]
+	if observedMax > last {
+		return observedMax
+	}
+	return last
 }
 
 // BeginTx begins a Bun transaction on a managed (or caller-owned) connection,

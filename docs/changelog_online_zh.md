@@ -46,6 +46,10 @@
 
 ### 🐛 问题修复
 
+- **ACP 在会话加载期间保持取消可达，并让级联关闭与子会话 prompt 串行**
+  - ACP 的会话作用域请求运行在按会话串行的异步 lane 上，因此缓慢的 `session/new`/`load`/`fork` 不再头阻塞 JSON-RPC 读循环，`$/cancel_request`/`session/cancel` 保持可达。`session/prompt` 现在也走该 lane；由于它可能在 Run 注册取消句柄之前阻塞在执行 admission（含同进程 draining 等待），其 admission 上下文会在派发前同步登记且可取消，因此「尚未 admit 或正在 admit」时到达的取消会中止该 prompt，而不是启动一个客户端已经取消的 Run。
+  - `session/close` 现在把每个级联到的派生会话关闭在该会话自身的 lane 上，因此针对子会话的并发 prompt 不会与其关闭交错。注意响应时序：`session/prompt` 改为异步应答，因此紧接 prompt 之后的下一个请求（包括 `session/list`）不再保证能看到刚启动的 Run——请用 `run_status` 事件或重试。
+
 - **Runtime 租约总线监听器不再因最后一个订阅者的竞态而自我禁用**
   - 当最后一个订阅者在 UDP 监听器仍在 bind 时退订，监听器在延迟清理前提前 return，导致 `started`/`listening` 仍为真、已关闭的 socket 仍被缓存，进程此后静默听不到跨进程归属事件直到重启。现在提前 return 会复位监听状态，下次订阅即可重新 bind。
 
