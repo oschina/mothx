@@ -422,6 +422,16 @@ func (s *Server) HandleSubmitRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runtimeRelease := runtimeGuard.Release
+	// Resolve the server-wide run concurrency slot (maxConcurrentRequests).
+	// Acquire before any admission error path so every exit releases it; the slot
+	// is folded into runtimeRelease so all existing error paths release both.
+	slotRelease, slotOK := s.acquireRunSlot()
+	if !slotOK {
+		runtimeRelease()
+		writeError(w, http.StatusTooManyRequests, "maximum concurrent requests reached", "concurrency_limit_reached")
+		return
+	}
+	runtimeRelease = chainReleases(runtimeRelease, slotRelease)
 	// Note: runtimeRelease is intentionally NOT deferred here; ownership
 	// transfers to the background goroutine.
 

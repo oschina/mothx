@@ -1544,6 +1544,10 @@ Source: https://mothx.net/zh/changelog.md
 
 ### ✨ 新功能
 
+- **跨进程会话归属现通过租约总线在本机多进程间同步**
+  - loopback UDP `SessionLeaseBus` 不再只是唤醒：通知带上规范化的 `DatabaseIdentity`、每来源 `Seq` 以及属主 PID/run，每个进程维护以 `(DatabaseIdentity, sessionId)` 为键的全局内存归属视图。属主每 10s 重播持有的租约（`ownership_snapshot`），使丢失的 acquire 自愈、静默属主在 30s 存活窗口内保持新鲜。接收端用 `Seq` 丢弃重复/乱序，遇序号缺口或 epoch 冲突则将该来源条目标为不确定，任何缺失、过期或不确定都回落 SQLite——通知永不授权准入或取消。
+  - `agentruntime.InspectSessionExecution` 现在对“新鲜、远端、execution”租约直接由同步缓存作答（标记 `source: "cache"`），否则读 SQLite 并回填视图；快照投影为单一共享函数，两条路径不会漂移。`session.RuntimeLeaseBusMetrics()` 暴露发送/发送失败/接收/非法/自身跳过/去重/应用/缺口/不确定计数。报文版本 3，单包上限 4096 字节。
+
 - **知识库可用性完善**
   - **忽略规则与发现诊断。** 知识库新增 `ignoreGlobs` 列表，与固定忽略目录以及从源目录根读取的 `.gitignore`/`.mothxignore` 建议规则（只读）合并生效。每次扫描会在快照上记录有界的发现投影（`discovered`/`ignored`/`skipped` 及逐路径原因），因此“静默未索引”变为可解释。超大、二进制/非 UTF-8 或不可读的文件标记为 `skipped` 并给出原因，且不会交给模型。
   - **增量差异摘要。** 每次重建的快照都会持久化 `added`/`modified`/`removed`/`unchanged` 投影（含有限路径样本）；完全未变化的扫描保留既有的快照复用事件，并在事件数据中携带全 0 差异。
@@ -1565,6 +1569,9 @@ Source: https://mothx.net/zh/changelog.md
   - **运行时二进制设置。** 桌面设置（运行时 → MothX 运行时二进制）可在内置 `mothx` 可执行文件（默认）与自定义 `mothx` 二进制路径之间切换。选择与校验都在特权的 Electron 主进程完成，切换后自动重启 ACP 运行时；自定义路径不可用时回退到内置运行时并给出可见提示，自定义二进制无法启动时回滚选择，保证客户端始终可用。`MOTHX_BINARY` 环境变量仍是优先级最高的开发覆盖项。
 
 ### 🐛 问题修复
+
+- **Runtime 租约总线监听器不再因最后一个订阅者的竞态而自我禁用**
+  - 当最后一个订阅者在 UDP 监听器仍在 bind 时退订，监听器在延迟清理前提前 return，导致 `started`/`listening` 仍为真、已关闭的 socket 仍被缓存，进程此后静默听不到跨进程归属事件直到重启。现在提前 return 会复位监听状态，下次订阅即可重新 bind。
 
 - **ACP 不再因默认供应商缺 key 而整体不可用**
   - 此前 `mothx acp` 在启动时把“默认供应商不可用（缺 API key / 未知供应商 / 无可用模型）”当作致命错误：进程直接以结构化启动错误退出，initialize、会话、管理面（`mothx/manage/*`）全部不可用，Desktop 等客户端连“配置供应商”这条路都走不通。
@@ -1619,6 +1626,9 @@ Source: https://mothx.net/zh/changelog.md
 
 - **SSE 流内错误事件现在纳入 provider 重试**
   - provider 在流中途发出带内错误事件/分片时（Anthropic 的 `event: error`（如 `overloaded_error`）、Google 的 `error` 分片（如 `UNAVAILABLE`、`RESOURCE_EXHAUSTED`）、OpenAI 兼容网关的 `{"error":…}` 分片），此前会立即终止 run——OpenAI chat 流甚至会静默忽略错误分片、把被截断的流当正常完成上报。现在这些错误会返回给调用方的重试分类逻辑：在尚未产生可见输出时按有界退避策略重试，否则作为普通流错误呈现。`IsRetryable` 同时新增了 `unavailable`、`resource_exhausted`、`internal error` 子串匹配。
+- **修复 TUI 排队提示词误报“lease is held by another process”**
+  - run 进入终态后，如果带围栏的终态持久化写入需要重试，Runtime 会（按设计）继续持有执行租约并在后台重试；此时 TUI 中排队的提示词会立即尝试下一次 admission，并被 `session runtime lease is held by another process` 拒绝——这实际是同进程的收尾窗口，却被误报为跨进程占用错误，排队的输入还会被丢弃。
+  - 共享执行 admission 现在能区分“正在收尾”与“被占用”：如果 busy 的租约仍由当前进程持有、且该执行已选定终态，排队的后继请求（admission 与会话 mutation）会等待 Runtime 自行释放租约，会话因此保留在本进程内，排队输入正常执行。对同进程内真正活跃的执行或其他进程持有的租约，未开启等待的调用方仍然立即失败。
 
 ## v1.3.102
 
@@ -12216,7 +12226,7 @@ MothX 的会话设计在不同运行模式下有所区别：
 - 进程崩溃（kill -9、panic）不丢失任何数据；
 - 操作系统崩溃或断电时，数据库不会损坏，但最近一次 checkpoint 之后（通常为秒级）的提交可能回退；缺失的 run 终态由租约过期 → 孤儿恢复路径收敛，会话不会永久停留在“运行中”。
 
-对断电敏感的部署（不稳定电源、部分网络盘等）可用环境变量 `MOTHX_SQLITE_SYNCHRONOUS=FULL` 恢复旧的每提交 fsync 行为；该变量按进程生效，新旧进程混布共享同一库文件是安全的。以 `--debug` 启动时，`/debug/vars` 端点的 `mothx_sqlite` 指标（busy 重试次数与退避总时长、事务 begin 次数/等待总时长/单次最大等待）可用于观测跨进程写锁竞争。完整设计与压测矩阵见 `docs/proposal/sqlite-write-pressure-reduction-proposal.md`。
+对断电敏感的部署（不稳定电源、部分网络盘等）可用环境变量 `MOTHX_SQLITE_SYNCHRONOUS=FULL` 恢复旧的每提交 fsync 行为；该变量按进程生效，新旧进程混布共享同一库文件是安全的。以 `--debug` 启动时，`/debug/vars` 端点的 `mothx_sqlite` 指标（busy 重试次数与退避总时长、事务 begin 次数/等待总时长/单次最大等待与按桶近似的 p50/p99、checkpoint 次数/失败与帧计数、每个已打开库的 WAL 大小与连接池等待计数）以及 `mothx_runtime_lease` 指标（租约围栏丢失次数与每库心跳健康）可用于观测跨进程写锁竞争与租约健康。完整设计与压测矩阵见 `docs/proposal/sqlite-write-pressure-reduction-proposal.md`。
 
 ## 会话操作
 

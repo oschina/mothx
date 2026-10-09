@@ -1145,3 +1145,36 @@ func TestSessionToolOptionsFromNamesDoesNotOverrideHostedTools(t *testing.T) {
 		t.Fatalf("browser option = %#v, want enabled", options.Browser)
 	}
 }
+
+// TestSubmitRunRejectsWhenConcurrencyLimitReached pins that the run-submit entry
+// point shares the server-wide maxConcurrentRequests limit with chat
+// completions, and that a rejected submit neither leaves a durable run nor holds
+// the session's execution lease.
+func TestSubmitRunRejectsWhenConcurrencyLimitReached(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.pool.Stop()
+	srv.cfg.DefaultMode = "yolo"
+	p := newHistoryRecordingProvider()
+	srv.provider = p
+	srv.model = p.models[0]
+	srv.runSlots = make(chan struct{}, 1)
+	srv.runSlots <- struct{}{}
+
+	sessionID := "run-limit-session"
+	if _, err := srv.getOrCreateSession(sessionID, srv.cfg.GetWorkDir()); err != nil {
+		t.Fatalf("getOrCreateSession: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+sessionID+"/runs", strings.NewReader(`{"message":"hello"}`))
+	w := httptest.NewRecorder()
+	srv.HandleSubmitRun(w, req)
+	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "concurrency_limit_reached") {
+		t.Fatalf("submit status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if calls := p.recordedCalls(); len(calls) != 0 {
+		t.Fatalf("provider ran despite the concurrency limit: %d calls", len(calls))
+	}
+	if run, err := agentruntime.GetActiveDurableRun(context.Background(), srv.settings.GetSessionDir(), sessionID); err != nil || run != nil {
+		t.Fatalf("rejected submit left an active run: run=%+v err=%v", run, err)
+	}
+}

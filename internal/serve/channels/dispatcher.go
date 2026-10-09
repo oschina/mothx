@@ -1042,6 +1042,40 @@ func (d *Dispatcher) HandleMessage(ctx context.Context, msg messaging.InboundMes
 	return response.Text, err
 }
 
+// channelQueueNoticeEvery bounds how often a channel sender is reminded that
+// their message is still queued behind an in-flight run for the same session.
+// It is projection only: the admission wait itself stays Runtime-owned and no
+// timeout here ever decides ownership. It is a variable only so the periodic
+// notice can be tested without a real 30s wait.
+var channelQueueNoticeEvery = 30 * time.Second
+
+// awaitChannelAdmission waits for the session execution admission (Wait:true)
+// while periodically reminding the sender that their message is queued. The
+// ownership decision stays in the shared Runtime; the adapter only adds
+// progress so a long wait is visible instead of silent.
+func (d *Dispatcher) awaitChannelAdmission(ctx context.Context, sessionID string, progress func(string)) (*session.RuntimeLeaseGuard, error) {
+	done := make(chan struct{})
+	if progress != nil {
+		go func() {
+			ticker := time.NewTicker(channelQueueNoticeEvery)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					progress("⏳ 仍在排队，等待上一条消息执行完成…")
+				}
+			}
+		}()
+	}
+	guard, err := agentruntime.AcquireExecutionAdmission(ctx, d.sessionDir, sessionID, agentruntime.ExecutionAdmissionOptions{Wait: true})
+	close(done)
+	return guard, err
+}
+
 // HandleDelivery processes an inbound message through the channel Runtime and
 // returns the transport projection of the canonical text/artifact result.
 func (d *Dispatcher) HandleDelivery(ctx context.Context, msg messaging.InboundMessage) (response messaging.MessageResponse, runErr error) {
@@ -1083,7 +1117,7 @@ func (d *Dispatcher) HandleDelivery(ctx context.Context, msg messaging.InboundMe
 		if queuedBehind != "" && msg.ProgressFunc != nil {
 			msg.ProgressFunc("⏳ 上一条消息仍在执行，本条消息将排队等待…")
 		}
-		runtimeGuard, admissionErr := agentruntime.AcquireExecutionAdmission(ctx, d.sessionDir, sess.Manager.GetHeader().ID, agentruntime.ExecutionAdmissionOptions{Wait: true})
+		runtimeGuard, admissionErr := d.awaitChannelAdmission(ctx, sess.Manager.GetHeader().ID, msg.ProgressFunc)
 		if admissionErr != nil {
 			lease.release()
 			return messaging.MessageResponse{}, fmt.Errorf("acquire channel execution admission: %w", admissionErr)

@@ -1,6 +1,6 @@
 # SQLite 写压力优化方案(synchronous 降级、事务合批、心跳合并)
 
-> 状态:阶段 1–3 已实施(2026-09-14)。已落地:`synchronous(NORMAL)` 默认 + `MOTHX_SQLITE_SYNCHRONOUS=FULL` 逃生门、会话域 `AppendMessages` 事务合批(agent 工具结果批量落盘)、每目录租约心跳调度器 + DAO `RenewBatch`。阶段 0 大部分落地:busy 重试与 begin 等待指标(`internal/db.BusyRetryStats`/`BeginWaitStats`)经 `--debug` pprof 服务器的 `/debug/vars` 暴露(`mothx_sqlite`);压测形状 A/B/C 实现于 `internal/session/write_pressure_test.go`(`MOTHX_WRITE_PRESSURE_SCALE` 控制负载倍数),形状 D 由既有测试套覆盖(见 §4.2);WAL/checkpoint 上报与 p50/p99 直方图仍待建。以下为方案与多进程论证原文。
+> 状态:阶段 1–3 已实施(2026-09-14)。已落地:`synchronous(NORMAL)` 默认 + `MOTHX_SQLITE_SYNCHRONOUS=FULL` 逃生门、会话域 `AppendMessages` 事务合批(agent 工具结果批量落盘)、每目录租约心跳调度器 + DAO `RenewBatch`。阶段 0 大部分落地:busy 重试与 begin 等待指标(`internal/db.BusyRetryStats`/`BeginWaitStats`)经 `--debug` pprof 服务器的 `/debug/vars` 暴露(`mothx_sqlite`);压测形状 A/B/C 实现于 `internal/session/write_pressure_test.go`(`MOTHX_WRITE_PRESSURE_SCALE` 控制负载倍数),形状 D 由既有测试套覆盖(见 §4.2);WAL/checkpoint 上报、p50/p99 直方图与围栏健康计数已建(见 §4.1)。以下为方案与多进程论证原文。
 >
 > 日期:2026-09-14
 >
@@ -89,10 +89,11 @@ admission(intent + run + started event + turn + lease binding)与 terminal(run u
 ### 4.1 指标
 
 1. **busy 重试**:命中次数、累计等待时间、按进程实例打标签(已落地:`internal/db/busy.go` 的 atomic 计数器 + `BusyRetryStats()` 快照,经 `internal/db/stats.go` 发布到 expvar,`--debug` pprof 服务器的 `/debug/vars` 提供;按进程标签即每进程暴露自己的端点)。
-2. **begin 等待分布**:p50/p99/max,按进程打标签——这是跨进程排队的直接度量(部分落地:`BeginWaitStats()` 提供次数/累计/单次最大等待;直方图分位数待基线数据证明需要后再加)。
+2. **begin 等待分布**:p50/p99/max,按进程打标签——这是跨进程排队的直接度量(已落地:`BeginWaitStats()` 提供次数/累计/单次最大等待,`BeginWaitQuantiles()` 提供固定桶近似的 p50/p99,均经 `mothx_sqlite` 暴露;分位数为桶上界,是保守估计)。
 3. **事务计数与 commit 延迟**:`RunInTx` 计时,按调用方标签分类(entry/run/lease/stats/event)。
-4. **WAL 大小与 checkpoint**:`PRAGMA wal_checkpoint(PASSIVE)` 读数与频率(`CloseAll` 已执行该语句,补上报)。
-5. **围栏健康**:owner 进程的 `ErrRuntimeLeaseLost` 计数(应恒为 0,出现即围栏被破坏)。
+4. **WAL 大小与 checkpoint**:`internal/db.WalStats()` 按进程内已打开的库上报 `-wal` 文件大小,`CheckpointStats()` 上报 `Close`/`CloseAll` 的 checkpoint 次数与 (busy, log, checkpointed) 帧计数,均经 `mothx_sqlite` 暴露。持续增长而不收缩的 WAL 是写压力超过 checkpoint 的直接信号;`wal_autocheckpoint` 阈值仍需该数据决定是否调整。
+5. **围栏健康**:`internal/session.LeaseLostCount()` 统计本进程因围栏被顶替而丢失的租约(应恒为 0,出现即围栏被破坏),并经 `mothx_runtime_lease` 暴露;同处还暴露每库心跳健康(`LeaseHeartbeatHealthStats()`:最近尝试/成功时间、连续失败次数、尝试/失败次数、最大续约耗时)——心跳失败是可用性问题,不是所有权丢失。
+6. **连接池等待**:`internal/db.PoolStats()` 按已打开的库上报 `database/sql` 的 `WaitCount`/`WaitDuration`/`InUse`/`MaxOpenConnections` 等。因为每个托管连接 `SetMaxOpenConns(1)`,WaitCount/WaitDuration 是操作在单连接上排队的直接度量,也是判断单写者连接模型是否需要独立只读连接池的基线(§1.4 已否决的其他方案不变;只有在数据证明读路径受限时才单独立项)。
 
 ### 4.2 压测矩阵(真实多进程形状)
 
@@ -106,6 +107,8 @@ admission(intent + run + started event + turn + lease binding)与 terminal(run u
 实现方式:扩展 `internal/session/sqlite_robustness_test.go` 已有的 subprocess-helper 模式;每个形状跑 60s,输出 §4.1 指标。三个阶段各合入后重跑同一矩阵。
 
 > 落地记录(2026-09-14):形状 A(多进程写不同会话 + 指标报告)、形状 B(一个 helper 设 `MOTHX_SQLITE_SYNCHRONOUS=FULL` 的混布双进程)、形状 C(单进程多会话多租约,验证单调度器与同拍批量续期)实现于 `internal/session/write_pressure_test.go`,默认轻量、`MOTHX_WRITE_PRESSURE_SCALE` 放大负载供基线对比(60s 持续负载由该倍数近似)。形状 D 由既有套件覆盖,不重复建设:`internal/agentruntime/process_integration_test.go`(双进程 admission 竞争,一个 winner 一个 duplicate/busy)、`TestSQLiteTwoProcessesCompetingForSameSession`、`TestRuntimeLeaseSurvivesProcessFailureUntilExpiry`(kill -9 + 过期)、`TestLeaseHeartbeatSchedulerBatchRenewDisplaceAndRetire`(顶替只 lost 自己 + 调度器退休)。
+>
+> 基线样本(本机空闲、`MOTHX_WRITE_PRESSURE_SCALE=16`,形状 A/B 用 `-run TestWritePressureShapeA|B`,形状 C 单独 `-run TestWritePressureShapeCSingleProcessManySessions` 以取干净样本;新指标字段见 §4.1):形状 A(3 进程 × 2 会话 × 768 entries/进程)`busyHits=0`、`beginP50Us=100`、`beginP99Us<=10000`、`beginMaxMs<=79`(首开库迁移/索引),`poolMaxOpen=1`、`poolWaitCount=0`、`walBytes≈4MB`;形状 B(FULL+NORMAL 混布)`busyHits=0`、`beginP99Us<=250`;形状 C(单进程 64 会话/64 租约、16448 entries、436 begins,证明批量落盘把 entries 与事务数解耦)`busyHits=0`、`beginP50Us=beginP99Us=100`、`poolWaitCount=0`、`walBytes≈4.4MB`。结论:在这些负载下单连接从未排队(`poolWaitCount=0` 且 `busyRetryHits=0`),读路径未被单写者模型限制,故**不立项只读连接池**;WAL 运行期增至约 4MB 后在关闭时 checkpoint,阈值继续由数据决定。真实配额/慢盘/更大并发下应复测同一组指标以验证该结论。
 
 ### 4.3 验收
 

@@ -439,11 +439,15 @@ func (s *leaseHeartbeatScheduler) retire() bool {
 // released. Each attempt is bounded by a context deadline so the managed
 // transaction's busy-begin retry can never outlive the budget.
 func (s *leaseHeartbeatScheduler) renew(leases []*runtimeLease) {
-	deadline := time.Now().Add(runtimeHeartbeatRetry)
+	started := time.Now()
+	deadline := started.Add(runtimeHeartbeatRetry)
 	current := leases
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			// Budget exhausted without a successful commit: an availability
+			// problem to retry on the next tick, never ownership loss.
+			recordHeartbeatFailure(s.dirKey, time.Since(started))
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), remaining)
@@ -460,6 +464,7 @@ func (s *leaseHeartbeatScheduler) renew(leases []*runtimeLease) {
 				lease.expiresAt = renewedAt
 				lease.bindingMu.Unlock()
 			}
+			recordHeartbeatSuccess(s.dirKey, time.Since(started))
 			return
 		}
 		select {
@@ -515,6 +520,7 @@ func markRuntimeLeaseLost(lease *runtimeLease, reason string) {
 	epoch := lease.epoch
 	sessionID := lease.sessionID
 	lease.bindingMu.Unlock()
+	recordLeaseFenceLoss(leaseDirKey(lease.sessionDir))
 	log.Printf("[session] runtime lease lost for %s (owner=%s epoch=%d): %s", sessionID, ownerID, epoch, reason)
 	forgetRuntimeLease(lease)
 	lease.lostOnce.Do(func() {

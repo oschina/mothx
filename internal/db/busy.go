@@ -69,15 +69,39 @@ var busyRetryCounters = struct {
 	waitNanods atomic.Uint64
 }{}
 
+// beginWaitBuckets are the inclusive upper bounds of the transaction begin wait
+// histogram. They separate the sub-millisecond steady state from the
+// millisecond-scale queueing that multi-process writer contention introduces, so
+// p50/p99 begin wait is observable without storing every sample.
+var beginWaitBuckets = [...]time.Duration{
+	100 * time.Microsecond,
+	250 * time.Microsecond,
+	500 * time.Microsecond,
+	time.Millisecond,
+	2 * time.Millisecond,
+	5 * time.Millisecond,
+	10 * time.Millisecond,
+	25 * time.Millisecond,
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	250 * time.Millisecond,
+	500 * time.Millisecond,
+	time.Second,
+	2 * time.Second,
+	5 * time.Second,
+	10 * time.Second,
+}
+
 // beginWaitCounters tracks every transaction begin attempt (successful or
 // retried): how often the process begins write/read transactions, how much
-// wall time the begin calls take in total, and the single slowest begin. A
-// growing max/total under multi-process load is the direct signal of writer
-// queueing on the shared session database.
+// wall time the begin calls take in total, the single slowest begin, and a
+// fixed-bucket histogram for quantiles. A growing max/total under multi-process
+// load is the direct signal of writer queueing on the shared session database.
 var beginWaitCounters = struct {
-	count   atomic.Uint64
-	totalNs atomic.Uint64
-	maxNs   atomic.Uint64
+	count     atomic.Uint64
+	totalNs   atomic.Uint64
+	maxNs     atomic.Uint64
+	histogram [len(beginWaitBuckets) + 1]atomic.Uint64
 }{}
 
 // BusyRetryStats returns the cumulative begin-retry hit count and the total
@@ -100,12 +124,59 @@ func BeginWaitStats() (count uint64, total, max time.Duration) {
 func recordBeginWait(elapsed time.Duration) {
 	beginWaitCounters.count.Add(1)
 	beginWaitCounters.totalNs.Add(uint64(elapsed))
+	beginWaitCounters.histogram[beginWaitBucket(elapsed)].Add(1)
 	for {
 		previous := beginWaitCounters.maxNs.Load()
 		if uint64(elapsed) <= previous || beginWaitCounters.maxNs.CompareAndSwap(previous, uint64(elapsed)) {
 			return
 		}
 	}
+}
+
+// beginWaitBucket returns the histogram bucket index for elapsed: the first
+// bucket whose inclusive upper bound covers it, or the overflow bucket.
+func beginWaitBucket(elapsed time.Duration) int {
+	for i, bound := range beginWaitBuckets {
+		if elapsed <= bound {
+			return i
+		}
+	}
+	return len(beginWaitBuckets)
+}
+
+// BeginWaitQuantiles returns bucket-approximated p50 and p99 transaction begin
+// waits: each value is the inclusive upper bound of the bucket containing the
+// quantile, so it is a conservative (never-understated) estimate. Both are zero
+// until the first begin is recorded.
+func BeginWaitQuantiles() (p50, p99 time.Duration) {
+	cumulative := make([]uint64, len(beginWaitCounters.histogram))
+	var total uint64
+	for i := range beginWaitCounters.histogram {
+		cumulative[i] = beginWaitCounters.histogram[i].Load()
+		total += cumulative[i]
+	}
+	if total == 0 {
+		return 0, 0
+	}
+	return beginQuantile(cumulative, total, 0.50), beginQuantile(cumulative, total, 0.99)
+}
+
+func beginQuantile(cumulative []uint64, total uint64, q float64) time.Duration {
+	target := uint64(float64(total) * q)
+	if target == 0 {
+		target = 1
+	}
+	var running uint64
+	for i, count := range cumulative {
+		running += count
+		if running >= target {
+			if i >= len(beginWaitBuckets) {
+				return beginWaitBuckets[len(beginWaitBuckets)-1]
+			}
+			return beginWaitBuckets[i]
+		}
+	}
+	return beginWaitBuckets[len(beginWaitBuckets)-1]
 }
 
 // BeginTx begins a Bun transaction on a managed (or caller-owned) connection,

@@ -65,7 +65,7 @@ MothX 的会话设计在不同运行模式下有所区别：
 - 进程崩溃（kill -9、panic）不丢失任何数据；
 - 操作系统崩溃或断电时，数据库不会损坏，但最近一次 checkpoint 之后（通常为秒级）的提交可能回退；缺失的 run 终态由租约过期 → 孤儿恢复路径收敛，会话不会永久停留在“运行中”。
 
-对断电敏感的部署（不稳定电源、部分网络盘等）可用环境变量 `MOTHX_SQLITE_SYNCHRONOUS=FULL` 恢复旧的每提交 fsync 行为；该变量按进程生效，新旧进程混布共享同一库文件是安全的。以 `--debug` 启动时，`/debug/vars` 端点的 `mothx_sqlite` 指标（busy 重试次数与退避总时长、事务 begin 次数/等待总时长/单次最大等待）可用于观测跨进程写锁竞争。完整设计与压测矩阵见 `docs/proposal/sqlite-write-pressure-reduction-proposal.md`。
+对断电敏感的部署（不稳定电源、部分网络盘等）可用环境变量 `MOTHX_SQLITE_SYNCHRONOUS=FULL` 恢复旧的每提交 fsync 行为；该变量按进程生效，新旧进程混布共享同一库文件是安全的。以 `--debug` 启动时，`/debug/vars` 端点的 `mothx_sqlite` 指标（busy 重试次数与退避总时长、事务 begin 次数/等待总时长/单次最大等待与按桶近似的 p50/p99、checkpoint 次数/失败与帧计数、每个已打开库的 WAL 大小与连接池等待计数）以及 `mothx_runtime_lease` 指标（租约围栏丢失次数与每库心跳健康）可用于观测跨进程写锁竞争与租约健康。完整设计与压测矩阵见 `docs/proposal/sqlite-write-pressure-reduction-proposal.md`。
 
 ## 会话操作
 

@@ -607,6 +607,12 @@ func (p *SessionPool) Get(id string) *APISession {
 }
 
 // GetForWorkDir returns a session by workDir and ID, or nil.
+//
+// Session IDs are unique in the session database (sessions.id is the primary
+// key), and getOrCreateSession rejects reusing an ID with a different work
+// directory, so an empty workDir lookup matches at most one entry. The >1
+// guard is a defensive fail-safe: if the invariant were ever violated it
+// returns nil (fail closed) rather than picking an arbitrary instance.
 func (p *SessionPool) GetForWorkDir(workDir, id string) *APISession {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

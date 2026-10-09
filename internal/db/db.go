@@ -156,8 +156,10 @@ func CloseAll() error {
 	var errs []error
 	for path, connection := range state.dbs {
 		var busy, logFrames, checkpointed int
-		if err := connection.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &logFrames, &checkpointed); err != nil {
-			errs = append(errs, fmt.Errorf("checkpoint %s: %w", path, err))
+		checkpointErr := connection.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &logFrames, &checkpointed)
+		recordCheckpoint(busy, logFrames, checkpointed, checkpointErr)
+		if checkpointErr != nil {
+			errs = append(errs, fmt.Errorf("checkpoint %s: %w", path, checkpointErr))
 		}
 		if err := connection.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close %s: %w", path, err))
@@ -202,8 +204,10 @@ func Close(path string) error {
 	}
 	var errs []error
 	var busy, logFrames, checkpointed int
-	if err := connection.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &logFrames, &checkpointed); err != nil {
-		errs = append(errs, fmt.Errorf("checkpoint %s: %w", canonical, err))
+	checkpointErr := connection.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &logFrames, &checkpointed)
+	recordCheckpoint(busy, logFrames, checkpointed, checkpointErr)
+	if checkpointErr != nil {
+		errs = append(errs, fmt.Errorf("checkpoint %s: %w", canonical, checkpointErr))
 	}
 	if err := connection.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close %s: %w", canonical, err))

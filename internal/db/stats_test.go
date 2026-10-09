@@ -36,17 +36,41 @@ func TestSQLiteStatsPublishedViaExpvar(t *testing.T) {
 	if published == nil {
 		t.Fatalf("expvar %q is not published", sqliteExpvarKey)
 	}
-	var snapshot map[string]int64
+	var snapshot map[string]any
 	if err := json.Unmarshal([]byte(published.String()), &snapshot); err != nil {
 		t.Fatalf("decode snapshot %q: %v", published.String(), err)
 	}
-	for _, key := range []string{"busyRetryHits", "busyRetryWaitMs", "beginCount", "beginTotalWaitMs", "beginMaxWaitMs"} {
+	for _, key := range []string{
+		"busyRetryHits", "busyRetryWaitMs", "beginCount", "beginTotalWaitMs", "beginMaxWaitMs",
+		"beginP50WaitMs", "beginP99WaitMs",
+		"checkpointAttempts", "checkpointFailures", "checkpointBusyFrames", "checkpointLogFrames", "checkpointDoneFrames",
+		"wal", "pool",
+	} {
 		if _, ok := snapshot[key]; !ok {
 			t.Fatalf("snapshot %q is missing %q", published.String(), key)
 		}
 	}
-	if snapshot["beginCount"] < 1 {
-		t.Fatalf("beginCount = %d, want at least the transaction this test committed", snapshot["beginCount"])
+	if beginCount, ok := snapshot["beginCount"].(float64); !ok || beginCount < 1 {
+		t.Fatalf("beginCount = %v, want at least the transaction this test committed", snapshot["beginCount"])
+	}
+	// A committed write leaves frames in the WAL until a checkpoint, so at
+	// least the database this test wrote must be reported with a positive size.
+	wal, ok := snapshot["wal"].([]any)
+	if !ok || len(wal) == 0 {
+		t.Fatalf("wal = %#v, want at least one open database", snapshot["wal"])
+	}
+	var found bool
+	for _, entry := range wal {
+		stat, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if stat["path"] == path && stat["walBytes"] != nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("wal = %#v, want an entry for %q", wal, path)
 	}
 
 	if err := CloseAll(); err != nil {

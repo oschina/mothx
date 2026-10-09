@@ -67,6 +67,16 @@ func (s *Server) SubmitExternalResponsesBackground(req serviceruntime.Background
 		return "", fmt.Errorf("session cannot start background run: %w", err)
 	}
 	runtimeRelease := runtimeGuard.Release
+	// Responses-background submissions are Serve-owned runs and share the
+	// server-wide maxConcurrentRequests limit. Fold the slot into runtimeRelease
+	// so every existing early-return path releases both and the run returns it at
+	// terminalization (see the release closure below).
+	slotRelease, slotOK := s.acquireRunSlot()
+	if !slotOK {
+		runtimeRelease()
+		return "", fmt.Errorf("maximum concurrent requests reached")
+	}
+	runtimeRelease = chainReleases(runtimeRelease, slotRelease)
 	if !sess.TryLock() {
 		runtimeRelease()
 		return "", fmt.Errorf("session already has an active run")

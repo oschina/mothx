@@ -97,8 +97,9 @@ func newMux() *http.ServeMux {
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	// Standard expvar endpoint. Packages publish their own metrics through
 	// expvar.Publish (for example internal/db reports SQLite writer
-	// contention under "mothx_sqlite"), so the debug server never imports
-	// metric owners directly.
+	// contention under "mothx_sqlite" and internal/session reports lease
+	// heartbeat health under "mothx_runtime_lease"), so the debug server never
+	// imports metric owners directly.
 	mux.Handle("/debug/vars", expvar.Handler())
 	return mux
 }

@@ -1489,6 +1489,10 @@ Source: https://mothx.net/en/changelog.md
 
 ### ✨ New Features
 
+- **Cross-process session ownership is now synchronized across local processes over the lease bus**
+  - The loopback UDP `SessionLeaseBus` no longer only wakes peers: notifications carry a canonical `DatabaseIdentity`, a per-origin `Seq`, and the owner PID/run, and every process keeps a global in-memory ownership view keyed by `(DatabaseIdentity, sessionId)`. Owners re-announce held leases every 10s (`ownership_snapshot`) so a lost acquire self-heals and an otherwise-silent owner stays fresh within a 30s liveness window. Receivers drop duplicate/out-of-order messages via `Seq`, mark an origin's entries uncertain on a sequence gap or an epoch conflict, and fall back to SQLite on any miss, staleness, or uncertainty — notifications never authorize admission or cancellation.
+  - `agentruntime.InspectSessionExecution` now answers a fresh, remote execution lease from the synchronized cache (marked `source: "cache"`) and otherwise reads SQLite and refreshes the view; the snapshot projection is a single shared function so the two paths cannot diverge. `session.RuntimeLeaseBusMetrics()` exposes sent/send-failed/received/invalid/self-skipped/duplicate/applied/gap/uncertain counters. The wire version is 3 and the datagram limit 4096 bytes.
+
 - **Knowledge Base Usability Completion**
   - **Ignore rules and discovery diagnostics.** A knowledge base now accepts an `ignoreGlobs` list, merged with the fixed ignore directories and the suggested patterns read from the source root's `.gitignore`/`.mothxignore` (read-only). Every scan records a bounded discovery projection (`discovered`/`ignored`/`skipped` with per-path reasons) on the snapshot, so a file that is never indexed is explained instead of silently dropped. Files that are oversized, binary/non-UTF-8, or unreadable are marked `skipped` with a reason and are not handed to the model.
   - **Incremental diff summary.** Each rebuilt snapshot persists an `added`/`modified`/`removed`/`unchanged` projection with bounded path samples; a fully unchanged scan keeps the existing snapshot-reuse event and now carries the all-zero diff in its event data.
@@ -1510,6 +1514,9 @@ Source: https://mothx.net/en/changelog.md
   - **Runtime binary setting.** The desktop settings (运行时 → MothX 运行时二进制) let the user switch between the bundled `mothx` executable (default) and a custom `mothx` binary path. Selection and validation live in the privileged Electron main process, the ACP runtime restarts on the switch, an unavailable custom path falls back to the bundled runtime with a visible notice, and a custom binary that fails to start rolls the selection back so the client stays usable. The `MOTHX_BINARY` environment variable remains the highest-priority development override.
 
 ### 🐛 Bug Fixes
+
+- **Runtime lease bus listener no longer disables itself after a last-subscriber race**
+  - When the final subscriber unsubscribed while the UDP listener was still binding, the listener returned before its deferred cleanup, leaving its `started`/`listening` state set and the closed socket cached, so the process silently stopped hearing cross-process ownership events until restart. The early return now resets the listener state so the next subscription rebinds.
 
 - **ACP no longer becomes wholly unusable when the default provider lacks a key**
   - `mothx acp` used to treat an unusable default provider (missing API key, unknown provider, no usable model) as a fatal startup error: the process exited with the structured startup line, so initialize, sessions, and the entire management plane (`mothx/manage/*`) were unavailable — clients such as Desktop could not even reach the settings needed to configure a provider.
@@ -1564,6 +1571,10 @@ Source: https://mothx.net/en/changelog.md
 
 - **In-stream SSE error events now go through the provider retry loop**
   - A provider stream that emits an in-band error event/chunk mid-stream (Anthropic `event: error` such as `overloaded_error`, Google `error` chunks such as `UNAVAILABLE`/`RESOURCE_EXHAUSTED`, OpenAI-compatible `{"error":…}` chunks) previously terminated the run immediately — OpenAI chat streams even silently ignored error chunks and reported the truncated stream as a normal completion. These errors are now returned to the caller's retry classification: they are retried with bounded backoff while no visible output has been produced, and surface as a regular stream error otherwise. `IsRetryable` additionally matches `unavailable`, `resource_exhausted`, and `internal error` substrings.
+
+- **Queued TUI prompts no longer fail with "lease is held by another process"**
+  - When a run reached its terminal state and the fenced terminal-persistence write needed a retry, the Runtime kept the execution lease (by design) while it retried in the background; a TUI prompt queued behind that run immediately tried its admission and was rejected with `session runtime lease is held by another process` — a misleading cross-process error for a same-process drain window, and the queued input was dropped.
+  - Shared execution admission now distinguishes draining from contention: a busy lease still held by the current process for an execution that already selected its terminal state makes queued successors (admission and session mutation) wait for the Runtime-owned release, so the session stays in this process and the queued input runs. A genuinely active same-process execution or another process's lease still fails fast for callers that did not opt into waiting.
 
 ## v1.3.102
 
@@ -12179,7 +12190,7 @@ Entries keep stable IDs and parent IDs so the conversation can be replayed as a 
 - A process crash (kill -9, panic) loses nothing.
 - An OS crash or power loss does not corrupt the database, but commits made since the last checkpoint (typically seconds of writes) may roll back; a missing run terminal state converges through the lease-expiry → orphan-recovery path, so a session never stays stuck as "running" forever.
 
-Deployments sensitive to power loss (unstable power, some network drives) can restore the legacy per-commit fsync behavior with the `MOTHX_SQLITE_SYNCHRONOUS=FULL` environment variable; it takes effect per process, and mixed old/new processes sharing one database file is safe. With `--debug`, the `mothx_sqlite` metrics on the `/debug/vars` endpoint (busy-retry hits and backoff total, transaction begin count/total wait/slowest single wait) make cross-process writer contention observable. Full design and load-test matrix: `docs/proposal/sqlite-write-pressure-reduction-proposal.md`.
+Deployments sensitive to power loss (unstable power, some network drives) can restore the legacy per-commit fsync behavior with the `MOTHX_SQLITE_SYNCHRONOUS=FULL` environment variable; it takes effect per process, and mixed old/new processes sharing one database file is safe. With `--debug`, the `mothx_sqlite` metrics on the `/debug/vars` endpoint (busy-retry hits and backoff total, transaction begin count/total wait/slowest single wait plus bucket-approximated p50/p99, checkpoint attempt/failure and frame counts, per-database WAL size, and per-database connection-pool wait counters) and the `mothx_runtime_lease` metrics (lease fence-loss count and per-database heartbeat health) make cross-process writer contention and lease health observable. Full design and load-test matrix: `docs/proposal/sqlite-write-pressure-reduction-proposal.md`.
 
 ## Session Operations
 

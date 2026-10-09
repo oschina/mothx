@@ -157,15 +157,16 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hadPersistedHistory := len(sess.Manager.GetReplayState().Messages) > 0
-	if s.runSlots != nil {
-		select {
-		case s.runSlots <- struct{}{}:
-			defer func() { <-s.runSlots }()
-		default:
-			writeError(w, http.StatusTooManyRequests, "maximum concurrent requests reached", "concurrency_limit_reached")
-			return
-		}
+	// maxConcurrentRequests is the server-wide run concurrency limit, shared
+	// with the run-submit and external background entries. Acquire it before the
+	// run starts and hold it until the run finishes (this handler returns when the
+	// streamed run ends).
+	slotRelease, slotOK := s.acquireRunSlot()
+	if !slotOK {
+		writeError(w, http.StatusTooManyRequests, "maximum concurrent requests reached", "concurrency_limit_reached")
+		return
 	}
+	defer slotRelease()
 	sess.Touch()
 	runID := newRunID()
 	runInput, err := sess.Runtime.AcceptInput(r.Context(), runID, lastUserInput.Text, lastUserIngresses)

@@ -155,6 +155,11 @@ type server struct {
 	sessions map[string]*sessionRuntime
 	pending  map[string]chan json.RawMessage
 
+	// ops serializes session-scoped request handling per session so a slow
+	// lifecycle operation cannot head-of-line block the read loop. A nil value
+	// runs jobs inline, keeping direct handler invocations synchronous.
+	ops *sessionOpLanes
+
 	toolTitles  map[string]string
 	mcpNotify   map[string]bool
 	initialized bool
@@ -1048,6 +1053,7 @@ func Run(opts RunOptions) (runErr error) {
 		artifactOverride: opts.Artifact,
 		sessions:         make(map[string]*sessionRuntime),
 		pending:          make(map[string]chan json.RawMessage),
+		ops:              newSessionOpLanes(),
 		toolTitles:       make(map[string]string),
 		mcpNotify:        make(map[string]bool),
 		r:                bufio.NewReader(os.Stdin),
@@ -1251,93 +1257,102 @@ func Run(opts RunOptions) (runErr error) {
 			}
 		}
 
-		switch req.Method {
-		case "initialize":
-			srv.handleInitialize(req)
-		case "mothx/doctor":
-			srv.handleDoctor(req)
-		case "session/new":
-			srv.handleNewSession(req)
-		case "session/load":
-			srv.handleLoadSession(req)
-		case "mothx/session/history":
-			srv.handleSessionHistory(req)
-		case "mothx/session/draft-config-options":
-			srv.handleDraftConfigOptions(req)
-		case "session/resume":
-			srv.handleResumeSession(req)
-		case "session/fork":
-			srv.handleForkSession(req)
-		case "session/prompt":
-			srv.handlePrompt(req)
-		case "session/cancel":
-			srv.handleCancel(req)
-		case "$/cancel_request":
-			srv.handleCancelRequest(req)
-		case "session/close":
-			srv.handleCloseSession(req)
-		case "mothx/session/delete":
-			srv.handleDeleteSession(req)
-		case "session/delete":
-			srv.handleDeleteSession(req)
-		case "mothx/session/setTitle":
-			srv.handleSetSessionTitle(req)
-		case "mothx/session/setWorkDir":
-			srv.handleSetSessionWorkDir(req)
-		case "mothx/session/setMeta":
-			srv.handleSetSessionMeta(req)
-		case "mothx/projects/list":
-			srv.handleProjectsList(req)
-		case "mothx/projects/create":
-			srv.handleProjectsCreate(req)
-		case "mothx/projects/rename":
-			srv.handleProjectsRename(req)
-		case "mothx/projects/delete":
-			srv.handleProjectsDelete(req)
-		case "mothx/workspace/extend":
-			srv.handleWorkspaceExtend(req)
-		case "mothx/worktree/list":
-			srv.handleWorktreeList(req)
-		case "mothx/worktree/create":
-			srv.handleWorktreeCreate(req)
-		case "mothx/worktree/remove":
-			srv.handleWorktreeRemove(req)
-		case "mothx/worktree/reset":
-			srv.handleWorktreeReset(req)
-		case "mothx/attachment/fetch":
-			srv.handleAttachmentFetch(req)
-		case "mothx/attachment/list":
-			srv.handleAttachmentList(req)
-		case "session/list":
-			srv.handleListSessions(req)
-		case "mothx/session/listAll":
-			srv.handleListAllSessions(req)
-		case "session/set_config_option":
-			srv.handleSetConfigOption(req)
-		case "session/set_mode":
-			srv.handleSetMode(req)
-		default:
-			if strings.HasPrefix(req.Method, "mothx/manage/") {
-				if manageAsyncMethods[req.Method] {
-					// Read-only network-bound manage projections run off the
-					// read loop so a slow or hung upstream cannot head-of-line
-					// block the transport: $/cancel_request and the client's
-					// responses to reverse approval/question requests are read
-					// on this loop and must stay reachable while a probe is in
-					// flight. Concurrent dispatch is race-free for exactly
-					// these methods: they resolve state from fresh on-disk
-					// settings (manageSettings) or under s.mu (sessionRuntime),
-					// mutate neither server nor session state, and write under
-					// wmu. Mutating manage methods stay synchronous on this
-					// loop to preserve FIFO order and the single-writer
-					// invariant refreshProviderCatalog relies on.
-					go srv.handleManageRequest(req)
-				} else {
-					srv.handleManageRequest(req)
-				}
-			} else if len(req.ID) > 0 {
-				srv.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32601, Message: "method not found"})
+		srv.dispatchRequest(req)
+	}
+}
+
+// dispatchRequest routes one decoded JSON-RPC request. Session-scoped methods
+// are serialized per session on sessionOpLanes so a slow lifecycle operation
+// cannot block the read loop; cancel and decision handling stay synchronous on
+// that loop so they remain reachable while a load is in flight.
+func (s *server) dispatchRequest(req rpcRequest) {
+	switch req.Method {
+	case "initialize":
+		s.handleInitialize(req)
+	case "mothx/doctor":
+		s.handleDoctor(req)
+	case "session/new":
+		// Always off the read loop: creating a session assembles Runtime
+		// resources and connects MCP servers. A unique key keeps concurrent
+		// creates independent (no session of this id exists yet).
+		s.dispatchSessionOp(req, "\x00new\x00"+mcp.RawIDKey(req.ID), func() { s.handleNewSession(req) })
+	case "session/load":
+		s.dispatchSessionOp(req, sessionOpKey(req.Params), func() { s.handleLoadSession(req) })
+	case "mothx/session/history":
+		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handleSessionHistory(req) })
+	case "mothx/session/draft-config-options":
+		s.handleDraftConfigOptions(req)
+	case "session/resume":
+		s.dispatchSessionOp(req, sessionOpKey(req.Params), func() { s.handleResumeSession(req) })
+	case "session/fork":
+		s.dispatchSessionOp(req, sessionOpKey(req.Params), func() { s.handleForkSession(req) })
+	case "session/prompt":
+		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handlePrompt(req) })
+	case "session/cancel":
+		s.handleCancel(req)
+	case "$/cancel_request":
+		s.handleCancelRequest(req)
+	case "session/close":
+		s.dispatchSessionOp(req, sessionOpKey(req.Params), func() { s.handleCloseSession(req) })
+	case "mothx/session/delete", "session/delete":
+		s.dispatchSessionOp(req, sessionOpKey(req.Params), func() { s.handleDeleteSession(req) })
+	case "mothx/session/setTitle":
+		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handleSetSessionTitle(req) })
+	case "mothx/session/setWorkDir":
+		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handleSetSessionWorkDir(req) })
+	case "mothx/session/setMeta":
+		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handleSetSessionMeta(req) })
+	case "mothx/projects/list":
+		s.handleProjectsList(req)
+	case "mothx/projects/create":
+		s.handleProjectsCreate(req)
+	case "mothx/projects/rename":
+		s.handleProjectsRename(req)
+	case "mothx/projects/delete":
+		s.handleProjectsDelete(req)
+	case "mothx/workspace/extend":
+		s.handleWorkspaceExtend(req)
+	case "mothx/worktree/list":
+		s.handleWorktreeList(req)
+	case "mothx/worktree/create":
+		s.handleWorktreeCreate(req)
+	case "mothx/worktree/remove":
+		s.handleWorktreeRemove(req)
+	case "mothx/worktree/reset":
+		s.handleWorktreeReset(req)
+	case "mothx/attachment/fetch":
+		s.handleAttachmentFetch(req)
+	case "mothx/attachment/list":
+		s.handleAttachmentList(req)
+	case "session/list":
+		s.handleListSessions(req)
+	case "mothx/session/listAll":
+		s.handleListAllSessions(req)
+	case "session/set_config_option":
+		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handleSetConfigOption(req) })
+	case "session/set_mode":
+		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handleSetMode(req) })
+	default:
+		if strings.HasPrefix(req.Method, "mothx/manage/") {
+			if manageAsyncMethods[req.Method] {
+				// Read-only network-bound manage projections run off the
+				// read loop so a slow or hung upstream cannot head-of-line
+				// block the transport: $/cancel_request and the client's
+				// responses to reverse approval/question requests are read
+				// on this loop and must stay reachable while a probe is in
+				// flight. Concurrent dispatch is race-free for exactly
+				// these methods: they resolve state from fresh on-disk
+				// settings (manageSettings) or under s.mu (sessionRuntime),
+				// mutate neither server nor session state, and write under
+				// wmu. Mutating manage methods stay synchronous on this
+				// loop to preserve FIFO order and the single-writer
+				// invariant refreshProviderCatalog relies on.
+				go s.handleManageRequest(req)
+			} else {
+				s.handleManageRequest(req)
 			}
+		} else if len(req.ID) > 0 {
+			s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32601, Message: "method not found"})
 		}
 	}
 }
@@ -3471,6 +3486,10 @@ func (s *server) shutdownAllSessionRuntimes() {
 	if s == nil {
 		return
 	}
+	// Stop accepting new session-scoped work and wait for in-flight lane jobs
+	// (for example a session/load still connecting MCP servers) to finish before
+	// tearing down the runtimes they may be installing.
+	s.ops.shutdown()
 	s.mu.Lock()
 	runtimes := make([]*sessionRuntime, 0, len(s.sessions))
 	for _, rt := range s.sessions {

@@ -50,6 +50,46 @@ type writePressureMetrics struct {
 	BeginCount       uint64 `json:"beginCount"`
 	BeginTotalWaitMs int64  `json:"beginTotalWaitMs"`
 	BeginMaxWaitMs   int64  `json:"beginMaxWaitMs"`
+	// Baseline fields for the read-pool decision: bucket-approximated begin
+	// quantiles (in microseconds, because the healthy case is sub-millisecond),
+	// checkpoint counters, the shared session DB's WAL size, and the
+	// single-connection pool wait counters.
+	BeginP50WaitUs         int64  `json:"beginP50WaitUs"`
+	BeginP99WaitUs         int64  `json:"beginP99WaitUs"`
+	CheckpointAttempts     uint64 `json:"checkpointAttempts"`
+	CheckpointFailures     uint64 `json:"checkpointFailures"`
+	WalBytes               int64  `json:"walBytes"`
+	PoolWaitCount          int64  `json:"poolWaitCount"`
+	PoolWaitDurationMs     int64  `json:"poolWaitDurationMs"`
+	PoolMaxOpenConnections int    `json:"poolMaxOpenConnections"`
+}
+
+// walBytesForDir and poolStatsForDir report one specific session database's WAL
+// size and connection-pool counters from this process's own metrics.
+func walBytesForDir(sessionDir string) int64 {
+	target, err := database.CanonicalPath(filepath.Join(sessionDir, "sessions.db"))
+	if err != nil {
+		return 0
+	}
+	for _, stat := range database.WalStats() {
+		if stat.Path == target {
+			return stat.WalBytes
+		}
+	}
+	return 0
+}
+
+func poolStatsForDir(sessionDir string) (waitCount, waitMs int64, maxOpen int) {
+	target, err := database.CanonicalPath(filepath.Join(sessionDir, "sessions.db"))
+	if err != nil {
+		return 0, 0, 0
+	}
+	for _, stat := range database.PoolStats() {
+		if stat.Path == target {
+			return stat.WaitCount, stat.WaitDurationMillis, stat.MaxOpenConnections
+		}
+	}
+	return 0, 0, 0
 }
 
 func TestWritePressureProcessHelper(t *testing.T) {
@@ -108,6 +148,9 @@ func runWriteLoadProcess(t *testing.T) {
 
 	hits, retryWait := database.BusyRetryStats()
 	beginCount, beginTotal, beginMax := database.BeginWaitStats()
+	p50, p99 := database.BeginWaitQuantiles()
+	checkpointAttempts, checkpointFailures, _, _, _ := database.CheckpointStats()
+	poolWait, poolWaitMs, poolMaxOpen := poolStatsForDir(sessionDir)
 	encoded, err := json.Marshal(writePressureMetrics{
 		PID: os.Getpid(), Sessions: sessions, Entries: entries,
 		ElapsedMs:        time.Since(started).Milliseconds(),
@@ -116,6 +159,15 @@ func runWriteLoadProcess(t *testing.T) {
 		BeginCount:       beginCount,
 		BeginTotalWaitMs: beginTotal.Milliseconds(),
 		BeginMaxWaitMs:   beginMax.Milliseconds(),
+
+		BeginP50WaitUs:         p50.Microseconds(),
+		BeginP99WaitUs:         p99.Microseconds(),
+		CheckpointAttempts:     checkpointAttempts,
+		CheckpointFailures:     checkpointFailures,
+		WalBytes:               walBytesForDir(sessionDir),
+		PoolWaitCount:          poolWait,
+		PoolWaitDurationMs:     poolWaitMs,
+		PoolMaxOpenConnections: poolMaxOpen,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -187,6 +239,8 @@ func logWritePressureMetrics(t *testing.T, shape string, all ...writePressureMet
 	var wallMs int64
 	var busyHits uint64
 	var beginMaxMs int64
+	var poolWaitCount int64
+	var poolWaitMs int64
 	for _, m := range all {
 		totalEntries += m.Entries
 		if m.ElapsedMs > wallMs {
@@ -196,10 +250,16 @@ func logWritePressureMetrics(t *testing.T, shape string, all ...writePressureMet
 		if m.BeginMaxWaitMs > beginMaxMs {
 			beginMaxMs = m.BeginMaxWaitMs
 		}
-		t.Logf("[shape %s] pid=%d entries=%d elapsed=%dms busyHits=%d busyWaitMs=%d begins=%d beginTotalMs=%d beginMaxMs=%d",
-			shape, m.PID, m.Entries, m.ElapsedMs, m.BusyRetryHits, m.BusyRetryWaitMs, m.BeginCount, m.BeginTotalWaitMs, m.BeginMaxWaitMs)
+		poolWaitCount += m.PoolWaitCount
+		if m.PoolWaitDurationMs > poolWaitMs {
+			poolWaitMs = m.PoolWaitDurationMs
+		}
+		t.Logf("[shape %s] pid=%d entries=%d elapsed=%dms busyHits=%d busyWaitMs=%d begins=%d beginTotalMs=%d beginMaxMs=%d beginP50Us=%d beginP99Us=%d ckptAttempts=%d ckptFailures=%d walBytes=%d poolMaxOpen=%d poolWaitCount=%d poolWaitMs=%d",
+			shape, m.PID, m.Entries, m.ElapsedMs, m.BusyRetryHits, m.BusyRetryWaitMs, m.BeginCount, m.BeginTotalWaitMs, m.BeginMaxWaitMs,
+			m.BeginP50WaitUs, m.BeginP99WaitUs, m.CheckpointAttempts, m.CheckpointFailures, m.WalBytes, m.PoolMaxOpenConnections, m.PoolWaitCount, m.PoolWaitDurationMs)
 	}
-	t.Logf("[shape %s] aggregate entries=%d wallMs=%d busyHits=%d beginMaxMs=%d", shape, totalEntries, wallMs, busyHits, beginMaxMs)
+	t.Logf("[shape %s] aggregate entries=%d wallMs=%d busyHits=%d beginMaxMs=%d poolWaitCount=%d poolWaitMaxMs=%d",
+		shape, totalEntries, wallMs, busyHits, beginMaxMs, poolWaitCount, poolWaitMs)
 }
 
 func writeLoadEnv(sessionDir, idPrefix string, sessions, messages, batch int) []string {
@@ -384,4 +444,16 @@ func TestWritePressureShapeCSingleProcessManySessions(t *testing.T) {
 		t.Fatalf("entries = %d, want %d", count, want)
 	}
 	assertDatabaseIntegrity(t, filepath.Join(sessionDir, "sessions.db"))
+
+	// Shape C runs in this process, so its own database metrics are the direct
+	// in-process baseline for the read-pool decision (run it isolated with
+	// -run TestWritePressureShapeCSingleProcessManySessions for a clean sample).
+	hits, retryWait := database.BusyRetryStats()
+	beginCount, beginTotal, beginMax := database.BeginWaitStats()
+	p50, p99 := database.BeginWaitQuantiles()
+	checkpointAttempts, checkpointFailures, _, _, _ := database.CheckpointStats()
+	poolWait, poolWaitMs, poolMaxOpen := poolStatsForDir(sessionDir)
+	t.Logf("[shape C] sessions=%d entries=%d begins=%d beginTotalMs=%d beginP50Us=%d beginP99Us=%d beginMaxMs=%d busyHits=%d busyWaitMs=%d ckptAttempts=%d ckptFailures=%d walBytes=%d poolMaxOpen=%d poolWaitCount=%d poolWaitMs=%d",
+		sessionCount, count, beginCount, beginTotal.Milliseconds(), p50.Microseconds(), p99.Microseconds(), beginMax.Milliseconds(),
+		hits, retryWait.Milliseconds(), checkpointAttempts, checkpointFailures, walBytesForDir(sessionDir), poolMaxOpen, poolWait, poolWaitMs)
 }
