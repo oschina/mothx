@@ -4,14 +4,13 @@ Vendored Windows shell fallbacks, embedded into the binary.
 
 | File | Architecture |
 |---|---|
-| `busybox32u.exe` | 32-bit (`GOARCH=386`) |
-| `busybox64u.exe` | 64-bit (`GOARCH=amd64`) |
+| `busybox-windows-x86.exe` | 32-bit (`GOARCH=386`) |
+| `busybox-windows-x86_64.exe` | 64-bit (`GOARCH=amd64`) |
 
 ## Source
 
-[`rmyorston/busybox-w32`](https://github.com/rmyorston/busybox-w32) — the
-"unicode-enabled" (`*u.exe`) release assets, taken from the latest published
-release.
+[`startvibecoding/agentbusybox`](https://github.com/startvibecoding/agentbusybox) —
+Windows release assets, taken from the latest published release.
 
 ## Use
 
@@ -22,9 +21,9 @@ config `bin` directory on first use, and exposes it as the default shell for the
 
 ## Update
 
-1. Download `busybox32u.exe` and `busybox64u.exe` from the latest
-   `rmyorston/busybox-w32` release.
-2. Replace both files here (keep the existing names).
+1. Download `busybox-windows-x86.exe` and `busybox-windows-x86_64.exe` from
+   the latest `startvibecoding/agentbusybox` release.
+2. Replace both files here with the same names.
 3. Run `go test ./internal/platform/` and `go build ./...`.
 
 These files are third-party binaries; do not edit them by hand.

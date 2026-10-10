@@ -13,8 +13,8 @@ func TestBusyboxAssetForArch(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{arch: "amd64", want: "busybox64u.exe", ok: true},
-		{arch: "386", want: "busybox32u.exe", ok: true},
+		{arch: "amd64", want: "busybox-windows-x86_64.exe", ok: true},
+		{arch: "386", want: "busybox-windows-x86.exe", ok: true},
 		{arch: "arm64", want: "", ok: false},
 	}
 

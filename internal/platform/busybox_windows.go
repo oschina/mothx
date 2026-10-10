@@ -12,11 +12,11 @@ import (
 	"sync"
 )
 
-//go:embed busybox_assets/busybox32u.exe
-var busybox32u []byte
+//go:embed busybox_assets/busybox-windows-x86.exe
+var busyboxX86 []byte
 
-//go:embed busybox_assets/busybox64u.exe
-var busybox64u []byte
+//go:embed busybox_assets/busybox-windows-x86_64.exe
+var busyboxX8664 []byte
 
 var (
 	busyboxOnce sync.Once
@@ -75,9 +75,9 @@ func ensureWindowsBusybox() (string, error) {
 func busyboxAssetForArch(arch string) (name string, data []byte, ok bool) {
 	switch arch {
 	case "amd64":
-		return "busybox64u.exe", busybox64u, true
+		return "busybox-windows-x86_64.exe", busyboxX8664, true
 	case "386":
-		return "busybox32u.exe", busybox32u, true
+		return "busybox-windows-x86.exe", busyboxX86, true
 	default:
 		return "", nil, false
 	}

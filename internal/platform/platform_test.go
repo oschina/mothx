@@ -407,7 +407,7 @@ func TestShellArgs(t *testing.T) {
 	}{
 		{"/bin/bash", "echo hello", []string{"-c", "echo hello"}},
 		{"/bin/zsh", "echo hello", []string{"-c", "echo hello"}},
-		{"busybox64u.exe", "echo hello", []string{"sh", "-c", "echo hello"}},
+		{"busybox-windows-x86_64.exe", "echo hello", []string{"sh", "-c", "echo hello"}},
 		{"powershell.exe", "echo hello", []string{"-NoProfile", "-NonInteractive", "-Command", "echo hello"}},
 		{"pwsh.exe", "echo hello", []string{"-NoProfile", "-NonInteractive", "-Command", "echo hello"}},
 		{"cmd.exe", "echo hello", []string{"/c", "echo hello"}},
