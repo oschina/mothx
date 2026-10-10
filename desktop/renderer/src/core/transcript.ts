@@ -5,9 +5,9 @@
 import { acp, desktop, invoke } from './api';
 import { requestChatScroll } from './bus';
 import { getLocale, t } from './i18n';
-import { emit, isSessionRunning, sessionOwnsTranscript, setSessionRunStatus, setSessionStatus, state, type RunStatus, type ToolCallContentShape, type TranscriptItem, type UsageCacheProjection } from './state';
+import { emit, isSessionRunning, sessionOwnsTranscript, sessionRunStatus, setSessionRunStatus, setSessionStatus, state, type PendingDecisionItem, type RunStatus, type ToolCallContentShape, type TranscriptItem, type UsageCacheProjection } from './state';
 
-const RUN_STATUS_VALUES = new Set<string>(['idle', 'loading', 'planning', 'working', 'pending', 'completed', 'failed', 'cancelled']);
+const RUN_STATUS_VALUES = new Set<string>(['idle', 'loading', 'planning', 'working', 'pending', 'cancelling', 'completed', 'failed', 'cancelled']);
 import { previewImage, toast } from './ui-host';
 
 export type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>;
@@ -17,7 +17,7 @@ export type PermissionItem = Extract<TranscriptItem, { kind: 'permission' }>;
 export type QuestionItem = Extract<TranscriptItem, { kind: 'question' }>;
 export type DecisionItem = PermissionItem | QuestionItem;
 
-export type RunStatusVariant = 'idle' | 'planning' | 'working' | 'pending' | 'completed' | 'failed' | 'cancelled';
+export type RunStatusVariant = 'idle' | 'planning' | 'working' | 'pending' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
 
 export const STATUS_VARIANT: Record<string, RunStatusVariant> = {
   idle: 'idle',
@@ -25,6 +25,7 @@ export const STATUS_VARIANT: Record<string, RunStatusVariant> = {
   planning: 'planning',
   working: 'working',
   pending: 'pending',
+  cancelling: 'cancelling',
   completed: 'completed',
   failed: 'failed',
   cancelled: 'cancelled',
@@ -39,6 +40,7 @@ export function clearTranscript(sessionId: string | null): void {
   state.artifactRunCount = 0;
   state.pendingUserKey = null;
   state.usage = null;
+  if (sessionId) materializePendingDecisions(sessionId);
 }
 
 function upsert(item: TranscriptItem): void {
@@ -287,6 +289,7 @@ function applyMetaOnlyUpdate(sessionId: string, update: Record<string, unknown>)
   const kind = String(update.sessionUpdate || '');
   if (kind === 'session_info_update') applyTitleUpdate(sessionId, String(update.title || ''));
   if (kind === 'available_commands_update') {
+    if (sessionId !== state.activeSessionId) return;
     state.availableCommands = (update.availableCommands as typeof state.availableCommands) || [];
     emit();
   }
@@ -341,6 +344,14 @@ export function applySessionEvent(event: Record<string, unknown>): void {
     // 因此后台任务的 run 状态变化不会写进当前任务的运行状态。
     const status = String(event.status || '');
     const mapped = status === 'running' ? 'working' : status;
+    const current = sessionRunStatus(sessionId);
+    // Cancellation is a local in-flight projection. It stays live until the
+    // Runtime publishes a terminal state, so a late 'running' pulse does not
+    // reopen submission before the canonical confirmation arrives.
+    if (current === 'cancelling' && mapped !== 'completed' && mapped !== 'failed' && mapped !== 'cancelled') {
+      emit();
+      return;
+    }
     if (mapped && RUN_STATUS_VALUES.has(mapped)) setSessionRunStatus(sessionId, mapped as RunStatus);
     else if (mapped) setSessionStatus(sessionId, mapped);
     emit();
@@ -402,6 +413,7 @@ export function applySessionEvent(event: Record<string, unknown>): void {
       }
     }
     if (sessionOwnsTranscript(sessionId)) state.currentPlanKey = null;
+    dismissPendingDecisions(sessionId);
     emit();
     requestChatScroll();
     return;
@@ -438,9 +450,8 @@ export function applyReverseRequest(id: number | string, method: string, params:
     const toolCall = (params.toolCall || {}) as { toolCallId?: string; title?: string; kind?: string; rawInput?: Record<string, unknown> };
     const options = (params.options || []) as { optionId: string; name: string; kind: string }[];
     const sessionId = String(params.sessionId || state.activeSessionId || '');
-    if (!matchesTranscript(sessionId)) return;
     setSessionRunStatus(sessionId, 'pending');
-    upsert({
+    const item: PermissionItem = {
       kind: 'permission',
       key: `permission:${requestId}`,
       requestId,
@@ -449,14 +460,19 @@ export function applyReverseRequest(id: number | string, method: string, params:
       toolKind: String(toolCall.kind || 'other'),
       rawInput: toolCall.rawInput,
       options,
-    });
+    };
+    rememberPendingDecision(item);
+    if (!matchesTranscript(sessionId)) {
+      emit();
+      return;
+    }
+    upsert(item);
     emit();
     requestChatScroll();
     return;
   }
   if (method === 'mothx/requestQuestion' || method === '_mothx/request_question' || method === 'elicitation/create') {
     const sessionId = String(params.sessionId || state.activeSessionId || '');
-    if (!matchesTranscript(sessionId)) return;
     const promptText = String(params.prompt || params.question || params.message || '');
     const explanation = String(params.explanation || params.placeholder || '');
     const rawOptions = (params.options || []) as { id?: string; label?: string }[] | string[];
@@ -464,16 +480,21 @@ export function applyReverseRequest(id: number | string, method: string, params:
       typeof option === 'string' ? { id: option, label: option } : { id: String(option.id ?? option.label ?? ''), label: String(option.label ?? option.id ?? '') },
     );
     setSessionRunStatus(sessionId, 'pending');
-    upsert({
+    const item: QuestionItem = {
       kind: 'question',
-
       key: `question:${requestId}`,
       requestId,
       sessionId,
       prompt: promptText,
       explanation: explanation || undefined,
       options,
-    });
+    };
+    rememberPendingDecision(item);
+    if (!matchesTranscript(sessionId)) {
+      emit();
+      return;
+    }
+    upsert(item);
     emit();
     requestChatScroll();
   }
@@ -482,6 +503,7 @@ export function applyReverseRequest(id: number | string, method: string, params:
 export function resolvePermission(item: PermissionItem, optionId: string): void {
   item.resolved = optionId;
   acp.respond(item.requestId, { outcome: { outcome: 'selected', optionId } });
+  forgetPendingDecision(item.sessionId, item.requestId);
   finishDecision(item.sessionId);
   emit();
 }
@@ -489,6 +511,7 @@ export function resolvePermission(item: PermissionItem, optionId: string): void 
 export function cancelPermission(item: PermissionItem): void {
   item.resolved = t('chat.cancelled');
   acp.respond(item.requestId, { outcome: { outcome: 'cancelled' } });
+  forgetPendingDecision(item.sessionId, item.requestId);
   finishDecision(item.sessionId);
   emit();
 }
@@ -496,6 +519,7 @@ export function cancelPermission(item: PermissionItem): void {
 export function resolveQuestion(item: QuestionItem, answer: string): void {
   item.resolved = answer;
   acp.respond(item.requestId, { answer, ok: true });
+  forgetPendingDecision(item.sessionId, item.requestId);
   finishDecision(item.sessionId);
   emit();
 }
@@ -503,6 +527,7 @@ export function resolveQuestion(item: QuestionItem, answer: string): void {
 export function cancelQuestion(item: QuestionItem): void {
   item.resolved = t('chat.cancelled');
   acp.respond(item.requestId, { cancelled: true });
+  forgetPendingDecision(item.sessionId, item.requestId);
   finishDecision(item.sessionId);
   emit();
 }
@@ -514,21 +539,67 @@ function finishDecision(sessionId: string): void {
   if (!stillPending) {
     // The decision only unblocks its own session; another session's run stays
     // exactly as the Runtime reported it.
+    // A cancelling session must keep cancelling until the Runtime confirms a
+    // terminal state; resolving its last decision is not that confirmation.
+    if (sessionRunStatus(sessionId) === 'cancelling') return;
     setSessionRunStatus(sessionId, isSessionRunning(sessionId) ? 'working' : 'completed');
   }
 }
 
 // 运行被取消/终止时,把未决决策标记为已取消(server 端也会 $/cancel_request)。
-export function terminalizePendingDecisions(): void {
+export function terminalizePendingDecisions(sessionId = state.transcriptSessionId): void {
+  if (!sessionId) return;
   let changed = false;
   for (const entry of state.transcript) {
-    if ((entry.kind === 'permission' || entry.kind === 'question') && !entry.resolved) {
+    if ((entry.kind === 'permission' || entry.kind === 'question') && entry.sessionId === sessionId && !entry.resolved) {
       entry.resolved = t('chat.cancelled');
       acp.cancelReverse(entry.requestId);
       changed = true;
     }
   }
+  forgetPendingDecisions(sessionId);
   if (changed) emit();
+}
+
+function rememberPendingDecision(item: PendingDecisionItem): void {
+  state.pendingDecisions = {
+    ...state.pendingDecisions,
+    [item.sessionId]: { ...(state.pendingDecisions[item.sessionId] || {}), [item.requestId]: item },
+  };
+}
+
+function forgetPendingDecision(sessionId: string, requestId: string): void {
+  const decisions = state.pendingDecisions[sessionId];
+  if (!decisions?.[requestId]) return;
+  const next = { ...decisions };
+  delete next[requestId];
+  state.pendingDecisions = { ...state.pendingDecisions, [sessionId]: next };
+}
+
+function forgetPendingDecisions(sessionId: string): void {
+  if (!state.pendingDecisions[sessionId]) return;
+  const next = { ...state.pendingDecisions };
+  delete next[sessionId];
+  state.pendingDecisions = next;
+}
+
+// Terminal Run state is authoritative. Keep an already-visible decision card
+// from looking actionable after that state without sending a second reverse
+// cancellation back to ACP.
+function dismissPendingDecisions(sessionId: string): void {
+  for (const entry of state.transcript) {
+    if ((entry.kind === 'permission' || entry.kind === 'question') && entry.sessionId === sessionId && !entry.resolved) {
+      entry.resolved = t('chat.cancelled');
+    }
+  }
+  forgetPendingDecisions(sessionId);
+}
+
+function materializePendingDecisions(sessionId: string): void {
+  const existingKeys = new Set(state.transcript.map((entry) => entry.key));
+  for (const item of Object.values(state.pendingDecisions[sessionId] || {})) {
+    if (!existingKeys.has(item.key)) upsert(item);
+  }
 }
 
 // ===== 纯展示助手(组件层共用) =====

@@ -78,7 +78,7 @@ export function applyHomeBackground(root: HTMLElement | null): void {
   }
   if (backgroundImagePath !== path) {
     backgroundImagePath = path;
-    backgroundImageSource = '';
+    setBackgroundSource('');
     backgroundImageErrorPath = '';
     void desktop.homeBackgroundDataURL(path).then((result) => {
       // The selection may have changed while the privileged request was in
@@ -143,7 +143,16 @@ export function updateHomeBackground(patch: HomeBackgroundPatch, persist: boolea
   if (patch.homeBackgroundScope !== undefined) state.store.homeBackgroundScope = patch.homeBackgroundScope;
   if (patch.homeBackgroundFit !== undefined) state.store.homeBackgroundFit = patch.homeBackgroundFit;
   if (patch.homeBackgroundPosition !== undefined) state.store.homeBackgroundPosition = patch.homeBackgroundPosition;
-  if (persist) void desktop.storeSet(patch);
+  if (persist) {
+    // Only the privileged native chooser may authorize a non-empty image path.
+    // Clearance (empty string) and non-image settings may still be persisted
+    // through the generic store patch.
+    const storePatch = { ...patch };
+    if (typeof storePatch.homeBackgroundImage === 'string' && storePatch.homeBackgroundImage.trim() !== '') {
+      delete storePatch.homeBackgroundImage;
+    }
+    if (Object.keys(storePatch).length > 0) void desktop.storeSet(storePatch);
+  }
   emit();
 }
 

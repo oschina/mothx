@@ -561,6 +561,23 @@ func TestLeaseRenewalErrorNeverMarksLeaseLost(t *testing.T) {
 	if validateErr != nil {
 		t.Fatalf("live lease rejected its own write after a transient renewal error: %v", validateErr)
 	}
+	// Run admission uses the same lease fence. An expired row with our exact
+	// owner/epoch/token must bind successfully unless another process actually
+	// took it over; otherwise a transient heartbeat failure can still abort a
+	// task at durable Run creation.
+	tx, err = db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, bindErr := bindRuntimeLeaseToRunTx(tx, sessionDir, "renew-stall", "renew-stall-run")
+	if bindErr != nil {
+		_ = tx.Rollback()
+		t.Fatalf("expired-but-owned lease could not bind a run: %v", bindErr)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	markRuntimeLeaseBound(bound, "renew-stall-run")
 }
 
 // TestLeaseRenewalRecoversAfterRepeatedTimeoutTicks pins the availability

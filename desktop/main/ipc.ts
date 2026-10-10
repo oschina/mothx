@@ -8,7 +8,7 @@ import { SelectedFileGrants } from './file-grants';
 import { readHomeImageDataURL } from './home-image';
 import type { ReadHomeImageResult } from './home-image';
 import { isRunnableBinary, type RuntimeBinarySource, type RuntimeBinaryStatus } from './runtime-binary';
-import type { DesktopStore, DesktopStoreData } from './store';
+import { createStoreSetHandler, type DesktopStore, type DesktopStoreData } from './store';
 
 export type RendererEvent =
   | { type: 'state'; snapshot: AcpClientSnapshot }
@@ -224,10 +224,7 @@ export function registerIpc(deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle('desktop:store-set', (_event, patch: unknown) => {
-    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return deps.store.get();
-    return deps.store.set(patch as Partial<DesktopStoreData>);
-  });
+  ipcMain.handle('desktop:store-set', createStoreSetHandler(deps.store));
 
   ipcMain.on('desktop:window-control', (event, action: unknown) => {
     const win = BrowserWindow.fromWebContents(event.sender);

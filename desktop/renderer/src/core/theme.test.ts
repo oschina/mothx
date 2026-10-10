@@ -30,6 +30,7 @@ test('large background data URLs become blob object URLs before CSS injection', 
   assert.match(theme, /dataUrlToObjectUrl\(result\.dataUrl\)/, 'authorized image bytes must be converted before CSS injection');
   assert.match(theme, /URL\.createObjectURL\(new Blob\(\[bytes\]/, 'conversion must produce a short blob: URL');
   assert.match(theme, /URL\.revokeObjectURL\(backgroundImageSource\)/, 'replaced or cleared object URLs must be revoked');
+  assert.match(theme, /backgroundImagePath = path;\s+setBackgroundSource\(''\);/, 'changing a selected image must revoke its prior blob URL before loading the replacement');
 });
 
 test('Home logo settings project visibility and custom image selection through the Desktop bridge', () => {
@@ -38,4 +39,58 @@ test('Home logo settings project visibility and custom image selection through t
   assert.match(homeView, /!logo\.hidden/);
   assert.match(appearance, /settings\.homeLogo/);
   assert.match(appearance, /desktop\.chooseHomeLogo/);
+});
+
+test('changing background image revokes the previous blob object URL', async () => {
+  const originalCreate = globalThis.URL.createObjectURL;
+  const originalRevoke = globalThis.URL.revokeObjectURL;
+  const created: string[] = [];
+  const revoked: string[] = [];
+  let objectUrlCounter = 0;
+
+  globalThis.URL.createObjectURL = (blob: Blob) => {
+    objectUrlCounter += 1;
+    const url = `blob:test-${objectUrlCounter}`;
+    created.push(url);
+    return url;
+  };
+  globalThis.URL.revokeObjectURL = (url: string) => {
+    revoked.push(url);
+  };
+
+  // Provide a minimal bridge so theme.ts can run outside the renderer.
+  (globalThis as unknown as { window: { mothx: unknown } }).window = {
+    mothx: {
+      isDesktop: true,
+      platform: 'linux',
+      desktop: {
+        homeBackgroundDataURL: async () => ({ ok: true, dataUrl: 'data:image/png;base64,SGVsbG8=' }),
+      },
+    },
+  };
+
+  try {
+    const { applyHomeBackground, updateHomeBackground } = await import('./theme.ts');
+    const root = {
+      isConnected: true,
+      classList: { toggle() {}, remove() {} },
+      style: { setProperty() {}, removeProperty() {} },
+    } as unknown as HTMLElement;
+
+    updateHomeBackground({ homeBackgroundImage: '/tmp/first.png' }, false);
+    applyHomeBackground(root);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    updateHomeBackground({ homeBackgroundImage: '/tmp/second.png' }, false);
+    applyHomeBackground(root);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(created.length, 2, 'two blob URLs should be created for two image selections');
+    assert.equal(revoked.length, 1, 'the first blob URL should be revoked when the image changes');
+    assert.equal(revoked[0], created[0], 'revoked URL must be the previously created blob URL');
+  } finally {
+    globalThis.URL.createObjectURL = originalCreate;
+    globalThis.URL.revokeObjectURL = originalRevoke;
+    (globalThis as unknown as { window?: unknown }).window = undefined;
+  }
 });

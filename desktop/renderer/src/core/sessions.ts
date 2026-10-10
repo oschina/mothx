@@ -298,7 +298,10 @@ export async function openSession(sessionId: string): Promise<void> {
     };
     if (hasFeature('sessionHistoryPaging')) params.historyLimit = TRANSCRIPT_PAGE_SIZE;
     const result = await invoke<NewSessionResultShape>('session/load', params);
-    applySessionResult(result);
+    // A delayed load from a previously selected session is allowed to restore
+    // that session's own run projection below, but must never overwrite the
+    // now-active session's configuration, mode, or transcript.
+    if (state.activeSessionId === sessionId) applySessionResult(result);
     const remembered = state.store.sessionStatus[sessionId];
     if (!isSessionRunning(sessionId)) {
       const restored: RunStatus = remembered === 'failed' ? 'failed' : remembered === 'pending' ? 'pending' : 'completed';
@@ -306,9 +309,11 @@ export async function openSession(sessionId: string): Promise<void> {
     }
   } catch (error) {
     setSessionRunStatus(sessionId, 'failed');
-    toast(t('session.loadFailed', { e: error instanceof Error ? error.message : String(error) }));
+    if (state.activeSessionId === sessionId) {
+      toast(t('session.loadFailed', { e: error instanceof Error ? error.message : String(error) }));
+    }
   }
-  requestChatScroll(true);
+  if (state.activeSessionId === sessionId) requestChatScroll(true);
   emit();
 }
 

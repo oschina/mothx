@@ -6,7 +6,7 @@ import type { ConnectionState, StoreData } from './api';
 import { desktop } from './api';
 import { getLocale } from './i18n';
 
-export type RunStatus = 'idle' | 'loading' | 'planning' | 'working' | 'pending' | 'completed' | 'failed' | 'cancelled';
+export type RunStatus = 'idle' | 'loading' | 'planning' | 'working' | 'pending' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
 
 export interface ContentBlockShape {
   type: string;
@@ -138,6 +138,11 @@ export type TranscriptItem =
   | { kind: 'subagent'; key: string; agentId: string; status: string; title: string; role?: string; expertId?: string }
   | { kind: 'error'; key: string; message: string; code?: string; retryable?: boolean };
 
+// Reverse requests are Runtime-owned durable facts. Desktop retains this
+// short-lived copy solely so a background session remains discoverable until
+// it is opened (or ACP replays the request); it is never persisted locally.
+export type PendingDecisionItem = Extract<TranscriptItem, { kind: 'permission' | 'question' }>;
+
 export interface AttachmentDraft {
   path: string;
   name: string;
@@ -176,6 +181,7 @@ export interface AppState {
   // a background task must never make the active task look busy, block task
   // switching, or overwrite the active task's run status.
   runningSessions: Record<string, RunStatus>;
+  pendingDecisions: Record<string, Record<string, PendingDecisionItem>>;
   transcript: TranscriptItem[];
   transcriptSessionId: string | null;
 	// Ephemeral ACP transcript paging projection. This never becomes Desktop
@@ -216,6 +222,7 @@ export const state: AppState = {
   activeSessionId: null,
   activeTitle: '',
   runningSessions: {},
+  pendingDecisions: {},
   transcript: [],
   transcriptSessionId: null,
 	  transcriptNextCursor: '',
@@ -308,7 +315,7 @@ export function sessionTitle(sessionId: string): string {
 // owns an unfinished Run and must not be sent a second prompt, retargeted, or
 // reconfigured until it reaches a terminal status. "loading" is a read-side
 // projection (session/load in flight), not a Run, so it never blocks input.
-const LIVE_RUN_STATUSES: RunStatus[] = ['planning', 'working', 'pending'];
+const LIVE_RUN_STATUSES: RunStatus[] = ['planning', 'working', 'pending', 'cancelling'];
 
 export function sessionRunStatus(sessionId: string | null | undefined): RunStatus {
   if (!sessionId) return 'idle';

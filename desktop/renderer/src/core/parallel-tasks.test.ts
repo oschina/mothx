@@ -11,7 +11,8 @@ import test from 'node:test';
 
 import { isSessionRunning, sessionOwnsTranscript, sessionRunStatus, setSessionRunStatus, state } from './state.ts';
 import { openSession } from './sessions.ts';
-import { applySessionEvent, applySessionUpdate } from './transcript.ts';
+import { cancelRun } from './composer.ts';
+import { applyReverseRequest, applySessionEvent, applySessionUpdate, clearTranscript, resolvePermission } from './transcript.ts';
 
 // setSessionRunStatus 会把状态点写回 Desktop 本地 store,因此测试需要一个
 // 最小 preload 桥(只实现 storeSet/log),不引入任何真实 ACP 通道。
@@ -39,6 +40,7 @@ function reset(): void {
   state.transcriptSessionId = null;
   state.activeSessionId = null;
   state.runningSessions = {};
+  state.pendingDecisions = {};
   state.pendingUserKey = null;
   state.currentPlanKey = null;
 }
@@ -98,6 +100,51 @@ test('reattaching to a running task keeps its live run status', async () => {
   }
 });
 
+test('a late session load cannot overwrite the session opened afterwards', async () => {
+  reset();
+  const previousSessions = state.sessions;
+  const previousConfig = state.configOptions;
+  const previousMode = state.currentMode;
+  state.sessions = [
+    { sessionId: 'task-a', cwd: '/w/a', provider: 'p', model: 'm' },
+    { sessionId: 'task-b', cwd: '/w/b', provider: 'p', model: 'm' },
+  ];
+  let resolveA: ((value: unknown) => void) | undefined;
+  handlers.set('session/load', (params) => {
+    const sessionId = (params as { sessionId: string }).sessionId;
+    if (sessionId === 'task-a') return new Promise((resolve) => { resolveA = resolve; });
+    return {
+      sessionId,
+      configOptions: [{ id: 'mode', type: 'select', name: 'Mode', currentValue: 'yolo' }],
+      modes: { currentModeId: 'yolo' },
+      history: { sessionId, updates: [] },
+    };
+  });
+  try {
+    const openingA = openSession('task-a');
+    await Promise.resolve();
+    await openSession('task-b');
+    resolveA?.({
+      sessionId: 'task-a',
+      configOptions: [{ id: 'mode', type: 'select', name: 'Mode', currentValue: 'plan' }],
+      modes: { currentModeId: 'plan' },
+      history: { sessionId: 'task-a', updates: [{ sessionUpdate: 'agent_message_chunk', messageId: 'late', content: { type: 'text', text: 'late A' } }] },
+    });
+    await openingA;
+    assert.equal(state.activeSessionId, 'task-b');
+    assert.equal(state.currentMode, 'yolo', 'late A config must not replace B mode');
+    assert.equal(state.configOptions.find((option) => option.id === 'mode')?.currentValue, 'yolo');
+    assert.equal(state.transcriptSessionId, 'task-b');
+    assert.equal(state.transcript.length, 0, 'late A history must not enter B transcript');
+  } finally {
+    handlers.delete('session/load');
+    state.sessions = previousSessions;
+    state.configOptions = previousConfig;
+    state.currentMode = previousMode;
+    reset();
+  }
+});
+
 test('a background run never makes the active task look busy', () => {
   reset();
   try {
@@ -106,6 +153,54 @@ test('a background run never makes the active task look busy', () => {
     assert.equal(isSessionRunning('task-b'), false, 'an unrelated task must stay idle');
     state.activeSessionId = 'task-b';
     assert.equal(sessionRunStatus('task-b'), 'idle');
+  } finally {
+    reset();
+  }
+});
+
+test('cancelling keeps only that session submission-blocked until Runtime confirms terminal state', () => {
+  reset();
+  try {
+    state.activeSessionId = 'task-a';
+    state.transcriptSessionId = 'task-a';
+    setSessionRunStatus('task-a', 'working');
+    setSessionRunStatus('task-b', 'working');
+    cancelRun();
+    assert.equal(sessionRunStatus('task-a'), 'cancelling');
+    assert.equal(isSessionRunning('task-a'), true, 'cancelling must still block another prompt for A');
+    assert.equal(sessionRunStatus('task-b'), 'working', 'cancelling A must not alter B');
+    applySessionEvent({ sessionId: 'task-a', event: 'run_status', status: 'running' });
+    assert.equal(sessionRunStatus('task-a'), 'cancelling', 'a late running pulse must not reopen a cancelling session');
+    applySessionEvent({ sessionId: 'task-a', event: 'terminal', status: 'cancelled' });
+    assert.equal(sessionRunStatus('task-a'), 'cancelled');
+    assert.equal(isSessionRunning('task-a'), false);
+  } finally {
+    reset();
+  }
+});
+
+test('resolving a decision while cancelling does not reopen that session', () => {
+  reset();
+  try {
+    state.activeSessionId = 'task-a';
+    state.transcriptSessionId = 'task-a';
+    setSessionRunStatus('task-a', 'working');
+    applyReverseRequest('decision-a', 'session/request_permission', {
+      sessionId: 'task-a',
+      toolCall: { toolCallId: 'tool-a', title: 'write', kind: 'edit' },
+      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+    });
+    assert.equal(sessionRunStatus('task-a'), 'pending');
+    cancelRun();
+    assert.equal(sessionRunStatus('task-a'), 'cancelling');
+    const permission = state.transcript.find((entry) => entry.kind === 'permission');
+    assert.ok(permission && permission.kind === 'permission');
+    // Resolving the last decision must not reopen a session that is still
+    // cancelling; only a Runtime terminal confirmation may change that.
+    resolvePermission(permission, 'allow');
+    assert.equal(sessionRunStatus('task-a'), 'cancelling');
+    applySessionEvent({ sessionId: 'task-a', event: 'terminal', status: 'cancelled' });
+    assert.equal(sessionRunStatus('task-a'), 'cancelled');
   } finally {
     reset();
   }
@@ -156,6 +251,50 @@ test('a draft owns no transcript, so a running task cannot stream into it', () =
     assert.equal(state.transcript.length, 0, 'draft state must not absorb a background run');
     assert.equal(sessionOwnsTranscript('task-a'), false);
   } finally {
+    reset();
+  }
+});
+
+test('a background decision is retained for its session without entering the active transcript', () => {
+  reset();
+  try {
+    state.activeSessionId = 'task-b';
+    state.transcriptSessionId = 'task-b';
+    applyReverseRequest('decision-a', 'session/request_permission', {
+      sessionId: 'task-a',
+      toolCall: { toolCallId: 'tool-a', title: 'write', kind: 'edit' },
+      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+    });
+    assert.equal(sessionRunStatus('task-a'), 'pending');
+    assert.equal(state.transcript.length, 0, 'background request must not bleed into B');
+    assert.equal(state.pendingDecisions['task-a']?.['decision-a']?.kind, 'permission');
+
+    clearTranscript('task-a');
+    assert.equal(state.transcript.filter((entry) => entry.kind === 'permission').length, 1, 'opening A materializes its retained request once');
+    applyReverseRequest('decision-a', 'session/request_permission', {
+      sessionId: 'task-a',
+      toolCall: { toolCallId: 'tool-a', title: 'write', kind: 'edit' },
+      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+    });
+    assert.equal(state.transcript.filter((entry) => entry.kind === 'permission').length, 1, 'ACP replay must dedupe by request ID');
+    applySessionEvent({ sessionId: 'task-a', event: 'terminal', status: 'cancelled' });
+    assert.equal(state.pendingDecisions['task-a'], undefined, 'terminal state clears transient decision projection');
+  } finally {
+    reset();
+  }
+});
+
+test('background available command updates cannot replace active session commands', () => {
+  reset();
+  const previousCommands = state.availableCommands;
+  try {
+    state.activeSessionId = 'task-b';
+    state.transcriptSessionId = 'task-b';
+    state.availableCommands = [{ name: 'b-command' }];
+    applySessionUpdate('task-a', { sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'a-command' }] });
+    assert.deepEqual(state.availableCommands, [{ name: 'b-command' }]);
+  } finally {
+    state.availableCommands = previousCommands;
     reset();
   }
 });

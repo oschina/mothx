@@ -15,7 +15,7 @@ export function newSessionDirectoryPath(
   now = new Date(),
   joinPath: (...parts: string[]) => string = join,
 ): string {
-  return joinPath(home, 'projects', `mothx_projects_${newSessionDirectoryTimestamp(now)}`);
+  return joinPath(home, 'MothX', `mothx_projects_${newSessionDirectoryTimestamp(now)}`);
 }
 
 export function defaultNewSessionDirectory(home = homedir(), now = new Date()): string {

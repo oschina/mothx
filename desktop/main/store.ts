@@ -50,6 +50,31 @@ const DEFAULTS: DesktopStoreData = {
   sessionStatus: {},
 };
 
+// A non-empty local image path is file-read authority. Only the privileged
+// native chooser in ipc.ts may grant one; otherwise a renderer compromise could
+// set an arbitrary *.png path through the generic store channel and retrieve
+// it through the authorized-image bridge. The renderer may still clear a prior
+// chooser-owned path with an empty string.
+export function restrictRendererStorePatch(patch: Partial<DesktopStoreData>): Partial<DesktopStoreData> {
+  const restricted = { ...patch };
+  if (restricted.homeBackgroundImage !== undefined && restricted.homeBackgroundImage !== '') {
+    delete restricted.homeBackgroundImage;
+  }
+  if (restricted.homeLogoImage !== undefined && restricted.homeLogoImage !== '') {
+    delete restricted.homeLogoImage;
+  }
+  return restricted;
+}
+
+// Factory for the desktop:store-set handler. Kept with the store so the
+// restriction can be unit-tested without pulling in Electron's IPC stack.
+export function createStoreSetHandler(store: DesktopStore): (patch: unknown) => DesktopStoreData {
+  return (patch: unknown) => {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return store.get();
+    return store.set(restrictRendererStorePatch(patch as Partial<DesktopStoreData>));
+  };
+}
+
 const MAX_RECENT_WORKSPACES = 12;
 const MAX_STATUS_ENTRIES = 400;
 

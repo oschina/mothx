@@ -44,7 +44,7 @@ import {
   ungroupedSessions,
 } from '@/core/sessions';
 import { openSettingsTab } from '@/core/settings-nav';
-import { hasFeature, isSessionRunning, sessionTitle, state, type ListedSessionShape, type ProjectShape } from '@/core/state';
+import { hasFeature, isSessionRunning, sessionRunStatus, sessionTitle, state, type ListedSessionShape, type ProjectShape } from '@/core/state';
 import { applyTheme } from '@/core/theme';
 import { switchView } from '@/core/views';
 import { useAppState } from '@/hooks/useAppState';
@@ -68,6 +68,7 @@ const DOT_CLASS: Record<string, string> = {
   planning: 'bg-info',
   working: 'bg-primary',
   pending: 'bg-warning',
+  cancelling: 'bg-warning',
   completed: 'bg-success',
   failed: 'bg-danger',
   cancelled: 'bg-faint',
@@ -81,7 +82,10 @@ function sessionStatus(session: ListedSessionShape): string {
     return lastRun.status || 'idle';
   }
   // 每个任务各自投影自己的 Run:后台任务运行时,当前任务不会显示为“执行中”。
-  if (isSessionRunning(session.sessionId)) return 'working';
+  // Return the precise live status so pending/cancelling sessions get their own
+  // discoverable dot color instead of being collapsed into 'working'.
+  const live = sessionRunStatus(session.sessionId);
+  if (isSessionRunning(session.sessionId)) return live;
   return 'idle';
 }
 

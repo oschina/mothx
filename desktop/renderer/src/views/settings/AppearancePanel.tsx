@@ -62,7 +62,9 @@ export function AppearancePanel() {
     const picked = await desktop.chooseHomeLogo(store.homeLogoImage);
     if (!picked) return;
     appState.store.homeLogoImage = picked;
-    void desktop.storeSet({ homeLogoImage: picked });
+    // The privileged chooser persists the selected path; the renderer only
+    // mirrors it locally. A generic store patch cannot authorize a non-empty
+    // image path.
     emit();
     toast(t('settings.homeLogoSet', { w: basename(picked) }));
   };

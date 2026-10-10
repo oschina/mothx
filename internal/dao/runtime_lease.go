@@ -158,7 +158,12 @@ func (d *RuntimeLeaseDAO) Exists(ctx context.Context, executor bun.IDB, sessionI
 }
 
 func (d *RuntimeLeaseDAO) Bind(ctx context.Context, executor bun.IDB, sessionID, ownerID string, epoch int64, tokenHash, runID string, purposes []string) (int64, error) {
-	result, err := executor.NewUpdate().Model((*RuntimeLeaseRecord)(nil)).Set("run_id = ?", runID).Set("purpose = ?", "execution").Set("updated_at = CAST(strftime('%s','now') AS INTEGER)").Where("session_id = ? AND owner_instance_id = ? AND epoch = ? AND lease_token_hash = ? AND state = ? AND expires_at > CAST(strftime('%s','now') AS INTEGER) AND purpose IN (?) AND (run_id = '' OR run_id = ?)", sessionID, ownerID, epoch, tokenHash, "active", bun.In(purposes), runID).Exec(ctx)
+	// Expiry is an advisory recovery boundary, not an ownership fence. A live
+	// owner may have missed heartbeats while SQLite was unavailable; it retains
+	// authority until another owner takes the row over and advances its epoch.
+	// Keep the same owner/epoch/token/state CAS as Renew so that delayed run
+	// admission cannot turn a transient heartbeat failure into a false loss.
+	result, err := executor.NewUpdate().Model((*RuntimeLeaseRecord)(nil)).Set("run_id = ?", runID).Set("purpose = ?", "execution").Set("updated_at = CAST(strftime('%s','now') AS INTEGER)").Where("session_id = ? AND owner_instance_id = ? AND epoch = ? AND lease_token_hash = ? AND state = ? AND purpose IN (?) AND (run_id = '' OR run_id = ?)", sessionID, ownerID, epoch, tokenHash, "active", bun.In(purposes), runID).Exec(ctx)
 	if err != nil {
 		return 0, err
 	}

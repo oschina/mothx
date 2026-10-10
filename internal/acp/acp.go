@@ -3408,10 +3408,23 @@ func (s *server) handleCancel(req rpcRequest) {
 		}
 		return
 	}
+	// Cancel an admission context before looking up the installed runtime. A
+	// prompt can be queued behind session/load, in which case its session ID is
+	// known and its admission context is tracked, but the loader has not yet
+	// installed rt in s.sessions. Returning "unknown session" first would let
+	// that already-cancelled prompt start as soon as the load completes.
+	sessionID := strings.TrimSpace(in.SessionID)
+	cancelledInflight := s.cancelPromptInflightForSession(sessionID)
 	s.mu.Lock()
-	rt := s.sessions[in.SessionID]
+	rt := s.sessions[sessionID]
 	s.mu.Unlock()
 	if rt == nil {
+		if cancelledInflight {
+			if len(req.ID) > 0 {
+				s.writeResponse(req.ID, map[string]any{}, nil)
+			}
+			return
+		}
 		if len(req.ID) > 0 {
 			s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: "unknown session"})
 		}
@@ -3426,9 +3439,6 @@ func (s *server) handleCancel(req rpcRequest) {
 		}
 		rt.cancelMu.Unlock()
 	}
-	// A prompt that has not registered rt.cancel yet (still in admission) is
-	// aborted through its request context.
-	s.cancelPromptInflightForSession(strings.TrimSpace(in.SessionID))
 	if len(req.ID) > 0 {
 		s.writeResponse(req.ID, map[string]any{}, nil)
 	}

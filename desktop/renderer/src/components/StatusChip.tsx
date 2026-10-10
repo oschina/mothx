@@ -6,6 +6,7 @@ const CHIP_CLASS: Record<RunStatusVariant, string> = {
   planning: 'text-info bg-info-soft',
   working: 'text-primary bg-primary/8',
   pending: 'text-warning bg-warning-soft',
+  cancelling: 'text-warning bg-warning-soft',
   completed: 'text-success bg-success-soft',
   failed: 'text-danger bg-danger-soft',
   cancelled: 'text-muted-foreground bg-placeholder',
@@ -31,7 +32,7 @@ export function StatusChip({
       <span
         className={cn(
           'size-1.5 rounded-full bg-current',
-          (variant === 'working' || variant === 'planning') && 'animate-pulse'
+          (variant === 'working' || variant === 'planning' || variant === 'cancelling') && 'animate-pulse'
         )}
       />
       <span>{label}</span>

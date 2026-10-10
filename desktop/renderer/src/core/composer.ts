@@ -430,7 +430,10 @@ async function dispatchPrompt(trimmed: string, source: 'home' | 'chat'): Promise
     .then((result) => {
       const reason = String(result?.stopReason || 'end_turn');
       const current = sessionRunStatus(promptSessionId);
-      if (current === 'failed' || current === 'cancelled') return;
+      // Cancellation remains a non-terminal UI projection until the Runtime
+      // publishes its canonical terminal/run-status event. A prompt response
+      // alone must not reopen submission after session/cancel.
+      if (current === 'failed' || current === 'cancelled' || current === 'cancelling') return;
       setSessionRunStatus(promptSessionId, reason === 'cancelled' || reason === 'aborted' ? 'cancelled' : 'completed');
     })
     .catch((error: unknown) => {
@@ -439,7 +442,7 @@ async function dispatchPrompt(trimmed: string, source: 'home' | 'chat'): Promise
       if (sessionOwnsTranscript(promptSessionId)) {
         state.transcript.push({ kind: 'error', key: `error-prompt:${Date.now()}`, message });
       }
-      terminalizePendingDecisions();
+      terminalizePendingDecisions(promptSessionId);
     })
     .finally(() => {
       if (sessionOwnsTranscript(promptSessionId)) state.currentPlanKey = null;
@@ -462,8 +465,8 @@ export function cancelRun(): void {
   const target = state.activeSessionId;
   if (!target || !isSessionRunning(target)) return;
   acp.notify('session/cancel', { sessionId: target });
-  setSessionRunStatus(target, 'cancelled');
-  terminalizePendingDecisions();
+  setSessionRunStatus(target, 'cancelling');
+  terminalizePendingDecisions(target);
   emit();
 }
 

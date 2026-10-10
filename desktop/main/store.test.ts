@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { DesktopStore } from './store.ts';
+import { DesktopStore, restrictRendererStorePatch } from './store.ts';
+import { readHomeImageDataURL } from './home-image.ts';
 
 test('store defaults to visible home logo and no custom image', () => {
   const dir = mkdtempSync(join(tmpdir(), 'mothx-store-'));
@@ -40,6 +41,27 @@ test('store clamps custom logo path length', () => {
     const longPath = 'a'.repeat(5000);
     store.set({ homeLogoImage: longPath });
     assert.equal(store.get().homeLogoImage.length, 4096);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('generic renderer store patches cannot grant non-empty image paths', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mothx-store-'));
+  try {
+    const target = join(dir, 'private.png');
+    const store = new DesktopStore(dir);
+    store.set(restrictRendererStorePatch({ homeBackgroundImage: target, homeLogoImage: target }));
+    assert.equal(store.get().homeBackgroundImage, '');
+    assert.equal(store.get().homeLogoImage, '');
+    assert.deepEqual(readHomeImageDataURL(target, store.get().homeBackgroundImage), { ok: false, reason: 'unauthorized' });
+
+    // The privileged chooser writes directly to DesktopStore; generic renderer
+    // persistence may still clear those user-granted paths.
+    store.set({ homeBackgroundImage: target, homeLogoImage: target });
+    store.set(restrictRendererStorePatch({ homeBackgroundImage: '', homeLogoImage: '' }));
+    assert.equal(store.get().homeBackgroundImage, '');
+    assert.equal(store.get().homeLogoImage, '');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

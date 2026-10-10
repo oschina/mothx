@@ -71,6 +71,29 @@ func TestHandleCancelAbortsPromptAdmissionForSession(t *testing.T) {
 	}
 }
 
+// TestHandleCancelAbortsQueuedPromptBeforeSessionRuntimeIsInstalled covers a
+// prompt queued behind session/load. Its admission context is already known,
+// but the loader has not installed a runtime yet, so session/cancel must not
+// reject the request as an unknown session and let the prompt start later.
+func TestHandleCancelAbortsQueuedPromptBeforeSessionRuntimeIsInstalled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &server{
+		inflight: make(map[string]*promptInflight),
+		w:        &bytes.Buffer{},
+	}
+	srv.trackPromptInflight("5", "session-loading", cancel)
+	srv.handleCancel(rpcRequest{ID: json.RawMessage("1"), Params: json.RawMessage(`{"sessionId":"session-loading"}`)})
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("handleCancel did not cancel the prompt queued behind session/load")
+	}
+	responses := jsonLines(t, srv.w.(*bytes.Buffer))
+	if len(responses) != 1 || responses[0]["error"] != nil {
+		t.Fatalf("cancel response = %#v, want successful cancellation", responses)
+	}
+}
+
 // TestCancelPromptInflightForSessionScopesBySession verifies the session-scoped
 // cancel only touches the matching session's admission context.
 func TestCancelPromptInflightForSessionScopesBySession(t *testing.T) {

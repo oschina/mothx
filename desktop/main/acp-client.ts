@@ -99,7 +99,7 @@ interface PendingRequest {
   method: string;
 }
 
-interface StartOptions {
+export interface StartOptions {
   binary: string;
   args: string[];
   cwd: string;
@@ -150,6 +150,11 @@ export class AcpClient {
     return { ...this.snapshot };
   }
 
+  // Exposed for deterministic tests; do not rely on this in production code.
+  protected getRestartTimer(): NodeJS.Timeout | undefined {
+    return this.restartTimer;
+  }
+
   private setState(patch: Partial<AcpClientSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...patch };
     this.handlers.onState?.(this.getState());
@@ -160,24 +165,23 @@ export class AcpClient {
     this.stopping = false;
     this.startOptions = options;
     this.stderrTail = [];
+    // An explicit (re)start is a manual recovery: do not let an earlier
+    // automatic restart timer supersede it later.
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = undefined;
+    }
     this.setState({ state: 'starting', workspace: options.cwd, error: undefined, pid: undefined });
 
-    const env: NodeJS.ProcessEnv = { ...(options.env || process.env) };
-    // Desktop approvals are human-paced; keep decisions alive far longer than
-    // the ACP default (see desktop-acp-frontend-gap-proposal.md P0-3).
-    if (options.permissionTimeout) env.MOTHX_ACP_PERMISSION_TIMEOUT = options.permissionTimeout;
-    if (options.questionTimeout) env.MOTHX_ACP_QUESTION_TIMEOUT = options.questionTimeout;
-
-    const child = spawn(options.binary, options.args, {
-      cwd: options.cwd,
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
+    const child = this.spawnChild(options);
     this.child = child;
     this.setState({ pid: child.pid });
 
     child.on('error', (error) => {
+      // An explicit restart replaces the current child before the old one has
+      // finished exiting. Stale error/exit callbacks must not overwrite the new
+      // child's state or schedule another restart.
+      if (this.child !== child) return;
       this.setState({
         state: 'error',
         error: { code: 'spawn_failed', message: `Unable to start the MothX ACP runtime: ${error.message}` },
@@ -187,10 +191,11 @@ export class AcpClient {
     });
 
     child.once('exit', (code, signal) => {
+      if (this.child !== child) return;
       const detail = `code=${code ?? 'none'} signal=${signal ?? 'none'}`;
       this.handlers.onLog?.(`acp process exited: ${detail}`);
       this.failAllPending(new Error(`ACP process exited (${detail})`));
-      if (this.child === child) this.child = undefined;
+      this.child = undefined;
       if (this.stopping) {
         this.setState({ state: 'stopped', pid: undefined });
         return;
@@ -207,6 +212,13 @@ export class AcpClient {
     if (child.stderr) {
       const stderrRl = createInterface({ input: child.stderr });
       stderrRl.on('line', (line) => {
+        // Stale stderr lines (e.g. from a child being replaced by an explicit
+        // restart) must not overwrite the current child's state or schedule a
+        // restart based on old output.
+        if (this.child !== child) {
+          this.handlers.onLog?.(`acp stale stderr ignored (pid=${child.pid}): ${line.slice(0, 200)}`);
+          return;
+        }
         this.stderrTail.push(line);
         if (this.stderrTail.length > 40) this.stderrTail.shift();
         const startup = parseStartupErrorLine(line);
@@ -219,7 +231,14 @@ export class AcpClient {
 
     if (child.stdout) {
       const stdoutRl = createInterface({ input: child.stdout });
-      stdoutRl.on('line', (line) => this.handleLine(line));
+      stdoutRl.on('line', (line) => {
+        // Ignore stdout from a child that has already been replaced.
+        if (this.child !== child) {
+          this.handlers.onLog?.(`acp stale stdout ignored (pid=${child.pid}): ${line.slice(0, 200)}`);
+          return;
+        }
+        this.handleLine(line);
+      });
     }
 
     const init = (await this.request('initialize', desktopInitializeParams(options))) as InitializeResult;
@@ -292,6 +311,20 @@ export class AcpClient {
     }
     this.stopChild('stop');
     this.setState({ state: 'stopped', pid: undefined });
+  }
+
+  // spawnChild is separated so tests can inject deterministic mock children
+  // while still exercising the real event wiring and request/response logic.
+  protected spawnChild(options: StartOptions): ChildProcess {
+    const env: NodeJS.ProcessEnv = { ...(options.env || process.env) };
+    if (options.permissionTimeout) env.MOTHX_ACP_PERMISSION_TIMEOUT = options.permissionTimeout;
+    if (options.questionTimeout) env.MOTHX_ACP_QUESTION_TIMEOUT = options.questionTimeout;
+    return spawn(options.binary, options.args, {
+      cwd: options.cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
   }
 
   private stopChild(reason: string): void {
