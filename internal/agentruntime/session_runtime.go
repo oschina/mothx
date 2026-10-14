@@ -47,6 +47,16 @@ type SessionRuntime struct {
 	LastUsed     time.Time
 	Execution    *ExecutionRuntime
 	Decisions    *DecisionService
+	// mcpFailures records configured MCP servers that failed to connect on a
+	// tolerant/deferred connection, for the entry point's warning surface.
+	mcpFailures []string
+	// mcpDeferred records that build intentionally skipped configured MCP
+	// servers and the entry point owns connecting them later.
+	mcpDeferred bool
+	// mcpOverallTimeout is the build-time bound inherited by the deferred
+	// connection so the later connect still terminates when the caller did not
+	// pass its own timeout.
+	mcpOverallTimeout time.Duration
 	// Provider, Model, Mode, and ThinkingLevel are session-owned bindings used by
 	// BuildAgent when adapters omit overrides. Providers contains the selectable
 	// catalog and allows ACP sessions to switch credentials/models in-process.
@@ -80,6 +90,68 @@ type SessionRuntime struct {
 	// the image-generation tool at build time, so refresh reconciles only its
 	// settings gate.
 	imageGenerationTool bool
+}
+
+// recordMCPFailures stores human-readable MCP connect failures under the
+// runtime lock so an entry point can surface them after a tolerant connect.
+func (r *SessionRuntime) recordMCPFailures(failures []mcp.ServerConnectFailure) {
+	if r == nil || len(failures) == 0 {
+		return
+	}
+	descriptions := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		descriptions = append(descriptions, failure.Error())
+	}
+	r.mu.Lock()
+	r.mcpFailures = descriptions
+	r.mu.Unlock()
+}
+
+// MCPConnectFailures returns descriptions of configured MCP servers that failed
+// to connect during the last tolerant connection. It is a read-only projection
+// for an entry point's warning surface.
+func (r *SessionRuntime) MCPConnectFailures() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]string(nil), r.mcpFailures...)
+}
+
+// MCPDeferred reports whether configured MCP servers were intentionally skipped
+// at build time and are expected to be connected later by the entry point.
+func (r *SessionRuntime) MCPDeferred() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.mcpDeferred
+}
+
+// ConnectDeferredMCP connects the configured servers a deferred build skipped.
+// It is the Runtime-owned deferred path: the entry point only decides when to
+// run it and how to project the result. On success it clears the deferred flag
+// and records any tolerated failures for MCPConnectFailures. When the caller
+// does not pass an overall timeout, the one supplied to the deferred build is
+// reused so the connect always terminates.
+func (r *SessionRuntime) ConnectDeferredMCP(ctx context.Context, policy MCPPolicy) error {
+	if r == nil {
+		return fmt.Errorf("agent runtime is nil")
+	}
+	if policy.OverallTimeout <= 0 {
+		r.mu.RLock()
+		policy.OverallTimeout = r.mcpOverallTimeout
+		r.mu.RUnlock()
+	}
+	if err := r.ConnectConfiguredMCP(ctx, policy); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.mcpDeferred = false
+	r.mu.Unlock()
+	return nil
 }
 
 // SetExecution attaches the session's canonical execution lifecycle.
@@ -912,6 +984,25 @@ type BuildOptions struct {
 	Browser         bool
 	ArtifactEnabled bool
 	RegistryHooks   []RegistryHook
+	// MCP controls how configured MCP servers are connected during build. The
+	// zero value preserves strict, synchronous connection; an interactive entry
+	// point defers it so a slow server cannot freeze first paint.
+	MCP MCPConnectPolicy
+}
+
+// MCPConnectPolicy controls how the shared Runtime connects configured MCP
+// servers during build.
+type MCPConnectPolicy struct {
+	// Deferred skips connecting configured servers during build. The entry point
+	// connects them later through ConnectDeferredMCP, keeping an interactive
+	// surface responsive while a slow server starts.
+	Deferred bool
+	// Optional tolerates individual server failures instead of aborting build.
+	// Tolerated failures are exposed through MCPConnectFailures.
+	Optional bool
+	// OverallTimeout bounds the whole connection group independently of the
+	// per-operation timeouts. Zero uses only the per-operation timeouts.
+	OverallTimeout time.Duration
 }
 
 // RefreshOptions are mutable resource-affecting session capabilities.
@@ -1012,15 +1103,26 @@ func (b Builder) Build(ctx context.Context, opts BuildOptions) (*SessionRuntime,
 	if err := runtime.ApplyRegistryHooks(opts.RegistryHooks); err != nil {
 		return nil, err
 	}
+	if opts.MCP.Deferred {
+		// The entry point owns connecting configured servers later through
+		// ConnectDeferredMCP, so a slow server cannot block first paint.
+		runtime.mcpDeferred = true
+		runtime.mcpOverallTimeout = opts.MCP.OverallTimeout
+		return runtime, nil
+	}
 	servers, err := mcp.LoadConfiguredServers(opts.WorkDir)
 	if err != nil {
 		return nil, err
 	}
-	clients, err := mcp.ConnectServers(ctx, servers, registry, mcp.Callbacks{})
+	clients, failures, err := mcp.ConnectServersWithOptions(ctx, servers, registry, mcp.Callbacks{}, mcp.ConnectOptions{
+		Optional:       opts.MCP.Optional,
+		OverallTimeout: opts.MCP.OverallTimeout,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("connect MCP servers: %w", err)
 	}
 	runtime.MCPClients = clients
+	runtime.recordMCPFailures(failures)
 	return runtime, nil
 }
 

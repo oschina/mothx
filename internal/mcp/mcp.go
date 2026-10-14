@@ -251,39 +251,151 @@ type mcpContentBlock struct {
 	JSON     json.RawMessage `json:"json,omitempty"`
 }
 
-func ConnectServers(ctx context.Context, configs []ServerConfig, registry *tools.Registry, callbacks Callbacks) ([]*Client, error) {
-	var clients []*Client
-	seenServers := make(map[string]struct{})
-	registeredToolNames := make(map[string]struct{})
-	for _, t := range registry.All() {
-		registeredToolNames[t.Name()] = struct{}{}
+// ConnectOptions controls how a group of configured MCP servers is connected.
+type ConnectOptions struct {
+	// Optional tolerates individual server failures: healthy servers are still
+	// connected and their tools registered, while failed servers are reported
+	// through the returned failures slice. The default (false) preserves the
+	// historical strict behavior and aborts the whole group on any failure.
+	Optional bool
+	// OverallTimeout, when > 0, bounds the whole group connection independently
+	// of the per-operation timeouts. Servers still connecting when it elapses are
+	// reported as failures (or, in strict mode, abort the group). It is the
+	// caller's safeguard against several individually-slow servers adding up even
+	// though each stays under its per-operation timeout.
+	OverallTimeout time.Duration
+}
+
+// ServerConnectFailure identifies one configured MCP server that could not be
+// connected. It carries only the server name and error, never credentials.
+type ServerConnectFailure struct {
+	Name string
+	Err  error
+}
+
+func (f ServerConnectFailure) Error() string {
+	if strings.TrimSpace(f.Name) == "" {
+		return f.Err.Error()
 	}
+	return fmt.Sprintf("MCP server %q: %v", f.Name, f.Err)
+}
+
+func ConnectServers(ctx context.Context, configs []ServerConfig, registry *tools.Registry, callbacks Callbacks) ([]*Client, error) {
+	clients, _, err := ConnectServersWithOptions(ctx, configs, registry, callbacks, ConnectOptions{})
+	return clients, err
+}
+
+// ConnectServersWithOptions connects every configured server concurrently, so a
+// set of slow servers costs the slowest one rather than their sum. Discovery of
+// tools/resources/prompts happens per server in parallel too, while registration
+// into the shared registry is performed afterwards in configuration order so the
+// resulting tool surface stays identical to the sequential implementation
+// regardless of connection timing. Failed servers are returned through failures
+// in configuration order (deterministically, for stable reporting).
+func ConnectServersWithOptions(ctx context.Context, configs []ServerConfig, registry *tools.Registry, callbacks Callbacks, options ConnectOptions) ([]*Client, []ServerConnectFailure, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	seenServers := make(map[string]struct{}, len(configs))
 	for _, cfg := range configs {
-		trimmedName := strings.TrimSpace(cfg.Name)
-		if _, ok := seenServers[trimmedName]; ok {
-			CloseClients(clients)
-			return nil, fmt.Errorf("duplicate MCP server name %q", cfg.Name)
+		name := strings.TrimSpace(cfg.Name)
+		if _, ok := seenServers[name]; ok {
+			return nil, nil, fmt.Errorf("duplicate MCP server name %q", cfg.Name)
 		}
-		seenServers[trimmedName] = struct{}{}
-		client, err := newMCPClient(ctx, cfg, callbacks)
-		if err != nil {
-			CloseClients(clients)
-			return nil, err
+		seenServers[name] = struct{}{}
+	}
+	if len(configs) == 0 {
+		return nil, nil, nil
+	}
+
+	// Snapshot the registered tool names once. Registration is single-threaded
+	// below, so this map stays race-free and name allocation stays deterministic.
+	registeredToolNames := make(map[string]struct{})
+	if registry != nil {
+		for _, t := range registry.All() {
+			registeredToolNames[t.Name()] = struct{}{}
 		}
-		// Bind the image policy lazily through the registry method value. The
-		// registry receives its provider/model image hint when the Agent is
-		// built, which happens after MCP connection, so the policy must be
-		// resolved per tool call rather than captured here.
-		if registry != nil {
-			client.imagePolicy = registry.ImagePolicy
+	}
+
+	groupCtx := ctx
+	if options.OverallTimeout > 0 {
+		var cancel context.CancelFunc
+		groupCtx, cancel = context.WithTimeout(ctx, options.OverallTimeout)
+		defer cancel()
+	}
+
+	type connectResult struct {
+		client    *Client
+		tools     []mcpToolInfo
+		resources []mcpResourceInfo
+		prompts   []mcpPromptInfo
+		err       error
+	}
+	results := make([]connectResult, len(configs))
+	var wg sync.WaitGroup
+	for i := range configs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			client, err := newMCPClient(groupCtx, configs[i], callbacks)
+			if err != nil {
+				results[i] = connectResult{err: err}
+				return
+			}
+			// Bind the image policy lazily through the registry method value. The
+			// registry receives its provider/model image hint when the Agent is
+			// built, which happens after MCP connection, so the policy must be
+			// resolved per tool call rather than captured here.
+			if registry != nil {
+				client.imagePolicy = registry.ImagePolicy
+			}
+			tools, err := client.listTools(groupCtx)
+			if err != nil {
+				client.Close()
+				results[i] = connectResult{err: err}
+				return
+			}
+			resources, err := client.listResources(groupCtx)
+			if err != nil && !isMCPMethodNotFound(err) {
+				client.Close()
+				results[i] = connectResult{err: fmt.Errorf("list MCP resources for %q: %w", client.name, err)}
+				return
+			}
+			prompts, err := client.listPrompts(groupCtx)
+			if err != nil && !isMCPMethodNotFound(err) {
+				client.Close()
+				results[i] = connectResult{err: fmt.Errorf("list MCP prompts for %q: %w", client.name, err)}
+				return
+			}
+			results[i] = connectResult{client: client, tools: tools, resources: resources, prompts: prompts}
+		}(i)
+	}
+	wg.Wait()
+
+	var clients []*Client
+	var failures []ServerConnectFailure
+	for i := range results {
+		if results[i].err != nil {
+			failures = append(failures, ServerConnectFailure{Name: strings.TrimSpace(configs[i].Name), Err: results[i].err})
+			continue
 		}
-		clients = append(clients, client)
-		toolInfos, err := client.listTools(ctx)
-		if err != nil {
-			CloseClients(clients)
-			return nil, err
+		if results[i].client != nil {
+			clients = append(clients, results[i].client)
 		}
-		for _, info := range toolInfos {
+	}
+	if len(failures) > 0 && !options.Optional {
+		CloseClients(clients)
+		return nil, nil, failures[0].Err
+	}
+
+	// Register in configuration order so the resulting tool surface and name
+	// allocation are independent of which server finished connecting first.
+	for i := range results {
+		client := results[i].client
+		if client == nil || registry == nil {
+			continue
+		}
+		for _, info := range results[i].tools {
 			if strings.TrimSpace(info.Name) == "" {
 				continue
 			}
@@ -291,38 +403,24 @@ func ConnectServers(ctx context.Context, configs []ServerConfig, registry *tools
 			registeredToolNames[tool.Name()] = struct{}{}
 			registry.Register(tool)
 		}
-		resourceInfos, err := client.listResources(ctx)
-		if err != nil && !isMCPMethodNotFound(err) {
-			CloseClients(clients)
-			return nil, fmt.Errorf("list MCP resources for %q: %w", client.name, err)
-		}
-		if err == nil {
-			for _, info := range resourceInfos {
-				if strings.TrimSpace(info.URI) == "" {
-					continue
-				}
-				tool := newMCPResourceTool(client, info, registeredToolNames)
-				registeredToolNames[tool.Name()] = struct{}{}
-				registry.Register(tool)
+		for _, info := range results[i].resources {
+			if strings.TrimSpace(info.URI) == "" {
+				continue
 			}
+			tool := newMCPResourceTool(client, info, registeredToolNames)
+			registeredToolNames[tool.Name()] = struct{}{}
+			registry.Register(tool)
 		}
-		promptInfos, err := client.listPrompts(ctx)
-		if err != nil && !isMCPMethodNotFound(err) {
-			CloseClients(clients)
-			return nil, fmt.Errorf("list MCP prompts for %q: %w", client.name, err)
-		}
-		if err == nil {
-			for _, info := range promptInfos {
-				if strings.TrimSpace(info.Name) == "" {
-					continue
-				}
-				tool := newMCPPromptTool(client, info, registeredToolNames)
-				registeredToolNames[tool.Name()] = struct{}{}
-				registry.Register(tool)
+		for _, info := range results[i].prompts {
+			if strings.TrimSpace(info.Name) == "" {
+				continue
 			}
+			tool := newMCPPromptTool(client, info, registeredToolNames)
+			registeredToolNames[tool.Name()] = struct{}{}
+			registry.Register(tool)
 		}
 	}
-	return clients, nil
+	return clients, failures, nil
 }
 
 func isMCPMethodNotFound(err error) bool {
