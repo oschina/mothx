@@ -274,6 +274,9 @@ type ServerConnectFailure struct {
 }
 
 func (f ServerConnectFailure) Error() string {
+	if f.Err == nil {
+		return fmt.Sprintf("MCP server %q: connection failed", f.Name)
+	}
 	if strings.TrimSpace(f.Name) == "" {
 		return f.Err.Error()
 	}
@@ -337,7 +340,12 @@ func ConnectServersWithOptions(ctx context.Context, configs []ServerConfig, regi
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			client, err := newMCPClient(groupCtx, configs[i], callbacks)
+			// lifeCtx (the caller's context) owns the client for as long as it is
+			// connected; groupCtx only bounds the handshake below. Reusing the
+			// group timeout as the client's lifetime context would kill an already
+			// connected server the moment this function returns (its deferred
+			// cancel fires) and again when the overall timeout elapses.
+			client, err := newMCPClient(ctx, groupCtx, configs[i], callbacks)
 			if err != nil {
 				results[i] = connectResult{err: err}
 				return
@@ -434,7 +442,13 @@ func CloseClients(clients []*Client) {
 	}
 }
 
-func newMCPClient(ctx context.Context, cfg ServerConfig, callbacks Callbacks) (*Client, error) {
+// newMCPClient starts an MCP client. lifeCtx owns the client for as long as it
+// stays connected: it governs the stdio process and the inbound/SSE loops, so it
+// must be a long-lived context owned by the Runtime rather than a timeout that
+// expires once the connection is established. dialCtx bounds only the startup
+// handshake, so a caller can cap how long a slow server delays a group
+// connection without that deadline later tearing the live client down.
+func newMCPClient(lifeCtx, dialCtx context.Context, cfg ServerConfig, callbacks Callbacks) (*Client, error) {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return nil, fmt.Errorf("MCP server name is required")
 	}
@@ -444,17 +458,17 @@ func newMCPClient(ctx context.Context, cfg ServerConfig, callbacks Callbacks) (*
 	}
 	switch transport {
 	case "stdio":
-		return newMCPStdioClient(ctx, cfg, callbacks)
+		return newMCPStdioClient(lifeCtx, dialCtx, cfg, callbacks)
 	case "http":
-		return newMCPHTTPClient(ctx, cfg, false, callbacks)
+		return newMCPHTTPClient(lifeCtx, dialCtx, cfg, false, callbacks)
 	case "sse":
-		return newMCPHTTPClient(ctx, cfg, true, callbacks)
+		return newMCPHTTPClient(lifeCtx, dialCtx, cfg, true, callbacks)
 	default:
 		return nil, fmt.Errorf("unsupported MCP transport %q for server %q", cfg.Type, cfg.Name)
 	}
 }
 
-func newMCPStdioClient(ctx context.Context, cfg ServerConfig, callbacks Callbacks) (*Client, error) {
+func newMCPStdioClient(lifeCtx, dialCtx context.Context, cfg ServerConfig, callbacks Callbacks) (*Client, error) {
 	command := strings.TrimSpace(cfg.Command)
 	if command == "" {
 		return nil, fmt.Errorf("MCP server %q command is required", cfg.Name)
@@ -468,7 +482,7 @@ func newMCPStdioClient(ctx context.Context, cfg ServerConfig, callbacks Callback
 		return nil, fmt.Errorf("resolve MCP server %q command %q: %w", cfg.Name, command, err)
 	}
 
-	clientCtx, clientCancel := context.WithCancel(ctx)
+	clientCtx, clientCancel := context.WithCancel(lifeCtx)
 	cmd := exec.CommandContext(clientCtx, resolvedCommand, cfg.Args...)
 	cmd.Env = env
 	cmd.Stderr = os.Stderr
@@ -510,7 +524,7 @@ func newMCPStdioClient(ctx context.Context, cfg ServerConfig, callbacks Callback
 		client.closePending(fmt.Errorf("MCP server %q exited", cfg.Name))
 	}()
 
-	initCtx, cancel := context.WithTimeout(ctx, mcpInitializeTimeout)
+	initCtx, cancel := context.WithTimeout(dialCtx, mcpInitializeTimeout)
 	defer cancel()
 	if _, err := client.call(initCtx, "initialize", map[string]any{
 		"protocolVersion": mcpProtocolVersion,
@@ -641,7 +655,7 @@ func checkMCPExecutable(path string) error {
 	return nil
 }
 
-func newMCPHTTPClient(ctx context.Context, cfg ServerConfig, legacySSE bool, callbacks Callbacks) (*Client, error) {
+func newMCPHTTPClient(lifeCtx, dialCtx context.Context, cfg ServerConfig, legacySSE bool, callbacks Callbacks) (*Client, error) {
 	rawURL := strings.TrimSpace(cfg.URL)
 	if rawURL == "" {
 		return nil, fmt.Errorf("MCP server %q url is required for %s transport", cfg.Name, cfg.Type)
@@ -668,7 +682,7 @@ func newMCPHTTPClient(ctx context.Context, cfg ServerConfig, legacySSE bool, cal
 		headers:    headers,
 		callbacks:  callbacks,
 	}
-	client.ctx, client.cancel = context.WithCancel(ctx)
+	client.ctx, client.cancel = context.WithCancel(lifeCtx)
 	client.startInboundLoop()
 	if legacySSE {
 		msgURL := strings.TrimSpace(cfg.MessageURL)
@@ -686,7 +700,7 @@ func newMCPHTTPClient(ctx context.Context, cfg ServerConfig, legacySSE bool, cal
 		go client.readSSELoop(client.ctx, rawURL)
 	}
 
-	initCtx, cancel := context.WithTimeout(ctx, mcpInitializeTimeout)
+	initCtx, cancel := context.WithTimeout(dialCtx, mcpInitializeTimeout)
 	defer cancel()
 	if _, err := client.call(initCtx, "initialize", map[string]any{
 		"protocolVersion": mcpProtocolVersion,

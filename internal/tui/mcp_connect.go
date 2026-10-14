@@ -2,13 +2,18 @@ package tui
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/tui/i18n"
 )
+
+// errMCPToolsConnected is the synthetic cause used when the cached Agent must be
+// rebuilt to freeze newly connected MCP tools into its next system prompt. It is
+// an internal rebuild signal, not a user-facing failure.
+var errMCPToolsConnected = errors.New("MCP tools connected")
 
 // deferredMCPCmd connects the configured MCP servers a deferred build skipped.
 // It runs on a Bubble Tea command goroutine, never the Update loop, so a slow
@@ -57,7 +62,7 @@ func (a *App) handleMCPConnectReady(msg mcpConnectReadyMsg) tea.Cmd {
 	}
 	if a.agent != nil {
 		if a.run == nil && !a.isThinking {
-			a.discardAgent(fmt.Errorf("MCP tools connected"))
+			a.discardAgent(errMCPToolsConnected)
 		} else {
 			a.mcpRebuildPending = true
 		}

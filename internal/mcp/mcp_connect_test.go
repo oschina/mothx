@@ -134,6 +134,42 @@ func TestConnectServersWithOptionsConnectsConcurrently(t *testing.T) {
 	}
 }
 
+// TestConnectServersWithOptionsOverallTimeoutKeepsClientsLive pins the fix for a
+// regression where the whole-group timeout context also parented every client's
+// lifetime, so its deferred cancel (and the timeout itself) killed an already
+// connected server: its tools were registered but every call failed. A
+// successful connect under an overall timeout must stay usable afterwards.
+func TestConnectServersWithOptionsOverallTimeoutKeepsClientsLive(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script MCP fixture is Unix-specific")
+	}
+	dir := t.TempDir()
+	good := mcpFixtureServer(t, dir, "good", "0", "echo")
+
+	registry := newMCPTestRegistry(t)
+	clients, failures, err := ConnectServersWithOptions(context.Background(), []ServerConfig{good}, registry, Callbacks{}, ConnectOptions{OverallTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer CloseClients(clients)
+	if len(clients) != 1 || len(failures) != 0 {
+		t.Fatalf("clients=%v failures=%v, want one healthy client", clientNames(clients), failures)
+	}
+
+	// The server must outlive ConnectServersWithOptions returning and still
+	// answer a real request; the group timeout must only bound the handshake.
+	tools, err := clients[0].listTools(context.Background())
+	if err != nil {
+		t.Fatalf("the overall timeout tore down the connected client: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "tool-echo" {
+		t.Fatalf("tools = %v, want tool-echo", tools)
+	}
+	if !hasToolContaining(registry, "_echo") {
+		t.Fatal("healthy server tools must be registered")
+	}
+}
+
 func clientNames(clients []*Client) []string {
 	names := make([]string, 0, len(clients))
 	for _, client := range clients {

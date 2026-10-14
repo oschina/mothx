@@ -132,9 +132,9 @@ func (r *SessionRuntime) ConnectMCP(ctx context.Context, policy MCPPolicy) error
 		return fmt.Errorf("agent runtime is closed")
 	}
 	r.MCPClients = clients
-	if len(descriptions) > 0 {
-		r.mcpFailures = descriptions
-	}
+	// Assign unconditionally so a later clean connect clears a prior failure set
+	// instead of leaving a stale warning surface behind.
+	r.mcpFailures = descriptions
 	r.mu.Unlock()
 	if len(failures) > 0 && policy.OnError != nil {
 		for _, failure := range failures {

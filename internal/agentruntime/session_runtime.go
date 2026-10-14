@@ -93,14 +93,18 @@ type SessionRuntime struct {
 }
 
 // recordMCPFailures stores human-readable MCP connect failures under the
-// runtime lock so an entry point can surface them after a tolerant connect.
+// runtime lock so an entry point can surface them after a tolerant connect. An
+// empty set clears any prior failures so the warning surface cannot go stale.
 func (r *SessionRuntime) recordMCPFailures(failures []mcp.ServerConnectFailure) {
-	if r == nil || len(failures) == 0 {
+	if r == nil {
 		return
 	}
-	descriptions := make([]string, 0, len(failures))
-	for _, failure := range failures {
-		descriptions = append(descriptions, failure.Error())
+	var descriptions []string
+	if len(failures) > 0 {
+		descriptions = make([]string, 0, len(failures))
+		for _, failure := range failures {
+			descriptions = append(descriptions, failure.Error())
+		}
 	}
 	r.mu.Lock()
 	r.mcpFailures = descriptions
