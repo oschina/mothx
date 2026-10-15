@@ -597,9 +597,9 @@ func TestHandleDeliveryMaterializesToolImagesOnlyForFeishu(t *testing.T) {
 					t.Fatalf("projected image = %d bytes, read=%v close=%v", len(data), readErr, closeErr)
 				}
 			}
-			temporaryImages, err := filepath.Glob(filepath.Join(workDir, ".mothx", "tmp", "feishu-images", "*"))
-			if err != nil || len(temporaryImages) != 0 {
-				t.Fatalf("temporary Feishu images = %v, %v", temporaryImages, err)
+			temporaryEntries, err := filepath.Glob(filepath.Join(workDir, ".mothx", "tmp", "feishu-images-*"))
+			if err != nil || len(temporaryEntries) != 0 {
+				t.Fatalf("temporary Feishu image dirs = %v, %v", temporaryEntries, err)
 			}
 		})
 	}

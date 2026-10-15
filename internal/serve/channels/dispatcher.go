@@ -2778,10 +2778,17 @@ func materializeFeishuToolImages(ctx context.Context, sess *ChannelSession, coll
 	if collector == nil {
 		return fmt.Errorf("Feishu tool image delivery requires artifact publishing to be enabled")
 	}
-	tmpDir := filepath.Join(sess.Runtime.WorkDir, ".mothx", "tmp", "feishu-images")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	parentDir := filepath.Join(sess.Runtime.WorkDir, ".mothx", "tmp")
+	if err := os.MkdirAll(parentDir, 0o700); err != nil {
 		return fmt.Errorf("create temporary image directory: %w", err)
 	}
+	// One unique directory per call keeps concurrent runs from collecting each
+	// other's files; the deferred RemoveAll cleans it on every exit path.
+	tmpDir, err := os.MkdirTemp(parentDir, "feishu-images-")
+	if err != nil {
+		return fmt.Errorf("create temporary image directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
 	var failures []error
 	for _, image := range images {
 		mimeType := strings.ToLower(strings.TrimSpace(image.MimeType))
@@ -2825,13 +2832,8 @@ func materializeFeishuToolImages(ctx context.Context, sess *ChannelSession, coll
 			index = *sequence
 		}
 		filename := fmt.Sprintf("feishu-tool-image-%03d%s", index, extension)
-		_, registerErr := collector.Register(ctx, path, filename, string(agentruntime.AttachmentImage))
-		removeErr := os.Remove(path)
-		if registerErr != nil {
+		if _, registerErr := collector.Register(ctx, path, filename, string(agentruntime.AttachmentImage)); registerErr != nil {
 			failures = append(failures, fmt.Errorf("register %s tool image: %w", mimeType, registerErr))
-		}
-		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			failures = append(failures, fmt.Errorf("remove temporary %s tool image: %w", mimeType, removeErr))
 		}
 	}
 	return errors.Join(failures...)
