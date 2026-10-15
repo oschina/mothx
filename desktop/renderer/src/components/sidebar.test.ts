@@ -40,7 +40,7 @@ test('session rows animate reorders and entrances smoothly', () => {
 test('new task opens the native directory picker and binds the chosen cwd', () => {
   assert.match(sessionsCore, /export async function startNewTask\(pickDirectory = true\)/, 'new task must be an async flow with an opt-out for internal resets');
   assert.match(sessionsCore, /const picked = await chooseWorkingDirectory\(\);/, 'new task must await the native directory picker');
-  assert.match(sessionsCore, /state\.draftWorkspaceSource = 'selected';/, 'a picked directory must be explicitly bound to this new-task draft');
+  assert.match(sessionsCore, /replaceDraftWorkspace\('selected', picked\)/, 'a picked directory must be explicitly bound to this new-task draft');
   assert.match(sidebar, /onClick=\{\(\) => void startNewTask\(\)\}/, 'the new-task buttons must run the picker flow');
   assert.match(sessionsCore, /void startNewTask\(false\)/, 'session delete must not pop the picker again');
 });

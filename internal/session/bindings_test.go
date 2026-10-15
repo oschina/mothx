@@ -1,11 +1,15 @@
 package session
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestRotateBoundSessionRebindsChannel(t *testing.T) {
 	sessionDir := t.TempDir()
+	workDir := t.TempDir()
 	const (
-		workDir     = "/tmp/rotate-bound-session"
 		channelType = "wechat"
 		channelID   = "user-123"
 	)
@@ -16,7 +20,7 @@ func TestRotateBoundSessionRebindsChannel(t *testing.T) {
 	}
 	oldID := old.GetHeader().ID
 
-	rotated, err := RotateBoundSession(workDir, sessionDir, channelType, channelID, oldID)
+	rotated, err := RotateBoundSession(sessionDir, channelType, channelID, oldID)
 	if err != nil {
 		t.Fatalf("rotate bound session: %v", err)
 	}
@@ -40,11 +44,55 @@ func TestRotateBoundSessionRebindsChannel(t *testing.T) {
 	if oldBinding != nil {
 		t.Fatalf("old binding = %#v, want no external binding", oldBinding)
 	}
+	if got := rotated.GetHeader().Cwd; got != workDir {
+		t.Fatalf("rotated cwd = %q, want %q", got, workDir)
+	}
+}
+
+func TestRotateBoundSessionRejectsUnavailableWorkDirWithoutRebinding(t *testing.T) {
+	sessionDir := t.TempDir()
+	workDir := t.TempDir()
+	old, err := CreateBound(workDir, sessionDir, "wechat", "user-456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(workDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RotateBoundSession(sessionDir, "wechat", "user-456", old.GetHeader().ID); err == nil {
+		t.Fatal("expected unavailable work directory error")
+	}
+	binding, err := FindBinding(sessionDir, "wechat", "user-456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding == nil || binding.SessionID != old.GetHeader().ID {
+		t.Fatalf("binding = %#v, want original session %q", binding, old.GetHeader().ID)
+	}
+}
+
+func TestSetWorkDirRejectsRegularFileWithoutMutation(t *testing.T) {
+	sessionDir := t.TempDir()
+	workDir := t.TempDir()
+	mgr := New(workDir, sessionDir)
+	if err := mgr.InitWithID("set-workdir-invalid"); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.SetWorkDir(file); err == nil {
+		t.Fatal("expected regular file error")
+	}
+	if got := mgr.GetHeader().Cwd; got != workDir {
+		t.Fatalf("cwd after failed update = %q, want %q", got, workDir)
+	}
 }
 
 func TestChannelToolsPersistForBoundSession(t *testing.T) {
 	sessionDir := t.TempDir()
-	mgr, err := CreateBound("/tmp/channel-tools", sessionDir, "feishu", "chat-123")
+	mgr, err := CreateBound(t.TempDir(), sessionDir, "feishu", "chat-123")
 	if err != nil {
 		t.Fatalf("create bound session: %v", err)
 	}

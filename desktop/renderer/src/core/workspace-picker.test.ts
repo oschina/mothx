@@ -45,7 +45,8 @@ test('picker routing cannot mistake a next-session default for a session cwd', (
 
 test('quick start uses a transient scratch directory while New Task has no implicit cwd', () => {
   assert.match(bootstrapSrc, /state\.draftWorkspaceSource !== 'quick-start'/);
-  assert.match(bootstrapSrc, /state\.newSessionCwd = await desktop\.defaultNewSessionDirectory\(\)/);
+  assert.match(bootstrapSrc, /desktop\.defaultNewSessionDirectory\(\)\.then\(\(cwd\)/);
+  assert.match(bootstrapSrc, /isCurrentDraftWorkspace\('quick-start', '', generation\)/);
   const newSessionWorkspace = stateSrc.match(/export function newSessionWorkspace\(\): string \{[\s\S]*?\n\}/)?.[0] || '';
   assert.match(newSessionWorkspace, /return state\.newSessionCwd;/);
   assert.doesNotMatch(newSessionWorkspace, /lastWorkspace/);

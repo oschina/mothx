@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,9 +19,9 @@ export function newSessionDirectoryPath(
 }
 
 export function defaultNewSessionDirectory(home = homedir(), now = new Date()): string {
-  const directory = newSessionDirectoryPath(home, now);
-  mkdirSync(directory, { recursive: true });
-  return directory;
+  const prefix = newSessionDirectoryPath(home, now);
+  mkdirSync(join(home, 'MothX'), { recursive: true });
+  return mkdtempSync(`${prefix}_`);
 }
 
 // A fresh Desktop process has one default for all new sessions until the user

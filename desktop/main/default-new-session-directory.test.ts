@@ -12,10 +12,14 @@ test('new-session directories use a cross-platform safe timestamp under MothX', 
 
   const home = mkdtempSync(join(tmpdir(), 'mothx-default-workdir-'));
   try {
-    const directory = defaultNewSessionDirectory(home, now);
-    assert.equal(directory, join(home, 'MothX', 'mothx_projects_20260908_070605'));
-    assert.equal(basename(directory), 'mothx_projects_20260908_070605');
-    assert.equal(existsSync(directory), true);
+    const first = defaultNewSessionDirectory(home, now);
+    const second = defaultNewSessionDirectory(home, now);
+    assert.notEqual(first, second, 'same-second scratch directories must not be reused');
+    for (const directory of [first, second]) {
+      assert.equal(join(directory, '..'), join(home, 'MothX'));
+      assert.match(basename(directory), /^mothx_projects_20260908_070605_/);
+      assert.equal(existsSync(directory), true);
+    }
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

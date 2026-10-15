@@ -609,6 +609,61 @@ func TestSetSessionWorkDirPersistsTarget(t *testing.T) {
 	}
 }
 
+func TestSetSessionWorkDirRejectsUnavailableTargetsWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	oldCwd := t.TempDir()
+	newTestSession(t, oldCwd, dir, "move-invalid", 0)
+
+	for _, target := range []string{
+		filepath.Join(t.TempDir(), "missing"),
+		func() string {
+			file := filepath.Join(t.TempDir(), "not-a-directory")
+			if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return file
+		}(),
+	} {
+		var out bytes.Buffer
+		s := testSessionServer(oldCwd, dir, &out)
+		s.handleSetSessionWorkDir(rpcRequest{
+			ID:     json.RawMessage("1"),
+			Params: json.RawMessage(fmt.Sprintf(`{"sessionId":"move-invalid","cwd":%q,"_meta":{"mothx":{"workspace":{"cwd":%q}}}}`, target, target)),
+		})
+		messages := jsonLines(t, &out)
+		if messages[len(messages)-1]["error"] == nil {
+			t.Fatalf("set work directory target %q unexpectedly succeeded: %#v", target, messages)
+		}
+		mgr, err := session.OpenByIDExact(dir, "move-invalid")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := mgr.GetHeader().Cwd; got != oldCwd {
+			t.Fatalf("persisted cwd after rejected target = %q, want %q", got, oldCwd)
+		}
+	}
+}
+
+func TestSetSessionWorkDirRejectsDeletedSameTarget(t *testing.T) {
+	dir := t.TempDir()
+	cwd := t.TempDir()
+	newTestSession(t, cwd, dir, "move-deleted", 0)
+	if err := os.Remove(cwd); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	s := testSessionServer(cwd, dir, &out)
+	s.handleSetSessionWorkDir(rpcRequest{
+		ID:     json.RawMessage("1"),
+		Params: json.RawMessage(fmt.Sprintf(`{"sessionId":"move-deleted","cwd":%q,"_meta":{"mothx":{"workspace":{"cwd":%q}}}}`, cwd, cwd)),
+	})
+	messages := jsonLines(t, &out)
+	if messages[len(messages)-1]["error"] == nil {
+		t.Fatalf("deleted same-cwd target unexpectedly succeeded: %#v", messages)
+	}
+}
+
 func TestLoadSessionReplaysAllMessages(t *testing.T) {
 	dir := t.TempDir()
 	cwd := t.TempDir()

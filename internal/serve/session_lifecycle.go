@@ -278,11 +278,7 @@ func (s *SessionLifecycleService) Rotate(ctx context.Context, platform, userID s
 			releaseRuntime()
 			continue
 		}
-		workDir := ""
-		if s.dispatcher != nil {
-			workDir = s.dispatcher.PlatformWorkDir(platform)
-		}
-		rotated, rotateErr := session.RotateBoundSession(workDir, s.sessionDir, platform, userID, current.SessionID)
+		rotated, rotateErr := session.RotateBoundSession(s.sessionDir, platform, userID, current.SessionID)
 		if rotateErr != nil {
 			releaseIdentity()
 			releaseRuntime()

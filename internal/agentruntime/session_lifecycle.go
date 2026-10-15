@@ -3,8 +3,6 @@ package agentruntime
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/oschina/mothx/internal/session"
@@ -25,22 +23,7 @@ type CreateSessionOptions struct {
 // creation or rebinding time would persist an unusable session and defer the
 // failure to unrelated tools, MCP setup, or a later prompt.
 func ValidateWorkDir(workDir string) (string, error) {
-	workDir = strings.TrimSpace(workDir)
-	if workDir == "" {
-		return "", fmt.Errorf("session work directory is required")
-	}
-	if !filepath.IsAbs(workDir) {
-		return "", fmt.Errorf("session work directory must be an absolute path")
-	}
-	workDir = filepath.Clean(workDir)
-	info, err := os.Stat(workDir)
-	if err != nil {
-		return "", fmt.Errorf("session work directory is unavailable: %w", err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("session work directory is not a directory")
-	}
-	return workDir, nil
+	return session.ValidateWorkDir(workDir)
 }
 
 // CreateSession initializes a persisted local or bound channel session.

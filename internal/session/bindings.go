@@ -3,8 +3,6 @@ package session
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -167,9 +165,23 @@ func TransferBinding(sessionDir, channelType, channelID, fromSessionID, toSessio
 	return dao.NewBindingDAO(db.Bun()).Transfer(context.Background(), channelType, channelID, fromSessionID, toSessionID)
 }
 
-// RotateBoundSession atomically creates a new bound session and clears the old one.
-func RotateBoundSession(workDir, sessionDir, channelType, channelID, oldSessionID string) (*Manager, error) {
+// RotateBoundSession atomically creates a new bound session and clears the old
+// one. The replacement inherits the old session's durable work directory;
+// channel configuration is only used when an identity has no session yet.
+func RotateBoundSession(sessionDir, channelType, channelID, oldSessionID string) (*Manager, error) {
 	if err := validateBinding(channelType, channelID); err != nil {
+		return nil, err
+	}
+	old, err := OpenByIDExact(sessionDir, oldSessionID)
+	if err != nil {
+		return nil, err
+	}
+	header := old.GetHeader()
+	if header == nil {
+		return nil, fmt.Errorf("session header is unavailable")
+	}
+	workDir, err := ValidateWorkDir(header.Cwd)
+	if err != nil {
 		return nil, err
 	}
 	db, err := OpenRootDB(sessionDir)
@@ -185,6 +197,10 @@ func RotateBoundSession(workDir, sessionDir, channelType, channelID, oldSessionI
 
 func CreateBound(workDir, sessionDir, channelType, channelID string) (*Manager, error) {
 	if err := validateBinding(channelType, channelID); err != nil {
+		return nil, err
+	}
+	workDir, err := ValidateWorkDir(workDir)
+	if err != nil {
 		return nil, err
 	}
 	m := New(workDir, sessionDir)
@@ -233,17 +249,10 @@ func (m *Manager) SetExpertBinding(expertID string) error {
 // caller is responsible for ensuring that the new directory is authorized and
 // for rebuilding any Runtime resources that were assembled for the old one.
 func (m *Manager) SetWorkDir(cwd string) error {
-	cwd = strings.TrimSpace(cwd)
-	if cwd == "" || !filepath.IsAbs(cwd) {
-		return fmt.Errorf("session work directory must be an absolute path")
-	}
-	cwd = filepath.Clean(cwd)
-	info, err := os.Stat(cwd)
+	var err error
+	cwd, err = ValidateWorkDir(cwd)
 	if err != nil {
-		return fmt.Errorf("session work directory is unavailable: %w", err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("session work directory is not a directory")
+		return err
 	}
 
 	m.mu.Lock()

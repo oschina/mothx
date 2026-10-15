@@ -20,6 +20,7 @@ import {
   setSessionRunStatus,
   state,
   type AttachmentDraft,
+  type DraftConfigSelection,
   type SessionConfigOptionShape,
 } from './state';
 import { terminalizePendingDecisions } from './transcript';
@@ -129,7 +130,7 @@ export function buildPromptBlocks(text: string): ContentBlock[] {
 }
 
 // 会话创建前用户在 home 选择的 model/provider/mode 暂存,session/new 后应用。
-const pendingConfig: { provider?: string; model?: string; mode?: string; expert?: string; thinking_level?: string } = {};
+let pendingConfig: DraftConfigSelection = state.draftConfigSelection;
 
 interface ProviderCatalogResult {
   providers?: { name?: string; isDefault?: boolean; apiKeyConfigured?: boolean }[];
@@ -160,6 +161,25 @@ let catalogCapabilities = new Map<string, ModelChoice>();
 // 不自己判断可用性或重排优先级。
 let configuredProviders = new Set<string>();
 let providerOrder: string[] = [];
+
+function currentPendingConfig(): DraftConfigSelection {
+  if (pendingConfig !== state.draftConfigSelection) pendingConfig = state.draftConfigSelection;
+  return pendingConfig;
+}
+
+function draftIsCurrent(cwd: string, generation: number): boolean {
+  return !state.activeSessionId && state.newSessionCwd === cwd && state.draftGeneration === generation;
+}
+
+export function resetDraftConfigState(): void {
+  state.draftConfigOptions = [];
+  draftModelsByProvider = {};
+  catalogCapabilities = new Map();
+  configuredProviders = new Set();
+  providerOrder = [];
+  state.draftConfigSelection = {};
+  pendingConfig = state.draftConfigSelection;
+}
 
 // providerIsConfigured reports whether the ACP provider projection marked a
 // usable API key. Providers the projection does not know about stay visible so
@@ -207,10 +227,12 @@ export function visibleConfigOptions(options: SessionConfigOptionShape[]): Sessi
 // The desktop only reshapes the protocol response for a menu; provider/model
 // resolution and validation remain in the shared Runtime when the session is
 // created and the pending values are applied.
-export async function refreshDraftConfigOptions(): Promise<void> {
-  if (!isReady() || !hasFeature('manageProviders')) return;
+export async function refreshDraftConfigOptions(cwd = newSessionWorkspace(), generation = state.draftGeneration): Promise<void> {
+  if (!isReady() || !hasFeature('manageProviders') || !draftIsCurrent(cwd, generation)) return;
+  const config = currentPendingConfig();
   try {
     const result = await invoke<ProviderCatalogResult>('mothx/manage/providers/list', {});
+    if (!draftIsCurrent(cwd, generation)) return;
     const projected = result.providers || [];
     configuredProviders = new Set(projected.filter((provider) => provider.apiKeyConfigured !== false).map((provider) => String(provider.name || '')));
     // 顺序完全采用 Runtime 的权威投影(默认供应商 → 最近使用 → 未使用)。
@@ -220,7 +242,7 @@ export async function refreshDraftConfigOptions(): Promise<void> {
       .map((provider) => ({ value: String(provider.name || ''), name: String(provider.name || '') }))
       .filter((provider) => provider.value !== '' && providerIsConfigured(provider.value));
     const existingProvider = state.draftConfigOptions.find((option) => option.id === 'provider')?.currentValue;
-    const preferredProvider = pendingConfig.provider || existingProvider || defaultProvider;
+    const preferredProvider = config.provider || existingProvider || defaultProvider;
     const provider = providerChoices.some((choice) => choice.value === preferredProvider) ? preferredProvider : providerChoices[0]?.value || '';
     draftModelsByProvider = {};
     catalogCapabilities = new Map();
@@ -240,18 +262,19 @@ export async function refreshDraftConfigOptions(): Promise<void> {
     }
     const modelChoices = draftModelsByProvider[provider] || [];
     const existingModel = state.draftConfigOptions.find((option) => option.id === 'model')?.currentValue;
-    const preferredModel = pendingConfig.model || existingModel || (provider === result.defaultProvider ? result.defaultModel || '' : '');
+    const preferredModel = config.model || existingModel || (provider === result.defaultProvider ? result.defaultModel || '' : '');
     const model: string = modelChoices.some((choice) => choice.value === preferredModel) ? preferredModel : modelChoices[0]?.value || '';
     state.draftConfigOptions = [
       { type: 'select', id: 'provider', name: 'Provider', currentValue: provider, options: providerChoices },
       { type: 'select', id: 'model', name: 'Model', currentValue: model, options: modelChoices },
     ];
-    const draft = await invoke<DraftConfigOptionsResult>('mothx/session/draft-config-options', { cwd: newSessionWorkspace() });
+    const draft = await invoke<DraftConfigOptionsResult>('mothx/session/draft-config-options', { cwd });
+    if (!draftIsCurrent(cwd, generation)) return;
     for (const option of draft.configOptions || []) {
       if (option.id !== 'provider' && option.id !== 'model') state.draftConfigOptions.push(option);
     }
-    if (provider) pendingConfig.provider = provider;
-    if (model) pendingConfig.model = model;
+    if (provider) config.provider = provider;
+    if (model) config.model = model;
     emit();
   } catch (error) {
     desktop.log(`providers/list for next task failed: ${error instanceof Error ? error.message : String(error)}`);

@@ -5,14 +5,25 @@ import { notifyCronCompleted } from './automation';
 import { refreshDraftConfigOptions } from './composer';
 import { setLocale } from './i18n';
 import { refreshProjects, refreshSessions } from './sessions';
-import { emit, state } from './state';
+import { emit, isCurrentDraftWorkspace, state } from './state';
 import { applyHomeBackground, applyTheme } from './theme';
 import { applyReverseRequest, applySessionEvent, applySessionUpdate } from './transcript';
 import { applyWorktreeStatus } from './worktrees';
 
-async function initializeQuickStartWorkspace(): Promise<void> {
-  if (state.activeSessionId || state.draftWorkspaceSource !== 'quick-start' || state.newSessionCwd) return;
-  state.newSessionCwd = await desktop.defaultNewSessionDirectory();
+let quickStartInitialization: Promise<boolean> | null = null;
+
+async function initializeQuickStartWorkspace(): Promise<boolean> {
+  if (state.activeSessionId || state.draftWorkspaceSource !== 'quick-start' || state.newSessionCwd) return false;
+  if (quickStartInitialization) return quickStartInitialization;
+  const generation = state.draftGeneration;
+  quickStartInitialization = desktop.defaultNewSessionDirectory().then((cwd) => {
+    if (!isCurrentDraftWorkspace('quick-start', '', generation)) return false;
+    state.newSessionCwd = cwd;
+    return true;
+  }).finally(() => {
+    quickStartInitialization = null;
+  });
+  return quickStartInitialization;
 }
 
 export function handleEvent(event: RendererEvent): void {

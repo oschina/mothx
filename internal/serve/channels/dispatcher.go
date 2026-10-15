@@ -1805,11 +1805,6 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 	cronStore := d.cronStore
 	scheduler := d.scheduler
 	workDir := cfg.GetPlatformWorkDir(platform)
-	if security != nil {
-		if err := security.CheckWorkDirAllowed(workDir); err != nil {
-			return nil, err
-		}
-	}
 	var mgr *session.Manager
 	var bound *session.Binding
 	var err error
@@ -1824,6 +1819,14 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 		if err != nil {
 			return nil, fmt.Errorf("open bound session: %w", err)
 		}
+		header := mgr.GetHeader()
+		if header == nil {
+			return nil, fmt.Errorf("open bound session: session header is unavailable")
+		}
+		workDir, err = agentruntime.ValidateWorkDir(header.Cwd)
+		if err != nil {
+			return nil, fmt.Errorf("open bound session: %w", err)
+		}
 	} else if platform == "wechat" || platform == "feishu" {
 		mgr, err = agentruntime.CreateSession(agentruntime.CreateSessionOptions{
 			WorkDir: workDir, SessionDir: d.sessionDir, ChannelType: platform, ChannelID: userID,
@@ -1835,6 +1838,11 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 		mgr, err = agentruntime.CreateSession(agentruntime.CreateSessionOptions{WorkDir: workDir, SessionDir: d.sessionDir})
 		if err != nil {
 			return nil, fmt.Errorf("create session: %w", err)
+		}
+	}
+	if security != nil {
+		if err := security.CheckWorkDirAllowed(workDir); err != nil {
+			return nil, err
 		}
 	}
 
@@ -2068,8 +2076,7 @@ func (d *Dispatcher) RotateSession(platform, userID string, force bool) error {
 			releaseRuntime()
 			continue
 		}
-		workDir := d.PlatformWorkDir(platform)
-		if _, rotateErr := session.RotateBoundSession(workDir, d.sessionDir, platform, userID, current.SessionID); rotateErr != nil {
+		if _, rotateErr := session.RotateBoundSession(d.sessionDir, platform, userID, current.SessionID); rotateErr != nil {
 			releaseIdentity()
 			releaseRuntime()
 			return fmt.Errorf("rotate bound session: %w", rotateErr)

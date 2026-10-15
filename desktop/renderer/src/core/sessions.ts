@@ -11,6 +11,7 @@ import {
   hasFeature,
   isSessionRunning,
   newSessionWorkspace,
+  replaceDraftWorkspace,
   sessionRunStatus,
   setSessionRunStatus,
   setSessionStatus,
@@ -370,8 +371,7 @@ function resetTaskState(): void {
   state.activeSessionCwd = '';
   state.activeTitle = '';
   state.attachments = [];
-  state.newSessionCwd = '';
-  state.draftWorkspaceSource = 'new-task';
+  replaceDraftWorkspace('new-task');
   clearTranscript(null);
 }
 
@@ -397,13 +397,15 @@ export function hasWorkingDirectory(cwd: string): boolean {
 }
 
 export async function chooseWorkingDirectory(): Promise<boolean> {
+  const generation = state.draftGeneration;
   const picked = await desktop.chooseDirectory(state.store.lastWorkspace);
-  if (!picked) return false;
-  state.newSessionCwd = picked;
-  state.draftWorkspaceSource = 'selected';
+  if (!picked || state.activeSessionId || state.draftGeneration !== generation) return false;
+  const selectedGeneration = replaceDraftWorkspace('selected', picked);
   void desktop.storeSet({ lastWorkspace: picked });
   state.store.lastWorkspace = picked;
   emit();
+  const { refreshDraftConfigOptions } = await import('./composer');
+  void refreshDraftConfigOptions(picked, selectedGeneration);
   return true;
 }
 
@@ -443,10 +445,11 @@ export async function createIsolatedWorktree(): Promise<void> {
       await refreshTaskLibrary();
       if (state.activeSessionId === targetSession) await openSession(targetSession);
     } else {
-      state.newSessionCwd = worktree.directory;
-      state.draftWorkspaceSource = 'selected';
+      const generation = replaceDraftWorkspace('selected', worktree.directory);
       void desktop.storeSet({ lastWorkspace: worktree.directory });
       state.store.lastWorkspace = worktree.directory;
+      const { refreshDraftConfigOptions } = await import('./composer');
+      void refreshDraftConfigOptions(worktree.directory, generation);
     }
     toast(t('composer.worktreeReady'));
     emit();

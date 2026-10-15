@@ -144,6 +144,14 @@ export type TranscriptItem =
 // it is opened (or ACP replays the request); it is never persisted locally.
 export type PendingDecisionItem = Extract<TranscriptItem, { kind: 'permission' | 'question' }>;
 
+export interface DraftConfigSelection {
+  provider?: string;
+  model?: string;
+  mode?: string;
+  expert?: string;
+  thinking_level?: string;
+}
+
 export interface AttachmentDraft {
   path: string;
   name: string;
@@ -174,6 +182,9 @@ export interface AppState {
   // directory; selected directories belong only to that draft/session.
   newSessionCwd: string;
   draftWorkspaceSource: DraftWorkspaceSource;
+  // In-memory identity of the current next-session draft. Async picker, ACP,
+  // and quick-start completions must match it before changing draft state.
+  draftGeneration: number;
   // 当前打开会话创建/加载时确定的工作目录。所有该会话的请求都以它为准。
   activeSessionCwd: string;
   activeSessionId: string | null;
@@ -194,6 +205,7 @@ export interface AppState {
   // They are a UI projection of mothx/manage/providers/list, never a second
   // provider catalog; sessionConfigOptions take over once a session is open.
   draftConfigOptions: SessionConfigOptionShape[];
+  draftConfigSelection: DraftConfigSelection;
   configOptions: SessionConfigOptionShape[];
   currentMode: string;
   availableCommands: AvailableCommandShape[];
@@ -220,6 +232,7 @@ export const state: AppState = {
   historyProjectId: '',
   newSessionCwd: '',
   draftWorkspaceSource: 'quick-start',
+  draftGeneration: 0,
   activeSessionCwd: '',
   activeSessionId: null,
   activeTitle: '',
@@ -230,6 +243,7 @@ export const state: AppState = {
 	  transcriptNextCursor: '',
 	  transcriptLoading: false,
   draftConfigOptions: [],
+  draftConfigSelection: {},
   configOptions: [],
   currentMode: 'yolo',
   availableCommands: [],
@@ -276,6 +290,22 @@ export function activeSessionWorkspace(): string {
 // a native-picker convenience and must never become a session fallback.
 export function newSessionWorkspace(): string {
   return state.newSessionCwd;
+}
+
+// replaceDraftWorkspace advances the in-memory draft identity so delayed
+// quick-start, native-picker, and ACP projection results cannot mutate a newer
+// New Task draft.
+export function replaceDraftWorkspace(source: DraftWorkspaceSource, cwd = ''): number {
+  state.draftGeneration += 1;
+  state.draftWorkspaceSource = source;
+  state.newSessionCwd = cwd;
+  state.draftConfigOptions = [];
+  for (const key of Object.keys(state.draftConfigSelection) as (keyof DraftConfigSelection)[]) delete state.draftConfigSelection[key];
+  return state.draftGeneration;
+}
+
+export function isCurrentDraftWorkspace(source: DraftWorkspaceSource, cwd: string, generation: number): boolean {
+  return !state.activeSessionId && state.draftWorkspaceSource === source && state.newSessionCwd === cwd && state.draftGeneration === generation;
 }
 
 export function isReady(): boolean {

@@ -11,6 +11,7 @@ import (
 
 type BindingRecord struct {
 	SessionID   string `bun:"id"`
+	CWD         string `bun:"cwd"`
 	ChannelType string `bun:"channel_type"`
 	ChannelID   string `bun:"channel_id"`
 }
@@ -195,11 +196,14 @@ func (d *BindingDAO) Transfer(ctx context.Context, channelType, channelID, fromS
 func (d *BindingDAO) Rotate(ctx context.Context, workDir, channelType, channelID, oldSessionID string, version int, id, timestamp string) error {
 	return d.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var current BindingRecord
-		if err := tx.NewSelect().Table("sessions").Column("id", "channel_type", "channel_id").Where("id = ?", oldSessionID).Limit(1).Scan(ctx, &current); err != nil {
+		if err := tx.NewSelect().Table("sessions").Column("id", "cwd", "channel_type", "channel_id").Where("id = ?", oldSessionID).Limit(1).Scan(ctx, &current); err != nil {
 			return err
 		}
 		if current.ChannelType != channelType || current.ChannelID != channelID {
 			return fmt.Errorf("session is no longer bound to %s/%s", channelType, channelID)
+		}
+		if current.CWD != workDir {
+			return fmt.Errorf("session work directory changed during channel rotation")
 		}
 		if _, err := tx.NewUpdate().Table("sessions").Set("channel_type = ?", "local").Set("channel_id = ?", "").Where("id = ?", oldSessionID).Exec(ctx); err != nil {
 			return err

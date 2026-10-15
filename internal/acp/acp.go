@@ -2354,10 +2354,6 @@ func (s *server) handleNewSession(req rpcRequest) {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "cwd is required"})
 		return
 	}
-	if _, err := agentruntime.ValidateWorkDir(cwd); err != nil {
-		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
-		return
-	}
 	if s.providerUnavailable() {
 		s.writeResponse(req.ID, nil, s.providerGateError())
 		return
@@ -3859,6 +3855,14 @@ func (s *server) handleSetSessionWorkDir(req rpcRequest) {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: err.Error()})
 		return
 	}
+	// Authorization only proves the target belongs to the negotiated workspace.
+	// Validate it before the same-CWD shortcut or an idle Runtime teardown so an
+	// unavailable target can never turn a usable session into a detached one.
+	targetCwd, err = agentruntime.ValidateWorkDir(targetCwd)
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
+		return
+	}
 	mgr, err := session.OpenByIDExact(s.currentSettings().GetSessionDir(), in.SessionID)
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
@@ -3879,27 +3883,34 @@ func (s *server) handleSetSessionWorkDir(req rpcRequest) {
 		s.writeResponse(req.ID, setWorkDirResult{Cwd: targetCwd}, nil)
 		return
 	}
-	if activeRun, activeErr := agentruntime.GetActiveDurableRun(context.Background(), s.currentSettings().GetSessionDir(), in.SessionID); activeErr != nil {
-		s.writeResponse(req.ID, nil, acpFailureRPCError(activeErr, nil, agentruntime.PhasePersistence))
-		return
-	} else if activeRun != nil {
-		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: "cannot change the work directory while the session is running"})
-		return
-	}
-
-	if rt := s.sessionRuntime(in.SessionID); rt != nil {
-		if _, active := rt.execution.Active(); active {
+	if err := s.withSessionMutationLease(in.SessionID, func() error {
+		activeRun, activeErr := agentruntime.GetActiveDurableRun(context.Background(), s.currentSettings().GetSessionDir(), in.SessionID)
+		if activeErr != nil {
+			return activeErr
+		}
+		if activeRun != nil {
+			return errACPActiveSessionRun
+		}
+		if rt := s.sessionRuntime(in.SessionID); rt != nil {
+			if _, active := rt.execution.Active(); active {
+				return errACPActiveSessionRun
+			}
+		}
+		// Revalidate while holding the mutation lease before persistence. This
+		// preserves a loaded Runtime whenever the target disappeared after the
+		// initial preflight.
+		if err := mgr.SetWorkDir(targetCwd); err != nil {
+			return err
+		}
+		if _, err := s.closeSessionRuntime(in.SessionID); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		if errors.Is(err, errACPActiveSessionRun) {
 			s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: "cannot change the work directory while the session is running"})
 			return
 		}
-		if _, err := s.closeSessionRuntime(in.SessionID); err != nil {
-			s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
-			return
-		}
-	}
-	if err := s.withSessionMutationLease(in.SessionID, func() error {
-		return mgr.SetWorkDir(targetCwd)
-	}); err != nil {
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
 		return
 	}
