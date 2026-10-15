@@ -409,6 +409,8 @@ const (
 	MsgRuleUseForce                       MessageID = "rule.use_force"
 	MsgRuleLoadedExisting                 MessageID = "rule.loaded_existing"
 	MsgReloading                          MessageID = "reload.reloading"
+	MsgMCPConnectWarning                  MessageID = "mcp.connect_warning"
+	MsgMCPConnectFailed                   MessageID = "mcp.connect_failed"
 	MsgCompactRunning                     MessageID = "compact.running"
 	MsgModeChangeAborted                  MessageID = "mode.change_aborted"
 	MsgCommandAgentEntry                  MessageID = "commands.agent.entry"
@@ -617,6 +619,8 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRuleLoaded:                         "Loaded into the current session.",
 		MsgRuleExists:                         "Rule file already exists: %s",
 		MsgReloading:                          "↻ Reloading: starting a fresh process with a new session...",
+		MsgMCPConnectWarning:                  "⚠ MCP server unavailable: %s",
+		MsgMCPConnectFailed:                   "MCP connection failed: %v",
 		MsgCompactRunning:                     "Cannot compact while the agent is running.",
 		MsgModeChangeAborted:                  "⏹ Aborted (mode change)",
 		MsgCommandAgentEntry:                  "  %s [%s]",
@@ -1053,6 +1057,8 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRuleLoaded:                         "已加载到当前会话。",
 		MsgRuleExists:                         "规则文件已存在：%s",
 		MsgReloading:                          "↻ 正在重新加载：以新会话启动全新进程……",
+		MsgMCPConnectWarning:                  "⚠ MCP 服务器不可用：%s",
+		MsgMCPConnectFailed:                   "MCP 连接失败：%v",
 		MsgCompactRunning:                     "Agent 运行时不能压缩上下文。",
 		MsgModeChangeAborted:                  "⏹ 已中止（模式切换）",
 		MsgCommandAgentEntry:                  "  %s [%s]",

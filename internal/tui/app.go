@@ -151,13 +151,17 @@ type App struct {
 	runtime             *agentruntime.SessionRuntime
 	run                 *tuiRun
 	registry            *tools.Registry
-	sandboxInfo         string
-	cwd                 string
-	mode                string
-	extraContext        string
-	ruleContent         string
-	skillsMgr           *skills.Manager
-	skillHub            *skillhub.Service
+	// mcpRebuildPending records that MCP tools finished connecting while a run
+	// was active, so the cached Agent is rebuilt on the next idle submission
+	// instead of cancelling the in-flight run just to pick up the new tools.
+	mcpRebuildPending bool
+	sandboxInfo       string
+	cwd               string
+	mode              string
+	extraContext      string
+	ruleContent       string
+	skillsMgr         *skills.Manager
+	skillHub          *skillhub.Service
 
 	// Skills state: base extraContext (without skills) and active skill names
 	baseExtraContext string            // extraContext without skill content
@@ -763,6 +767,12 @@ func (a *App) Init() tea.Cmd {
 		cmds = append(cmds, a.backgroundRunPoll())
 	}
 
+	// Configured MCP servers are connected in the background for the interactive
+	// TUI (a deferred build skipped them), so a slow server cannot freeze the UI.
+	if cmd := a.deferredMCPCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
 	return tea.Batch(cmds...)
 }
 
@@ -950,6 +960,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.scheduleRender()
 		}
 		return a, nil
+
+	case mcpConnectReadyMsg:
+		return a, a.handleMCPConnectReady(msg)
 
 	case statusLineRenderedMsg:
 		return a, a.handleStatusLineRendered(msg)

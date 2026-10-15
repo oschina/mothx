@@ -125,7 +125,7 @@ func TestIsMCPMethodNotFound(t *testing.T) {
 }
 
 func TestMCPSSERejectsInvalidMessageURL(t *testing.T) {
-	_, err := newMCPHTTPClient(context.Background(), ServerConfig{
+	_, err := newMCPHTTPClient(context.Background(), context.Background(), ServerConfig{
 		Name:       "invalid-sse",
 		Type:       "sse",
 		URL:        "http://127.0.0.1/events",

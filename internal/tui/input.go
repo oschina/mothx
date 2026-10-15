@@ -532,6 +532,13 @@ func (a *App) processInput(input string) tea.Cmd {
 	}
 	a.run.artifacts = artifacts
 	a.prepareESMRun()
+	// MCP tools that finished connecting during a prior run are now on the
+	// shared registry; discard the cached Agent so this submission's build
+	// freezes them into its system prompt.
+	if a.mcpRebuildPending {
+		a.discardAgent(errMCPToolsConnected)
+		a.mcpRebuildPending = false
+	}
 	a.ensureAgent()
 	if a.agent == nil {
 		a.runtime.DiscardInput(context.Background(), runInput)

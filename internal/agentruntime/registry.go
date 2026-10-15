@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/oschina/mothx/internal/browser"
 	"github.com/oschina/mothx/internal/config"
@@ -81,7 +82,12 @@ type MCPPolicy struct {
 	Servers   []mcp.ServerConfig
 	Callbacks mcp.Callbacks
 	Optional  bool
-	OnError   func(error)
+	// OverallTimeout bounds the whole connection group. Zero uses only the
+	// per-operation timeouts. It lets an entry point cap how long a set of slow
+	// configured servers may collectively delay a run without changing the
+	// per-server timeout semantics.
+	OverallTimeout time.Duration
+	OnError        func(error)
 }
 
 // ConnectMCP connects policy servers to this Runtime's registry. Strict policy
@@ -100,7 +106,10 @@ func (r *SessionRuntime) ConnectMCP(ctx context.Context, policy MCPPolicy) error
 	if len(servers) == 0 {
 		return nil
 	}
-	clients, err := mcp.ConnectServers(ctx, servers, r.Registry, policy.Callbacks)
+	clients, failures, err := mcp.ConnectServersWithOptions(ctx, servers, r.Registry, policy.Callbacks, mcp.ConnectOptions{
+		Optional:       policy.Optional,
+		OverallTimeout: policy.OverallTimeout,
+	})
 	if err != nil {
 		if policy.Optional {
 			if policy.OnError != nil {
@@ -110,7 +119,28 @@ func (r *SessionRuntime) ConnectMCP(ctx context.Context, policy MCPPolicy) error
 		}
 		return err
 	}
+	// Publish under the runtime lock: a deferred connection can run concurrently
+	// with Shutdown, and Close reads MCPClients under the same lock.
+	descriptions := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		descriptions = append(descriptions, failure.Error())
+	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		mcp.CloseClients(clients)
+		return fmt.Errorf("agent runtime is closed")
+	}
 	r.MCPClients = clients
+	// Assign unconditionally so a later clean connect clears a prior failure set
+	// instead of leaving a stale warning surface behind.
+	r.mcpFailures = descriptions
+	r.mu.Unlock()
+	if len(failures) > 0 && policy.OnError != nil {
+		for _, failure := range failures {
+			policy.OnError(failure.Err)
+		}
+	}
 	return nil
 }
 

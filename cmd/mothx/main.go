@@ -664,6 +664,12 @@ func registerA2AMasterTool(registry *tools.Registry, opts runOptions) error {
 	return nil
 }
 
+// interactiveMCPConnectTimeout bounds the whole deferred MCP connection group
+// for the interactive TUI. It is intentionally generous (per-server startup is
+// already capped at 15s) and only exists so the background connect always
+// terminates and reports failures instead of hanging indefinitely.
+const interactiveMCPConnectTimeout = 60 * time.Second
+
 func setupAgentRuntime(ctx context.Context, p provider.Provider, providerName string, model *provider.Model, settings *config.Settings, opts runOptions, sessionMgr *session.Manager, sessionID, workDir string) (runtimeSetup, error) {
 	level := sandbox.LevelNone
 	if opts.sandbox || settings.Sandbox.Enabled {
@@ -678,10 +684,19 @@ func setupAgentRuntime(ctx context.Context, p provider.Provider, providerName st
 		}
 		return registerA2AMasterTool(runtime.Registry, opts)
 	}}
+	// Interactive TUI defers MCP so a slow or unhealthy configured server cannot
+	// freeze first paint; the TUI connects it after the program starts and any
+	// tolerated failures surface as a warning. Non-interactive print keeps the
+	// strict, synchronous connection so a bad server fails the command clearly.
+	mcpPolicy := agentruntime.MCPConnectPolicy{}
+	if !opts.print {
+		mcpPolicy = agentruntime.MCPConnectPolicy{Deferred: true, Optional: true, OverallTimeout: interactiveMCPConnectTimeout}
+	}
 	sharedRuntime, err := (agentruntime.Builder{Settings: settings, SandboxLevel: level}).Build(ctx, agentruntime.BuildOptions{
 		ID: sessionID, Source: agentruntime.SourceTUI, WorkDir: workDir, Manager: sessionMgr,
 		Workflows: opts.workflows, Browser: opts.browser,
 		ArtifactEnabled: opts.artifact || settings.IsArtifactEnabled(), RegistryHooks: hooks,
+		MCP: mcpPolicy,
 	})
 	if err != nil {
 		return runtimeSetup{}, err
