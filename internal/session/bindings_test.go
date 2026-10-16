@@ -71,6 +71,32 @@ func TestRotateBoundSessionRejectsUnavailableWorkDirWithoutRebinding(t *testing.
 	}
 }
 
+// TestRotateBoundSessionToleratesNonCanonicalStoredCwd guards the rotation CAS:
+// a legacy session persisted with a non-canonical cwd (trailing separator) must
+// still rotate, while the replacement inherits the canonical path.
+func TestRotateBoundSessionToleratesNonCanonicalStoredCwd(t *testing.T) {
+	sessionDir := t.TempDir()
+	workDir := t.TempDir()
+	rawCwd := workDir + string(os.PathSeparator)
+
+	legacy := New(rawCwd, sessionDir)
+	if err := legacy.InitWithBinding("wechat", "user-789"); err != nil {
+		t.Fatalf("init bound session: %v", err)
+	}
+	if got := legacy.GetHeader().Cwd; got != rawCwd {
+		t.Fatalf("precondition: stored cwd = %q, want %q", got, rawCwd)
+	}
+
+	rotated, err := RotateBoundSession(sessionDir, "wechat", "user-789", legacy.GetHeader().ID)
+	if err != nil {
+		t.Fatalf("rotate bound session with non-canonical stored cwd: %v", err)
+	}
+	wantCwd := filepath.Clean(rawCwd)
+	if got := rotated.GetHeader().Cwd; got != wantCwd {
+		t.Fatalf("rotated cwd = %q, want canonical %q", got, wantCwd)
+	}
+}
+
 func TestSetWorkDirRejectsRegularFileWithoutMutation(t *testing.T) {
 	sessionDir := t.TempDir()
 	workDir := t.TempDir()

@@ -171,16 +171,6 @@ function draftIsCurrent(cwd: string, generation: number): boolean {
   return !state.activeSessionId && state.newSessionCwd === cwd && state.draftGeneration === generation;
 }
 
-export function resetDraftConfigState(): void {
-  state.draftConfigOptions = [];
-  draftModelsByProvider = {};
-  catalogCapabilities = new Map();
-  configuredProviders = new Set();
-  providerOrder = [];
-  state.draftConfigSelection = {};
-  pendingConfig = state.draftConfigSelection;
-}
-
 // providerIsConfigured reports whether the ACP provider projection marked a
 // usable API key. Providers the projection does not know about stay visible so
 // an older runtime never loses its picker.

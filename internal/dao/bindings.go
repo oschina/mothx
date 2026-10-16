@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -202,7 +204,10 @@ func (d *BindingDAO) Rotate(ctx context.Context, workDir, channelType, channelID
 		if current.ChannelType != channelType || current.ChannelID != channelID {
 			return fmt.Errorf("session is no longer bound to %s/%s", channelType, channelID)
 		}
-		if current.CWD != workDir {
+		// Compare canonicalized paths: workDir is already ValidateWorkDir-cleaned,
+		// so tolerate a legacy row persisted with a non-canonical cwd (trailing
+		// slash, "..") while still detecting a real concurrent change.
+		if filepath.Clean(strings.TrimSpace(current.CWD)) != workDir {
 			return fmt.Errorf("session work directory changed during channel rotation")
 		}
 		if _, err := tx.NewUpdate().Table("sessions").Set("channel_type = ?", "local").Set("channel_id = ?", "").Where("id = ?", oldSessionID).Exec(ctx); err != nil {
