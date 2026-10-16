@@ -4,7 +4,7 @@
 >
 > 日期：2026-08-27
 >
-> 关联方案：[Session 分叉与消息进度分叉方案](./session-fork-and-message-branch-proposal.md)、[统一 Agent 核心与多入口 Runtime 方案](./agent-core-runtime-unification-proposal.md)、[Runtime 工作区输入文件物化方案](./runtime-workspace-input-materialization-proposal.md)、[WebUI 会话终止与审批生命周期方案](./webui-session-stop-and-approval-lifecycle.md)
+> 关联方案：[Session 分叉与消息进度分叉方案](./session-fork-and-message-branch-proposal.md)、[统一 Agent 核心与多入口 Runtime 方案](./agent-core-runtime-unification-proposal.md)、[Runtime 提交队列与执行完成屏障方案](./runtime-submission-queue-completion-barrier-proposal.md)、[Runtime 工作区输入文件物化方案](./runtime-workspace-input-materialization-proposal.md)、[WebUI 会话终止与审批生命周期方案](./webui-session-stop-and-approval-lifecycle.md)
 
 > 交接基线：当前分支 `lockandmedia` 的 `06dcf69` 已落地本方案的核心 Runtime/session/adapter 实现。下一次继续工作时，以本文件第 4、10、11.4 节为准，不要把已完成项重新设计成新方案。
 >
