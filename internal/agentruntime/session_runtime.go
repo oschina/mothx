@@ -177,6 +177,9 @@ func (r *SessionRuntime) SubmissionCoordinator() *SubmissionCoordinator {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return closedSubmissionCoordinator()
+	}
 	if r.Submissions == nil {
 		sessionDir := ""
 		sessionID := r.ID

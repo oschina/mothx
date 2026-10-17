@@ -622,6 +622,7 @@ func (a *App) enqueueRuntimeSubmission(input string, resources []agentruntime.Pr
 		return err
 	}
 	handleReady <- handle
+	go a.watchQueuedSubmission(handle)
 	// The Runtime submission closure owns prepared resources until admission or
 	// cancellation. The TUI keeps only text and the handle for projection.
 	a.queuedPrompts = append(a.queuedPrompts, queuedPrompt{text: input, handle: handle})
@@ -674,7 +675,6 @@ func (a *App) startAdmittedSubmission(msg tuiSubmissionAdmittedMsg) tea.Cmd {
 			userMessage, err = a.runtime.BuildUserMessage(msg.ctx, input)
 			if err != nil {
 				artifacts.Close()
-				a.runtime.DiscardInput(msg.ctx, input)
 			}
 			if err == nil {
 				a.prepareESMRun()
@@ -720,6 +720,26 @@ func (a *App) removeQueuedSubmission(handle *agentruntime.ExecutionHandle) {
 			a.queuedPrompts = append(a.queuedPrompts[:i], a.queuedPrompts[i+1:]...)
 			return
 		}
+	}
+}
+
+// watchQueuedSubmission projects a terminal admission failure back to the UI.
+// The coordinator only sends tuiSubmissionAdmittedMsg after a successful
+// admission, so without this watcher an externally owned or closed session
+// would leave the queued row visible with no explanation and no retry.
+func (a *App) watchQueuedSubmission(handle *agentruntime.ExecutionHandle) {
+	if a == nil || handle == nil {
+		return
+	}
+	completion, ok := <-handle.Completed
+	if !ok {
+		completion = agentruntime.ExecutionCompletion{SubmissionID: handle.SubmissionID, RunID: handle.RunID, Error: agentruntime.ErrSubmissionClosed}
+	}
+	if completion.Error == nil || errors.Is(completion.Error, agentruntime.ErrSubmissionCancelled) || errors.Is(completion.Error, context.Canceled) {
+		return
+	}
+	if a.program != nil {
+		a.program.Send(tuiSubmissionFailedMsg{handle: handle, err: completion.Error})
 	}
 }
 

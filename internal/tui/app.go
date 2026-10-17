@@ -112,6 +112,11 @@ type submissionCompletedMsg struct {
 	completion agentruntime.ExecutionCompletion
 }
 
+type tuiSubmissionFailedMsg struct {
+	handle *agentruntime.ExecutionHandle
+	err    error
+}
+
 type tuiSubmissionAdmittedMsg struct {
 	handle    *agentruntime.ExecutionHandle
 	input     string
@@ -1292,6 +1297,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.addCommandError(fmt.Sprintf("Session submission failed: %v", msg.completion.Error))
 			return a, a.timer.Stop()
 		}
+		return a, nil
+
+	case tuiSubmissionFailedMsg:
+		a.removeQueuedSubmission(msg.handle)
+		a.addCommandError(fmt.Sprintf("Queued input failed: %v", msg.err))
 		return a, nil
 
 	case agentEventMsg:

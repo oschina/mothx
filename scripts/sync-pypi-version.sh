@@ -25,11 +25,32 @@ VERSION="${VERSION#v}"
 VERSION="${VERSION%-dirty}"
 VERSION="${VERSION%%-[0-9]*-g[0-9a-f]*}"
 
-# npm pre-release tags use "-pre"; PyPI requires PEP 440 versions.
-VERSION="${VERSION/-pre/rc0}"
-VERSION="${VERSION/-alpha/a}"
-VERSION="${VERSION/-beta/b}"
-VERSION="${VERSION/-dev/.dev}"
+# npm pre-release tags use "-pre-N" (or bare "-pre"); PyPI requires PEP 440
+# "rcN" (or an explicit rc number for a bare "-pre"). Keep the numeric
+# pre-release ordinal instead of collapsing every pre-release into rc0.
+case "$VERSION" in
+  *-pre-[0-9]*)
+    VERSION=$(printf '%s' "$VERSION" | sed -E 's/-pre-([0-9]+)$/rc\1/')
+    ;;
+  *-pre)
+    VERSION="${VERSION%-pre}rc1"
+    ;;
+  *-alpha-[0-9]*)
+    VERSION=$(printf '%s' "$VERSION" | sed -E 's/-alpha-([0-9]+)$/a\1/')
+    ;;
+  *-alpha)
+    VERSION="${VERSION%-alpha}a1"
+    ;;
+  *-beta-[0-9]*)
+    VERSION=$(printf '%s' "$VERSION" | sed -E 's/-beta-([0-9]+)$/b\1/')
+    ;;
+  *-beta)
+    VERSION="${VERSION%-beta}b1"
+    ;;
+  *-dev)
+    VERSION="${VERSION%-dev}.dev0"
+    ;;
+esac
 
 if [ "$VERSION" = "dev" ]; then
   VERSION="0.0.0.dev0"

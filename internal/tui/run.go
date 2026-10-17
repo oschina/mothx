@@ -24,7 +24,6 @@ type tuiRun struct {
 	sessionID      string
 	id             string
 	sessionDir     string
-	releaseRuntime func()
 	workDir        string
 	model          string
 	mode           string
@@ -147,14 +146,44 @@ func (r *tuiRun) start(parent context.Context, a *agent.Agent, input agentruntim
 			if err != nil {
 				return nil, fmt.Errorf("session %s cannot submit execution: %w", r.sessionID, err)
 			}
-			started := <-startReady
+			return r.awaitSubmissionStart(startReady)
+		}
+	}
+	return r.startAdmitted(parent, a, input, userMessage)
+}
+
+// awaitSubmissionStart waits for the coordinator's runner handoff. The runner
+// is never invoked when admission fails (external owner, closed coordinator, or
+// recovery error), so Completed is the terminal signal for that case; waiting
+// only on startReady would leak the caller forever.
+func (r *tuiRun) awaitSubmissionStart(startReady <-chan struct {
+	events <-chan agent.Event
+	ctx    context.Context
+	err    error
+}) (<-chan agent.Event, error) {
+	select {
+	case started := <-startReady:
+		if started.err != nil {
+			return nil, started.err
+		}
+		return started.events, nil
+	case completion := <-r.submission.Completed:
+		// The runner sends startReady before it can complete, so a terminal
+		// submission without a start is an admission/terminal failure. Prefer a
+		// concurrently available start handoff to avoid a select race.
+		select {
+		case started := <-startReady:
 			if started.err != nil {
 				return nil, started.err
 			}
 			return started.events, nil
+		default:
 		}
+		if completion.Error != nil {
+			return nil, completion.Error
+		}
+		return nil, fmt.Errorf("submission %s completed before the run started", r.submission.SubmissionID)
 	}
-	return r.startAdmitted(parent, a, input, userMessage)
 }
 
 func (r *tuiRun) startAdmitted(parent context.Context, a *agent.Agent, input agentruntime.RunInput, userMessage provider.Message) (<-chan agent.Event, error) {
@@ -163,22 +192,14 @@ func (r *tuiRun) startAdmitted(parent context.Context, a *agent.Agent, input age
 	turnID := "turn-" + r.id
 	intentID := ""
 	if r.sessionID != "" {
-		releaseOnError := func() {
-			if r.releaseRuntime != nil {
-				r.releaseRuntime()
-				r.releaseRuntime = nil
-			}
-		}
 		startedAt := time.Now()
 		r.execution.SetRunStore(agentruntime.RunStore{SessionDir: r.sessionDir})
 		requestSnapshot, snapshotErr := json.Marshal(map[string]any{"input": input, "model": r.model, "mode": r.mode, "workDir": r.workDir})
 		if snapshotErr != nil {
-			releaseOnError()
 			return nil, snapshotErr
 		}
 		policySnapshot, snapshotErr := json.Marshal(map[string]any{"source": "tui", "mode": r.mode, "workDir": r.workDir, "approvalPolicy": "runtime", "questionPolicy": "runtime"})
 		if snapshotErr != nil {
-			releaseOnError()
 			return nil, snapshotErr
 		}
 		digest := sha256.Sum256(requestSnapshot)
@@ -196,10 +217,6 @@ func (r *tuiRun) startAdmitted(parent context.Context, a *agent.Agent, input age
 		ctx, err = r.execution.Begin(parent, r.id)
 	}
 	if err != nil {
-		if r.releaseRuntime != nil {
-			r.releaseRuntime()
-			r.releaseRuntime = nil
-		}
 		return nil, err
 	}
 	if r.sessionID != "" {
@@ -257,10 +274,6 @@ func (r *tuiRun) finish(state agentruntime.RunState) {
 		_ = r.execution.FinishDurableWithRetry(context.Background(), r.id, state, "", agentruntime.RunEvent{SessionID: r.sessionID, RunID: r.id, EventType: "finished", Source: "tui", Status: string(state), Model: r.model, Mode: r.mode, Timestamp: time.Now()})
 	} else {
 		_ = r.execution.FinishWithState(r.id, state)
-	}
-	if r.releaseRuntime != nil {
-		r.releaseRuntime()
-		r.releaseRuntime = nil
 	}
 	if r.artifacts != nil {
 		r.artifacts.Close()

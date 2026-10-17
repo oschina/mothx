@@ -507,3 +507,41 @@ func TestInputDuringRunQueuesWithoutReplacingLeaseOwner(t *testing.T) {
 }
 
 var _ *agent.Agent
+
+func TestTUIRunStartReturnsAdmissionFailureInsteadOfBlocking(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := filepath.Join(workDir, "sessions")
+	sess := session.New(workDir, sessionDir)
+	if err := sess.Init(); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+	sessionID := sess.GetHeader().ID
+	owner, err := session.AcquireExecutionAdmission(sessionDir, sessionID)
+	if err != nil {
+		t.Fatalf("hold execution lease: %v", err)
+	}
+	defer owner.Release()
+
+	coordinator := agentruntime.NewSubmissionCoordinator()
+	defer coordinator.Close()
+	run := &tuiRun{
+		execution:   &agentruntime.ExecutionRuntime{},
+		sessionID:   sessionID,
+		sessionDir:  sessionDir,
+		id:          "admission-failure-run",
+		coordinator: coordinator,
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, startErr := run.start(context.Background(), &agent.Agent{}, agentruntime.RunInput{}, provider.Message{})
+		done <- startErr
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, agentruntime.ErrSubmissionExternalBusy) {
+			t.Fatalf("run.start error = %v, want ErrSubmissionExternalBusy", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run.start blocked on an admission failure")
+	}
+}

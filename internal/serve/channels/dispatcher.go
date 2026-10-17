@@ -1102,7 +1102,7 @@ func (d *Dispatcher) awaitChannelAdmissionRuntime(ctx context.Context, runtime *
 		}
 		return guard.Release, nil
 	}
-	admission, err := runtime.SubmissionCoordinator().Acquire(ctx, "channel_admission_"+session.GenerateID(), agentruntime.SubmitPolicy{WaitForExternal: true}, func(admissionCtx context.Context) (func(), error) {
+	admission, err := runtime.SubmissionCoordinator().Acquire(ctx, "channel_admission_"+session.GenerateID(), agentruntime.SubmitPolicy{QueueBehindLocal: true, WaitForExternal: true}, func(admissionCtx context.Context) (func(), error) {
 		guard, acquireErr := agentruntime.AcquireExecutionAdmission(admissionCtx, d.sessionDir, sessionID, agentruntime.ExecutionAdmissionOptions{})
 		if acquireErr != nil {
 			return nil, acquireErr

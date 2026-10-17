@@ -226,3 +226,59 @@ func TestAcquireSessionMutationGroupReleasesEarlierSessionsOnFailure(t *testing.
 	}
 	guard.Release()
 }
+
+func TestAcquireExecutionSubmissionQueuesBehindLocalSubmission(t *testing.T) {
+	sessionDir := t.TempDir()
+	const sessionID = "submission-queue"
+	initRecoveryTestSession(t, sessionDir, sessionID)
+	coordinator := acquireSubmissionCoordinator(sessionDir, sessionID)
+	t.Cleanup(func() { releaseSubmissionCoordinator(coordinator) })
+
+	started := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	first, err := coordinator.Submit(context.Background(), "foreground", SubmitPolicy{QueueBehindLocal: true}, func(context.Context) (func(), error) {
+		return func() {}, nil
+	}, func(ctx context.Context) error {
+		close(started)
+		select {
+		case <-releaseFirst:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+
+	type acquireResult struct {
+		release func()
+		err     error
+	}
+	acquired := make(chan acquireResult, 1)
+	go func() {
+		release, err := AcquireExecutionSubmission(context.Background(), sessionDir, sessionID, "background", true)
+		acquired <- acquireResult{release: release, err: err}
+	}()
+	select {
+	case result := <-acquired:
+		t.Fatalf("background admission finished before the local run: err=%v", result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	<-first.Completed
+	select {
+	case result := <-acquired:
+		if result.err != nil {
+			t.Fatalf("background admission after local completion: %v", result.err)
+		}
+		if result.release == nil {
+			t.Fatal("background admission returned a nil release")
+		}
+		result.release()
+	case <-time.After(5 * time.Second):
+		t.Fatal("background admission did not resume after the local run finished")
+	}
+}

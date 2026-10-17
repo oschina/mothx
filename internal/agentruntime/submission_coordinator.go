@@ -72,8 +72,15 @@ type SubmissionAdmissionHandle struct {
 	ready       chan struct{}
 	release     chan struct{}
 	releaseOnce sync.Once
+
+	admissionDone chan struct{}
+	admissionOnce sync.Once
+	admissionErr  error
 }
 
+// Wait blocks until the submission acquires its admission lease or reaches a
+// terminal state. A failed, cancelled, or interrupted submission returns that
+// terminal error instead of leaving the caller blocked forever.
 func (h *SubmissionAdmissionHandle) Wait(ctx context.Context) error {
 	if h == nil {
 		return ErrSubmissionClosed
@@ -84,9 +91,31 @@ func (h *SubmissionAdmissionHandle) Wait(ctx context.Context) error {
 	select {
 	case <-h.Ready:
 		return nil
+	case <-h.admissionDone:
+		if h.admissionErr != nil {
+			return h.admissionErr
+		}
+		return ErrSubmissionCancelled
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// failAdmission records the terminal admission outcome. It is called only when
+// the runner was never started; a successfully admitted submission closes Ready
+// instead. The error is written before the channel is closed, so waiters that
+// observe the close also observe the value.
+func (h *SubmissionAdmissionHandle) failAdmission(err error) {
+	if h == nil {
+		return
+	}
+	h.admissionOnce.Do(func() {
+		if err == nil {
+			err = ErrSubmissionCancelled
+		}
+		h.admissionErr = err
+		close(h.admissionDone)
+	})
 }
 
 func (h *SubmissionAdmissionHandle) Release() {
@@ -138,12 +167,20 @@ func (h *ExecutionHandle) setState(state SubmissionState, err error) {
 }
 
 type submission struct {
-	handle *ExecutionHandle
-	ctx    context.Context
-	cancel context.CancelFunc
-	policy SubmitPolicy
-	admit  SubmissionAdmission
-	run    SubmissionRunner
+	handle    *ExecutionHandle
+	ctx       context.Context
+	cancel    context.CancelFunc
+	policy    SubmitPolicy
+	admit     SubmissionAdmission
+	run       SubmissionRunner
+	admission *SubmissionAdmissionHandle
+	admitted  atomic.Bool
+}
+
+func (s *submission) failAdmission(err error) {
+	if s != nil && s.admission != nil {
+		s.admission.failAdmission(err)
+	}
 }
 
 // SubmissionCoordinator serializes submissions for one SessionRuntime. It is
@@ -218,6 +255,23 @@ func releaseSubmissionWakeSubscription() {
 		return
 	}
 	submissionWakeSubscription.Unlock()
+}
+
+var closedSubmissionCoordinatorState struct {
+	once  sync.Once
+	value *SubmissionCoordinator
+}
+
+// closedSubmissionCoordinator is returned by an already closed SessionRuntime.
+// It keeps every adapter's nil-free contract while making Submit/Acquire fail
+// with ErrSubmissionClosed instead of reviving a new queue after shutdown.
+func closedSubmissionCoordinator() *SubmissionCoordinator {
+	closedSubmissionCoordinatorState.once.Do(func() {
+		coordinator := NewSubmissionCoordinator()
+		coordinator.Close()
+		closedSubmissionCoordinatorState.value = coordinator
+	})
+	return closedSubmissionCoordinatorState.value
 }
 
 func NewSubmissionCoordinator(sessionArgs ...string) *SubmissionCoordinator {
@@ -308,7 +362,7 @@ func releaseSubmissionCoordinator(c *SubmissionCoordinator) {
 // admission and release functions.
 func AcquireExecutionSubmission(ctx context.Context, sessionDir, sessionID, runID string, waitForExternal bool) (func(), error) {
 	coordinator := acquireSubmissionCoordinator(sessionDir, sessionID)
-	policy := SubmitPolicy{WaitForExternal: waitForExternal}
+	policy := SubmitPolicy{QueueBehindLocal: true, WaitForExternal: waitForExternal}
 	admission, err := coordinator.Acquire(ctx, runID, policy, func(admissionCtx context.Context) (func(), error) {
 		guard, acquireErr := AcquireExecutionAdmission(admissionCtx, sessionDir, sessionID, ExecutionAdmissionOptions{})
 		if acquireErr != nil {
@@ -353,6 +407,10 @@ func (c *SubmissionCoordinator) nextID() string {
 // idle. A request accepted behind a local execution is never dropped because
 // the admission lease is temporarily busy.
 func (c *SubmissionCoordinator) Submit(ctx context.Context, runID string, policy SubmitPolicy, admit SubmissionAdmission, run SubmissionRunner) (*ExecutionHandle, error) {
+	return c.submit(ctx, runID, policy, admit, run, nil)
+}
+
+func (c *SubmissionCoordinator) submit(ctx context.Context, runID string, policy SubmitPolicy, admit SubmissionAdmission, run SubmissionRunner, admission *SubmissionAdmissionHandle) (*ExecutionHandle, error) {
 	if c == nil {
 		return nil, ErrSubmissionClosed
 	}
@@ -367,7 +425,7 @@ func (c *SubmissionCoordinator) Submit(ctx context.Context, runID string, policy
 	events := make(chan SubmissionEvent, 16)
 	handle := &ExecutionHandle{SubmissionID: c.nextID(), RunID: runID, Completed: completed, Events: events, completed: completed, events: events}
 	handle.setState(SubmissionAccepted, nil)
-	s := &submission{handle: handle, ctx: ctx, cancel: cancel, policy: policy, admit: admit, run: run}
+	s := &submission{handle: handle, ctx: ctx, cancel: cancel, policy: policy, admit: admit, run: run, admission: admission}
 	handle.cancel = func() {
 		cancel()
 		c.cancelQueued(s)
@@ -377,11 +435,13 @@ func (c *SubmissionCoordinator) Submit(ctx context.Context, runID string, policy
 	if c.closed {
 		c.mu.Unlock()
 		cancel()
+		s.failAdmission(ErrSubmissionClosed)
 		return nil, ErrSubmissionClosed
 	}
 	if c.active != nil && !policy.QueueBehindLocal {
 		c.mu.Unlock()
 		cancel()
+		s.failAdmission(ErrSubmissionLocalBusy)
 		return nil, ErrSubmissionLocalBusy
 	}
 	if c.active != nil {
@@ -408,9 +468,13 @@ func (c *SubmissionCoordinator) Acquire(ctx context.Context, runID string, polic
 	}
 	ready := make(chan struct{})
 	release := make(chan struct{})
-	var submissionHandle *ExecutionHandle
-	var err error
-	submissionHandle, err = c.Submit(ctx, runID, policy, admit, func(runCtx context.Context) error {
+	admission := &SubmissionAdmissionHandle{
+		Ready:         ready,
+		ready:         ready,
+		release:       release,
+		admissionDone: make(chan struct{}),
+	}
+	submissionHandle, err := c.submit(ctx, runID, policy, admit, func(runCtx context.Context) error {
 		close(ready)
 		select {
 		case <-release:
@@ -418,11 +482,12 @@ func (c *SubmissionCoordinator) Acquire(ctx context.Context, runID string, polic
 		case <-runCtx.Done():
 			return runCtx.Err()
 		}
-	})
+	}, admission)
 	if err != nil {
 		return nil, err
 	}
-	return &SubmissionAdmissionHandle{Submission: submissionHandle, Ready: ready, ready: ready, release: release}, nil
+	admission.Submission = submissionHandle
+	return admission, nil
 }
 
 func (c *SubmissionCoordinator) cancelQueued(target *submission) {
@@ -442,6 +507,7 @@ func (c *SubmissionCoordinator) execute(s *submission) {
 	defer c.wg.Done()
 	release, err := c.admit(s)
 	if err == nil {
+		s.admitted.Store(true)
 		s.handle.setState(SubmissionRunning, nil)
 		err = s.run(s.ctx)
 	}
@@ -501,6 +567,11 @@ func (c *SubmissionCoordinator) admit(s *submission) (func(), error) {
 func (c *SubmissionCoordinator) completeLocked(s *submission, err error) {
 	if s == nil || s.handle == nil {
 		return
+	}
+	// A submission that never reached its runner has no Ready signal; report
+	// its terminal admission error to a synchronous Acquire waiter instead.
+	if !s.admitted.Load() {
+		s.failAdmission(err)
 	}
 	s.handle.completeOnce.Do(func() {
 		state := SubmissionCompleted

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/oschina/mothx/internal/session"
 )
@@ -220,5 +221,115 @@ func TestSubmissionCoordinatorPublishesCanonicalStateSequence(t *testing.T) {
 		if states[i] != want[i] {
 			t.Fatalf("state[%d] = %q, want %q; sequence=%v", i, states[i], want[i], states)
 		}
+	}
+}
+
+func TestSubmissionCoordinatorAcquireReportsAdmissionFailure(t *testing.T) {
+	c := NewSubmissionCoordinator()
+	defer c.Close()
+	want := errors.New("admission failed")
+	admission, err := c.Acquire(context.Background(), "failed", SubmitPolicy{}, func(context.Context) (func(), error) {
+		return nil, want
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := admission.Wait(ctx); !errors.Is(err, want) {
+		t.Fatalf("Wait error = %v, want %v", err, want)
+	}
+	if completion := <-admission.Submission.Completed; !errors.Is(completion.Error, want) {
+		t.Fatalf("completion error = %v, want %v", completion.Error, want)
+	}
+}
+
+func TestSubmissionCoordinatorAcquireQueuesBehindLocalSubmission(t *testing.T) {
+	c := NewSubmissionCoordinator()
+	defer c.Close()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	first, err := c.Submit(context.Background(), "first", SubmitPolicy{}, func(context.Context) (func(), error) {
+		return func() {}, nil
+	}, func(ctx context.Context) error {
+		close(started)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	admission, err := c.Acquire(context.Background(), "queued", SubmitPolicy{QueueBehindLocal: true}, func(context.Context) (func(), error) {
+		return func() {}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := admission.Wait(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued Wait error = %v, want deadline while the predecessor runs", err)
+	}
+	close(release)
+	<-first.Completed
+	if err := admission.Wait(context.Background()); err != nil {
+		t.Fatalf("queued Wait after predecessor completion = %v", err)
+	}
+	admission.Release()
+	<-admission.Submission.Completed
+}
+
+func TestSubmissionCoordinatorAcquireCancelledWhileQueued(t *testing.T) {
+	c := NewSubmissionCoordinator()
+	started := make(chan struct{})
+	block := make(chan struct{})
+	first, err := c.Submit(context.Background(), "first", SubmitPolicy{}, func(context.Context) (func(), error) {
+		return func() {}, nil
+	}, func(ctx context.Context) error {
+		close(started)
+		select {
+		case <-block:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	admission, err := c.Acquire(context.Background(), "queued", SubmitPolicy{QueueBehindLocal: true}, func(context.Context) (func(), error) {
+		return func() {}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CloseContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := admission.Wait(context.Background()); !errors.Is(err, ErrSubmissionCancelled) {
+		t.Fatalf("queued Wait error = %v, want cancelled", err)
+	}
+	<-first.Completed
+	close(block)
+}
+
+func TestSessionRuntimeSubmissionCoordinatorStaysClosed(t *testing.T) {
+	runtime := &SessionRuntime{}
+	runtime.Close()
+	coordinator := runtime.SubmissionCoordinator()
+	if coordinator == nil {
+		t.Fatal("closed runtime returned a nil submission coordinator")
+	}
+	_, err := coordinator.Submit(context.Background(), "after-close", SubmitPolicy{}, func(context.Context) (func(), error) {
+		return func() {}, nil
+	}, func(context.Context) error { return nil })
+	if !errors.Is(err, ErrSubmissionClosed) {
+		t.Fatalf("Submit after runtime close error = %v, want ErrSubmissionClosed", err)
 	}
 }
