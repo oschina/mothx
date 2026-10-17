@@ -1,5 +1,33 @@
 # 更新日志
 
+## v1.3.105-pre-1
+
+### ✨ 新功能
+
+- **会话更早拒绝不可用的工作目录。** `internal/session` 成为工作目录校验的唯一 owner，Runtime API 仅做委托。创建、重开、重绑定会话，ACP `mothx/session/setWorkDir` 与消息通道解析会话时，都必须先确认目标是存在的绝对目录，才会持久化或组装沙箱及工具资源。ACP 对同目录请求不再因目录已消失而拆掉可用 Runtime；通道运行也会校验已绑定会话持久化的 cwd，而不是平台默认目录。
+- **Desktop 使用显式的草稿目录模型。** 移除了遗留的 workspace 默认回退及其设置面板。Quick Start 草稿获得一个进程内 `mkdtemp` 临时目录；New Task 草稿保持未设置，直到原生目录选择器或 worktree 操作提供目录。选择历史只为下一次对话框定位便利；草稿状态携带 generation，迟到的 quick-start、picker 或 ACP 回调不会覆盖更新的 New Task。
+- **Runtime 统一协调本地会话提交。** `SessionRuntime` 为每个 `(database identity, session ID)` 持有一个 FIFO `SubmissionCoordinator`，`ExecutionRuntime.Completion` 成为权威完成屏障。TUI 排队输入、ACP prompt admission、Channel/Cron/ESM/Knowledge 的准入交接、关闭、取消以及本地/外部忙碌的结构化分类共享同一生命周期，不再轮询 lease 错误或以 Agent 结束事件启动后继提交。
+
+### 🐛 问题修复
+
+- **轮换已绑定频道会话时保留其持久目录。** 轮换继承既有会话记录的 cwd，而非平台默认目录；fenced CAS 比较规范化后的路径，因此末尾分隔符等等价存储形式仍可成功轮换，真实并发变更仍会被检测并拒绝。
+- **飞书工具图片清理具备并发安全性。** 每次投递都在唯一的私有临时目录下物化图片，并在所有退出路径清理整个目录，避免并行运行互相收集文件，也不会把图片字节残留在工作目录。
+
+## v1.3.104
+
+### ✨ 新功能
+
+- **新增 StepFun Step 5 Preview 模型。** StepFun provider 目录现已支持 `step-5-preview`。
+- **飞书可投递工具生成图片。** 绑定到飞书的运行中产生的受支持 PNG、JPEG、GIF、WebP 图片会经 Runtime artifact 管线物化，并与文本回复一起以图片消息发送。
+
+### 🐛 问题修复
+
+- **ACP 会话恢复历史记录。** ACP 每次 prompt 都构建新 Agent，此前却遗漏共享的历史注入步骤，导致同一会话的追问被当作全新对话。现在 prompt 处理会重载 session manager 并把规范 replay state 注入新 Agent，同时保留 Runtime-owned 的当前用户 entry，既不再失忆也不会重复写 transcript。回归测试通过真实 stdio 进程边界驱动两次 ACP prompt，并同时守护 serve chat 与 WebUI run-submit 路径。
+- **存活会话属主可熬过短暂数据库停滞。** 当同步租约总线报告另一存活属主的新鲜公告时，恢复流程即使看到已过期的 SQLite 租约行也会暂缓接管；本进程中仍存活但续期失败的租约会返回 busy，而不是被回收。因此数据库不可用或墙钟过期本身只是可用性故障，不再是所有权丢失的证据；只有 fenced CAS 接管或显式释放能取代存活属主。
+- **长时间运行的供应商轮次保留重试预算。** 流式传输与超时恢复计数器在每次成功轮次后重置，跨轮累积的独立瞬态故障不会再耗尽整次运行的续写预算；每轮仍有小上限，以约束反复卡住单轮的上下文增长。
+- **ACP 最后注册窗口的取消能够生效。** Run 已注册但取消句柄尚未安装的窄窗口中，admission context 会被重新检查，及时到达的取消会终止 prompt，而不会启动客户端已经放弃的 Run。
+- **新建 WebUI 会话不再误报 not found。** 服务端已分配但首次运行尚未持久化的 deferred session ID，现在会从 `/api/sessions/{id}/runtime`、`/capabilities`、`/trajectory` 投影默认能力与空 trajectory。未知、拼错或已删除的 ID 仍返回 404，不会被伪装成空白新会话。
+
 ## v1.3.103
 
 ### 💥 破坏性变更

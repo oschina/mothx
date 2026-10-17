@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.3.105-pre-1
+
+### ✨ New Features
+
+- **Sessions reject unusable working directories early.** `internal/session` is the single owner of working-directory validation, with the Runtime API delegating to it. Session creation, reopening, rebinding, ACP `mothx/session/setWorkDir`, and channel session resolution now require an existing absolute directory before persisting or assembling sandbox and tool resources. An ACP same-directory request no longer detaches a usable runtime when its directory has disappeared, and a channel run validates the bound session's persisted cwd rather than the platform default.
+- **Desktop uses an explicit draft-directory model.** The legacy workspace-default fallback and settings panel were removed. Quick-start drafts receive one process-local `mkdtemp` scratch directory, while a New Task draft remains unset until its native picker or worktree action supplies a directory. Picker history is only a convenience for the next dialog; draft state carries a generation so a stale quick-start, picker, or ACP completion cannot overwrite a newer New Task.
+- **Runtime coordinates local session submissions.** `SessionRuntime` owns one `(database identity, session ID)` FIFO `SubmissionCoordinator`, and `ExecutionRuntime.Completion` is the authoritative completion barrier. TUI queued input, ACP prompt admission, Channel/Cron/ESM/Knowledge admission handoffs, shutdown, cancellation, and structured local/external busy classification now share that lifecycle instead of polling lease errors or starting a successor from an Agent finish event.
+
+### 🐛 Bug Fixes
+
+- **Rotating a bound channel session preserves its durable directory.** Rotation inherits the existing session's persisted cwd instead of falling back to the platform default, and its fenced compare-and-set compares canonical paths so an equivalent stored form such as a trailing separator still succeeds while a real concurrent change is rejected.
+- **Feishu tool-image cleanup is concurrency-safe.** Each delivery materializes images beneath a unique private temporary directory and removes the whole directory on every exit path, preventing parallel runs from collecting one another's files and leaving no image bytes behind in the work directory.
+
+## v1.3.104
+
+### ✨ New Features
+
+- **StepFun Step 5 Preview model.** The StepFun provider catalog now includes `step-5-preview`.
+- **Feishu delivers tool-generated images.** Supported PNG, JPEG, GIF, and WebP images produced during a Feishu-bound run are materialized through the Runtime artifact pipeline and sent as image messages alongside the textual response.
+
+### 🐛 Bug Fixes
+
+- **ACP conversations retain their session history.** ACP builds a fresh Agent for each prompt but previously omitted the shared replay-seeding step, so every follow-up message was processed as a new conversation. Prompt handling now reloads the session manager and loads its canonical replay state into the newly built Agent while preserving the Runtime-owned current user entry, avoiding both amnesia and duplicate transcript rows. Regression coverage exercises two real stdio ACP prompts and both serve chat and WebUI run-submission paths.
+- **A live session owner can survive transient database stalls.** Recovery defers takeover when the synchronized lease bus reports a fresh announcement from another live owner, even if its SQLite lease row has expired; a same-process lease that is still live but could not renew is reported as busy instead of being reclaimed. Database unavailability or wall-clock expiry alone therefore remains an availability problem, not evidence of ownership loss. Fenced CAS takeover and explicit release remain the only ways to displace a live owner.
+- **Long-running provider turns keep their retry budget.** Stream transport and timeout recovery counters reset after a successful turn. Independent transient failures no longer accumulate across an entire run and exhaust continuation budget, while the per-turn cap still bounds growth from a repeatedly stuck turn.
+- **An ACP cancel in the final registration window takes effect.** After the Run becomes registered but before its cancellation handle is installed, the admission context is rechecked so a narrowly timed cancel terminates the prompt instead of starting a Run the client already abandoned.
+- **New WebUI sessions open without a false not-found error.** A server-allocated deferred session ID that has not yet been persisted by its first run now projects default capabilities and an empty trajectory from `/api/sessions/{id}/runtime`, `/capabilities`, and `/trajectory`. Unknown, mistyped, and deleted IDs still return 404 rather than masquerading as a blank new session.
+
 ## v1.3.103
 
 ### 💥 Breaking Changes
