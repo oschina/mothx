@@ -175,11 +175,11 @@ func (s *KnowledgeBaseService) indexDurable(ctx context.Context, knowledgeBaseID
 	if err != nil {
 		return session.KnowledgeSnapshot{}, err
 	}
-	guard, err := AcquireExecutionAdmission(ctx, s.sessionDir, manager.GetHeader().ID, ExecutionAdmissionOptions{Wait: true})
+	release, err := AcquireExecutionSubmission(ctx, s.sessionDir, manager.GetHeader().ID, "knowledge_index_"+session.GenerateID(), true)
 	if err != nil {
 		return session.KnowledgeSnapshot{}, fmt.Errorf("acquire knowledge indexing admission: %w", err)
 	}
-	defer guard.Release()
+	defer release()
 
 	runID := "knowledge_index_" + session.GenerateID()
 	job.update(func(p *KnowledgeIndexProgress) { p.RunID = runID })

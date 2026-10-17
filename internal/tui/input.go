@@ -457,7 +457,17 @@ func (a *App) processInput(input string) tea.Cmd {
 	if a.run != nil || a.isThinking {
 		resources := a.pendingInputResources
 		a.pendingInputResources = nil
-		a.queuedPrompts = append(a.queuedPrompts, queuedPrompt{text: input, resources: resources})
+		if a.program == nil {
+			// Headless fixtures do not have a Bubble Tea owner to receive the
+			// admission handoff; retain the compatibility queue for them.
+			a.queuedPrompts = append(a.queuedPrompts, queuedPrompt{text: input, resources: resources})
+			a.scheduleRender()
+			return nil
+		}
+		if err := a.enqueueRuntimeSubmission(input, resources); err != nil {
+			a.addCommandError(fmt.Sprintf("Failed to queue input: %v", err))
+			return nil
+		}
 		// Surface the queue immediately: the live view renders a styled
 		// "N queued" section with per-message previews until the run finishes
 		// and each prompt is submitted in order.
@@ -496,6 +506,7 @@ func (a *App) processInput(input string) tea.Cmd {
 	}
 	a.run.mode = a.mode
 	a.run.workDir = a.currentCwd()
+	a.run.coordinator = a.runtime.SubmissionCoordinator()
 	a.runtime.SetExecution(a.run.execution)
 	a.runtime.SetDecisions(a.run.decisions)
 
@@ -558,6 +569,156 @@ func (a *App) processInput(input string) tea.Cmd {
 			err:        err,
 			run:        run,
 			compacting: false,
+		}
+	}
+}
+
+// enqueueRuntimeSubmission transfers a queued foreground input to the shared
+// Runtime. The coordinator owns ordering and admission; Bubble Tea only
+// receives the main-thread handoff after the fenced lease is acquired.
+func (a *App) enqueueRuntimeSubmission(input string, resources []agentruntime.PreparedInput) error {
+	if err := a.ensureRuntime(); err != nil {
+		return err
+	}
+	if a.session == nil || a.session.GetHeader() == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	coordinator := a.runtime.SubmissionCoordinator()
+	runID := "tui_" + session.GenerateID()
+	ready := make(chan tuiSubmissionStartResult, 1)
+	handleReady := make(chan *agentruntime.ExecutionHandle, 1)
+	var handle *agentruntime.ExecutionHandle
+	var err error
+	handle, err = coordinator.Submit(context.Background(), runID, agentruntime.SubmitPolicy{QueueBehindLocal: true}, func(ctx context.Context) (func(), error) {
+		guard, acquireErr := agentruntime.AcquireExecutionAdmission(ctx, a.getSessionDir(), a.session.GetHeader().ID, agentruntime.ExecutionAdmissionOptions{})
+		if acquireErr != nil {
+			return nil, acquireErr
+		}
+		return guard.Release, nil
+	}, func(ctx context.Context) error {
+		var admitted *agentruntime.ExecutionHandle
+		select {
+		case admitted = <-handleReady:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		a.program.Send(tuiSubmissionAdmittedMsg{handle: admitted, input: input, resources: resources, ctx: ctx, ready: ready})
+		select {
+		case result := <-ready:
+			if result.err != nil {
+				return result.err
+			}
+			select {
+			case finishErr := <-result.done:
+				return finishErr
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if err != nil {
+		return err
+	}
+	handleReady <- handle
+	// The Runtime submission closure owns prepared resources until admission or
+	// cancellation. The TUI keeps only text and the handle for projection.
+	a.queuedPrompts = append(a.queuedPrompts, queuedPrompt{text: input, handle: handle})
+	return nil
+}
+
+func (a *App) startAdmittedSubmission(msg tuiSubmissionAdmittedMsg) tea.Cmd {
+	if a == nil || msg.handle == nil || a.run != nil || a.manualCompactionActive {
+		if msg.ready != nil {
+			msg.ready <- tuiSubmissionStartResult{err: fmt.Errorf("TUI cannot attach admitted submission")}
+		}
+		return nil
+	}
+	if err := a.ensureSession(); err != nil {
+		msg.ready <- tuiSubmissionStartResult{err: err}
+		return nil
+	}
+	if err := a.syncESMTools(); err != nil {
+		msg.ready <- tuiSubmissionStartResult{err: err}
+		return nil
+	}
+	run := newTUIRun(a.session.GetHeader().ID, a.getSessionDir())
+	run.id = msg.handle.RunID
+	run.coordinator = a.runtime.SubmissionCoordinator()
+	run.submission = msg.handle
+	run.admitted = true
+	run.submissionDone = make(chan error, 1)
+	run.model = ""
+	if a.model != nil {
+		run.model = a.model.ID
+	}
+	run.mode = a.mode
+	run.workDir = a.currentCwd()
+	a.run = run
+	a.runtime.SetExecution(run.execution)
+	a.runtime.SetDecisions(run.decisions)
+	var input agentruntime.InputSubmission
+	var err error
+	if len(msg.resources) > 0 {
+		input, err = a.runtime.AttachPreparedInput(msg.ctx, msg.input, msg.resources)
+	} else {
+		input, err = a.runtime.AcceptInput(msg.ctx, run.id, msg.input, nil)
+	}
+	if err == nil {
+		var artifacts *agentruntime.ArtifactCollector
+		artifacts, err = a.runtime.BeginArtifactCollection(run.id)
+		if err == nil {
+			run.artifacts = artifacts
+			var userMessage provider.Message
+			userMessage, err = a.runtime.BuildUserMessage(msg.ctx, input)
+			if err != nil {
+				artifacts.Close()
+				a.runtime.DiscardInput(msg.ctx, input)
+			}
+			if err == nil {
+				a.prepareESMRun()
+				if a.mcpRebuildPending {
+					a.discardAgent(errMCPToolsConnected)
+					a.mcpRebuildPending = false
+				}
+				a.ensureAgent()
+				if a.agent == nil {
+					err = fmt.Errorf("agent construction failed")
+				} else {
+					a.registerManagedAgent()
+					events, startErr := run.startAdmitted(msg.ctx, a.agent, input, userMessage)
+					err = startErr
+					if err == nil {
+						a.removeQueuedSubmission(msg.handle)
+						msg.ready <- tuiSubmissionStartResult{events: events, done: run.submissionDone}
+						return func() tea.Msg {
+							return agentStreamStartMsg{input: msg.input, submission: input, eventCh: events, run: run}
+						}
+					}
+				}
+			}
+		}
+	}
+	if a.run == run {
+		a.run = nil
+	}
+	if err != nil {
+		a.runtime.DiscardInput(msg.ctx, input)
+		msg.ready <- tuiSubmissionStartResult{err: err}
+		a.removeQueuedSubmission(msg.handle)
+	}
+	return nil
+}
+
+func (a *App) removeQueuedSubmission(handle *agentruntime.ExecutionHandle) {
+	if a == nil || handle == nil {
+		return
+	}
+	for i, prompt := range a.queuedPrompts {
+		if prompt.handle == handle {
+			a.queuedPrompts = append(a.queuedPrompts[:i], a.queuedPrompts[i+1:]...)
+			return
 		}
 	}
 }

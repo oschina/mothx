@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/provider"
@@ -27,6 +29,11 @@ type tuiRun struct {
 	model          string
 	mode           string
 	artifacts      *agentruntime.ArtifactCollector
+	coordinator    *agentruntime.SubmissionCoordinator
+	submission     *agentruntime.ExecutionHandle
+	submissionDone chan error
+	submissionOnce sync.Once
+	admitted       bool
 }
 
 func (r *tuiRun) registerDecision(id string, kind agentruntime.DecisionKind) error {
@@ -99,16 +106,63 @@ func (r *tuiRun) start(parent context.Context, a *agent.Agent, input agentruntim
 	if r == nil || r.execution == nil || a == nil {
 		return nil, fmt.Errorf("tui run is not ready")
 	}
+	var err error
+	if r.sessionID != "" {
+		if r.coordinator != nil && !r.admitted {
+			startReady := make(chan struct {
+				events <-chan agent.Event
+				ctx    context.Context
+				err    error
+			}, 1)
+			r.submissionDone = make(chan error, 1)
+			r.submission, err = r.coordinator.Submit(
+				parent,
+				r.id,
+				agentruntime.SubmitPolicy{QueueBehindLocal: true},
+				func(admissionCtx context.Context) (func(), error) {
+					guard, acquireErr := agentruntime.AcquireExecutionAdmission(admissionCtx, r.sessionDir, r.sessionID, agentruntime.ExecutionAdmissionOptions{})
+					if acquireErr != nil {
+						return nil, acquireErr
+					}
+					return guard.Release, nil
+				},
+				func(runCtx context.Context) error {
+					events, startErr := r.startAdmitted(runCtx, a, input, userMessage)
+					startReady <- struct {
+						events <-chan agent.Event
+						ctx    context.Context
+						err    error
+					}{events: events, ctx: runCtx, err: startErr}
+					if startErr != nil {
+						return startErr
+					}
+					select {
+					case finishErr := <-r.submissionDone:
+						return finishErr
+					case <-runCtx.Done():
+						return runCtx.Err()
+					}
+				},
+			)
+			if err != nil {
+				return nil, fmt.Errorf("session %s cannot submit execution: %w", r.sessionID, err)
+			}
+			started := <-startReady
+			if started.err != nil {
+				return nil, started.err
+			}
+			return started.events, nil
+		}
+	}
+	return r.startAdmitted(parent, a, input, userMessage)
+}
+
+func (r *tuiRun) startAdmitted(parent context.Context, a *agent.Agent, input agentruntime.RunInput, userMessage provider.Message) (<-chan agent.Event, error) {
 	var ctx context.Context
 	var err error
 	turnID := "turn-" + r.id
 	intentID := ""
 	if r.sessionID != "" {
-		guard, err := agentruntime.AcquireExecutionAdmission(parent, r.sessionDir, r.sessionID, agentruntime.ExecutionAdmissionOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("session %s cannot start execution: %w", r.sessionID, err)
-		}
-		r.releaseRuntime = guard.Release
 		releaseOnError := func() {
 			if r.releaseRuntime != nil {
 				r.releaseRuntime()
@@ -185,6 +239,20 @@ func (r *tuiRun) finish(state agentruntime.RunState) {
 		return
 	}
 	r.clearDecisions(decisionTerminalStatus(state))
+	if r.submissionDone != nil {
+		var finishErr error
+		if r.sessionID != "" {
+			finishErr = r.execution.FinishDurableWithRetry(context.Background(), r.id, state, "", agentruntime.RunEvent{SessionID: r.sessionID, RunID: r.id, EventType: "finished", Source: "tui", Status: string(state), Model: r.model, Mode: r.mode, Timestamp: time.Now()})
+		} else {
+			finishErr = r.execution.FinishWithState(r.id, state)
+		}
+		r.submissionOnce.Do(func() { r.submissionDone <- finishErr })
+		if r.artifacts != nil {
+			r.artifacts.Close()
+			r.artifacts = nil
+		}
+		return
+	}
 	if r.sessionID != "" {
 		_ = r.execution.FinishDurableWithRetry(context.Background(), r.id, state, "", agentruntime.RunEvent{SessionID: r.sessionID, RunID: r.id, EventType: "finished", Source: "tui", Status: string(state), Model: r.model, Mode: r.mode, Timestamp: time.Now()})
 	} else {
@@ -197,6 +265,27 @@ func (r *tuiRun) finish(state agentruntime.RunState) {
 	if r.artifacts != nil {
 		r.artifacts.Close()
 		r.artifacts = nil
+	}
+}
+
+func (r *tuiRun) completionCommand() tea.Cmd {
+	if r == nil || r.submission == nil {
+		return nil
+	}
+	if r.coordinator != nil {
+		return nil
+	}
+	completion := r.submission.Completed
+	return func() tea.Msg {
+		result, ok := <-completion
+		if !ok {
+			return submissionCompletedMsg{completion: agentruntime.ExecutionCompletion{
+				SubmissionID: r.submission.SubmissionID,
+				RunID:        r.submission.RunID,
+				Error:        agentruntime.ErrSubmissionClosed,
+			}}
+		}
+		return submissionCompletedMsg{completion: result}
 	}
 }
 

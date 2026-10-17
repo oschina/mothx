@@ -851,13 +851,18 @@ func (a *Agent) emitRunFinished(ch chan<- Event, status TaskStatus, reason strin
 	a.mu.Lock()
 	turnID := a.conversationTurnID
 	turnOpen := a.conversationTurnOpen
+	runtimeOwnsTurnEnd := a.config.RuntimeOwnsTurnEnd
 	assistantEntryID := a.lastAssistantEntryID
 	assistantMessage := cloneMessage(a.lastAssistantMessage)
-	if turnOpen && !a.config.RuntimeOwnsTurnEnd {
+	if turnOpen {
 		a.conversationTurnOpen = false
 	}
 	a.mu.Unlock()
-	if turnOpen {
+	// Runtime-owned turns are closed atomically with the durable Run, terminal
+	// event, assistant entry, and lease fencing. Closing them here races the
+	// Runtime terminal transaction and can make a consecutive submission lose
+	// its lease while the Agent is still emitting its terminal event.
+	if turnOpen && !runtimeOwnsTurnEnd {
 		if store, ok := any(a.config.Session).(conversationTurnStore); ok {
 			turnStatus := "failed"
 			switch status {

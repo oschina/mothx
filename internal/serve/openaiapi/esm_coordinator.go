@@ -231,13 +231,12 @@ func (s *Server) runESMCoordinator(ctx context.Context, sessionID string) {
 	// temporary lease conflict as a reason to drop the requested continuation.
 	// Its run-scoped SteeringSource still receives the updated objective at its
 	// next loop boundary, so waiting here never creates a concurrent run.
-	runtimeGuard, err := agentruntime.AcquireExecutionAdmission(ctx, s.settings.GetSessionDir(), sessionID, agentruntime.ExecutionAdmissionOptions{Wait: true})
+	releaseRuntime, err := agentruntime.AcquireExecutionSubmission(ctx, s.settings.GetSessionDir(), sessionID, "esm_admission_"+session.GenerateID(), true)
 	if err != nil {
 		return
 	}
-	release := runtimeGuard.Release
 	sess.Lock()
-	defer release()
+	defer releaseRuntime()
 	defer sess.Unlock()
 	if err := sess.Manager.Reload(); err != nil {
 		return

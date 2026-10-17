@@ -34,6 +34,17 @@ func (a *App) resetTranscriptState() {
 }
 
 func (a *App) clearQueuedInput() {
+	if len(a.queuedPrompts) > 0 {
+		legacy := a.queuedPrompts[:0]
+		for _, prompt := range a.queuedPrompts {
+			if prompt.handle == nil {
+				legacy = append(legacy, prompt)
+				continue
+			}
+			prompt.handle.Cancel()
+		}
+		a.queuedPrompts = legacy
+	}
 	a.inputQueueMu.Lock()
 	a.inputQueue = a.inputQueue[:0]
 	a.lastInputTime = time.Time{}

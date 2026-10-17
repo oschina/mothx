@@ -1,12 +1,14 @@
 # Runtime 提交队列与执行完成屏障方案
 
-> 状态：提案（尚未实施）
+> 状态：Phase 1/Phase 2 已实施，Phase 3 入口迁移进行中
 >
 > 日期：2026-10-16
 >
 > 关联方案：[统一 Agent 核心与多入口 Runtime 方案](./agent-core-runtime-unification-proposal.md)、[跨进程 Session 执行归属、停止与恢复方案](./cross-process-session-execution-ownership-proposal.md)
 
 ## 1. 背景
+
+> 实施记录（2026-10-17）：`ExecutionRuntime.Completion` 已成为 Runtime-owned completion barrier；`SessionRuntime` 提供按 `(databaseIdentity, sessionID)` 复用的 `SubmissionCoordinator`；coordinator 通过既有 `SessionLeaseBus` 仅接收 advisory wake，并在每次重试时重新执行 SQLite fenced admission。TUI 的 queued input 已通过 Runtime coordinator 持有资源、排序、取消、admission 和 terminal handoff；`queuedPrompts` 只保留 projection 和无 Program 测试兼容桥。Runtime-owned ConversationTurn 只由 `ExecutionRuntime` 的 fenced terminal transaction 关闭；Agent Core 仅发出 `EventRunFinished`，不再从 terminal callback 直接 `EndConversationTurn`，避免连续提交时与 lease handoff 竞争并误报 lease lost。
 
 TUI 允许用户在一个 Run 执行期间继续输入，后续输入显示为排队消息，并在前一个 Run 结束后依次执行。当前队列由 TUI adapter 管理，而 Run 的 durable terminal transition、execution registration、retained lease 和跨进程 admission 由 `internal/agentruntime` 与 `internal/session` 管理。
 
@@ -251,21 +253,23 @@ TUI              SubmissionCoordinator      ExecutionRuntime       SQLite lease/
 
 ### Phase 1：completion barrier
 
-1. 为 `ExecutionRuntime` 增加只读 completion handle；完成信号在完整 release 后关闭。
-2. 将 guard/retained lease ownership 收敛到 Runtime 单一释放路径。
-3. 现有 Adapter 暂不迁移队列，但不得再把 `EventRunFinished` 当作可 admission 证明。
+1. [x] 为 `ExecutionRuntime` 增加只读 completion handle；完成信号在完整 release 后关闭。
+2. [x] 将 coordinator admission 与 TUI terminal handoff 收敛到 Runtime completion barrier；guard 由 coordinator 统一释放。
+3. [x] TUI 不再以 `EventRunFinished` 直接启动后继 Run；该事件只负责结果投影。
+4. [x] UDP/ownership bus 只触发 coordinator advisory wake；通知不授权、不取消、不写入状态，所有 admission 仍重新读取 SQLite。
 
 ### Phase 2：Runtime submission coordinator
 
-1. 在 `SessionRuntime` 接入 FIFO coordinator 和结构化 SubmitPolicy。
-2. 复用现有 input、ExecutionRuntime、DecisionService 与 durable Run API。
-3. 增加 queued submission cancel、shutdown 和 failure convergence。
+1. [x] 在 `SessionRuntime` 接入按数据库 identity 与 Session ID 复用的 FIFO coordinator 和结构化 SubmitPolicy。
+2. [x] 复用现有 input、ExecutionRuntime、DecisionService 与 durable Run API，不新建 Agent/Run/DAO 生命周期。
+3. [x] 增加 queued submission cancel、shutdown、external busy 分类和 advisory wake retry。
+4. [x] 将 TUI queued input 的实际存储、资源持有、取消和调度迁入 coordinator；`queuedPrompts` 只保留队列渲染与无 Program fixture 兼容。
 
 ### Phase 3：入口迁移
 
-1. 先迁移 TUI，删除 TUI admission polling和主动启动下一条逻辑。
-2. 迁移 ACP/Channel 中已有的本地串行等待路径。
-3. CLI/API 保留 fail-fast 或显式 wait policy，但必须调用同一 coordinator/admission contract。
+1. [x] TUI 已迁移 queued input、admission、terminal handoff 和 completion sequencing；`queuedPrompts` 不再负责生产路径的调度。
+2. [x] ACP/Channel 的本地串行 admission 已通过共享 coordinator contract；progress/协议仍由适配器投影。
+3. [x] CLI/API 的同步 admission保持既有 fail-fast contract；Cron/ESM/Knowledge 等后台长任务已通过 Runtime coordinator admission handoff，未复制 Agent/Run 生命周期。剩余仅是少量 legacy wrapper 清理。
 
 ### Phase 4：删除兼容桥
 

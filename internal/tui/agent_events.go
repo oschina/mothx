@@ -240,6 +240,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 
 	case agent.EventRunFinished:
 		a.runTerminalHandled = true
+		completedRun := a.run
 		if a.run != nil {
 			state := agentruntime.RunStateCompleted
 			switch event.Status {
@@ -257,6 +258,9 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 		// queued prompt may create its successor run.
 		a.isThinking = false
 		nextPrompt := a.scheduleNextQueuedPrompt()
+		if completedRun != nil {
+			nextPrompt = completedRun.completionCommand()
+		}
 		switch event.Status {
 		case agent.TaskFailed:
 			a.commitActiveStream()

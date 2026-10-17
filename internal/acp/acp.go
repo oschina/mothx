@@ -365,7 +365,23 @@ func (s *server) acquirePromptAdmission(ctx context.Context, rt *sessionRuntime)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	guard, err := agentruntime.AcquireExecutionAdmission(ctx, s.currentSettings().GetSessionDir(), rt.id, agentruntime.ExecutionAdmissionOptions{})
+	if rt.runtime == nil {
+		// Compatibility path for lightweight ACP fixtures that do not attach a
+		// SessionRuntime. Production ACP sessions always use the coordinator.
+		guard, err := agentruntime.AcquireExecutionAdmission(ctx, s.currentSettings().GetSessionDir(), rt.id, agentruntime.ExecutionAdmissionOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", errACPActiveSessionRun, err)
+		}
+		return guard.Release, nil
+	}
+	coordinator := rt.runtime.SubmissionCoordinator()
+	admission, err := coordinator.Acquire(ctx, "acp_admission_"+session.GenerateID(), agentruntime.SubmitPolicy{WaitForExternal: true}, func(admissionCtx context.Context) (func(), error) {
+		guard, acquireErr := agentruntime.AcquireExecutionAdmission(admissionCtx, s.currentSettings().GetSessionDir(), rt.id, agentruntime.ExecutionAdmissionOptions{})
+		if acquireErr != nil {
+			return nil, acquireErr
+		}
+		return guard.Release, nil
+	})
 	if err != nil {
 		// Keep the underlying ownership reason (lease busy, recovery required,
 		// detached remote execution) inspectable in the projected RPC error
@@ -376,10 +392,14 @@ func (s *server) acquirePromptAdmission(ctx context.Context, rt *sessionRuntime)
 	localActive := rt.cancel != nil
 	rt.cancelMu.Unlock()
 	if localActive {
-		guard.Release()
+		admission.Release()
 		return nil, errACPActiveSessionRun
 	}
-	return guard.Release, nil
+	if err := admission.Wait(ctx); err != nil {
+		admission.Release()
+		return nil, err
+	}
+	return admission.Release, nil
 }
 
 // closeResources releases the shared runtime resources. The legacy MCP slice

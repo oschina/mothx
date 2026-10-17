@@ -857,6 +857,32 @@ func (r *ExecutionRuntime) Wait(ctx context.Context) error {
 	}
 }
 
+// Completion returns the Runtime-owned completion barrier for runID. The
+// channel closes only after the durable terminal transition, local execution
+// deregistration, and retained lease release have completed. Adapters may use
+// it for projection sequencing but must not use Agent terminal events as an
+// admission signal.
+func (r *ExecutionRuntime) Completion(runID string) <-chan struct{} {
+	if r == nil {
+		closed := make(chan struct{})
+		close(closed)
+		return closed
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if runID != "" && r.runID != "" && r.runID != runID {
+		closed := make(chan struct{})
+		close(closed)
+		return closed
+	}
+	if r.done != nil {
+		return r.done
+	}
+	closed := make(chan struct{})
+	close(closed)
+	return closed
+}
+
 // State reports the current run state. It returns the last terminal state when
 // idle after a run has finished, and an empty state for a zero-value runtime.
 func (r *ExecutionRuntime) State() RunState {

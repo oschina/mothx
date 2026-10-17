@@ -103,9 +103,28 @@ type InputEvent struct {
 type queuedPrompt struct {
 	text      string
 	resources []agentruntime.PreparedInput
+	handle    *agentruntime.ExecutionHandle
 }
 
 type queuedPromptStartMsg struct{}
+
+type submissionCompletedMsg struct {
+	completion agentruntime.ExecutionCompletion
+}
+
+type tuiSubmissionAdmittedMsg struct {
+	handle    *agentruntime.ExecutionHandle
+	input     string
+	resources []agentruntime.PreparedInput
+	ctx       context.Context
+	ready     chan tuiSubmissionStartResult
+}
+
+type tuiSubmissionStartResult struct {
+	events <-chan agent.Event
+	done   <-chan error
+	err    error
+}
 
 type toolResultStatus string
 
@@ -1265,6 +1284,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case queuedPromptStartMsg:
 		return a, a.startNextQueuedPrompt()
 
+	case tuiSubmissionAdmittedMsg:
+		return a, a.startAdmittedSubmission(msg)
+
+	case submissionCompletedMsg:
+		if msg.completion.Error != nil {
+			a.addCommandError(fmt.Sprintf("Session submission failed: %v", msg.completion.Error))
+			return a, a.timer.Stop()
+		}
+		return a, nil
+
 	case agentEventMsg:
 		// Esc can cancel a run while its event channel still has terminal
 		// events buffered. Do not let those stale events mutate the next run
@@ -1349,6 +1378,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// leaving a.run set would swallow every later submission into the queue and
 		// keep the session's execution lease alive indefinitely.
 		a.finalizeInterruptedTools()
+		completedRun := a.run
 		if a.run != nil {
 			a.finalizeAbortedRun()
 			a.run.finish(agentruntime.RunStateFailed)
@@ -1362,7 +1392,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.stopReason != "" {
 			a.addMessage(statusStyle.Render(a.translator.Text(i18n.MsgSessionEndedPrefix)) + msg.stopReason)
 		}
-		return a, tea.Batch(a.timer.Stop(), a.scheduleNextQueuedPrompt())
+		return a, tea.Batch(a.timer.Stop(), a.completionCommandForRun(completedRun))
 	}
 
 	// Update components
@@ -1779,6 +1809,7 @@ func (a *App) finalizeForQuit() {
 }
 
 func (a *App) abortPendingRequest(reason string) tea.Cmd {
+	completedRun := a.run
 	a.pendingAbortReason = reason
 	a.abortActiveESMAgent()
 	if a.agent != nil {
@@ -1805,7 +1836,14 @@ func (a *App) abortPendingRequest(reason string) tea.Cmd {
 	a.addMessage(statusStyle.Render(a.translator.Text(i18n.MsgAborted)))
 	// Prompts queued while the aborted run was active must still run: nothing else
 	// restarts the queue because the aborted run's terminal event is retired.
-	return tea.Batch(a.timer.Stop(), a.scheduleNextQueuedPrompt())
+	return tea.Batch(a.timer.Stop(), a.completionCommandForRun(completedRun))
+}
+
+func (a *App) completionCommandForRun(run *tuiRun) tea.Cmd {
+	if run != nil && run.submission != nil {
+		return run.completionCommand()
+	}
+	return a.scheduleNextQueuedPrompt()
 }
 
 // handlePaste handles large pastes by creating markers

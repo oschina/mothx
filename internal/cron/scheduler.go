@@ -349,12 +349,12 @@ func (s *Scheduler) executeJobContext(ctx context.Context, job CronJob) {
 		// the same stale leaf and trigger ErrSessionModified.
 		var releaseRuntime func()
 		if job.SessionID != "" && s.sessionDir != "" {
-			guard, err := agentruntime.AcquireExecutionAdmission(ctx, s.sessionDir, job.SessionID, agentruntime.ExecutionAdmissionOptions{Wait: true})
+			release, err := agentruntime.AcquireExecutionSubmission(ctx, s.sessionDir, job.SessionID, "cron_admission_"+session.GenerateID(), true)
 			if err != nil {
 				lastErr = fmt.Errorf("acquire cron execution admission: %w", err)
 				return
 			}
-			releaseRuntime = guard.Release
+			releaseRuntime = release
 			defer releaseRuntime()
 			if opened, err := session.OpenByIDExact(s.sessionDir, job.SessionID); err == nil {
 				sess = opened

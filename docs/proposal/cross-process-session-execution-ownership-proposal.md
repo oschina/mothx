@@ -10,6 +10,8 @@
 >
 > 当前工作树包含本方案对应的 Runtime/session/Serve/ACP/Channel/Agent Core 改动；交接时应以本节状态和第 11.4 节测试证据为准，不要把兼容桥误认为新的生命周期实现。
 
+> 提交队列关联：同一进程的连续 submission 由 `internal/agentruntime.SubmissionCoordinator` 串行化；`SessionLeaseBus` 只作为 advisory wake，通知接收后必须重新读取 SQLite 并执行 fenced admission，不能用 UDP 报文直接授权、取消或终结 Run。Runtime completion barrier 关闭前，ownership snapshot 仍保持 busy/reserved，适配器不得把 `EventRunFinished` 当作可提交证明。
+
 ## 1. 背景与问题
 
 当前可能出现如下用户可见的不一致：Session 列表或聊天页显示“正在运行”，但点击停止后接口返回 `session has no active run`。这并不必然说明列表错误；也可能是**另一个进程**持有该 Session 的有效执行权并仍在运行。

@@ -78,6 +78,7 @@ type SessionRuntime struct {
 	Expert       *ExpertBinding
 	Mailbox      *agent.MemberMailbox
 	ExpertCenter *expert.Center
+	Submissions  *SubmissionCoordinator
 
 	// resourceSettings and the two capability flags record the shared resource
 	// assembly policy used to create this runtime. They let a lazily-bound
@@ -168,6 +169,28 @@ func (r *SessionRuntime) SetExecution(execution *ExecutionRuntime) {
 	r.mu.Unlock()
 }
 
+// SubmissionCoordinator returns the Runtime-owned local FIFO for this
+// Session. It is created once per SessionRuntime and closed by Shutdown.
+func (r *SessionRuntime) SubmissionCoordinator() *SubmissionCoordinator {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.Submissions == nil {
+		sessionDir := ""
+		sessionID := r.ID
+		if r.Manager != nil {
+			sessionDir = r.Manager.GetSessionDir()
+			if header := r.Manager.GetHeader(); header != nil && header.ID != "" {
+				sessionID = header.ID
+			}
+		}
+		r.Submissions = acquireSubmissionCoordinator(sessionDir, sessionID)
+	}
+	return r.Submissions
+}
+
 // SetDecisions attaches the session's shared decision lifecycle. Adapters may
 // keep protocol payload maps alongside it, but Runtime owns cleanup on close.
 func (r *SessionRuntime) SetDecisions(decisions *DecisionService) {
@@ -191,12 +214,21 @@ func (r *SessionRuntime) Shutdown(ctx context.Context) error {
 	r.mu.RLock()
 	execution := r.Execution
 	decisions := r.Decisions
+	submissions := r.Submissions
 	r.mu.RUnlock()
 	runID := ""
 	var shutdownErr error
 	if execution != nil {
 		runID, _ = execution.Active()
 		shutdownErr = execution.ShutdownContext(ctx, "session runtime shutdown")
+	}
+	if submissions != nil {
+		r.mu.Lock()
+		if r.Submissions == submissions {
+			r.Submissions = nil
+		}
+		r.mu.Unlock()
+		releaseSubmissionCoordinator(submissions)
 	}
 	if decisions != nil {
 		if runID != "" {
@@ -230,7 +262,10 @@ func (r *SessionRuntime) Close() {
 	r.closed = true
 	clients := r.MCPClients
 	r.MCPClients = nil
+	submissions := r.Submissions
+	r.Submissions = nil
 	r.mu.Unlock()
+	releaseSubmissionCoordinator(submissions)
 	mcp.CloseClients(clients)
 }
 

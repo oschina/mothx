@@ -105,11 +105,11 @@ func (s *KnowledgeBaseService) runLibrarian(ctx context.Context, base session.Kn
 		return "", fmt.Errorf("configure librarian runtime: %w", err)
 	}
 
-	guard, err := AcquireExecutionAdmission(ctx, s.sessionDir, manager.GetHeader().ID, ExecutionAdmissionOptions{Wait: true})
+	release, err := AcquireExecutionSubmission(ctx, s.sessionDir, manager.GetHeader().ID, "knowledge_librarian_"+session.GenerateID(), true)
 	if err != nil {
 		return "", fmt.Errorf("acquire librarian execution admission: %w", err)
 	}
-	defer guard.Release()
+	defer release()
 
 	runID := "knowledge_" + session.GenerateID()
 	execution := &ExecutionRuntime{}
