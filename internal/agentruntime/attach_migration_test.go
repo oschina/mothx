@@ -220,3 +220,44 @@ func TestAttachSessionResourcesHealsStaleEventStoreBeforeExport(t *testing.T) {
 		}
 	}
 }
+
+// TestAttachSessionResourcesFailsClosedOnUnhealthyCanonicalEventStore pins the
+// other half of the migration contract: once a session's canonical content store
+// IS the EventStore, an unhealthy store (bytes SQLite cannot account for) must
+// fail the attach instead of serving uncertain content. The legacy path
+// self-heals by discarding non-canonical leftovers; this canonical one fails
+// closed.
+func TestAttachSessionResourcesFailsClosedOnUnhealthyCanonicalEventStore(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+	manager := session.New(workDir, sessionDir)
+	if err := manager.Init(); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := manager.GetHeader().ID
+	if _, err := manager.AppendMessage(provider.NewUserMessage("canonical content")); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MigrateToEventStore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Orphan bytes with no SQLite intent: SQLite can no longer account for the
+	// canonical store, so it is not replayable.
+	store, err := session.NewEventStore(sessionDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append("orphan-batch", sessionID, "", "", []session.EventRecord{{
+		EventID: "orphan-event", SessionID: sessionID, Kind: "message", Payload: json.RawMessage(`{}`),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := tools.NewRegistry(workDir, sandbox.NewNoneSandbox())
+	if _, err := AttachSessionResources(AttachedResources{
+		Source: SourceACP, WorkDir: workDir, Manager: manager, Registry: registry,
+	}); err == nil {
+		t.Fatal("attach on an unhealthy canonical EventStore succeeded, want it to fail closed")
+	}
+}
