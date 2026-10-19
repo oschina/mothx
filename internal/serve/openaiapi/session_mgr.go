@@ -2231,6 +2231,13 @@ func (s *Server) GetSessionSubAgents(id string) ([]SessionSubAgentInfo, error) {
 		} else if found {
 			return external, nil
 		}
+		// A server-issued deferred WebUI session has no live sub-agents yet;
+		// project an empty list like the other session lookups so the WebUI can
+		// open the new session before its first run persists it. Arbitrary unknown
+		// ids are still rejected.
+		if s.isAllocatedSessionID(id) {
+			return external, nil
+		}
 		return nil, ErrSessionNotFound
 	}
 	if sess.AgentMgr == nil {
@@ -2335,6 +2342,12 @@ func (s *Server) GetSessionRunEvents(id string) ([]SessionRunEventEntry, error) 
 	if _, found, err := s.findSessionWorkDir(id); err != nil {
 		return nil, err
 	} else if !found {
+		// A server-issued deferred WebUI session has no persisted run events yet;
+		// project an empty list so the WebUI can open the new session before its
+		// first run persists it. Arbitrary unknown ids are still rejected.
+		if s.isAllocatedSessionID(id) {
+			return []SessionRunEventEntry{}, nil
+		}
 		return nil, ErrSessionNotFound
 	}
 	events, err := session.ListSessionRunEventsWithSeq(s.settings.GetSessionDir(), id)
@@ -2356,6 +2369,11 @@ func (s *Server) GetSessionCapabilityEvents(id string) ([]SessionCapabilityEvent
 	if _, found, err := s.findSessionWorkDir(id); err != nil {
 		return nil, err
 	} else if !found {
+		// Same deferred-session contract as run events: an allocated id with no
+		// persisted transcript yet projects an empty list.
+		if s.isAllocatedSessionID(id) {
+			return []SessionCapabilityEventEntry{}, nil
+		}
 		return nil, ErrSessionNotFound
 	}
 	events, err := session.ListSessionCapabilityEventsWithSeq(s.settings.GetSessionDir(), id)
