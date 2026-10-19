@@ -112,6 +112,28 @@ func (d *SessionEventIntentDAO) List(ctx context.Context, executor bun.IDB, sess
 	return d.list(ctx, executor, sessionID, nil)
 }
 
+// CommittedStateCounts returns how many of the session's event intents are
+// committed and how many are in any other state. It is the O(1) control-plane
+// half of the append write gate: with a single fenced writer and an unchanged
+// physical revision, "no non-committed intents and committed count equals the
+// physical batch count" is exactly the healthy reconciliation state.
+func (d *SessionEventIntentDAO) CommittedStateCounts(ctx context.Context, executor bun.IDB, sessionID string) (committed, nonCommitted int, err error) {
+	committed, err = executor.NewSelect().Model((*SessionEventIntentRecord)(nil)).
+		Where("session_id = ?", sessionID).
+		Where("state = ?", "committed").
+		Count(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	total, err := executor.NewSelect().Model((*SessionEventIntentRecord)(nil)).
+		Where("session_id = ?", sessionID).
+		Count(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return committed, total - committed, nil
+}
+
 func (d *SessionEventIntentDAO) list(ctx context.Context, executor bun.IDB, sessionID string, states []string) ([]SessionEventIntentRecord, error) {
 	var records []SessionEventIntentRecord
 	query := executor.NewSelect().Model(&records).Where("session_id = ?", sessionID).OrderExpr("seq_from ASC")

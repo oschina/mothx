@@ -63,6 +63,7 @@ var eventStoreStats = struct {
 	appendBytes   atomic.Uint64
 	cacheHits     atomic.Uint64
 	cacheMisses   atomic.Uint64
+	fullScans     atomic.Uint64
 }{}
 
 // EventStoreStats is a process-local write-pressure snapshot. It is advisory
@@ -73,6 +74,10 @@ type EventStoreStats struct {
 	AppendBytes   uint64
 	CacheHits     uint64
 	CacheMisses   uint64
+	// FullScans counts whole-log physical scans. A steady-state append path must
+	// not grow this with transcript size; it exists to pin that the hot path is
+	// O(1) instead of re-reading the ever-growing log per append.
+	FullScans uint64
 }
 
 func EventStoreWriteStats() EventStoreStats {
@@ -82,6 +87,7 @@ func EventStoreWriteStats() EventStoreStats {
 		AppendBytes:   eventStoreStats.appendBytes.Load(),
 		CacheHits:     eventStoreStats.cacheHits.Load(),
 		CacheMisses:   eventStoreStats.cacheMisses.Load(),
+		FullScans:     eventStoreStats.fullScans.Load(),
 	}
 }
 
@@ -420,6 +426,7 @@ func (s *EventStore) scanLayout() (eventStoreLayout, error) {
 }
 
 func (s *EventStore) scanState(layout eventStoreLayout, repairTail bool) (eventStoreScan, error) {
+	eventStoreStats.fullScans.Add(1)
 	all := make([]EventBatch, 0)
 	nextSeq := int64(eventStoreSeqBase)
 	seenBatchIDs := make(map[string]struct{})
@@ -493,14 +500,26 @@ func (s *EventStore) scan(repairTail bool) ([]EventBatch, error) {
 // complete batch. It is a reservation hint; the SQLite event intent and the
 // fenced writer are what make the reservation authoritative.
 func (s *EventStore) NextSequence() (int64, error) {
-	batches, err := s.Scan()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	layout, err := s.scanLayout()
 	if err != nil {
 		return 0, err
 	}
-	if len(batches) == 0 {
+	if len(layout.paths) == 0 {
 		return eventStoreSeqBase, nil
 	}
-	return batches[len(batches)-1].SeqTo + 1, nil
+	// The append-state cache already tracks the next sequence and is validated
+	// against the physical revision, so the hot append path never rescans the
+	// whole log to learn where it ends.
+	cache, err := eventStoreAppendState(s.root, layout)
+	if err != nil {
+		return 0, err
+	}
+	if cache.nextSeq < eventStoreSeqBase {
+		return eventStoreSeqBase, nil
+	}
+	return cache.nextSeq, nil
 }
 
 func (s *EventStore) writeManifest(layout eventStoreLayout, nextSeq int64) error {
@@ -705,47 +724,10 @@ func scanEventStore(path string, repairTail bool) (eventStoreScan, error) {
 // still match; a peer write, external change, or startup cache miss falls back
 // to a full validated scan, preserving cross-process correctness.
 func eventStoreAppendState(root string, layout eventStoreLayout) (*eventStoreAppendCache, error) {
-	if layout.legacy {
-		path := layout.paths[0]
-		info, statErr := os.Stat(path)
-		if statErr == nil {
-			if cached, ok := eventStoreAppendCaches.Load(path); ok {
-				cache := cached.(*eventStoreAppendCache)
-				if cache.size == info.Size() && cache.modTime.Equal(info.ModTime()) {
-					eventStoreStats.cacheHits.Add(1)
-					return cache, nil
-				}
-			}
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return nil, fmt.Errorf("inspect event store append state: %w", statErr)
-		}
-		store := &EventStore{mu: &sync.Mutex{}, root: root}
-		batches, err := store.scan(true)
-		eventStoreStats.cacheMisses.Add(1)
-		if err != nil {
-			return nil, err
-		}
-		cached, _ := eventStoreAppendCaches.Load(path)
-		if cached != nil {
-			return cached.(*eventStoreAppendCache), nil
-		}
-		return newEventStoreAppendCache(root, layout, batches), nil
-	}
-	if cached, ok := eventStoreSegmentCaches.Load(root); ok {
-		cache := cached.(*eventStoreAppendCache)
-		if len(layout.paths) == 0 {
-			if cache.size == 0 {
-				eventStoreStats.cacheHits.Add(1)
-				return cache, nil
-			}
-		} else if info, statErr := os.Stat(layout.paths[len(layout.paths)-1]); statErr == nil {
-			if cache.size == info.Size() && cache.modTime.Equal(info.ModTime()) {
-				eventStoreStats.cacheHits.Add(1)
-				return cache, nil
-			}
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return nil, fmt.Errorf("inspect event store append state: %w", statErr)
-		}
+	if cache, ok, err := eventStoreAppendStateFresh(root, layout); err != nil {
+		return nil, err
+	} else if ok {
+		return cache, nil
 	}
 	store := &EventStore{mu: &sync.Mutex{}, root: root}
 	batches, err := store.scan(true)
@@ -753,10 +735,86 @@ func eventStoreAppendState(root string, layout eventStoreLayout) (*eventStoreApp
 	if err != nil {
 		return nil, err
 	}
-	if cached, ok := eventStoreSegmentCaches.Load(root); ok {
+	if layout.legacy {
+		if cached, ok := eventStoreAppendCaches.Load(layout.paths[0]); ok {
+			return cached.(*eventStoreAppendCache), nil
+		}
+	} else if cached, ok := eventStoreSegmentCaches.Load(root); ok {
 		return cached.(*eventStoreAppendCache), nil
 	}
 	return newEventStoreAppendCache(root, layout, batches), nil
+}
+
+// eventStoreAppendStateFresh reports the cached append state only when it still
+// describes the current physical revision. found=false means "scan it": a
+// missing cache, a stale size/mtime, or an absent file. A non-NotExist stat
+// error is surfaced so append correctness still fails closed.
+func eventStoreAppendStateFresh(root string, layout eventStoreLayout) (cache *eventStoreAppendCache, found bool, err error) {
+	if layout.legacy {
+		if len(layout.paths) == 0 {
+			return nil, false, nil
+		}
+		path := layout.paths[0]
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) {
+				return nil, false, nil
+			}
+			return nil, false, fmt.Errorf("inspect event store append state: %w", statErr)
+		}
+		cached, ok := eventStoreAppendCaches.Load(path)
+		if !ok {
+			return nil, false, nil
+		}
+		c := cached.(*eventStoreAppendCache)
+		if c.size == info.Size() && c.modTime.Equal(info.ModTime()) {
+			eventStoreStats.cacheHits.Add(1)
+			return c, true, nil
+		}
+		return nil, false, nil
+	}
+	cached, ok := eventStoreSegmentCaches.Load(root)
+	if !ok {
+		return nil, false, nil
+	}
+	c := cached.(*eventStoreAppendCache)
+	if len(layout.paths) == 0 {
+		if c.size == 0 {
+			eventStoreStats.cacheHits.Add(1)
+			return c, true, nil
+		}
+		return nil, false, nil
+	}
+	info, statErr := os.Stat(layout.paths[len(layout.paths)-1])
+	if statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("inspect event store append state: %w", statErr)
+	}
+	if c.size == info.Size() && c.modTime.Equal(info.ModTime()) {
+		eventStoreStats.cacheHits.Add(1)
+		return c, true, nil
+	}
+	return nil, false, nil
+}
+
+// peekAppendState returns the process-local, validated append state only while
+// it is fresh for the current physical revision, without ever scanning. A miss
+// means the cached state cannot be trusted to describe the file right now, so
+// callers that need an exact answer run the full inspection instead.
+func (s *EventStore) peekAppendState() (*eventStoreAppendCache, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	layout, err := s.scanLayout()
+	if err != nil {
+		return nil, false
+	}
+	cache, ok, err := eventStoreAppendStateFresh(s.root, layout)
+	if err != nil {
+		return nil, false
+	}
+	return cache, ok
 }
 
 func newEventStoreAppendCache(root string, layout eventStoreLayout, batches []EventBatch) *eventStoreAppendCache {

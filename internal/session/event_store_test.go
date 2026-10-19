@@ -524,7 +524,7 @@ func TestEventIntentCommitRefusedAfterLeaseTakeover(t *testing.T) {
 	if rebound.Epoch <= binding.Epoch || rebound.OwnerInstanceID == "" {
 		t.Fatalf("replacement lease binding = %#v, want a bumped epoch over %#v", rebound, binding)
 	}
-	if err := CommitEventIntent(context.Background(), sessionDir, spec, nil); !errors.Is(err, ErrEventIntentFenced) {
+	if err := CommitEventIntent(context.Background(), sessionDir, spec, nil, nil); !errors.Is(err, ErrEventIntentFenced) {
 		t.Fatalf("commit after takeover error = %v, want ErrEventIntentFenced", err)
 	}
 	committed, err := ReadCommittedEventBatches(context.Background(), sessionDir, "session-takeover")
@@ -685,10 +685,10 @@ func TestEventIntentProtocolCommitsOnlyWithFencedIdentity(t *testing.T) {
 	}
 	wrong := spec
 	wrong.LeaseEpoch++
-	if err := CommitEventIntent(context.Background(), sessionDir, wrong, nil); !errors.Is(err, ErrEventIntentFenced) {
+	if err := CommitEventIntent(context.Background(), sessionDir, wrong, nil, nil); !errors.Is(err, ErrEventIntentFenced) {
 		t.Fatalf("wrong fenced identity error = %v, want ErrEventIntentFenced", err)
 	}
-	if err := CommitEventIntent(context.Background(), sessionDir, spec, nil); err != nil {
+	if err := CommitEventIntent(context.Background(), sessionDir, spec, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	inspection, err = InspectEventStore(context.Background(), sessionDir, "session-1")
@@ -2612,6 +2612,50 @@ func TestMigrateToEventStoreDoesNotContendWithHeldLease(t *testing.T) {
 	}
 }
 
+// TestMigrateToEventStoreDefersWhileAnotherOwnerRuns pins the unified entry's
+// opportunistic contract: when another owner is actively running the session
+// there is no safe window to take the irreversible step, so the call is a
+// successful no-op and the self-consistent legacy store keeps serving. This is
+// what lets an adapter attach (ACP/Desktop, channels) open a session it does not
+// own instead of being blocked by migration.
+func TestMigrateToEventStoreDefersWhileAnotherOwnerRuns(t *testing.T) {
+	sessionDir := t.TempDir()
+	const sessionID = "migrate-deferred-run"
+	manager := New("/tmp/event-deferred", sessionDir)
+	if err := manager.InitWithID(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AppendMessage(provider.NewUserMessage("legacy")); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	// A durable run row with no live lease held by this process means another
+	// owner is mid-run, exactly the state an attach must tolerate.
+	if err := SaveSessionRun(sessionDir, SessionRun{
+		ID: "run-elsewhere", SessionID: sessionID, Status: "running", StartedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.MigrateToEventStore(context.Background()); err != nil {
+		t.Fatalf("migrate while another owner runs the session = %v, want deferred no-op", err)
+	}
+	flipped, err := sessionUsesEventStore(context.Background(), mustOpenRootDB(t, sessionDir), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flipped {
+		t.Fatal("session content store was flipped while another owner ran the session")
+	}
+	messages, err := ListSessionMessagesWithSeq(sessionDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Message.Content != "legacy" {
+		t.Fatalf("legacy replay after deferred migration = %#v", messages)
+	}
+}
+
 // TestAppendEventStoreEntriesAfterReleasedReservation proves the reservation is
 // short-lived rather than an acquired-and-forgotten lock: a second append after
 // the first released its reservation must succeed and extend the same log.
@@ -2779,7 +2823,7 @@ func TestOpenDuringPreparedIntentWindowReplaysCommittedHistory(t *testing.T) {
 	if err := markEventIntent(ctx, sessionDir, spec, EventIntentPrepared, EventIntentAppended, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := CommitEventIntent(ctx, sessionDir, spec, nil); err != nil {
+	if err := CommitEventIntent(ctx, sessionDir, spec, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	settled, err := OpenByIDExact(sessionDir, sessionID)

@@ -2,12 +2,14 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +30,11 @@ import (
 //   - Shape C: one process with many concurrent sessions and leases (the
 //     Serve-with-N-sessions shape), pinning the coalesced heartbeat and
 //     batched entry writes at scale.
+//   - Shape E: the same multi-process load run against two session directories,
+//     one on the legacy SQLite transcript and one flipped to the EventStore, so
+//     the storage change's real effect on shared-database pressure (begin wait,
+//     WAL, pool wait, wall time) and on where the payload bytes live can be
+//     compared directly instead of asserted from first principles.
 //
 // Shape D (two-process same-session admission competition, kill -9 owner and
 // bounded recovery convergence) is covered by the existing suites instead of
@@ -62,6 +69,14 @@ type writePressureMetrics struct {
 	PoolWaitCount          int64  `json:"poolWaitCount"`
 	PoolWaitDurationMs     int64  `json:"poolWaitDurationMs"`
 	PoolMaxOpenConnections int    `json:"poolMaxOpenConnections"`
+	// ContentStore records which store the helper wrote through, and the
+	// EventStore counters report the append-side pressure of that path (zero for
+	// a legacy run). They make the shape-E comparison self-describing.
+	ContentStore      string `json:"contentStore"`
+	PayloadBytes      int    `json:"payloadBytes"`
+	EventStoreBatches uint64 `json:"eventStoreBatches"`
+	EventStoreEvents  uint64 `json:"eventStoreEvents"`
+	EventStoreBytes   uint64 `json:"eventStoreBytes"`
 }
 
 // walBytesForDir and poolStatsForDir report one specific session database's WAL
@@ -123,6 +138,24 @@ func runWriteLoadProcess(t *testing.T) {
 	if err != nil || batch < 1 {
 		t.Fatalf("invalid MOTHX_WP_BATCH: %v", err)
 	}
+	contentStore := os.Getenv("MOTHX_WP_CONTENT_STORE")
+	if contentStore == "" {
+		contentStore = "sqlite"
+	}
+	if contentStore != "sqlite" && contentStore != "event_store" {
+		t.Fatalf("invalid MOTHX_WP_CONTENT_STORE %q", contentStore)
+	}
+	// payloadBytes pads every message so the comparison can exercise the case the
+	// EventStore exists for: large transcript payloads leaving the shared SQLite
+	// B-tree. Zero keeps the other shapes' tiny-message behavior unchanged.
+	payloadBytes := 0
+	if raw := os.Getenv("MOTHX_WP_PAYLOAD_BYTES"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			t.Fatalf("invalid MOTHX_WP_PAYLOAD_BYTES %q", raw)
+		}
+		payloadBytes = parsed
+	}
 
 	started := time.Now()
 	entries := 0
@@ -132,11 +165,23 @@ func runWriteLoadProcess(t *testing.T) {
 		if err := m.InitWithID(sessionID); err != nil {
 			t.Fatal(err)
 		}
+		// A fresh session has no lease, so adopting the EventStore is a metadata
+		// flip followed by canonical append/replay; the same call the Runtime
+		// attach paths now make.
+		if contentStore == "event_store" {
+			if err := m.MigrateToEventStore(context.Background()); err != nil {
+				t.Fatalf("migrate session %s to event store: %v", sessionID, err)
+			}
+		}
 		for start := 0; start < messages; start += batch {
 			end := min(start+batch, messages)
 			bulk := make([]provider.Message, 0, end-start)
 			for i := start; i < end; i++ {
-				bulk = append(bulk, provider.NewUserMessage(fmt.Sprintf("%s-message-%d", sessionID, i)))
+				content := fmt.Sprintf("%s-message-%d", sessionID, i)
+				if payloadBytes > len(content) {
+					content += strings.Repeat("x", payloadBytes-len(content))
+				}
+				bulk = append(bulk, provider.NewUserMessage(content))
 			}
 			ids, err := m.AppendMessages(bulk)
 			if err != nil {
@@ -151,6 +196,7 @@ func runWriteLoadProcess(t *testing.T) {
 	p50, p99 := database.BeginWaitQuantiles()
 	checkpointAttempts, checkpointFailures, _, _, _ := database.CheckpointStats()
 	poolWait, poolWaitMs, poolMaxOpen := poolStatsForDir(sessionDir)
+	esStats := EventStoreWriteStats()
 	encoded, err := json.Marshal(writePressureMetrics{
 		PID: os.Getpid(), Sessions: sessions, Entries: entries,
 		ElapsedMs:        time.Since(started).Milliseconds(),
@@ -168,6 +214,12 @@ func runWriteLoadProcess(t *testing.T) {
 		PoolWaitCount:          poolWait,
 		PoolWaitDurationMs:     poolWaitMs,
 		PoolMaxOpenConnections: poolMaxOpen,
+
+		ContentStore:      contentStore,
+		PayloadBytes:      payloadBytes,
+		EventStoreBatches: esStats.AppendBatches,
+		EventStoreEvents:  esStats.AppendEvents,
+		EventStoreBytes:   esStats.AppendBytes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -254,9 +306,10 @@ func logWritePressureMetrics(t *testing.T, shape string, all ...writePressureMet
 		if m.PoolWaitDurationMs > poolWaitMs {
 			poolWaitMs = m.PoolWaitDurationMs
 		}
-		t.Logf("[shape %s] pid=%d entries=%d elapsed=%dms busyHits=%d busyWaitMs=%d begins=%d beginTotalMs=%d beginMaxMs=%d beginP50Us=%d beginP99Us=%d ckptAttempts=%d ckptFailures=%d walBytes=%d poolMaxOpen=%d poolWaitCount=%d poolWaitMs=%d",
-			shape, m.PID, m.Entries, m.ElapsedMs, m.BusyRetryHits, m.BusyRetryWaitMs, m.BeginCount, m.BeginTotalWaitMs, m.BeginMaxWaitMs,
-			m.BeginP50WaitUs, m.BeginP99WaitUs, m.CheckpointAttempts, m.CheckpointFailures, m.WalBytes, m.PoolMaxOpenConnections, m.PoolWaitCount, m.PoolWaitDurationMs)
+		t.Logf("[shape %s] pid=%d store=%s payloadBytes=%d entries=%d elapsed=%dms busyHits=%d busyWaitMs=%d begins=%d beginTotalMs=%d beginMaxMs=%d beginP50Us=%d beginP99Us=%d ckptAttempts=%d ckptFailures=%d walBytes=%d poolMaxOpen=%d poolWaitCount=%d poolWaitMs=%d esBatches=%d esEvents=%d esBytes=%d",
+			shape, m.PID, m.ContentStore, m.PayloadBytes, m.Entries, m.ElapsedMs, m.BusyRetryHits, m.BusyRetryWaitMs, m.BeginCount, m.BeginTotalWaitMs, m.BeginMaxWaitMs,
+			m.BeginP50WaitUs, m.BeginP99WaitUs, m.CheckpointAttempts, m.CheckpointFailures, m.WalBytes, m.PoolMaxOpenConnections, m.PoolWaitCount, m.PoolWaitDurationMs,
+			m.EventStoreBatches, m.EventStoreEvents, m.EventStoreBytes)
 	}
 	t.Logf("[shape %s] aggregate entries=%d wallMs=%d busyHits=%d beginMaxMs=%d poolWaitCount=%d poolWaitMaxMs=%d",
 		shape, totalEntries, wallMs, busyHits, beginMaxMs, poolWaitCount, poolWaitMs)
@@ -456,4 +509,216 @@ func TestWritePressureShapeCSingleProcessManySessions(t *testing.T) {
 	t.Logf("[shape C] sessions=%d entries=%d begins=%d beginTotalMs=%d beginP50Us=%d beginP99Us=%d beginMaxMs=%d busyHits=%d busyWaitMs=%d ckptAttempts=%d ckptFailures=%d walBytes=%d poolMaxOpen=%d poolWaitCount=%d poolWaitMs=%d",
 		sessionCount, count, beginCount, beginTotal.Milliseconds(), p50.Microseconds(), p99.Microseconds(), beginMax.Milliseconds(),
 		hits, retryWait.Milliseconds(), checkpointAttempts, checkpointFailures, walBytesForDir(sessionDir), poolMaxOpen, poolWait, poolWaitMs)
+}
+
+// writeLoadEnvWithContentStore is writeLoadEnv plus the content-store selection
+// for the shape-E storage comparison. An empty contentStore keeps the helper's
+// legacy SQLite default.
+func writeLoadEnvWithContentStore(sessionDir, idPrefix string, sessions, messages, batch int, contentStore string) []string {
+	env := writeLoadEnv(sessionDir, idPrefix, sessions, messages, batch)
+	if contentStore != "" {
+		env = append(env, "MOTHX_WP_CONTENT_STORE="+contentStore)
+	}
+	return env
+}
+
+// fileBytesForDir reports the size of a named file under sessionDir, or 0 when
+// it is absent.
+func fileBytesForDir(sessionDir, name string) int64 {
+	info, err := os.Stat(filepath.Join(sessionDir, name))
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+// dirBytes reports the recursive on-disk size of a directory tree (the
+// EventStore segments live outside sessions.db, so this is where the migrated
+// payload bytes land).
+func dirBytes(path string) int64 {
+	var total int64
+	_ = filepath.WalkDir(path, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, statErr := d.Info(); statErr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// logShapeEDelta prints the legacy-vs-EventStore aggregate delta for shape E so
+// a baseline run reports the comparison without a spreadsheet.
+func logShapeEDelta(t *testing.T, legacy, event []writePressureMetrics) {
+	t.Helper()
+	type agg struct {
+		entries                  int
+		payloadBytes             int
+		wallMs                   int64
+		busyHits                 uint64
+		beginCount               uint64
+		beginTotalWaitMs         int64
+		beginMaxWaitMs           int64
+		poolWaitCount            int64
+		walBytes                 int64
+		eventStoreBatches, eByte uint64
+	}
+	sum := func(all []writePressureMetrics) agg {
+		var a agg
+		for _, m := range all {
+			a.entries += m.Entries
+			if m.PayloadBytes > a.payloadBytes {
+				a.payloadBytes = m.PayloadBytes
+			}
+			if m.ElapsedMs > a.wallMs {
+				a.wallMs = m.ElapsedMs
+			}
+			a.busyHits += m.BusyRetryHits
+			a.beginCount += m.BeginCount
+			a.beginTotalWaitMs += m.BeginTotalWaitMs
+			if m.BeginMaxWaitMs > a.beginMaxWaitMs {
+				a.beginMaxWaitMs = m.BeginMaxWaitMs
+			}
+			a.poolWaitCount += m.PoolWaitCount
+			if m.WalBytes > a.walBytes {
+				a.walBytes = m.WalBytes
+			}
+			a.eventStoreBatches += m.EventStoreBatches
+			a.eByte += m.EventStoreBytes
+		}
+		return a
+	}
+	l, e := sum(legacy), sum(event)
+	t.Logf("[shape E delta] payloadBytes=%d entries legacy=%d event=%d wallMs legacy=%d event=%d deltaMs=%d; begins legacy=%d event=%d; beginTotalMs legacy=%d event=%d; beginMaxMs legacy=%d event=%d; busyHits legacy=%d event=%d; poolWaitCount legacy=%d event=%d; walBytes legacy=%d event=%d; eventStoreBatches=%d eventStoreBytes=%d",
+		l.payloadBytes, l.entries, e.entries, l.wallMs, e.wallMs, e.wallMs-l.wallMs,
+		l.beginCount, e.beginCount, l.beginTotalWaitMs, e.beginTotalWaitMs,
+		l.beginMaxWaitMs, e.beginMaxWaitMs, l.busyHits, e.busyHits,
+		l.poolWaitCount, e.poolWaitCount, l.walBytes, e.walBytes, e.eventStoreBatches, e.eByte)
+}
+
+// assertEventStoreSessionRows verifies a flipped session kept no legacy payload
+// rows, wrote one projection row per event (session header plus messages), and
+// still replays the full transcript through the canonical EventStore.
+func assertEventStoreSessionRows(t *testing.T, sessionDir, idPrefix string, processes, sessions, messages int) {
+	t.Helper()
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var headerRows, payloadRows, projected int
+	for p := 0; p < processes; p++ {
+		for s := 0; s < sessions; s++ {
+			sessionID := fmt.Sprintf("%s-p%d-%d", idPrefix, p, s)
+			var total int
+			if err := db.Bun().QueryRow("SELECT COUNT(*) FROM entries WHERE session_id = ?", sessionID).Scan(&total); err != nil {
+				t.Fatal(err)
+			}
+			headerRows += total
+			var payload int
+			if err := db.Bun().QueryRow("SELECT COUNT(*) FROM entries WHERE session_id = ? AND type <> 'session'", sessionID).Scan(&payload); err != nil {
+				t.Fatal(err)
+			}
+			payloadRows += payload
+			if payload != 0 {
+				t.Fatalf("event-store session %s kept %d legacy payload entries, want 0 (total entries=%d)", sessionID, payload, total)
+			}
+			var projectedCount int
+			if err := db.Bun().QueryRow("SELECT COUNT(*) FROM session_event_projections WHERE session_id = ?", sessionID).Scan(&projectedCount); err != nil {
+				t.Fatal(err)
+			}
+			projected += projectedCount
+			if projectedCount != messages {
+				t.Fatalf("projections for %s = %d, want %d", sessionID, projectedCount, messages)
+			}
+			manager, err := OpenByID("/tmp/write-pressure", sessionDir, sessionID)
+			if err != nil {
+				t.Fatalf("reopen event-store session %s: %v", sessionID, err)
+			}
+			if got := len(manager.GetMessages()); got != messages {
+				t.Fatalf("replayed messages for %s = %d, want %d", sessionID, got, messages)
+			}
+		}
+	}
+	t.Logf("[shape E rows] event-store sessions=%d entriesRetained=%d payloadRows=%d projections=%d",
+		processes*sessions, headerRows, payloadRows, projected)
+}
+
+// TestWritePressureShapeEEventStoreVersusLegacy runs the shape-A workload twice
+// concurrently: three processes against a legacy SQLite session directory and
+// three against a directory whose sessions were flipped to the EventStore. It
+// pins the storage change's real effect instead of asserting it:
+//
+//   - both groups write and replay the identical transcript,
+//   - the legacy group keeps its payload in `entries` while the EventStore group
+//     keeps none there and one lightweight projection row per event, and
+//   - the shared-database pressure metrics (begin wait, WAL size, pool wait,
+//     wall time) are reported per group and as a delta for before/after runs.
+//
+// The comparison is descriptive, not a threshold: absolute numbers scale with
+// the machine, so the logged delta is the artifact a baseline run reads.
+func TestWritePressureShapeEEventStoreVersusLegacy(t *testing.T) {
+	legacyDir := t.TempDir()
+	eventDir := t.TempDir()
+	scale := writePressureScale(t)
+	const (
+		processes          = 3
+		sessionsPerProcess = 2
+		batch              = 8
+	)
+	messagesPerSession := 24 * scale
+	// A payloadSize of ~8 KiB per message is the regime the EventStore targets:
+	// the transcript bytes dominate, so where they physically live matters. The
+	// same size is applied to both groups, isolating the storage choice.
+	const payloadSize = 8192
+
+	legacyProcs := make([]writePressureProcess, 0, processes)
+	eventProcs := make([]writePressureProcess, 0, processes)
+	for i := 0; i < processes; i++ {
+		payloadEnv := "MOTHX_WP_PAYLOAD_BYTES=" + strconv.Itoa(payloadSize)
+		legacyProcs = append(legacyProcs, startWritePressureProcess(t,
+			append(writeLoadEnv(legacyDir, fmt.Sprintf("shapeE-legacy-p%d", i), sessionsPerProcess, messagesPerSession, batch), payloadEnv)...))
+		eventProcs = append(eventProcs, startWritePressureProcess(t,
+			append(writeLoadEnvWithContentStore(eventDir, fmt.Sprintf("shapeE-event-p%d", i), sessionsPerProcess, messagesPerSession, batch, "event_store"), payloadEnv)...))
+	}
+
+	legacy := make([]writePressureMetrics, 0, processes)
+	event := make([]writePressureMetrics, 0, processes)
+	for i := 0; i < processes; i++ {
+		lm := waitWritePressureProcess(t, legacyProcs[i])
+		if lm.ContentStore != "sqlite" {
+			t.Fatalf("legacy helper %d store = %q, want sqlite", i, lm.ContentStore)
+		}
+		if lm.Entries != sessionsPerProcess*messagesPerSession {
+			t.Fatalf("legacy helper %d entries = %d, want %d", i, lm.Entries, sessionsPerProcess*messagesPerSession)
+		}
+		legacy = append(legacy, lm)
+
+		em := waitWritePressureProcess(t, eventProcs[i])
+		if em.ContentStore != "event_store" {
+			t.Fatalf("event-store helper %d store = %q, want event_store", i, em.ContentStore)
+		}
+		if em.Entries != sessionsPerProcess*messagesPerSession {
+			t.Fatalf("event-store helper %d entries = %d, want %d", i, em.Entries, sessionsPerProcess*messagesPerSession)
+		}
+		if em.EventStoreEvents == 0 {
+			t.Fatalf("event-store helper %d reported no EventStore appends", i)
+		}
+		event = append(event, em)
+	}
+
+	logWritePressureMetrics(t, "E-legacy", legacy...)
+	logWritePressureMetrics(t, "E-event-store", event...)
+	logShapeEDelta(t, legacy, event)
+	t.Logf("[shape E] sessions.db bytes legacy=%d event=%d; event-store tree bytes=%d",
+		fileBytesForDir(legacyDir, "sessions.db"), fileBytesForDir(eventDir, "sessions.db"), dirBytes(filepath.Join(eventDir, "event-store")))
+
+	for i := 0; i < processes; i++ {
+		assertWriteLoadRows(t, legacyDir, fmt.Sprintf("shapeE-legacy-p%d", i), sessionsPerProcess, messagesPerSession)
+	}
+	assertEventStoreSessionRows(t, eventDir, "shapeE-event", processes, sessionsPerProcess, messagesPerSession)
+
+	assertDatabaseIntegrity(t, filepath.Join(legacyDir, "sessions.db"))
+	assertDatabaseIntegrity(t, filepath.Join(eventDir, "sessions.db"))
 }

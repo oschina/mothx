@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -52,6 +53,17 @@ func AttachSessionResources(resources AttachedResources) (*SessionRuntime, error
 	}
 	if resources.ID == "" {
 		return nil, fmt.Errorf("runtime session ID is required")
+	}
+	if resources.Manager.GetHeader() == nil {
+		return nil, fmt.Errorf("initialized session manager is required")
+	}
+	// BindSession, AttachSessionResources, and Builder.Build all adopt the
+	// canonical content store through the same single migration entry point: an
+	// adapter that attaches resources directly (ACP/Desktop, channels, and
+	// knowledge runs) migrates an existing legacy session and flips a new one
+	// instead of silently leaving it on the legacy SQLite transcript.
+	if err := resources.Manager.MigrateToEventStore(context.Background()); err != nil {
+		return nil, fmt.Errorf("migrate session content to EventStore: %w", err)
 	}
 	additionalDirectories, err := NormalizeAdditionalDirectories(resources.AdditionalDirectories)
 	if err != nil {

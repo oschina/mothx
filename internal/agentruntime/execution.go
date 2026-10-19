@@ -655,11 +655,19 @@ func (r *ExecutionRuntime) shutdownLoopOwned(ctx context.Context, runID, message
 	var updateErr error
 	// A terminal durable transition owns the row while it is writing its
 	// terminal event. Avoid waiting on that I/O here; cancellation and the
-	// caller's context-bounded Wait must remain responsive.
+	// caller's context-bounded Wait must remain responsive. A previously
+	// prepared-but-failed terminal write also leaves the row in the committed
+	// terminalizing window, so it must not be forced back to cancelling either.
 	r.mu.Lock()
-	terminalizing := r.terminalizing
+	terminalizing := r.terminalizing || r.terminalPrepared
+	terminalState, terminalMessage := r.terminalState, r.terminalMessage
+	terminalEvent := r.terminalEvent
+	needsRetry := r.terminalEventSet && terminalizing && !r.terminalRetryRunning
 	r.mu.Unlock()
 	if terminalizing {
+		if needsRetry {
+			r.startTerminalPersistenceRetry(runID, terminalState, terminalMessage, terminalEvent)
+		}
 		return r.Wait(ctx)
 	}
 	if !r.transitionMu.TryLock() {
@@ -667,7 +675,7 @@ func (r *ExecutionRuntime) shutdownLoopOwned(ctx context.Context, runID, message
 	}
 	r.mu.Lock()
 	stillActive := r.activeLocked(runID)
-	terminalizing = r.terminalizing
+	terminalizing = r.terminalizing || r.terminalPrepared
 	r.mu.Unlock()
 	if !stillActive {
 		r.transitionMu.Unlock()

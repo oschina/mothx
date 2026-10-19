@@ -17,25 +17,39 @@ import (
 // worst-case fairness envelope during migration.
 const maxEventStoreEntriesPerBatch = maxEntriesPerTransaction
 
-// MigrateToEventStore exports the legacy SQLite transcript once, under a
-// session content lease. The EventStore batch is committed and indexed before
-// legacy payload rows are removed, so a failed export leaves the old source
-// intact while a successful migration removes the duplicate payload copy.
+// MigrateToEventStore is the single migration entry point for a session's
+// persisted content store. Every Runtime attach path (SessionRuntime.BindSession,
+// AttachSessionResources, and Builder.Build) calls exactly this method and does
+// no migration logic of its own, so no entry point can diverge on whether an old
+// session is migrated.
 //
-// Migration is idempotent and must never contend with the Run it serves. The
-// Runtime binds — and therefore migrates — a session while the durable Run that
-// owns the session lease is still active, so this routine never reserves an
-// idle session with AcquireMutation. It either adopts facts that are already
-// committed (no lease at all) or fences the one irreversible step, the content
-// store flip, against the lease identity this process already holds. When no
-// lease exists the session is genuinely idle and the flip needs no fence
-// beyond the atomic statement itself.
+// It exports the legacy SQLite transcript once, under a session content lease.
+// The EventStore batch is committed and indexed before legacy payload rows are
+// removed, so a failed export leaves the old source intact while a successful
+// migration removes the duplicate payload copy.
+//
+// Migration is opportunistic and must never contend with the Run a session
+// serves: an attach is not an execution, and an adapter must be able to open a
+// session whose run is owned elsewhere. The Runtime binds — and therefore
+// migrates — a session while the durable Run that owns the session lease is still
+// active, so this routine never reserves an idle session with AcquireMutation. It
+// either adopts facts that are already committed (no lease at all) or fences the
+// one irreversible step, the content store flip, against the lease identity this
+// process already holds. When no lease exists the session is genuinely idle and
+// the flip needs no fence beyond the atomic statement itself.
+//
+// When another owner holds the session run — or this process loses its lease
+// mid-export — there is no safe window to take the irreversible step, so the
+// call returns nil having done nothing: the session keeps serving from its
+// self-consistent legacy store and a later attach (or the owner's own bind)
+// migrates it. Only a genuinely unsafe session fails closed: an unhealthy or
+// corrupt EventStore, an entry type the store cannot replay, or a database error.
 //
 // Convergence is idempotent, so bind does not fork it: `ConvergeEventStore` —
 // which every open passes through — is called first and brings this Manager to
 // the canonical event log together with the two durable repairs. When the
-// session has not been flipped yet, bind is the only caller entitled to take
-// the irreversible step, so `exportLegacyTranscript` follows.
+// session has not been flipped yet, only this entry is entitled to take the
+// irreversible step, so `exportLegacyTranscript` follows.
 func (m *Manager) MigrateToEventStore(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -58,7 +72,14 @@ func (m *Manager) MigrateToEventStore(ctx context.Context) error {
 		// irreversible step left to take.
 		return nil
 	}
-	return m.exportLegacyTranscript(ctx)
+	err := m.exportLegacyTranscript(ctx)
+	if errors.Is(err, ErrRuntimeLeaseLost) || errors.Is(err, ErrSessionRunActive) {
+		// Another owner is running the session, or this process lost its lease
+		// during the export. Leave the still-authoritative legacy store in place and
+		// let a later call migrate; the transcript is never left half-flipped.
+		return nil
+	}
+	return err
 }
 
 // ConvergeEventStore makes this Manager read the canonical EventStore. It is the
@@ -242,10 +263,11 @@ func (m *Manager) exportLegacyTranscript(ctx context.Context) error {
 		return err
 	}
 	spec := EventIntentSpec{ID: GenerateID(), SessionID: sessionID, RunID: binding.RunID, SeqFrom: seqFrom, SeqTo: seqFrom + int64(len(records)) - 1, Digest: digest, OwnerInstanceID: binding.OwnerInstanceID, LeaseEpoch: binding.Epoch, LeaseTokenHash: binding.TokenHash}
-	if _, err := AppendPreparedEventBatch(ctx, sessionDir, spec, records); err != nil {
+	batch, err := AppendPreparedEventBatch(ctx, sessionDir, spec, records)
+	if err != nil {
 		return err
 	}
-	if err := CommitEventIntent(ctx, sessionDir, spec, func(tx *dao.Tx) error {
+	if err := CommitEventIntent(ctx, sessionDir, spec, &batch, func(tx *dao.Tx) error {
 		return translateConversationTurnBoundaries(ctx, tx, sessionID, boundaries)
 	}); err != nil {
 		return err
@@ -540,12 +562,12 @@ func (m *Manager) appendEventStoreEntriesLocked(ctx context.Context, runID, turn
 	if sessionDir == "" {
 		sessionDir = filepath.Dir(resolveDBPath(m.file))
 	}
-	inspection, err := InspectEventStore(ctx, sessionDir, sessionID)
+	store, err := NewEventStore(sessionDir, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	if inspection.State != EventStoreHealthy {
-		return nil, fmt.Errorf("%w: cannot append while session EventStore is %s: %s", ErrEventStoreNotHealthy, inspection.State, inspection.Reason)
+	if err := eventStoreWritable(ctx, sessionDir, sessionID, store); err != nil {
+		return nil, err
 	}
 
 	binding, release, err := eventStoreWriteBinding(sessionDir, sessionID, runID)
@@ -577,43 +599,51 @@ func (m *Manager) appendEventStoreEntriesLocked(ctx context.Context, runID, turn
 	// A process may crash after the EventStore batch commits but before its
 	// caller observes success. Stable entry IDs make a retry idempotent; reject
 	// partial or payload-divergent retries rather than duplicating transcript
-	// entries or silently choosing one version.
-	committed, err := ReadCommittedEventBatches(ctx, sessionDir, sessionID)
+	// entries or silently choosing one version. An incoming ID can only already
+	// be committed on such a retry, so the projection index answers the common
+	// case in one probe and the full committed transcript is read only then.
+	db, err := OpenRootDB(sessionDir)
 	if err != nil {
 		return nil, err
 	}
-	existing := make(map[string]EventRecord)
-	for _, batch := range committed {
-		for _, record := range batch.Events {
-			existing[record.EventID] = record
-		}
+	retry, err := dao.NewSessionEventProjectionDAO(nil).AnyIDPresent(ctx, db.Bun(), sessionID, ids)
+	if err != nil {
+		return nil, err
 	}
-	matched := 0
-	for _, record := range records {
-		if old, ok := existing[record.EventID]; ok {
-			oldBytes, _ := json.Marshal(old)
-			newBytes, _ := json.Marshal(record)
-			if !bytes.Equal(oldBytes, newBytes) {
-				return nil, fmt.Errorf("event entry %s already exists with different content", record.EventID)
+	if retry {
+		committed, err := ReadCommittedEventBatches(ctx, sessionDir, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		existing := make(map[string]EventRecord)
+		for _, committedBatch := range committed {
+			for _, record := range committedBatch.Events {
+				existing[record.EventID] = record
 			}
-			matched++
 		}
-	}
-	if matched > 0 {
-		if matched != len(records) {
-			return nil, errors.New("event batch retry overlaps only part of an existing committed batch")
+		matched := 0
+		for _, record := range records {
+			if old, ok := existing[record.EventID]; ok {
+				oldBytes, _ := json.Marshal(old)
+				newBytes, _ := json.Marshal(record)
+				if !bytes.Equal(oldBytes, newBytes) {
+					return nil, fmt.Errorf("event entry %s already exists with different content", record.EventID)
+				}
+				matched++
+			}
 		}
-		for _, entry := range entries {
-			m.entries = append(m.entries, entry)
+		if matched > 0 {
+			if matched != len(records) {
+				return nil, errors.New("event batch retry overlaps only part of an existing committed batch")
+			}
+			for _, entry := range entries {
+				m.entries = append(m.entries, entry)
+			}
+			lastID := ids[len(ids)-1]
+			m.leafID = &lastID
+			m.eventStoreMode = true
+			return ids, nil
 		}
-		lastID := ids[len(ids)-1]
-		m.leafID = &lastID
-		m.eventStoreMode = true
-		return ids, nil
-	}
-	store, err := NewEventStore(sessionDir, sessionID)
-	if err != nil {
-		return nil, err
 	}
 	seqFrom, err := store.NextSequence()
 	if err != nil {
@@ -628,10 +658,11 @@ func (m *Manager) appendEventStoreEntriesLocked(ctx context.Context, runID, turn
 		SeqFrom: seqFrom, SeqTo: seqFrom + int64(len(records)) - 1, Digest: digest,
 		OwnerInstanceID: binding.OwnerInstanceID, LeaseEpoch: binding.Epoch, LeaseTokenHash: binding.TokenHash,
 	}
-	if _, err := AppendPreparedEventBatch(ctx, sessionDir, spec, records); err != nil {
+	batch, err := AppendPreparedEventBatch(ctx, sessionDir, spec, records)
+	if err != nil {
 		return nil, err
 	}
-	if err := CommitEventIntent(ctx, sessionDir, spec, nil); err != nil {
+	if err := CommitEventIntent(ctx, sessionDir, spec, &batch, nil); err != nil {
 		return nil, err
 	}
 	for _, entry := range entries {

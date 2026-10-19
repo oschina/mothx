@@ -46,6 +46,22 @@ func (d *SessionEventProjectionDAO) DeleteSession(ctx context.Context, executor 
 	return err
 }
 
+// AnyIDPresent reports whether any of ids is already recorded for the session.
+// It is the O(1) existence probe behind the append path's idempotency check: a
+// retry only matters when at least one incoming event ID is already committed,
+// so the caller reads the full committed transcript only when this is true.
+func (d *SessionEventProjectionDAO) AnyIDPresent(ctx context.Context, executor bun.IDB, sessionID string, ids []string) (bool, error) {
+	if len(ids) == 0 {
+		return false, nil
+	}
+	return executor.NewSelect().Model((*SessionEventProjectionRecord)(nil)).
+		Column("id").
+		Where("session_id = ?", sessionID).
+		Where("id IN (?)", bun.In(ids)).
+		Limit(1).
+		Exists(ctx)
+}
+
 func (d *SessionEventProjectionDAO) Seq(ctx context.Context, executor bun.IDB, sessionID, id string) (int64, error) {
 	var seq int64
 	err := executor.NewSelect().Table("session_event_projections").Column("seq").Where("session_id = ? AND id = ?", sessionID, id).Limit(1).Scan(ctx, &seq)

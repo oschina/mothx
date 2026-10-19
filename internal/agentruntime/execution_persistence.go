@@ -432,10 +432,28 @@ func (r *ExecutionRuntime) CancelDurable(message string) (bool, error) {
 	if !active {
 		return false, nil
 	}
-	if err := store.Update(runID, RunStateCancelling, message); err != nil {
-		return false, fmt.Errorf("persist run cancellation: %w", err)
+	r.mu.Lock()
+	// A Run whose terminal transaction is already prepared has committed its
+	// durable row to the non-terminal "terminalizing" window. Only the selected
+	// terminal write may advance it, and the transition matrix rejects
+	// terminalizing -> cancelling, so forcing the cancelling state here would
+	// fail and leave the Run permanently uncancellable. Cancellation still
+	// cancels the loop below so its owner can reach that pending transition.
+	terminalizing := r.terminalizing || r.terminalPrepared
+	terminalState, terminalMessage := r.terminalState, r.terminalMessage
+	terminalEvent := r.terminalEvent
+	needsRetry := r.terminalEventSet && terminalizing && !r.terminalRetryRunning
+	r.mu.Unlock()
+	if !terminalizing {
+		if err := store.Update(runID, RunStateCancelling, message); err != nil {
+			return false, fmt.Errorf("persist run cancellation: %w", err)
+		}
+		r.notifyDurableStateChanged()
+	} else if needsRetry {
+		// The prepared terminal write previously failed and no retry is running;
+		// restart it so a cancellation request can still reach a terminal state.
+		r.startTerminalPersistenceRetry(runID, terminalState, terminalMessage, terminalEvent)
 	}
-	r.notifyDurableStateChanged()
 	if !r.Cancel() {
 		return false, nil
 	}

@@ -221,7 +221,13 @@ func markEventIntent(ctx context.Context, sessionDir string, spec EventIntentSpe
 // CommitEventIntent closes the second half of the protocol. finalize runs in
 // the same SQLite transaction as the fenced appended->committed transition,
 // allowing Runtime to update Run/turn/decision state atomically.
-func CommitEventIntent(ctx context.Context, sessionDir string, spec EventIntentSpec, finalize func(*dao.Tx) error) error {
+//
+// verified, when non-nil, is the batch this process just appended and fsynced
+// through AppendPreparedEventBatch. Supplying it lets the hot append path skip
+// the whole-log Scan() that otherwise exists only to re-read a batch this
+// process did not write (crash recovery, reconciliation). A nil batch always
+// rescans, so recovery keeps its exhaustive verification.
+func CommitEventIntent(ctx context.Context, sessionDir string, spec EventIntentSpec, verified *EventBatch, finalize func(*dao.Tx) error) error {
 	database, err := OpenRootDB(sessionDir)
 	if err != nil {
 		return err
@@ -239,22 +245,24 @@ func CommitEventIntent(ctx context.Context, sessionDir string, spec EventIntentS
 	if spec.SeqFrom == 0 && spec.SeqTo == 0 && (intent.SeqFrom != 0 || intent.SeqTo != 0) {
 		spec.SeqFrom, spec.SeqTo = intent.SeqFrom, intent.SeqTo
 	}
-	store, err := NewEventStore(sessionDir, spec.SessionID)
-	if err != nil {
-		return err
-	}
-	batches, err := store.Scan()
-	if err != nil {
-		return err
-	}
-	var committedBatch *EventBatch
-	for i := range batches {
-		if batches[i].BatchID == spec.ID {
-			committedBatch = &batches[i]
-			break
+	committedBatch := verified
+	if committedBatch == nil {
+		store, err := NewEventStore(sessionDir, spec.SessionID)
+		if err != nil {
+			return err
+		}
+		batches, err := store.Scan()
+		if err != nil {
+			return err
+		}
+		for i := range batches {
+			if batches[i].BatchID == spec.ID {
+				committedBatch = &batches[i]
+				break
+			}
 		}
 	}
-	if committedBatch == nil || committedBatch.SeqFrom != spec.SeqFrom || committedBatch.SeqTo != spec.SeqTo || committedBatch.Digest != spec.Digest {
+	if committedBatch == nil || committedBatch.BatchID != spec.ID || committedBatch.SeqFrom != spec.SeqFrom || committedBatch.SeqTo != spec.SeqTo || committedBatch.Digest != spec.Digest {
 		return fmt.Errorf("event batch %s is not complete for commit", spec.ID)
 	}
 	projections, err := eventProjectionRecords(*committedBatch)
@@ -370,7 +378,7 @@ func ReconcileEventIntents(ctx context.Context, sessionDir, sessionID, runID str
 				return err
 			}
 		}
-		if err := CommitEventIntent(ctx, sessionDir, spec, func(tx *dao.Tx) error {
+		if err := CommitEventIntent(ctx, sessionDir, spec, &batch, func(tx *dao.Tx) error {
 			if finalize == nil {
 				return nil
 			}
@@ -486,4 +494,39 @@ func InspectEventStore(ctx context.Context, sessionDir, sessionID string) (Event
 		inspection.State = EventStoreHealthy
 	}
 	return inspection, nil
+}
+
+// eventStoreWritable fails closed unless the session's EventStore may accept a
+// new append. It is the write gate in front of every EventStore append.
+//
+// The common case is O(1). When the process-local append-state cache is fresh
+// for the current physical revision — which only a validated scan or one of our
+// own appends can produce — the physical log has not changed since it was last
+// validated, and the fence guarantees we are its single writer, so the
+// exhaustive reconciliation can only reach the same verdict: no intent is in a
+// non-committed state and the committed batch count equals the physical one.
+// Any staleness, or any failed cheap check, falls back to the exhaustive
+// InspectEventStore, so correctness never depends on the fast path.
+func eventStoreWritable(ctx context.Context, sessionDir, sessionID string, store *EventStore) error {
+	if cache, fresh := store.peekAppendState(); fresh {
+		db, err := OpenRootDB(sessionDir)
+		if err != nil {
+			return err
+		}
+		committed, nonCommitted, err := dao.NewSessionEventIntentDAO(db.Bun()).CommittedStateCounts(ctx, db.Bun(), sessionID)
+		if err != nil {
+			return err
+		}
+		if nonCommitted == 0 && committed == len(cache.batchIDs) {
+			return nil
+		}
+	}
+	inspection, err := InspectEventStore(ctx, sessionDir, sessionID)
+	if err != nil {
+		return err
+	}
+	if inspection.State != EventStoreHealthy {
+		return fmt.Errorf("%w: cannot append while session EventStore is %s: %s", ErrEventStoreNotHealthy, inspection.State, inspection.Reason)
+	}
+	return nil
 }

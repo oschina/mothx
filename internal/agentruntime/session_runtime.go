@@ -368,6 +368,9 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 	if manager == nil || manager.GetHeader() == nil {
 		return fmt.Errorf("initialized session manager is required")
 	}
+	// MigrateToEventStore is the single migration entry point; adopt the
+	// canonical content store before the Runtime exposes the session to any
+	// adapter.
 	if err := manager.MigrateToEventStore(context.Background()); err != nil {
 		return fmt.Errorf("migrate session content to EventStore: %w", err)
 	}
@@ -1076,6 +1079,14 @@ func (b Builder) Build(ctx context.Context, opts BuildOptions) (*SessionRuntime,
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	// Migration is a property of attaching a session to the Runtime, not of
+	// whichever entry point performs the attach: run the same single migration
+	// entry point Builder-shared runtimes (TUI/CLI) would otherwise skip.
+	if opts.Manager != nil && opts.Manager.GetHeader() != nil {
+		if err := opts.Manager.MigrateToEventStore(context.Background()); err != nil {
+			return nil, fmt.Errorf("migrate session content to EventStore: %w", err)
+		}
 	}
 
 	expertBundle, err := resolveBoundExpertBundle(opts.WorkDir, opts.Manager)
