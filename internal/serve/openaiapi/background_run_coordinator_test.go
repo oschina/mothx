@@ -422,7 +422,9 @@ func TestRecoverResponsesBackgroundFunctionContinuation(t *testing.T) {
 	}
 	sess.Lock()
 	sess.beginRun(runID)
-	srv.monitorRecoveredResponsesBackgroundRun(sess, session.SessionRun{ID: runID, SessionID: sess.ID, WorkDir: sess.WorkDir, Source: "responses_background", Model: model.ID, Mode: "yolo"}, &session.ResponseRun{SessionID: sess.ID, LocalRunID: "remote-recovery", LocalTurnID: runID, ResponseID: "resp-recovery", Provider: p.Name(), API: "openai-responses", State: "queued", CreatedAt: time.Now(), UpdatedAt: time.Now()}, model, func() {})
+	// This test drives the monitor inline rather than through the pool, so both
+	// releases are no-ops; the pooled path is what wires them for real.
+	srv.monitorRecoveredResponsesBackgroundRun(sess, session.SessionRun{ID: runID, SessionID: sess.ID, WorkDir: sess.WorkDir, Source: "responses_background", Model: model.ID, Mode: "yolo"}, &session.ResponseRun{SessionID: sess.ID, LocalRunID: "remote-recovery", LocalTurnID: runID, ResponseID: "resp-recovery", Provider: p.Name(), API: "openai-responses", State: "queued", CreatedAt: time.Now(), UpdatedAt: time.Now()}, model, func() {}, func() {})
 	messages := sess.Manager.GetMessages()
 	if len(messages) == 0 || messageText(messages[len(messages)-1]) != "recovered continuation" {
 		t.Fatalf("recovered messages = %#v", messages)

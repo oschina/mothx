@@ -77,6 +77,24 @@ func (s *Server) SubmitExternalResponsesBackground(req serviceruntime.Background
 		return "", fmt.Errorf("maximum concurrent requests reached")
 	}
 	runtimeRelease = chainReleases(runtimeRelease, slotRelease)
+	// Reserve the pool drain slot before the locks and the durable admit, for
+	// the same reason as the WebUI submit path: only the background executor
+	// terminalizes the Run it admits, so a Shutdown racing the hand-off would
+	// leave a live Run nothing drains, still appending to a session directory the
+	// process is already closing. Folding the release into runtimeRelease makes
+	// every early-return below hand the slot back, and the launch at the end
+	// transfers it to the executor.
+	drainRelease, drainOK := s.pool.ReserveBackground()
+	if !drainOK {
+		runtimeRelease()
+		return "", fmt.Errorf("session pool is shutting down")
+	}
+	runtimeRelease = chainReleases(runtimeRelease, drainRelease)
+	// handOffRelease is the outermost release and the only one the pool drain
+	// waits on. Keeping it out of runtimeRelease stops the drain from returning
+	// while the coordinator still closes its artifact collector, cancels its run
+	// context and terminalizes the Run.
+	handOffRelease := drainRelease
 	if !sess.TryLock() {
 		runtimeRelease()
 		return "", fmt.Errorf("session already has an active run")
@@ -242,9 +260,22 @@ func (s *Server) SubmitExternalResponsesBackground(req serviceruntime.Background
 			}
 		}
 	}
-	go func() {
+	// Hand the reserved drain slot to the executor. The slot travels in
+	// handOffRelease rather than inside `release`, so it stays held continuously
+	// from the admit until the coordinator has finished every deferred step.
+	if !s.pool.LaunchBackground(handOffRelease, func() {
 		defer artifacts.Close()
-		s.executeResponsesBackgroundRunWithConfig(sess, runID, release, model, mode, message, true, &agentOpts, req.InitialHistory, onComplete, req.Progress)
-	}()
+		s.executeResponsesBackgroundRunWithConfig(sess, runID, release, handOffRelease, model, mode, message, true, &agentOpts, req.InitialHistory, onComplete, req.Progress)
+	}) {
+		_ = execution.FinishDurableWithRetry(context.Background(), runID, agentruntime.RunStateFailed, "session pool stopped accepting work", agentruntime.RunEvent{
+			SessionID: sess.ID, RunID: runID, EventType: "failed", Source: runSource, Status: "failed",
+			Model: model.ID, Mode: mode, Timestamp: time.Now(),
+		})
+		artifacts.Close()
+		sess.finishRun(runID)
+		sess.Unlock()
+		release()
+		return "", fmt.Errorf("session pool is shutting down")
+	}
 	return runID, nil
 }

@@ -368,6 +368,9 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 	if manager == nil || manager.GetHeader() == nil {
 		return fmt.Errorf("initialized session manager is required")
 	}
+	if err := manager.MigrateToEventStore(context.Background()); err != nil {
+		return fmt.Errorf("migrate session content to EventStore: %w", err)
+	}
 	header := manager.GetHeader()
 	entrySource := requested
 	if entrySource == SourceUnknown {

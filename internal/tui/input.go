@@ -480,7 +480,7 @@ func (a *App) processInput(input string) tea.Cmd {
 	}
 
 	if err := a.ensureSession(); err != nil {
-		a.addCommandError(fmt.Sprintf("Error creating session: %v", err))
+		a.addCommandError(sessionCreationError(a.translator, err, a.getSessionDir()))
 		return nil
 	}
 	if a.backgroundSubmitter != nil && providerResponsesBackgroundEnabled(a.provider) {
@@ -857,7 +857,7 @@ func (a *App) submitAgentPrompt(prompt string) tea.Cmd {
 		return nil
 	}
 	if err := a.ensureSession(); err != nil {
-		a.addCommandError(fmt.Sprintf("Error creating session: %v", err))
+		a.addCommandError(sessionCreationError(a.translator, err, a.getSessionDir()))
 		return nil
 	}
 	if err := a.syncESMTools(); err != nil {

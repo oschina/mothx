@@ -325,6 +325,11 @@ func TestCheckIntegrityNeverRepairsTableDamage(t *testing.T) {
 		t.Fatal("Open accepted a database with a broken table page")
 	} else if !strings.Contains(err.Error(), "sqlite integrity check failed") || strings.Contains(err.Error(), "after index repair") {
 		t.Fatalf("error = %v, want the plain integrity abort for table damage", err)
+	} else {
+		var integrity *IntegrityError
+		if !errors.As(err, &integrity) || integrity.Path != path || integrity.Report == "" {
+			t.Fatalf("error = %#v, want IntegrityError with path and SQLite report", err)
+		}
 	}
 	if repairs := TakeIndexRepairs(); len(repairs) != 0 {
 		t.Fatalf("table damage was reported as an index repair: %#v", repairs)

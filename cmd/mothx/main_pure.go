@@ -33,9 +33,9 @@ func newPureCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pure",
 		Short: "Archive the sessions database and start a brand-new empty one",
-		Long: "Move the shared sessions.db (and its SQLite sidecars) aside and create a fresh, empty database in its place.\n" +
+		Long: "Move the shared sessions.db, its SQLite sidecars, and the session EventStore aside and create a fresh, empty database in their place.\n" +
 			"Nothing is deleted: the previous files are renamed next to the new database as sessions.db.pure-<timestamp>.bak[.<suffix>].\n\n" +
-			"Only sessions.db is archived. Everything else in the session directory stays where it is, and it stays there for different\n" +
+			"The session EventStore is archived with sessions.db. Everything else in the session directory stays where it is, and it stays there for different\n" +
 			"reasons: channel directories are separate session roots with their own sessions.db, each knowledge-base file is that base's\n" +
 			"own authoritative store, and attachment storage is content the archived database used to describe. Of those, only unreferenced\n" +
 			"attachment storage is reclaimable, which the Runtime does automatically once it is past the attachment retention window;\n" +
@@ -143,6 +143,10 @@ func printPureReport(out io.Writer, sessionDir string, report session.ResetRepor
 		sidecarKind = "SQLite sidecar"
 	}
 	for _, archived := range report.Archived {
+		if strings.HasSuffix(archived.To, ".event-store") {
+			fmt.Fprintf(out, "Moved session EventStore to: %s\n", archived.To)
+			continue
+		}
 		if archived.To == report.DatabaseBackup {
 			fmt.Fprintf(out, "Moved previous sessions database to: %s\n", archived.To)
 			continue

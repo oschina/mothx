@@ -10,6 +10,14 @@
 
 ### 🐛 问题修复
 
+- **会话 transcript 已具备 EventStore 迁移路径。** Runtime 绑定的会话可以把消息、工具、压缩、turn 和终态 payload 保存在按会话隔离的 append-only EventStore 中，同时由 SQLite 保留 fenced Run/lease/decision/turn 控制状态及可重建的 metadata projection。该路径包含 intent 对账、有界 fsync batch、EventStore 分页/fork/recovery 支持和损坏时 fail-closed；旧会话仍通过明确命名的兼容桥读取。读取与修复被严格分开：只有持有 lease 的追加路径才有资格截断不完整尾部或落盘可重建的 manifest，而观测型读取（`EventStore.Inspect`，因而也是会话 load、对账与各入口读取）分类损坏的方式完全相同却不会写目录 —— 打开一个会话不再可能改动其存储字节、与并发 owner 的 fsync 竞争，也不会在退出时残留目录。
+
+- **迁移后的会话仍然保有可用的 turn 边界。** legacy `entries.seq` 是数据库全局 AUTOINCREMENT，会与共享 `sessions.db` 的所有会话交错，因而可能数值上落入另一个存储的区间却不代表任何归属。migration 现在依据持久化的 parent 链重建 transcript 顺序，并在同一个 fenced commit 事务内把每个 `conversation_turns` 区间翻译为 EventStore 位置，使 fork resolution 与 open-turn recovery 仍指向真实存在的 marker。projection 的 `turn_id`/`run_id` 改为由解码后的 marker payload 自身推导（migration 导出的 marker 其批量信封为空，此前每个迁移过的 marker 都丢失 turn 身份，静默破坏 turn 状态读取的 COALESCE 回退与 `ListOpenTurns`）。对账不再是 bind 的副作用：它作为 `ConvergeEventStore` 下沉到共享 load 路径，因此仅仅打开会话的各个入口——serve/chat、后台运行协调器、Channel、ESM、ACP 与 TUI 恢复路径——都会自行清理残留的 legacy payload 副本并修复控制行，而不再回放一份已由 EventStore 拥有的 transcript。`MigrateToEventStore` 据此拆为「对账」与唯一不可逆的 export 步骤（`exportLegacyTranscript`），`Manager.Reload()` 也改由持锁体重新载入，使采纳他路径翻转的动作不会在非可重入的 manager 互斥锁上自死锁。由更早构建翻转的会话因而在下一次 open 而非 bind 自愈；无法回放的 entry 类型（`custom`/`custom_message`）则让整个 export fail closed，而不是把它从 transcript 中静默抹掉。
+
+- **服务端关闭不再与它承诺要 drain 的运行竞争。** 后台运行此前是先做 durable admit、然后才把活儿交给 goroutine，于是夹在这两步之间的 `Shutdown` 会留下一个没有任何人 drain 的活跃 Run，而进程此时已经开始关闭自己的 session 数据库。`SessionPool` 现在把「占用 drain 槽位」与「启动工作」分开：`ReserveBackground` 在 durable admit 之前占住槽位，`LaunchBackground` 把这份所有权搬到 executor goroutine 上，因此槽位从准入起连续持有到 executor 返回，而 `Shutdown` 会等待调用方要么启动、要么归还。释放被拆成两层——`runtimeRelease`（runtime pin 加并发槽）与 `handOffRelease`（drain 交接）——每个 executor 都把 `handOffRelease` 注册为第一个 defer，使它成为最外层因而最后执行的那个，于是 artifact collector 关闭、run context 取消、兜底终态写入与 `FinalizeRun` 全部落在 drain 之内。经 reattach 恢复的孤儿 Responses 运行也遵循同一屏障。`LaunchBackground` 刻意不像 `GoCtx` 那样从停止信号派生可取消上下文：durable Run 持有 fenced execution lease，必须走到自己的终态转换，在此取消只会把它变成孤儿。`Shutdown` 的 drain 等待现在受调用方 context 约束，超时时返回 `ctx.Err()` 而不是无限阻塞——一个永不返回的任务（等不到审批的 agent、无视 context 的 provider 流）是可用性问题，不是让进程变得杀不掉的理由；归属仍由 fenced lease 决定，提前返回绝不会把一个活跃 Run 终态化。这条顺序不变量既无法用类型表达，也无法端到端固定——审批阻塞型 fixture 可以证明永远到不了 executor 的延迟尾部，而能快速终态的 fixture 又让断言变得空洞——因此由 `internal/architecture/drain_release_guard_test.go` 静态守住：它遍历每一处 `LaunchBackground`，沿「wrapper 转发 → executor 执行」的委托链前进，检查 drain 参数是否落在由**被调方签名自身推导**的位置上，以及 executor 是否把它作为第一个 defer；四种变异证明该守卫并非空洞。
+
+- **损坏的会话数据库现在会显示恢复指引。** TUI 不再把 SQLite 完整的 b-tree 错误作为难以理解的创建会话失败直接输出，而是指出数据库路径，明确原文件未被修改，并在停止其他进程后给出 `mothx pure --force` 归档恢复路径。
+
 - **轮换已绑定频道会话时保留其持久目录。** 轮换继承既有会话记录的 cwd，而非平台默认目录；fenced CAS 比较规范化后的路径，因此末尾分隔符等等价存储形式仍可成功轮换，真实并发变更仍会被检测并拒绝。
 - **飞书工具图片清理具备并发安全性。** 每次投递都在唯一的私有临时目录下物化图片，并在所有退出路径清理整个目录，避免并行运行互相收集文件，也不会把图片字节残留在工作目录。
 

@@ -17,6 +17,8 @@ import (
 // file can never inherit a stale write-ahead log or shared-memory index.
 var databaseSidecarSuffixes = []string{"-wal", "-shm", "-journal"}
 
+const eventStoreDirectoryName = "event-store"
+
 // ResetReport describes what one sessions database reset did, and what it
 // deliberately did not do.
 type ResetReport struct {
@@ -53,9 +55,10 @@ type LeftBehindEntry struct {
 	Bytes int64
 }
 
-// ResetDatabase moves the shared sessions database aside and creates a fresh,
-// migrated one in its place. The previous database and its sidecars are renamed
-// (never deleted) next to the new file, so the old sessions remain recoverable.
+// ResetDatabase moves the shared sessions database and session EventStore aside
+// and creates a fresh, migrated database in their place. The previous database,
+// sidecars, and event store are renamed (never deleted) next to the new file,
+// so the old sessions remain recoverable.
 // A sidecar that outlived its database - an interrupted reset, or a database
 // deleted by hand - is archived under the same name as well: leaving it in
 // place would let the fresh database inherit it and make SQLite's own handling
@@ -77,23 +80,39 @@ func ResetDatabase(sessionDir string) (ResetReport, error) {
 	if err := database.CloseAll(); err != nil {
 		return report, fmt.Errorf("close session databases: %w", err)
 	}
+	ForgetEventStoreCaches(sessionDir)
 
 	sources, err := existingDatabaseFiles(dbPath)
 	if err != nil {
 		return report, err
 	}
-	if len(sources) > 0 {
+	eventStorePath := filepath.Join(sessionDir, eventStoreDirectoryName)
+	eventStoreExists, err := directoryExists(eventStorePath)
+	if err != nil {
+		return report, err
+	}
+	if len(sources) > 0 || eventStoreExists {
 		backup, err := resetBackupPath(dbPath)
 		if err != nil {
 			return report, err
 		}
-		archived, err := moveDatabaseFiles(dbPath, sources, backup)
-		if err != nil {
-			return report, err
+		if len(sources) > 0 {
+			archived, moveErr := moveDatabaseFiles(dbPath, sources, backup)
+			if moveErr != nil {
+				return report, moveErr
+			}
+			report.Archived = archived
+			if sources[0] == dbPath {
+				report.DatabaseBackup = backup
+			}
 		}
-		report.Archived = archived
-		if sources[0] == dbPath {
-			report.DatabaseBackup = backup
+		if eventStoreExists {
+			eventStoreBackup := backup + ".event-store"
+			if err := os.Rename(eventStorePath, eventStoreBackup); err != nil {
+				_, rollbackErr := rollbackDatabaseMove(dbPath, sources, report.Archived, fmt.Errorf("move %s: %w", eventStorePath, err))
+				return report, rollbackErr
+			}
+			report.Archived = append(report.Archived, ArchivedFile{From: eventStorePath, To: eventStoreBackup})
 		}
 	}
 
@@ -109,6 +128,21 @@ func ResetDatabase(sessionDir string) (ResetReport, error) {
 	}
 	report.LeftBehind = leftBehind
 	return report, nil
+}
+
+func directoryExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	switch {
+	case err == nil:
+		if !info.IsDir() {
+			return false, fmt.Errorf("event store path %s is not a directory", path)
+		}
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	default:
+		return false, fmt.Errorf("inspect %s: %w", path, err)
+	}
 }
 
 // existingDatabaseFiles returns the sessions database and every sidecar
@@ -262,8 +296,9 @@ func resetBackupPath(path string) (string, error) {
 // backupPathAvailable reports whether neither the candidate name nor any of its
 // sidecar derivatives exists yet.
 func backupPathAvailable(candidate string) (bool, error) {
-	names := make([]string, 0, 1+len(databaseSidecarSuffixes))
+	names := make([]string, 0, 2+len(databaseSidecarSuffixes))
 	names = append(names, candidate)
+	names = append(names, candidate+".event-store")
 	for _, suffix := range databaseSidecarSuffixes {
 		names = append(names, candidate+suffix)
 	}

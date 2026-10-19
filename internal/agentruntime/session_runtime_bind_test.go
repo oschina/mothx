@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/provider"
 	"github.com/oschina/mothx/internal/session"
 )
 
@@ -66,6 +68,43 @@ func TestSessionRuntimeBindSessionUpdatesLazyIdentity(t *testing.T) {
 	}
 	if runtime.Manager != manager || runtime.ID != manager.GetHeader().ID || runtime.WorkDir != manager.GetHeader().Cwd || runtime.Source != SourceTUI {
 		t.Fatalf("runtime binding = %#v", runtime)
+	}
+}
+
+func TestBindSessionMigratesLegacyTranscriptToEventStore(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+	manager := session.New(workDir, sessionDir)
+	if err := manager.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AppendMessage(provider.NewUserMessage("legacy before bind")); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &SessionRuntime{Source: SourceTUI, WorkDir: workDir}
+	if err := runtime.BindSession(manager, SourceTUI); err != nil {
+		t.Fatal(err)
+	}
+	db, err := session.OpenRootDB(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payloadRows int
+	if err := db.Bun().QueryRow("SELECT COUNT(*) FROM entries WHERE session_id = ? AND type <> 'session'", manager.GetHeader().ID).Scan(&payloadRows); err != nil {
+		t.Fatal(err)
+	}
+	if payloadRows != 0 {
+		t.Fatalf("legacy payload rows after Runtime bind = %d, want 0", payloadRows)
+	}
+	header, err := dao.NewSessionDAO(db.Bun()).Header(context.Background(), "sessions", manager.GetHeader().ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.ContentStore != "event_store" {
+		t.Fatalf("content store = %q, want event_store", header.ContentStore)
+	}
+	if messages := manager.GetMessages(); len(messages) != 1 || messages[0].Content != "legacy before bind" {
+		t.Fatalf("migrated Runtime replay = %#v", messages)
 	}
 }
 

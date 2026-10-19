@@ -118,7 +118,7 @@ func (a *App) setESMFooter(obj *esm.Objective) {
 
 func (a *App) handleESMCommand(cmd string) tea.Cmd {
 	if err := a.ensureSession(); err != nil {
-		a.addCommandError(fmt.Sprintf("Error creating session: %v", err))
+		a.addCommandError(sessionCreationError(a.translator, err, a.getSessionDir()))
 		return nil
 	}
 	raw := strings.TrimSpace(strings.TrimPrefix(cmd, "/esm"))
@@ -415,7 +415,7 @@ func (a *App) startESMContinuationIfIdle() tea.Cmd {
 		return nil
 	}
 	if err := a.ensureSession(); err != nil {
-		a.addCommandError(fmt.Sprintf("Error creating session: %v", err))
+		a.addCommandError(sessionCreationError(a.translator, err, a.getSessionDir()))
 		return nil
 	}
 	obj, err := a.loadESMObjective(context.Background())

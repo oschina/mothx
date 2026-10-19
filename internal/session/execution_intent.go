@@ -118,9 +118,19 @@ func createExecutionIntentAndSessionRunEvent(sessionDir string, intent Execution
 		run.ContextUsage = json.RawMessage(`{}`)
 	}
 
+	// Resolve the canonical start event once, before the content-plane dispatch,
+	// so the SQLite control facts and the EventStore handoff share identical
+	// event identity rather than each deriving its own.
+	event = normalizeIntentStartEvent(event, run)
 	db, err := OpenRootDB(sessionDir)
 	if err != nil {
 		return "", err
+	}
+	eventStore, err := sessionUsesEventStore(context.Background(), db, run.SessionID)
+	if err != nil {
+		return "", err
+	} else if eventStore {
+		return createExecutionIntentAndSessionRunEventEventStore(sessionDir, intent, run, event, turn)
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -149,30 +159,6 @@ func createExecutionIntentAndSessionRunEvent(sessionDir string, intent Execution
 		return "", fmt.Errorf("create session run for execution intent: %w", err)
 	}
 	if event.EventType != "" {
-		if event.ID == "" {
-			event.ID = GenerateID()
-		}
-		if event.SessionID == "" {
-			event.SessionID = run.SessionID
-		}
-		if event.RunID == "" {
-			event.RunID = run.ID
-		}
-		if event.Timestamp.IsZero() {
-			event.Timestamp = run.StartedAt
-		}
-		if event.Status == "" {
-			event.Status = run.Status
-		}
-		if event.Source == "" {
-			event.Source = run.Source
-		}
-		if event.Model == "" {
-			event.Model = run.Model
-		}
-		if event.Mode == "" {
-			event.Mode = run.Mode
-		}
 		if err := dao.NewRunDAO(db.Bun()).InsertEvent(context.Background(), tx, &dao.SessionRunEventRecord{
 			ID: event.ID, SessionID: event.SessionID, RunID: event.RunID, EventType: event.EventType,
 			Source: event.Source, Status: event.Status, Model: event.Model, Mode: event.Mode,
@@ -213,6 +199,121 @@ func createExecutionIntentAndSessionRunEvent(sessionDir string, intent Execution
 	}
 	markRuntimeLeaseBound(boundLease, run.ID)
 	return event.ID, nil
+}
+
+// createExecutionIntentAndSessionRunEventEventStore admits an execution intent
+// whose session uses the EventStore content plane. It mirrors the plain Run
+// admission: only control facts (intent, Run, event, turn boundary row, resource
+// bindings, submission reservation, lease binding) are written under SQLite, and
+// the user-facing turn-start/message entries are handed to the EventStore after
+// commit through the shared handoff helper. Without this branch every production
+// entry point would keep writing legacy transcript rows and the EventStore would
+// never see real traffic.
+func createExecutionIntentAndSessionRunEventEventStore(sessionDir string, intent ExecutionIntent, run SessionRun, event SessionRunEvent, turn *ConversationTurn) (string, error) {
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		return "", err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := validateRuntimeLeaseTx(tx, sessionDir, run.SessionID); err != nil {
+		return "", err
+	}
+	if err := dao.NewRunDAO(db.Bun()).InsertIntent(context.Background(), tx, &dao.ExecutionIntentRecord{
+		ID: intent.ID, SessionID: intent.SessionID, Source: intent.Source, Model: intent.Model, Mode: intent.Mode,
+		WorkDir: intent.WorkDir, RequestFingerprint: intent.RequestFingerprint, RequestJSON: string(intent.Request),
+		PolicyJSON: string(intent.Policy), CreatedAt: intent.CreatedAt.Format(time.RFC3339Nano),
+	}); err != nil {
+		return "", fmt.Errorf("create execution intent: %w", err)
+	}
+	var finishedAt *string
+	if run.FinishedAt != nil {
+		value := run.FinishedAt.Format(time.RFC3339Nano)
+		finishedAt = &value
+	}
+	if err := dao.NewRunDAO(db.Bun()).InsertRun(context.Background(), tx, sessionRunRecord(&run, finishedAt)); err != nil {
+		return "", fmt.Errorf("create session run for execution intent: %w", err)
+	}
+	if event.EventType != "" {
+		if err := dao.NewRunDAO(db.Bun()).InsertEvent(context.Background(), tx, &dao.SessionRunEventRecord{
+			ID: event.ID, SessionID: event.SessionID, RunID: event.RunID, EventType: event.EventType,
+			Source: event.Source, Status: event.Status, Model: event.Model, Mode: event.Mode,
+			Timestamp: event.Timestamp.Format(time.RFC3339Nano), Data: string(normalizedRunJSON(event.Data)),
+		}); err != nil {
+			return "", fmt.Errorf("create session run started event: %w", err)
+		}
+	}
+	if turn != nil {
+		if turn.StartedAt.IsZero() {
+			turn.StartedAt = run.StartedAt
+		}
+		if turn.Kind == "" {
+			turn.Kind = "conversation"
+		}
+		if err := dao.NewConversationTurnDAO(nil).Insert(context.Background(), tx, &dao.ConversationTurnRecord{
+			ID: turn.ID, SessionID: turn.SessionID, IntentID: turn.IntentID, Kind: turn.Kind,
+			Status: "open", StartSeq: 0, StartedAt: turn.StartedAt.Format(time.RFC3339Nano),
+		}); err != nil {
+			return "", fmt.Errorf("create conversation turn: %w", err)
+		}
+	}
+	if err := bindInputResourcesToRunTx(tx, run.SessionID, run.ID, run.IntentID, run.InputResourceIDs); err != nil {
+		return "", fmt.Errorf("bind input resources to session run: %w", err)
+	}
+	if err := reserveRuntimeSubmissionTx(tx, run); err != nil {
+		return "", fmt.Errorf("reserve runtime submission: %w", err)
+	}
+	boundLease, err := bindRuntimeLeaseToRunTx(tx, sessionDir, run.SessionID, run.ID)
+	if err != nil {
+		return "", fmt.Errorf("bind execution lease to session run: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	markRuntimeLeaseBound(boundLease, run.ID)
+
+	if err := appendEventStoreUserHandoff(db, sessionDir, run, turn); err != nil {
+		return "", err
+	}
+	return event.ID, nil
+}
+
+// normalizeIntentStartEvent fills the derived identity, ownership, and metadata
+// defaults of a Run start event from its Run. It runs once for every content
+// plane so the durable event row and the canonical projection agree on the same
+// IDs instead of each generating their own.
+func normalizeIntentStartEvent(event SessionRunEvent, run SessionRun) SessionRunEvent {
+	if event.EventType == "" {
+		return event
+	}
+	if event.ID == "" {
+		event.ID = GenerateID()
+	}
+	if event.SessionID == "" {
+		event.SessionID = run.SessionID
+	}
+	if event.RunID == "" {
+		event.RunID = run.ID
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = run.StartedAt
+	}
+	if event.Status == "" {
+		event.Status = run.Status
+	}
+	if event.Source == "" {
+		event.Source = run.Source
+	}
+	if event.Model == "" {
+		event.Model = run.Model
+	}
+	if event.Mode == "" {
+		event.Mode = run.Mode
+	}
+	return event
 }
 
 func GetExecutionIntent(sessionDir, intentID string) (*ExecutionIntent, error) {

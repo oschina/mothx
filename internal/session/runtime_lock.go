@@ -182,6 +182,39 @@ func RuntimeLeaseLost(sessionDir, sessionID string) <-chan struct{} {
 	return lease.lost
 }
 
+// HeldRuntimeLeaseBinding reports the lease identity this process holds for a
+// session together with its loss signal. Callers that must write while the lease
+// is held by an active durable Run need both: the identity to fence the write
+// against the SQLite lease row, and the signal to stop before a takeover makes
+// the fence stale. CurrentRuntimeLeaseBinding alone cannot express "no lease".
+func HeldRuntimeLeaseBinding(sessionDir, sessionID string) (RuntimeLeaseBinding, <-chan struct{}, bool) {
+	if strings.TrimSpace(sessionDir) == "" || strings.TrimSpace(sessionID) == "" {
+		return RuntimeLeaseBinding{}, nil, false
+	}
+	activeRuntimeLeases.Lock()
+	lease := activeRuntimeLeases.leases[runtimeLockKey(sessionDir, sessionID)]
+	activeRuntimeLeases.Unlock()
+	if lease == nil {
+		return RuntimeLeaseBinding{}, nil, false
+	}
+	lease.bindingMu.RLock()
+	released := lease.released
+	binding := RuntimeLeaseBinding{
+		DatabaseIdentity: runtimeDatabaseIdentity(lease.sessionDir),
+		SessionID:        lease.sessionID,
+		RunID:            lease.runID,
+		OwnerInstanceID:  lease.ownerID,
+		TokenHash:        lease.tokenHash,
+		Epoch:            lease.epoch,
+		Purpose:          RuntimeLeasePurpose(lease.purpose),
+	}
+	lease.bindingMu.RUnlock()
+	if released {
+		return RuntimeLeaseBinding{}, nil, false
+	}
+	return binding, lease.lost, true
+}
+
 func newLeaseTokenHash() string {
 	var token [32]byte
 	if _, err := rand.Read(token[:]); err != nil {
@@ -709,6 +742,22 @@ func validateRuntimeLeaseTxContext(ctx context.Context, tx *dao.Tx, sessionDir, 
 	if err != nil {
 		return err
 	}
+	// A released short reservation is not a durable owner. Mutation/fork
+	// leases exist only to serialize one administrative change; once their
+	// holder releases, the session is idle again and the next legitimate writer
+	// must be able to reserve it. Keeping their tombstone armed would freeze a
+	// session forever after any single administrative call (deleting a sibling,
+	// binding a session, migrating it to the EventStore), because every later
+	// fenced write would observe "released" with no live local lease.
+	//
+	// Execution-side purposes (execution, admission, recovery, legacy run) keep
+	// their tombstone: for those, release ends the Run's authority decisively, so
+	// a delayed write from the former owner must stay rejected. Takeover by
+	// another process is unaffected either way, because Acquire bumps the epoch
+	// and marks the row active again.
+	if record.State == "released" && isReservationLeasePurpose(record.Purpose) {
+		return nil
+	}
 	activeRuntimeLeases.Lock()
 	lease := activeRuntimeLeases.leases[runtimeLockKey(sessionDir, sessionID)]
 	activeRuntimeLeases.Unlock()
@@ -722,6 +771,52 @@ func validateRuntimeLeaseTxContext(ctx context.Context, tx *dao.Tx, sessionDir, 
 		return ErrRuntimeLeaseLost
 	}
 	return nil
+}
+
+// isReservationLeasePurpose reports whether a lease purpose only ever reserves
+// a session for one short, non-execution change, as opposed to carrying Run
+// execution authority. Reservation purposes leave no durable owner behind when
+// they are released, and they never authorize provider side effects on their
+// own; `legacy` is the compatibility reservation used by direct calls into the
+// old Session Manager (see AcquireContentWriteReservation).
+func isReservationLeasePurpose(purpose string) bool {
+	switch RuntimeLeasePurpose(purpose) {
+	case RuntimeLeasePurposeMutation, RuntimeLeasePurposeFork, RuntimeLeasePurposeLegacy:
+		return true
+	default:
+		return false
+	}
+}
+
+// AcquireContentWriteReservation serializes one Session content write across
+// every process without requiring the session to be idle.
+//
+// This is the compatibility reservation for callers that reach the Session
+// Manager directly instead of going through a Runtime-bound execution lease.
+// Such a caller has no Run binding to fence against and must stay behaviourally
+// identical to the legacy SQLite transcript writer, which checked the lease
+// passively and relied on the leaf CAS. `AcquireMutation` cannot serve here:
+// it refuses any session with an active durable Run, so a background/API turn
+// that legitimately appends while its own Run is still open would fail closed.
+//
+// The reservation therefore borrows the legacy acquisition mode (no active-Run
+// gate) and stays a *reservation*, not an execution grant: purpose `legacy` is
+// a short reservation, it carries no Run ID, it cannot be bound to a Run, and
+// it is excluded from every execution/admission/recovery allowlist. Single
+// writer per session is preserved because acquisition still bumps the epoch
+// and cross-process contention still fails with ErrRuntimeLeaseBusy.
+//
+// Migration bridge. Owner: internal/agentruntime EventStore convergence.
+// Removal condition: every entry point appends canonical content only through
+// a Runtime-bound execution lease (TUI, CLI, serve/openaiapi background runs,
+// channels and ACP all bind before writing), at which point this function and
+// its call site in eventStoreWriteBinding are deleted.
+func AcquireContentWriteReservation(sessionDir, sessionID string) (*RuntimeLeaseGuard, error) {
+	return acquireRuntimeLeaseGuard(sessionDir, sessionID, runtimeLeaseAcquireOptions{
+		purpose:             RuntimeLeasePurposeLegacy,
+		mode:                runtimeLeaseAcquireLegacy,
+		allowMissingSession: strings.TrimSpace(sessionDir) == "",
+	})
 }
 
 // validateRuntimeLeaseBindingTx verifies that the current process owns the

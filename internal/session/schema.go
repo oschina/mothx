@@ -21,7 +21,8 @@ CREATE TABLE sessions (
 	fork_boundary_seq INTEGER NOT NULL DEFAULT 0,
 	seed_length INTEGER NOT NULL DEFAULT 0,
 	fork_kind TEXT NOT NULL DEFAULT '',
-	expert_id TEXT NOT NULL DEFAULT ''
+	expert_id TEXT NOT NULL DEFAULT '',
+	content_store TEXT NOT NULL DEFAULT 'sqlite'
 );
 CREATE TABLE entries (
 	seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -452,7 +453,8 @@ CREATE TABLE sub_session (
 	fork_boundary_seq INTEGER NOT NULL DEFAULT 0,
 	seed_length INTEGER NOT NULL DEFAULT 0,
 	fork_kind TEXT NOT NULL DEFAULT '',
-	expert_id TEXT NOT NULL DEFAULT ''
+	expert_id TEXT NOT NULL DEFAULT '',
+	content_store TEXT NOT NULL DEFAULT 'sqlite'
 );
 CREATE TABLE sub_entries (
 	seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -474,7 +476,7 @@ CREATE INDEX idx_sub_session_cwd ON sub_session(cwd);
 var currentSchema = fmt.Sprintf(currentSchemaTemplate, nonTerminalSessionRunStatusSQL())
 
 var requiredSchema = map[string][]string{
-	"sessions":                         {"id", "cwd", "timestamp", "parent_session", "version", "channel_type", "channel_id", "fork_boundary_seq", "seed_length", "fork_kind", "expert_id"},
+	"sessions":                         {"id", "cwd", "timestamp", "parent_session", "version", "channel_type", "channel_id", "fork_boundary_seq", "seed_length", "fork_kind", "expert_id", "content_store"},
 	"entries":                          {"seq", "session_id", "id", "type", "parent_id", "timestamp", "data"},
 	"request_stats":                    {"id", "timestamp", "session_id", "provider", "protocol", "model", "input_tokens", "output_tokens", "total_tokens", "duration_ms"},
 	"session_capabilities":             {"session_id", "mode", "display_mode", "delegate_mode", "multi_agent", "workflows", "web_search", "browser", "a2a_master", "updated_at"},
@@ -505,7 +507,7 @@ var requiredSchema = map[string][]string{
 	"session_metadata":                 {"session_id", "project_id", "pinned", "updated_at"},
 	"session_channel_tools":            {"session_id", "tool_name", "enabled", "updated_at"},
 	"session_channel_tool_generations": {"session_id", "generation", "updated_at"},
-	"sub_session":                      {"id", "cwd", "timestamp", "parent_session", "version", "channel_type", "channel_id", "fork_boundary_seq", "seed_length", "fork_kind", "expert_id"},
+	"sub_session":                      {"id", "cwd", "timestamp", "parent_session", "version", "channel_type", "channel_id", "fork_boundary_seq", "seed_length", "fork_kind", "expert_id", "content_store"},
 	"sub_entries":                      {"seq", "session_id", "id", "type", "parent_id", "timestamp", "data"},
 }
 

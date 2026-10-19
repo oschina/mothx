@@ -209,3 +209,64 @@ func TestSchemaMigrationAppliesAfterHistoricalVersionCollision(t *testing.T) {
 		t.Fatalf("expert migration version = %d, want 41", version)
 	}
 }
+
+// TestEnsureCurrentSchemaConvergesPartialContentStoreMigration reproduces the
+// database shape left behind when migration 47 recorded itself as applied while
+// only the sessions half of the change landed. requiredSchema hard-requires
+// sub_session.content_store, so without the version-48 convergence step this
+// database is reported incompatible and internal/db responds by backing it up
+// and rebuilding it empty, discarding every session.
+func TestEnsureCurrentSchemaConvergesPartialContentStoreMigration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "partial-47.db")
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(10000)")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(currentSchema); err != nil {
+		t.Fatalf("create current schema: %v", err)
+	}
+	// Simulate a build that applied 47 to sessions only, then recorded it.
+	if _, err := db.Exec(`ALTER TABLE sub_session DROP COLUMN content_store`); err != nil {
+		t.Fatalf("drop sub_session.content_store: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("create migration history: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_migrations(version, name) VALUES (47, 'add_session_content_store_mode')`); err != nil {
+		t.Fatalf("seed partial migration 47 row: %v", err)
+	}
+
+	if err := EnsureCurrentSchema(db); err != nil {
+		t.Fatalf("EnsureCurrentSchema on partial v47 database: %v", err)
+	}
+
+	for _, table := range []string{"sessions", "sub_session"} {
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = 'content_store'", table).Scan(&count); err != nil {
+			t.Fatalf("check %s.content_store: %v", table, err)
+		}
+		if count != 1 {
+			t.Fatalf("table %s is missing content_store after convergence", table)
+		}
+	}
+	var version int
+	if err := db.QueryRow(`SELECT version FROM schema_migrations WHERE name = 'converge_content_store_columns'`).Scan(&version); err != nil {
+		t.Fatalf("read convergence migration: %v", err)
+	}
+	if version != 48 {
+		t.Fatalf("convergence migration version = %d, want 48", version)
+	}
+	// Re-running must stay idempotent, so this database never reaches the
+	// destructive backup-and-rebuild path.
+	if err := EnsureCurrentSchema(db); err != nil {
+		t.Fatalf("EnsureCurrentSchema must stay idempotent: %v", err)
+	}
+	var after int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name = 'converge_content_store_columns'`).Scan(&after); err != nil {
+		t.Fatalf("count convergence rows: %v", err)
+	}
+	if after != 1 {
+		t.Fatalf("convergence migration rows = %d, want 1", after)
+	}
+}

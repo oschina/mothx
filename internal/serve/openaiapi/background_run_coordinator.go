@@ -34,13 +34,13 @@ func (s *Server) responsesBackgroundEnabled() bool {
 // executeResponsesBackgroundRun owns one remote Responses background task.
 // It deliberately coordinates durable run state instead of invoking Agent.Run:
 // a remote response_id can outlive this process, whereas an Agent loop cannot.
-func (s *Server) executeResponsesBackgroundRun(sess *APISession, runID string, runtimeRelease func(), model *provider.Model, mode string, msg provider.Message, transcript bool) {
-	s.executeResponsesBackgroundRunWithConfig(sess, runID, runtimeRelease, model, mode, msg, transcript, nil, nil, nil, nil)
+func (s *Server) executeResponsesBackgroundRun(sess *APISession, runID string, runtimeRelease, handOffRelease func(), model *provider.Model, mode string, msg provider.Message, transcript bool) {
+	s.executeResponsesBackgroundRunWithConfig(sess, runID, runtimeRelease, handOffRelease, model, mode, msg, transcript, nil, nil, nil, nil)
 }
 
 // executeResponsesBackgroundRunWithConfig lets another serve entry point hand
 // the already-resolved request configuration to the shared durable runtime.
-func (s *Server) executeResponsesBackgroundRunWithConfig(sess *APISession, runID string, runtimeRelease func(), model *provider.Model, mode string, msg provider.Message, transcript bool, agentOpts *agentruntime.AgentBuildOptions, initialHistory []provider.Message, complete func(string, []provider.Attachment, error), progress func(string)) {
+func (s *Server) executeResponsesBackgroundRunWithConfig(sess *APISession, runID string, runtimeRelease, handOffRelease func(), model *provider.Model, mode string, msg provider.Message, transcript bool, agentOpts *agentruntime.AgentBuildOptions, initialHistory []provider.Message, complete func(string, []provider.Attachment, error), progress func(string)) {
 	terminalStatus := "failed"
 	conversationTurnID := "turn-" + runID
 	runSource := "responses_background"
@@ -49,6 +49,9 @@ func (s *Server) executeResponsesBackgroundRunWithConfig(sess *APISession, runID
 		runSource = resolvedSource
 		mode = resolvedMode
 	}
+	// Registered first so it runs last: the pool drain slot is freed only after
+	// every deferred terminal write and callback below has completed.
+	defer handOffRelease()
 	defer runtimeRelease()
 	defer sess.Unlock()
 	defer func() {
@@ -604,7 +607,7 @@ func (s *Server) reattachResponsesBackgroundRun(localRun session.SessionRun, res
 	}
 	sess, err := s.getOrCreateSession(localRun.SessionID, localRun.WorkDir)
 	if err != nil || sess == nil {
-		return false, fmt.Errorf("unable to restore session for Responses background run")
+		return false, fmt.Errorf("unable to restore session for Responses background run: %w", err)
 	}
 	recoveryGuard, err := session.AcquireRecovery(s.settings.GetSessionDir(), sess.ID, localRun.ID)
 	if err != nil {
@@ -641,6 +644,20 @@ func (s *Server) reattachResponsesBackgroundRun(localRun session.SessionRun, res
 	}
 	localRun.Source = runSource
 	localRun.Mode = mode
+	// Reserve the pool drain slot before anything durable is reattached. The
+	// recovery monitor below is the only thing that terminalizes this Run, so a
+	// Shutdown slipping in between the reattach and the goroutine hand-off would
+	// leave a live Run that nothing drains while the process closes its session
+	// databases. Reserving first makes that window impossible: Shutdown waits for
+	// this request either to launch the monitor or to give the slot back. A
+	// refused reserve is not fatal here — the Run stays durable and unreclaimed
+	// for the next startup recovery rather than being failed on a transient drain.
+	drainRelease, drainOK := s.pool.ReserveBackground()
+	if !drainOK {
+		sess.Unlock()
+		runtimeRelease()
+		return false, ErrResponsesRuntimeBusy
+	}
 	execution := sess.ensureExecution()
 	execution.SetRunStore(agentruntime.RunStore{SessionDir: s.settings.GetSessionDir()})
 	execution.SetEventSink(s.runtimeRunEventSink(sess))
@@ -656,6 +673,7 @@ func (s *Server) reattachResponsesBackgroundRun(localRun session.SessionRun, res
 		Source: localRun.Source, Status: localRun.Status, Model: localRun.Model,
 		Mode: localRun.Mode, Timestamp: time.Now(),
 	}); err != nil {
+		drainRelease()
 		sess.Unlock()
 		runtimeRelease()
 		return false, fmt.Errorf("reattach durable Responses run: %w", err)
@@ -665,7 +683,21 @@ func (s *Server) reattachResponsesBackgroundRun(localRun session.SessionRun, res
 	if s.runManager != nil {
 		_ = s.runManager.Register(localRun)
 	}
-	go s.monitorRecoveredResponsesBackgroundRun(sess, localRun, responseRun, model, runtimeRelease)
+	// The monitor owns the whole deferred tail that writes after the Run has
+	// terminalized (recordSessionRunEvent, FinalizeRun), so the drain slot is
+	// handed to it as the outermost release, mirroring the submit paths.
+	if !s.pool.LaunchBackground(drainRelease, func() {
+		s.monitorRecoveredResponsesBackgroundRun(sess, localRun, responseRun, model, runtimeRelease, drainRelease)
+	}) {
+		// Unreachable while ReserveBackground succeeded: the pool is not
+		// draining, so LaunchBackground cannot refuse. Fail closed rather than
+		// leave a reattached Run nobody monitors; LaunchBackground already gave
+		// the slot back on this branch.
+		sess.finishRun(localRun.ID)
+		sess.Unlock()
+		runtimeRelease()
+		return false, fmt.Errorf("session pool is shutting down")
+	}
 	return true, nil
 }
 
@@ -678,7 +710,11 @@ func isTerminalSessionRunState(state string) bool {
 	}
 }
 
-func (s *Server) monitorRecoveredResponsesBackgroundRun(sess *APISession, localRun session.SessionRun, responseRun *session.ResponseRun, model *provider.Model, runtimeRelease func()) {
+func (s *Server) monitorRecoveredResponsesBackgroundRun(sess *APISession, localRun session.SessionRun, responseRun *session.ResponseRun, model *provider.Model, runtimeRelease, drainRelease func()) {
+	// Registered first so it runs last: the pool drain slot is only handed back
+	// after the durable terminal transition, the fallback run-event write and
+	// FinalizeRun below have all completed.
+	defer drainRelease()
 	defer runtimeRelease()
 	defer sess.Unlock()
 	terminalStatus := "failed"

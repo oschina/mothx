@@ -100,7 +100,7 @@ func (a *App) handleSessionsCommand(parts []string) {
 
 func (a *App) forkCurrentSession() {
 	if err := a.ensureSession(); err != nil {
-		a.addCommandError(fmt.Sprintf("Error creating session: %v", err))
+		a.addCommandError(sessionCreationError(a.translator, err, a.getSessionDir()))
 		return
 	}
 	id := a.getCurrentSessionID()

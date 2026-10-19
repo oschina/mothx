@@ -584,6 +584,14 @@ func (p *SessionPool) Snapshot() []*APISession {
 // best-effort work such as title generation from touching a test or server's
 // session database after Shutdown has returned.
 func (p *SessionPool) Go(fn func()) bool {
+	return p.GoCtx(func(context.Context) { fn() })
+}
+
+// GoCtx runs a pool-owned background task that observes cancellation. Shutdown
+// waits for tracked tasks, so a task ignoring its context would make the drain
+// outlive its own deadline; handing it the shutdown context is what lets an
+// optional provider call stop as soon as the process starts leaving.
+func (p *SessionPool) GoCtx(fn func(ctx context.Context)) bool {
 	if p == nil || fn == nil {
 		return false
 	}
@@ -593,12 +601,115 @@ func (p *SessionPool) Go(fn func()) bool {
 		return false
 	}
 	p.backgroundWG.Add(1)
+	stopCh := p.stopCh
 	p.mu.Unlock()
 	go func() {
 		defer p.backgroundWG.Done()
+		fn(poolTaskContext(stopCh))
+	}()
+	return true
+}
+
+// ReserveBackground claims one drain slot without starting anything yet and
+// returns the function that releases it. Callers whose work must become
+// observable durable state before the goroutine exists — a submit handler that
+// admits a Run and only then hands it to a background executor — reserve first
+// so Shutdown can never slip in between the durable write and the hand-off and
+// leave an active Run that nothing will ever drain.
+//
+// The returned release is idempotent and must run on every path, including the
+// ones that never reach the goroutine. A reserved slot is counted by the same
+// wait group as a running task, so Shutdown waits for the caller either to
+// launch the task with LaunchBackground or to release the reservation.
+func (p *SessionPool) ReserveBackground() (release func(), ok bool) {
+	if p == nil {
+		return func() {}, false
+	}
+	p.mu.Lock()
+	if p.stopped {
+		p.mu.Unlock()
+		return func() {}, false
+	}
+	p.backgroundWG.Add(1)
+	p.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { p.backgroundWG.Done() }) }, true
+}
+
+// LaunchBackground starts a task under a reservation obtained from
+// ReserveBackground and moves that reservation's release onto the new
+// goroutine, so the slot is held continuously from the reserve until the task
+// itself finishes. Releasing it in the caller instead would reopen exactly the
+// window the reservation exists to close: Shutdown could return while the task
+// still writes.
+//
+// Unlike GoCtx this deliberately does not derive a cancellation context from
+// the pool's stop signal. A durable Run owns a fenced execution lease and must
+// reach its own terminal transition, so Shutdown waits for it and then offers
+// the session runtime a chance to cancel it through SessionRuntime.Shutdown;
+// cancelling here would orphan the run instead.
+func (p *SessionPool) LaunchBackground(release func(), fn func()) bool {
+	if fn == nil {
+		if release != nil {
+			release()
+		}
+		return false
+	}
+	if p == nil {
+		// No pool means no drain will ever wait for this task, so handing it
+		// over would leak the reservation. Run it inline-owned instead and let
+		// the caller keep its existing release ownership.
+		return false
+	}
+	p.mu.RLock()
+	stopped := p.stopped
+	p.mu.RUnlock()
+	if stopped {
+		if release != nil {
+			release()
+		}
+		return false
+	}
+	go func() {
+		// Deferred so a panicking task still frees the slot instead of wedging
+		// every future Shutdown. The release is once-guarded by the caller, so a
+		// task that already released it through its own cleanup is unaffected.
+		defer func() {
+			if release != nil {
+				release()
+			}
+		}()
 		fn()
 	}()
 	return true
+}
+
+// poolTaskContext derives a cancellable context from the pool's shutdown
+// signal. The stop channel is closed before Shutdown waits for tracked tasks,
+// so a task honouring this context can never hold up the drain that owns it.
+func poolTaskContext(stopCh <-chan struct{}) context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx
+}
+
+// Draining reports whether Shutdown has begun. A tracked task that is handed
+// over while draining must not start a new durable write: the run that queued
+// it has already returned to its caller, so the only thing left for it to do is
+// put a record into a database the process is on its way out of closing.
+func (p *SessionPool) Draining() bool {
+	if p == nil {
+		return true
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.stopped
 }
 
 // Get returns an existing session by ID, or nil.
@@ -857,10 +968,36 @@ func (s *Server) findSessionWorkDir(id string) (string, bool, error) {
 	return "", true, nil
 }
 
+// waitBackground blocks until every tracked background task has returned, or
+// until ctx expires. It exists so the drain is bounded by the caller's deadline
+// instead of by whichever task happens to be wedged; a plain WaitGroup.Wait
+// cannot express that.
+func (p *SessionPool) waitBackground(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		p.backgroundWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Shutdown stops eviction and closes every session through the shared
 // SessionRuntime boundary. The context bounds agent cancellation and MCP
 // cleanup; the pool is emptied only after each runtime has been offered a
 // chance to terminalize its active run.
+//
+// The drain wait is bounded by ctx like every other step here. A background
+// task that never returns (an agent parked on an approval nobody will answer, a
+// provider stream that ignores its context) is an availability problem, not a
+// reason to make process exit unkillable: Shutdown reports ctx.Err() and lets
+// the caller decide. Ownership still lives in the fenced lease, so returning
+// early never terminalizes a live Run — it only stops promising that the drain
+// completed.
 func (p *SessionPool) Shutdown(ctx context.Context) error {
 	if p == nil {
 		return nil
@@ -874,7 +1011,9 @@ func (p *SessionPool) Shutdown(ctx context.Context) error {
 		p.mu.Unlock()
 		close(p.stopCh)
 	})
-	p.backgroundWG.Wait()
+	if err := p.waitBackground(ctx); err != nil {
+		return err
+	}
 	sessions := p.Snapshot()
 	var firstErr error
 	closed := make(map[*APISession]struct{}, len(sessions))

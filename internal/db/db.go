@@ -53,6 +53,24 @@ type Options struct {
 	ForeignKeys bool
 }
 
+// IntegrityError means SQLite found structural corruption while opening a
+// database. The database is deliberately left untouched: unlike a stale
+// derived index, a damaged b-tree may contain canonical session data.
+type IntegrityError struct {
+	Path   string
+	Report string
+}
+
+func (e *IntegrityError) Error() string {
+	return fmt.Sprintf("sqlite integrity check failed: %s", e.Report)
+}
+
+// IsIntegrityError reports whether err describes structural SQLite corruption.
+func IsIntegrityError(err error) bool {
+	var integrity *IntegrityError
+	return errors.As(err, &integrity)
+}
+
 var state = struct {
 	sync.Mutex
 	dbs map[string]*bun.DB
@@ -338,7 +356,7 @@ func checkIntegrity(sqlDB *sql.DB, path string) error {
 		return nil
 	}
 	if !isStaleIndexReport(integrity) {
-		return fmt.Errorf("sqlite integrity check failed: %s", integrity)
+		return &IntegrityError{Path: path, Report: integrity}
 	}
 	cause := integrity
 
@@ -360,7 +378,7 @@ func checkIntegrity(sqlDB *sql.DB, path string) error {
 		return fmt.Errorf("run sqlite integrity check after index repair: %w", err)
 	}
 	if integrity != "ok" {
-		return fmt.Errorf("sqlite integrity check failed after index repair: %s", integrity)
+		return &IntegrityError{Path: path, Report: integrity}
 	}
 	recordIndexRepair(IndexRepair{Path: path, Cause: cause, At: time.Now()})
 	return nil

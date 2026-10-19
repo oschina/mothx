@@ -21,6 +21,7 @@ type SessionRecord struct {
 	SeedLength      int64   `bun:"seed_length"`
 	ForkKind        string  `bun:"fork_kind"`
 	ExpertID        string  `bun:"expert_id"`
+	ContentStore    string  `bun:"content_store"`
 }
 
 type SessionCapabilityRecord struct {
@@ -88,6 +89,7 @@ type sessionListRow struct {
 	SeedLength    int64   `bun:"seed_length"`
 	ForkKind      string  `bun:"fork_kind"`
 	ExpertID      string  `bun:"expert_id"`
+	ContentStore  string  `bun:"content_store"`
 }
 
 // sessionListColumns is the shared projection of one session row. last_active_at
@@ -95,8 +97,8 @@ type sessionListRow struct {
 // callers order and display sessions by when they were last used rather than by
 // when they were created.
 var sessionListColumns = "s.id, s.cwd, s.timestamp, " +
-	"COALESCE((SELECT MAX(e.timestamp) FROM entries e WHERE e.session_id = s.id), s.timestamp) AS last_active_at, " +
-	"s.channel_type, s.channel_id, s.parent_session, s.version, s.fork_boundary_seq, s.seed_length, s.fork_kind, s.expert_id"
+	"COALESCE((SELECT MAX(e.timestamp) FROM entries e WHERE e.session_id = s.id), (SELECT MAX(p.timestamp) FROM session_event_projections p WHERE p.session_id = s.id), s.timestamp) AS last_active_at, " +
+	"s.channel_type, s.channel_id, s.parent_session, s.version, s.fork_boundary_seq, s.seed_length, s.fork_kind, s.expert_id, s.content_store"
 
 type SessionDetailAggregates struct {
 	MessageCounts map[string]int
@@ -119,6 +121,18 @@ func (d *SessionDAO) DetailAggregates(ctx context.Context, sessionIDs []string) 
 		return result, err
 	}
 	for _, row := range counts {
+		result.MessageCounts[row.SessionID] = row.Count
+	}
+	var projectedCounts []struct {
+		SessionID string `bun:"session_id"`
+		Count     int    `bun:"message_count"`
+	}
+	if err := d.db.NewSelect().Table("session_event_projections").Column("session_id").ColumnExpr("COUNT(*) AS message_count").Where("session_id IN (?) AND type = ?", bun.In(sessionIDs), "message").Group("session_id").Scan(ctx, &projectedCounts); err != nil {
+		return result, err
+	}
+	for _, row := range projectedCounts {
+		// EventStore sessions have no payload rows in entries. Prefer the
+		// projection when both stores temporarily coexist during migration.
 		result.MessageCounts[row.SessionID] = row.Count
 	}
 	var first []struct {
@@ -165,6 +179,29 @@ func (d *SessionDAO) UpdateSessionExpertID(ctx context.Context, executor bun.IDB
 func (d *SessionDAO) UpdateSessionCWD(ctx context.Context, executor bun.IDB, table, sessionID, cwd string) error {
 	_, err := executor.NewUpdate().Table(table).Set("cwd = ?", cwd).Where("id = ?", sessionID).Exec(ctx)
 	return err
+}
+
+func (d *SessionDAO) SetContentStore(ctx context.Context, executor bun.IDB, sessionID, contentStore string) error {
+	_, err := executor.NewUpdate().Table("sessions").Set("content_store = ?", contentStore).Where("id = ?", sessionID).Exec(ctx)
+	return err
+}
+
+// FlipContentStoreOnLease selects the session's canonical content store, but
+// only while the caller still holds the exact lease identity that owns the
+// session. The single statement is atomic in SQLite, so a concurrent epoch
+// takeover makes it affect zero rows instead of writing over the new owner.
+// Unlike SetContentStore this is safe to call while a durable Run is active:
+// the authority is the lease fence, not an idle-session reservation.
+func (d *SessionDAO) FlipContentStoreOnLease(ctx context.Context, executor bun.IDB, sessionID, contentStore, ownerID string, epoch int64, tokenHash string) (int64, error) {
+	result, err := executor.NewUpdate().Table("sessions").
+		Set("content_store = ?", contentStore).
+		Where("id = ?", sessionID).
+		Where("exists (select 1 from session_runtime_leases where session_runtime_leases.session_id = sessions.id and session_runtime_leases.owner_instance_id = ? and session_runtime_leases.epoch = ? and session_runtime_leases.lease_token_hash = ? and session_runtime_leases.state = ?)", ownerID, epoch, tokenHash, "active").
+		Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func nullableSessionString(value string) any {
@@ -218,7 +255,7 @@ func (d *SessionDAO) List(ctx context.Context, filter SessionListFilter) ([]Sess
 	q := d.db.NewSelect().TableExpr("sessions AS s").ColumnExpr(sessionListColumns)
 	applySessionCWDFilter(q, "s.cwd", filter.CWD, filter.CWDFilter)
 	if filter.MessagesOnly {
-		q.Where("EXISTS (SELECT 1 FROM entries e WHERE e.session_id = s.id AND e.type = 'message')")
+		q.Where("EXISTS (SELECT 1 FROM entries e WHERE e.session_id = s.id AND e.type = 'message') OR EXISTS (SELECT 1 FROM session_event_projections p WHERE p.session_id = s.id AND p.type = 'message')")
 	}
 	if filter.Search != "" {
 		p := "%" + filter.Search + "%"
@@ -244,14 +281,14 @@ func sessionRecordsFromRows(rows []sessionListRow) []SessionRecord {
 		if lastActive == "" {
 			lastActive = row.Timestamp
 		}
-		result[i] = SessionRecord{ID: row.ID, CWD: row.CWD, Timestamp: row.Timestamp, LastActiveAt: lastActive, ChannelType: row.ChannelType, ChannelID: row.ChannelID, ParentSession: row.ParentSession, Version: row.Version, ForkBoundarySeq: row.ForkBoundary, SeedLength: row.SeedLength, ForkKind: row.ForkKind, ExpertID: row.ExpertID}
+		result[i] = SessionRecord{ID: row.ID, CWD: row.CWD, Timestamp: row.Timestamp, LastActiveAt: lastActive, ChannelType: row.ChannelType, ChannelID: row.ChannelID, ParentSession: row.ParentSession, Version: row.Version, ForkBoundarySeq: row.ForkBoundary, SeedLength: row.SeedLength, ForkKind: row.ForkKind, ExpertID: row.ExpertID, ContentStore: row.ContentStore}
 	}
 	return result
 }
 func (d *SessionDAO) Count(ctx context.Context, filter SessionListFilter) (int, error) {
 	q := d.db.NewSelect().TableExpr("sessions AS s").ColumnExpr("COUNT(*)")
 	if filter.MessagesOnly {
-		q.Where("EXISTS (SELECT 1 FROM entries e WHERE e.session_id = s.id AND e.type = 'message')")
+		q.Where("EXISTS (SELECT 1 FROM entries e WHERE e.session_id = s.id AND e.type = 'message') OR EXISTS (SELECT 1 FROM session_event_projections p WHERE p.session_id = s.id AND p.type = 'message')")
 	}
 	if filter.CWD != "" {
 		applySessionCWDFilter(q, "s.cwd", filter.CWD, filter.CWDFilter)
@@ -280,12 +317,24 @@ func (d *SessionDAO) Timestamp(ctx context.Context, table, id string) (string, e
 }
 func (d *SessionDAO) Header(ctx context.Context, table, id string) (*SessionRecord, error) {
 	row := new(SessionRecord)
-	err := d.db.NewSelect().Table(table).Column("cwd", "timestamp", "parent_session", "version", "channel_type", "channel_id", "fork_boundary_seq", "seed_length", "fork_kind", "expert_id").Where("id = ?", id).Limit(1).Scan(ctx, row)
+	err := d.db.NewSelect().Table(table).Column("cwd", "timestamp", "parent_session", "version", "channel_type", "channel_id", "fork_boundary_seq", "seed_length", "fork_kind", "expert_id", "content_store").Where("id = ?", id).Limit(1).Scan(ctx, row)
 	return row, err
 }
 func (d *SessionDAO) Entries(ctx context.Context, table, sessionID string) ([]EntryRecord, error) {
 	var rows []EntryRecord
 	err := d.db.NewSelect().Table(table).Column("type", "data").Where("session_id = ?", sessionID).OrderExpr("seq ASC").Scan(ctx, &rows)
+	return rows, err
+}
+
+// TranscriptRows returns every transcript row of one session with its durable
+// identity (sequence, ID, type, parent) and payload, ordered by sequence.
+// `Entries` deliberately projects only type/data for replay callers; migrating a
+// session between content stores additionally needs the legacy sequence each
+// `conversation_turns` bound was written against, which is why this reads the
+// identity columns as well.
+func (d *SessionDAO) TranscriptRows(ctx context.Context, table, sessionID string) ([]EntryRecord, error) {
+	var rows []EntryRecord
+	err := d.db.NewSelect().Table(table).Column("seq", "id", "type", "parent_id", "data").Where("session_id = ?", sessionID).OrderExpr("seq ASC").Scan(ctx, &rows)
 	return rows, err
 }
 

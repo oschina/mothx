@@ -180,6 +180,7 @@ const (
 	MsgSessionsUnknownSubcommand          MessageID = "sessions.unknown_subcommand"
 	MsgSessionsErrorListing               MessageID = "sessions.error_listing"
 	MsgSessionsDeleteFailed               MessageID = "sessions.delete_failed"
+	MsgSessionDatabaseCorrupt             MessageID = "session.database_corrupt"
 	MsgSessionsAmbiguousID                MessageID = "sessions.ambiguous_id"
 	MsgSessionsNoMatch                    MessageID = "sessions.no_match"
 	MsgSessionsNewOnNextMessage           MessageID = "sessions.new_on_next_message"
@@ -766,6 +767,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgSessionsUnknownSubcommand:        "Unknown subcommand: %s. Use /sessions, or ls, set, clear, del.",
 		MsgSessionsErrorListing:             "Error listing sessions: %v",
 		MsgSessionsDeleteFailed:             "Error deleting session: %v",
+		MsgSessionDatabaseCorrupt:           "SQLite cannot open the sessions database because it appears corrupted.\nDatabase: %s\nYour database was not modified. Stop other MothX processes, then run `mothx pure --force --session-dir %s` to archive it and create a fresh database. Use --force only after confirming no other process is using this session directory.\nSQLite details: %s",
 		MsgSessionsAmbiguousID:              "Ambiguous ID '%s'. Be more specific.",
 		MsgSessionsNoMatch:                  "No session found matching '%s'.",
 		MsgSessionsNewOnNextMessage:         "✅ New session will be created when you send the next message.",
@@ -1281,6 +1283,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgSessionsUnknownSubcommand:    "未知子命令：%s。可使用 /sessions，或 ls、set、clear、del。",
 		MsgSessionsErrorListing:         "列出会话失败：%v",
 		MsgSessionsDeleteFailed:         "删除会话失败：%v",
+		MsgSessionDatabaseCorrupt:       "SQLite 无法打开会话数据库，文件可能已损坏。\n数据库：%s\n程序没有修改原数据库。请先停止其他 MothX 进程，确认没有进程正在使用此会话目录后，运行 `mothx pure --force --session-dir %s` 归档旧数据库并创建新的数据库。\nSQLite 详情：%s",
 		MsgSessionsAmbiguousID:          "会话 ID “%s” 匹配了多个会话，请提供更具体的前缀。",
 		MsgSessionsNoMatch:              "未找到与 “%s” 匹配的会话。",
 		MsgSessionsNewOnNextMessage:     "✅ 发送下一条消息时将创建新会话。",

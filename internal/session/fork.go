@@ -107,6 +107,11 @@ func ForkSession(ctx context.Context, sessionDir string, options ForkOptions) (F
 	if err != dao.ErrNoRows {
 		return ForkResult{}, err
 	}
+	if inspection, inspectErr := InspectEventStore(ctx, sessionDir, options.SourceSessionID); inspectErr != nil {
+		return ForkResult{}, inspectErr
+	} else if len(inspection.Batches) > 0 || len(inspection.Intents) > 0 {
+		return forkEventStoreSession(ctx, sessionDir, options, requestHash, fingerprint)
+	}
 	lease, err := AcquireFork(sessionDir, options.SourceSessionID)
 	if err != nil {
 		switch {
@@ -470,14 +475,17 @@ func resolveForkBoundaryTx(ctx context.Context, tx *dao.Tx, sessionID string, en
 	if *atSeq <= 0 {
 		return 0, ForkKindUnknown, ErrForkInvalidBoundary
 	}
-	record, err := dao.NewForkDAO(nil).EntryAtSeq(ctx, tx, sessionID, *atSeq)
-	if err != nil {
-		if err == dao.ErrNoRows {
-			return 0, ForkKindUnknown, ErrForkInvalidBoundary
+	var boundaryEntry *forkSourceEntry
+	for i := range entries {
+		if entries[i].Seq == *atSeq {
+			boundaryEntry = &entries[i]
+			break
 		}
-		return 0, ForkKindUnknown, err
 	}
-	entryType, data := record.Type, record.Data
+	if boundaryEntry == nil {
+		return 0, ForkKindUnknown, ErrForkInvalidBoundary
+	}
+	entryType, data := boundaryEntry.Type, boundaryEntry.Data
 	if entryType != string(EntryMessage) {
 		return 0, ForkKindUnknown, ErrForkUnavailable
 	}

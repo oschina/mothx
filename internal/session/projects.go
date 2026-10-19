@@ -139,6 +139,19 @@ func LatestSessionTitle(sessionDir, sessionID string) (string, string, error) {
 	if err != nil || !ok {
 		return "", "", err
 	}
+	if eventStore, err := sessionUsesEventStore(context.Background(), db, sessionID); err != nil {
+		return "", "", err
+	} else if eventStore {
+		manager, err := OpenByIDExact(sessionDir, sessionID)
+		if err != nil {
+			return "", "", err
+		}
+		entry, ok := manager.GetLatestSessionInfo()
+		if !ok {
+			return "", "", nil
+		}
+		return entry.Name, entry.Source, nil
+	}
 	data, err := dao.NewProjectDAO(db.Bun()).LatestSessionInfoData(context.Background(), sessionID)
 	if err == dao.ErrNoRows {
 		return "", "", nil

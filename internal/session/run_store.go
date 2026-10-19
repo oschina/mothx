@@ -290,6 +290,21 @@ func FinishSessionRunAndConversationTurn(sessionDir string, run SessionRun, even
 	if event.Status == "" {
 		event.Status = run.Status
 	}
+	finishedAt := event.Timestamp
+	if run.FinishedAt != nil && !run.FinishedAt.IsZero() {
+		finishedAt = *run.FinishedAt
+	}
+	eventStoreTerminal, err := appendEventStoreRunTerminal(context.Background(), sessionDir, run, turnID, turnStatus, stopReason, finishedAt)
+	if err != nil {
+		return "", err
+	}
+	if eventStoreTerminal {
+		// The final assistant payload is canonical in EventStore. Keep the
+		// existing SQLite terminal transaction for Run/Turn/Event/delivery facts,
+		// but prevent appendRunAssistantMessageTx from making a second payload
+		// copy in the legacy entries table.
+		run.AssistantMessage = nil
+	}
 	db, err := OpenRootDB(sessionDir)
 	if err != nil {
 		return "", err
@@ -335,14 +350,22 @@ func FinishSessionRunAndConversationTurn(sessionDir string, run SessionRun, even
 	if turnID != "" {
 		state, err := dao.NewConversationTurnDAO(nil).State(context.Background(), tx, run.SessionID, turnID)
 		if err == nil && state.Status == "open" {
-			parentID, err := currentLeafTx(tx, run.SessionID)
-			if err != nil {
-				return "", err
-			}
-			entry := TurnEndEntry{EntryBase: EntryBase{Type: EntryTurnEnd, ID: GenerateID(), ParentID: stringPtr(parentID), Timestamp: event.Timestamp}, TurnID: turnID, IntentID: state.IntentID, RunID: state.RunID, Status: turnStatus, StopReason: stopReason}
-			endSeq, err := appendTurnEntryTx(tx, run.SessionID, entry, parentID)
-			if err != nil {
-				return "", err
+			var endSeq int64
+			if eventStoreTerminal {
+				endSeq, err = dao.NewSessionEventProjectionDAO(nil).Seq(context.Background(), tx, run.SessionID, stableTurnEntryID(turnID, "end"))
+				if err != nil {
+					return "", err
+				}
+			} else {
+				parentID, err := currentLeafTx(tx, run.SessionID)
+				if err != nil {
+					return "", err
+				}
+				entry := TurnEndEntry{EntryBase: EntryBase{Type: EntryTurnEnd, ID: GenerateID(), ParentID: stringPtr(parentID), Timestamp: event.Timestamp}, TurnID: turnID, IntentID: state.IntentID, RunID: state.RunID, Status: turnStatus, StopReason: stopReason}
+				endSeq, err = appendTurnEntryTx(tx, run.SessionID, entry, parentID)
+				if err != nil {
+					return "", err
+				}
 			}
 			if err := dao.NewConversationTurnDAO(nil).Close(context.Background(), tx, run.SessionID, turnID, turnStatus, endSeq, event.Timestamp.Format(time.RFC3339Nano)); err != nil {
 				return "", err
@@ -430,6 +453,11 @@ func createSessionRunAndEvent(sessionDir string, run SessionRun, event SessionRu
 	if err != nil {
 		return "", err
 	}
+	if eventStore, err := sessionUsesEventStore(context.Background(), db, run.SessionID); err != nil {
+		return "", err
+	} else if eventStore {
+		return createSessionRunAndEventEventStore(sessionDir, run, event, turn)
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return "", err
@@ -483,6 +511,147 @@ func createSessionRunAndEvent(sessionDir string, run SessionRun, event SessionRu
 	}
 	markRuntimeLeaseBound(boundLease, run.ID)
 	return event.ID, nil
+}
+
+// createSessionRunAndEventEventStore admits the Runtime control facts without
+// inserting transcript payload into SQLite. The EventStore batch is appended
+// after the Run/turn/lease transaction; an interrupted handoff leaves durable
+// control facts and is resolved by the existing Runtime recovery path rather
+// than being hidden behind a large entries-table transaction.
+func createSessionRunAndEventEventStore(sessionDir string, run SessionRun, event SessionRunEvent, turn *ConversationTurn) (string, error) {
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		return "", err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := validateRuntimeLeaseTx(tx, sessionDir, run.SessionID); err != nil {
+		return "", err
+	}
+	var finishedAt *string
+	if run.FinishedAt != nil {
+		value := run.FinishedAt.Format(time.RFC3339Nano)
+		finishedAt = &value
+	}
+	if err := dao.NewRunDAO(nil).InsertRun(context.Background(), tx, sessionRunRecord(&run, finishedAt)); err != nil {
+		return "", err
+	}
+	if err := dao.NewRunDAO(nil).InsertEvent(context.Background(), tx, &dao.SessionRunEventRecord{ID: event.ID, SessionID: event.SessionID,
+		RunID: event.RunID, EventType: event.EventType, Source: event.Source, Status: event.Status, Model: event.Model, Mode: event.Mode,
+		Timestamp: event.Timestamp.Format(time.RFC3339Nano), Data: string(normalizedRunJSON(event.Data))}); err != nil {
+		return "", err
+	}
+	if turn != nil {
+		if turn.SessionID != run.SessionID || (turn.RunID != "" && turn.RunID != run.ID) {
+			return "", fmt.Errorf("conversation turn identity does not match run")
+		}
+		if turn.RunID == "" {
+			turn.RunID = run.ID
+		}
+		if turn.IntentID == "" {
+			turn.IntentID = run.IntentID
+		}
+		if turn.StartedAt.IsZero() {
+			turn.StartedAt = run.StartedAt
+		}
+		if err := dao.NewConversationTurnDAO(nil).Insert(context.Background(), tx, &dao.ConversationTurnRecord{
+			ID: turn.ID, SessionID: turn.SessionID, IntentID: turn.IntentID, Kind: turn.Kind,
+			Status: "open", StartSeq: 0, StartedAt: turn.StartedAt.Format(time.RFC3339Nano),
+		}); err != nil {
+			return "", err
+		}
+	}
+	if err := bindInputResourcesToRunTx(tx, run.SessionID, run.ID, run.IntentID, run.InputResourceIDs); err != nil {
+		return "", err
+	}
+	if err := reserveRuntimeSubmissionTx(tx, run); err != nil {
+		return "", err
+	}
+	boundLease, err := bindRuntimeLeaseToRunTx(tx, sessionDir, run.SessionID, run.ID)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	markRuntimeLeaseBound(boundLease, run.ID)
+
+	if err := appendEventStoreUserHandoff(db, sessionDir, run, turn); err != nil {
+		return "", err
+	}
+	return event.ID, nil
+}
+
+// appendEventStoreUserHandoff publishes the user-facing EventStore facts for an
+// admitted Run: the turn boundary followed by the user message, then the turn's
+// start sequence back into the control plane. Both the plain Run admission and
+// the execution-intent admission must share this single implementation so a
+// session resolved to the EventStore content never falls back to legacy
+// transcript rows depending on which entry point accepted it.
+func appendEventStoreUserHandoff(db *dao.Database, sessionDir string, run SessionRun, turn *ConversationTurn) error {
+	manager, err := OpenByIDExact(sessionDir, run.SessionID)
+	if err != nil {
+		return err
+	}
+	content := make([]interface{}, 0, 2)
+	if turn != nil {
+		content = append(content, TurnStartEntry{EntryBase: EntryBase{Type: EntryTurnStart, ID: stableTurnEntryID(turn.ID, "start"), Timestamp: turn.StartedAt}, TurnID: turn.ID, IntentID: turn.IntentID, RunID: run.ID, Attempt: turn.Attempt})
+	}
+	if run.UserMessage != nil {
+		message := *run.UserMessage
+		message, _ = provider.NormalizeMessage(message)
+		if message.Role == "" {
+			message.Role = "user"
+		}
+		if message.Timestamp.IsZero() {
+			message.Timestamp = run.StartedAt
+		}
+		entryID := run.UserEntryID
+		if entryID == "" {
+			entryID = RunUserEntryID(run.ID)
+		}
+		var parent *string
+		if len(content) > 0 {
+			parentID := idOfEntry(content[len(content)-1])
+			parent = &parentID
+		}
+		content = append(content, MessageEntry{EntryBase: EntryBase{Type: EntryMessage, ID: entryID, ParentID: parent, Timestamp: message.Timestamp}, Message: message})
+	}
+	if len(content) > 0 {
+		if _, err := manager.AppendEventStoreEntries(context.Background(), run.ID, turnIDOf(turn), content); err != nil {
+			return err
+		}
+	}
+	if turn != nil {
+		startSeq, err := dao.NewSessionEventProjectionDAO(nil).Seq(context.Background(), db.Bun(), run.SessionID, stableTurnEntryID(turn.ID, "start"))
+		if err != nil {
+			return err
+		}
+		if err := db.RunInTx(context.Background(), nil, func(_ context.Context, tx dao.Tx) error {
+			if err := validateRuntimeLeaseTx(&tx, sessionDir, run.SessionID); err != nil {
+				return err
+			}
+			return dao.NewConversationTurnDAO(nil).UpdateStartSeq(context.Background(), &tx, run.SessionID, turn.ID, startSeq)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func turnIDOf(turn *ConversationTurn) string {
+	if turn == nil {
+		return ""
+	}
+	return turn.ID
+}
+
+func idOfEntry(entry interface{}) string {
+	id, _, _, _ := getEntryMetadata(entry)
+	return id
 }
 
 func scanSessionRun(scanner interface{ Scan(...any) error }) (*SessionRun, error) {

@@ -61,7 +61,7 @@ func (d *RecoveryDAO) ListOpenTurns(ctx context.Context, executor bun.IDB, sessi
 		IntentID string `bun:"intent_id"`
 		RunID    string `bun:"run_id"`
 	}
-	err := executor.NewSelect().TableExpr("conversation_turns AS t").ColumnExpr("t.id, t.intent_id, COALESCE((SELECT json_extract(e.data, '$.runId') FROM entries e WHERE e.session_id = t.session_id AND e.type = 'turn_start' AND json_extract(e.data, '$.turnId') = t.id ORDER BY e.seq DESC LIMIT 1), '') AS run_id").Where("t.session_id = ? AND t.status = ?", sessionID, "open").OrderExpr("t.start_seq").Scan(ctx, &rows)
+	err := executor.NewSelect().TableExpr("conversation_turns AS t").ColumnExpr("t.id, t.intent_id, COALESCE((SELECT json_extract(e.data, '$.runId') FROM entries e WHERE e.session_id = t.session_id AND e.type = 'turn_start' AND json_extract(e.data, '$.turnId') = t.id ORDER BY e.seq DESC LIMIT 1), (SELECT p.run_id FROM session_event_projections p WHERE p.session_id = t.session_id AND p.type = 'turn_start' AND p.turn_id = t.id ORDER BY p.seq DESC LIMIT 1), '') AS run_id").Where("t.session_id = ? AND t.status = ?", sessionID, "open").OrderExpr("t.start_seq").Scan(ctx, &rows)
 	result := make([]OpenTurnRecord, len(rows))
 	for i, row := range rows {
 		result[i] = OpenTurnRecord{row.ID, row.IntentID, row.RunID}

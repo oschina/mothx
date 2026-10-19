@@ -40,6 +40,15 @@ type Manager struct {
 	cwd        string
 	sessionDir string
 	subAgent   bool
+	// eventStoreMode is set only after a committed EventStore batch exists or
+	// when the Runtime explicitly appends through AppendEventStoreEntries.
+	eventStoreMode bool
+	// convergingEventStore is held while this Manager converges onto its
+	// EventStore. Convergence removes the legacy payload duplicate and then
+	// reloads, so without this guard the reload would re-enter convergence
+	// forever. It is process-local bookkeeping for one call stack, never
+	// ownership or authority.
+	convergingEventStore bool
 }
 
 type replayState struct {
@@ -133,7 +142,9 @@ func (m *Manager) Reload() error {
 	m.header = nil
 	m.entries = nil
 	m.leafID = nil
-	if err := m.load(); err != nil {
+	// Reload owns m.mu, so it reloads through the locked body. Calling load()
+	// here would re-lock the non-reentrant mutex and hang the process.
+	if err := m.loadLocked(context.Background()); err != nil {
 		m.header, m.entries, m.leafID, m.cwd = oldHeader, oldEntries, oldLeaf, oldCwd
 		return err
 	}
@@ -385,11 +396,72 @@ func ListAll(sessionDir string, opts ...ListOption) ([]SessionInfo, error) {
 		return nil, err
 	}
 
-	records, err := dao.NewSessionDAO(db.Bun()).List(context.Background(), dao.SessionListFilter{Search: opt.search, MessagesOnly: opt.messagesOnly, Limit: opt.limit, Offset: opt.offset, CWDFilter: sessionCWDFilter()})
+	query := dao.SessionListFilter{Search: opt.search, MessagesOnly: opt.messagesOnly, Limit: opt.limit, Offset: opt.offset, CWDFilter: sessionCWDFilter()}
+	if opt.search != "" {
+		// SQLite no longer contains EventStore payloads. Fetch the ordered
+		// metadata candidate set first, then let the canonical Session replay
+		// perform content matching before applying pagination.
+		query.Search = ""
+		query.Limit = 0
+		query.Offset = 0
+	}
+	records, err := dao.NewSessionDAO(db.Bun()).List(context.Background(), query)
 	if err != nil {
 		return nil, err
 	}
+	if opt.search != "" {
+		records = filterSessionRecordsBySearch(sessionDir, records, opt.search)
+		if opt.offset > 0 {
+			if opt.offset >= len(records) {
+				records = nil
+			} else {
+				records = records[opt.offset:]
+			}
+		}
+		if opt.limit > 0 && len(records) > opt.limit {
+			records = records[:opt.limit]
+		}
+	}
 	return sessionInfosFromRecords(sessionDir, records), nil
+}
+
+func filterSessionRecordsBySearch(sessionDir string, records []dao.SessionRecord, search string) []dao.SessionRecord {
+	needle := strings.ToLower(search)
+	filtered := make([]dao.SessionRecord, 0, len(records))
+	for _, record := range records {
+		if strings.Contains(strings.ToLower(record.ID), needle) || strings.Contains(strings.ToLower(record.CWD), needle) || strings.Contains(strings.ToLower(record.ChannelType), needle) || strings.Contains(strings.ToLower(record.ChannelID), needle) {
+			filtered = append(filtered, record)
+			continue
+		}
+		manager, err := OpenByIDExact(sessionDir, record.ID)
+		if err != nil {
+			continue
+		}
+		if info, ok := manager.GetLatestSessionInfo(); ok && strings.Contains(strings.ToLower(info.Name), needle) {
+			filtered = append(filtered, record)
+			continue
+		}
+		matched := false
+		for _, message := range manager.GetMessages() {
+			if strings.Contains(strings.ToLower(message.Content), needle) {
+				matched = true
+				break
+			}
+			for _, block := range message.Contents {
+				if strings.Contains(strings.ToLower(block.Text), needle) {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
+		}
+		if matched {
+			filtered = append(filtered, record)
+		}
+	}
+	return filtered
 }
 
 // CountWithMessages returns the number of sessions that contain at least one
@@ -407,6 +479,13 @@ func CountWithMessages(sessionDir string, opts ...ListOption) (int, error) {
 	db, ok, err := openExistingSessionDB(sessionDir)
 	if err != nil || !ok {
 		return 0, err
+	}
+	if opt.search != "" {
+		records, listErr := dao.NewSessionDAO(db.Bun()).List(context.Background(), dao.SessionListFilter{MessagesOnly: opt.messagesOnly, CWDFilter: sessionCWDFilter()})
+		if listErr != nil {
+			return 0, listErr
+		}
+		return len(filterSessionRecordsBySearch(sessionDir, records, opt.search)), nil
 	}
 	return dao.NewSessionDAO(db.Bun()).Count(context.Background(), dao.SessionListFilter{Search: opt.search, MessagesOnly: opt.messagesOnly})
 }
@@ -555,6 +634,8 @@ func (m *Manager) initWithBindingLocked(id, channelType, channelID string) error
 			handlePath = m.file
 		}
 
+		// Session metadata remains in SQLite; transcript content starts in the
+		// EventStore after the Runtime binds this new session.
 		err := m.writeEntry(m.header)
 		if err == nil {
 			if handlePath != "" {
@@ -764,6 +845,13 @@ func (m *Manager) AppendMessage(msg provider.Message) (string, error) {
 		},
 		Message: msg,
 	}
+	if m.eventStoreMode {
+		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
+		if err != nil {
+			return "", err
+		}
+		return ids[0], nil
+	}
 
 	if err := m.writeEntry(entry); err != nil {
 		return "", err
@@ -793,6 +881,19 @@ func (m *Manager) AppendMessages(msgs []provider.Message) ([]string, error) {
 
 	if err := m.ensureInitializedLocked(); err != nil {
 		return nil, err
+	}
+	if m.eventStoreMode {
+		entries := make([]interface{}, len(msgs))
+		parent := m.leafID
+		now := time.Now()
+		for i, msg := range msgs {
+			msg, _ = provider.NormalizeMessage(msg)
+			id := GenerateID()
+			entries[i] = MessageEntry{EntryBase: EntryBase{Type: EntryMessage, ID: id, ParentID: parent, Timestamp: now}, Message: msg}
+			entryID := id
+			parent = &entryID
+		}
+		return m.appendEventStoreEntriesLocked(context.Background(), "", "", entries)
 	}
 
 	ids := make([]string, 0, len(msgs))
@@ -852,6 +953,13 @@ func (m *Manager) AppendModelChange(providerName, modelID string) (string, error
 		Provider: providerName,
 		ModelID:  modelID,
 	}
+	if m.eventStoreMode {
+		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
+		if err != nil {
+			return "", err
+		}
+		return ids[0], nil
+	}
 
 	if err := m.writeEntry(entry); err != nil {
 		return "", err
@@ -881,6 +989,13 @@ func (m *Manager) AppendModeChange(mode string) (string, error) {
 		},
 		Mode: mode,
 	}
+	if m.eventStoreMode {
+		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
+		if err != nil {
+			return "", err
+		}
+		return ids[0], nil
+	}
 	if err := m.writeEntry(entry); err != nil {
 		return "", err
 	}
@@ -908,6 +1023,13 @@ func (m *Manager) AppendThinkingLevelChange(level string) (string, error) {
 		},
 		ThinkingLevel: level,
 	}
+	if m.eventStoreMode {
+		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
+		if err != nil {
+			return "", err
+		}
+		return ids[0], nil
+	}
 
 	if err := m.writeEntry(entry); err != nil {
 		return "", err
@@ -928,6 +1050,13 @@ func (m *Manager) AppendAdditionalDirectories(directories []string) (string, err
 	}
 	id := GenerateID()
 	entry := AdditionalDirectoriesEntry{EntryBase: EntryBase{Type: EntryAdditionalDirectories, ID: id, ParentID: m.leafID, Timestamp: time.Now()}, Directories: append([]string(nil), directories...)}
+	if m.eventStoreMode {
+		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
+		if err != nil {
+			return "", err
+		}
+		return ids[0], nil
+	}
 	if err := m.writeEntry(entry); err != nil {
 		return "", err
 	}
@@ -970,6 +1099,13 @@ func (m *Manager) AppendCompaction(summary, firstKeptEntryID string, tokensBefor
 		SummaryVersion:       summaryVersion,
 		PreviousCompactionID: previousCompactionID,
 		LastSummarizedEntry:  lastSummarizedEntryIDLocked(m.entries, firstKeptEntryID),
+	}
+	if m.eventStoreMode {
+		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
+		if err != nil {
+			return "", err
+		}
+		return ids[0], nil
 	}
 
 	if err := m.writeEntry(entry); err != nil {
@@ -1022,6 +1158,13 @@ func (m *Manager) AppendContentOverride(targetEntryID string, msg provider.Messa
 		Message:       cloneMessage(msg),
 		Reason:        reason,
 		Code:          code,
+	}
+	if m.eventStoreMode {
+		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
+		if err != nil {
+			return "", err
+		}
+		return ids[0], nil
 	}
 
 	if err := m.writeEntry(entry); err != nil {
@@ -1088,6 +1231,13 @@ func (m *Manager) AppendSessionTitle(name, source string) (string, error) {
 	}
 	id := GenerateID()
 	entry := SessionInfoEntry{EntryBase: EntryBase{Type: EntrySessionInfo, ID: id, ParentID: m.leafID, Timestamp: time.Now()}, Name: name, Source: source}
+	if m.eventStoreMode {
+		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
+		if err != nil {
+			return "", err
+		}
+		return ids[0], nil
+	}
 	if err := m.writeEntry(entry); err != nil {
 		return "", err
 	}
@@ -1188,6 +1338,18 @@ func (m *Manager) GetLatestAdditionalDirectories() (AdditionalDirectoriesEntry, 
 	return AdditionalDirectoriesEntry{}, false
 }
 
+// GetLatestSessionInfo returns the newest session title entry.
+func (m *Manager) GetLatestSessionInfo() (SessionInfoEntry, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for i := len(m.entries) - 1; i >= 0; i-- {
+		if entry, ok := m.entries[i].(SessionInfoEntry); ok {
+			return entry, true
+		}
+	}
+	return SessionInfoEntry{}, false
+}
+
 // GetFile returns the session file path.
 func (m *Manager) GetFile() string {
 	m.mu.RLock()
@@ -1234,6 +1396,16 @@ func (m *Manager) StartConversationTurn(turnID, intentID, runID string) error {
 	if sessionDir == "" {
 		sessionDir = filepath.Dir(resolveDBPath(file))
 	}
+	m.mu.Lock()
+	if m.eventStoreMode {
+		if err := m.startEventStoreTurnLocked(context.Background(), ConversationTurn{ID: turnID, SessionID: sessionID, IntentID: intentID, RunID: runID}); err != nil {
+			m.mu.Unlock()
+			return err
+		}
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
 	if err := StartConversationTurn(sessionDir, ConversationTurn{ID: turnID, SessionID: sessionID, IntentID: intentID, RunID: runID}); err != nil {
 		return err
 	}
@@ -1263,6 +1435,13 @@ func (m *Manager) EndConversationTurn(turnID, status, stopReason string) error {
 	if sessionDir == "" {
 		sessionDir = filepath.Dir(resolveDBPath(file))
 	}
+	m.mu.Lock()
+	if m.eventStoreMode {
+		err := m.endEventStoreTurnLocked(context.Background(), turnID, status, stopReason)
+		m.mu.Unlock()
+		return err
+	}
+	m.mu.Unlock()
 	if err := EndConversationTurn(sessionDir, sessionID, turnID, status, stopReason, time.Now()); err != nil {
 		return err
 	}
@@ -1562,6 +1741,19 @@ func getEntryMetadata(entry interface{}) (id string, typeStr string, parentID *s
 
 // load reads a session from the SQLite database using the handle file's session ID.
 func (m *Manager) load() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.loadLocked(context.Background())
+}
+
+// loadLocked reads this Manager's persisted session into memory. The caller
+// holds m.mu. It is separated from load so EventStore convergence can reload
+// through the canonical content source without releasing the lock it already
+// owns.
+func (m *Manager) loadLocked(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var sessionID string
 	idBytes, err := os.ReadFile(m.file)
 	if err == nil {
@@ -1574,6 +1766,13 @@ func (m *Manager) load() error {
 
 	if sessionID == "" {
 		return fmt.Errorf("could not determine session ID from %s", m.file)
+	}
+	// A manager opened from a virtual handle did not originate through New, so
+	// restore its canonical root now. EventStore, attachment, lease, and turn
+	// operations must all target the same sessions.db directory rather than
+	// relying on individual callers to derive it from the handle.
+	if m.sessionDir == "" {
+		m.sessionDir = filepath.Dir(resolveDBPath(m.file))
 	}
 
 	return m.withDB(func(db *dao.Database) error {
@@ -1611,7 +1810,35 @@ func (m *Manager) load() error {
 			ForkKind:        forkKind.String,
 			ExpertID:        record.ExpertID,
 		}
+		m.eventStoreMode = record.ContentStore == "event_store"
 		m.cwd = cwd.String
+
+		eventEntries, useEventStore, err := m.loadCommittedEventEntries(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if useEventStore {
+			m.eventStoreMode = true
+			m.entries = append(m.entries, eventEntries...)
+			for _, entry := range eventEntries {
+				id, _, _, _ := getEntryMetadata(entry)
+				if id != "" {
+					m.leafID = &id
+				}
+			}
+			// Loading through the EventStore is not yet the same thing as being
+			// converged on it. The session may still carry the legacy payload
+			// duplicate that a flip-before-cleanup crash left behind, and a session
+			// flipped by an older build still holds `conversation_turns` bounds
+			// naming deleted legacy sequences. Convergence is a property of the
+			// session rather than of whichever entry point happens to call
+			// SessionRuntime.BindSession, so it runs here, where every open path
+			// (New, Open, OpenByID, OpenByIDExact, ContinueRecent, Reload) passes.
+			// loadLocked holds m.mu, so this is the locked body of
+			// ConvergeEventStore. The recursion flag makes the reload inside it
+			// terminate instead of converging again.
+			return m.convergeEventStoreLocked(ctx)
+		}
 
 		records, err := dao.NewSessionDAO(db.Bun()).Entries(context.Background(), m.entriesTable(), sessionID)
 		if err != nil {
@@ -1736,6 +1963,62 @@ func (m *Manager) load() error {
 	})
 }
 
+// loadCommittedEventEntries selects the EventStore as the canonical content
+// source only when a session has committed event batches. Legacy sessions with
+// no event intents continue through the SQLite compatibility path; a session
+// with an unusable EventStore fails closed instead of silently falling back to
+// a stale SQLite payload copy.
+//
+// `reconciling` is deliberately *not* fatal here. It means another writer is
+// inside the `prepared -> appended -> committed` window, so its bytes are not
+// yet canonical; it says nothing about the batches that already committed. The
+// proposal specifies this split ("继续展示已有已提交历史，但不接受新的
+// side-effecting Run"): replay reads committed history through
+// `ReadCommittedEventBatches`, which excludes in-doubt bytes, while every write
+// gate (`appendEventStoreEntriesLocked`, `appendEventStoreRunTerminal`, the
+// export path) keeps refusing a non-healthy store. Erroring here turned that
+// transient window into a hard open failure for any reader racing a live Run.
+func (m *Manager) loadCommittedEventEntries(ctx context.Context, sessionID string) ([]interface{}, bool, error) {
+	sessionDir := m.sessionDir
+	if sessionDir == "" {
+		sessionDir = filepath.Dir(resolveDBPath(m.file))
+	}
+	inspection, err := InspectEventStore(ctx, sessionDir, sessionID)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(inspection.Batches) == 0 && len(inspection.Intents) == 0 && !m.eventStoreMode {
+		return nil, false, nil
+	}
+	if len(inspection.Batches) == 0 && len(inspection.Intents) == 0 && m.eventStoreMode {
+		// A freshly created or migrated-empty session is intentionally an
+		// EventStore session before its first batch. Do not fall back to a
+		// legacy payload store merely because there is nothing to replay yet.
+		return nil, true, nil
+	}
+	if inspection.State != EventStoreHealthy && inspection.State != EventStoreReconciling {
+		return nil, false, fmt.Errorf("session event store is %s: %s", inspection.State, inspection.Reason)
+	}
+	batches, err := ReadCommittedEventBatches(ctx, sessionDir, sessionID)
+	if err != nil {
+		return nil, false, err
+	}
+	entries := make([]interface{}, 0)
+	for _, batch := range batches {
+		for _, event := range batch.Events {
+			entry, err := DecodeEventRecord(event)
+			if err != nil {
+				return nil, false, err
+			}
+			if _, ok := entry.(Header); ok {
+				continue
+			}
+			entries = append(entries, entry)
+		}
+	}
+	return entries, true, nil
+}
+
 // sessionChildTables lists every session_id-keyed child table of sessions,
 // ordered child-first (tables that reference another child table come before
 // their parent) so deletion stays safe even if SQLite foreign key enforcement
@@ -1770,6 +2053,8 @@ var sessionChildTables = []string{
 	"response_turns",
 	"session_channel_tool_generations",
 	"session_channel_tools",
+	"session_event_projections",
+	"session_event_intents",
 	"entries",
 }
 
@@ -1879,6 +2164,9 @@ func deleteSessionWithMutationTarget(cleanPath, sessionDir, sessionID string, gu
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit deleting session %s: %w", sessionID, err)
+	}
+	if err := RemoveEventStore(sessionDir, sessionID); err != nil {
+		return err
 	}
 	return removeSessionHandle(cleanPath)
 }
@@ -2151,6 +2439,11 @@ func ListSessionMessagesWithSeq(sessionDir, sessionID string) ([]SequencedMessag
 	if err != nil || !ok {
 		return nil, err
 	}
+	if usesEventStore, err := sessionUsesEventStore(context.Background(), db, sessionID); err != nil {
+		return nil, err
+	} else if usesEventStore {
+		return eventStoreSequencedMessages(context.Background(), sessionDir, sessionID)
+	}
 	records, err := dao.NewSessionDAO(db.Bun()).Messages(context.Background(), sessionID)
 	if err != nil {
 		return nil, err
@@ -2212,6 +2505,15 @@ func ListSessionMessagesAfter(sessionDir, sessionID string, afterSeq int64, limi
 	if err != nil || !ok {
 		return nil, err
 	}
+	if usesEventStore, err := sessionUsesEventStore(context.Background(), db, sessionID); err != nil {
+		return nil, err
+	} else if usesEventStore {
+		messages, err := eventStoreSequencedMessages(context.Background(), sessionDir, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		return eventStoreMessageWindow(messages, afterSeq, 0, false, limit), nil
+	}
 	records, err := dao.NewSessionDAO(db.Bun()).MessagesAfter(context.Background(), sessionID, afterSeq, limit)
 	if err != nil {
 		return nil, err
@@ -2243,6 +2545,17 @@ func ListSessionMessagesLatest(sessionDir, sessionID string, limit int) ([]Seque
 	db, ok, err := openExistingSessionDB(sessionDir)
 	if err != nil || !ok {
 		return nil, err
+	}
+	if usesEventStore, err := sessionUsesEventStore(context.Background(), db, sessionID); err != nil {
+		return nil, err
+	} else if usesEventStore {
+		messages, err := eventStoreSequencedMessages(context.Background(), sessionDir, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		// The legacy path pages with `ORDER BY seq DESC LIMIT n` and reverses,
+		// so a non-positive limit is not a full scan there either.
+		return eventStoreMessageWindow(messages, 0, 0, true, limit), nil
 	}
 	records, err := dao.NewSessionDAO(db.Bun()).MessagesLatest(context.Background(), sessionID, limit)
 	if err != nil {
@@ -2280,6 +2593,15 @@ func ListSessionMessagesBefore(sessionDir, sessionID string, beforeSeq int64, li
 	if err != nil || !ok {
 		return nil, err
 	}
+	if usesEventStore, err := sessionUsesEventStore(context.Background(), db, sessionID); err != nil {
+		return nil, err
+	} else if usesEventStore {
+		messages, err := eventStoreSequencedMessages(context.Background(), sessionDir, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		return eventStoreMessageWindow(messages, 0, beforeSeq, true, limit), nil
+	}
 	records, err := dao.NewSessionDAO(db.Bun()).MessagesBefore(context.Background(), sessionID, beforeSeq, limit)
 	if err != nil {
 		return nil, err
@@ -2302,6 +2624,101 @@ func ListSessionMessagesBefore(sessionDir, sessionID string, beforeSeq int64, li
 		messages[i], messages[j] = messages[j], messages[i]
 	}
 	return messages, nil
+}
+
+func sessionUsesEventStore(ctx context.Context, db *dao.Database, sessionID string) (bool, error) {
+	header, err := dao.NewSessionDAO(db.Bun()).Header(ctx, "sessions", sessionID)
+	if err != nil {
+		return false, err
+	}
+	return header.ContentStore == "event_store", nil
+}
+
+func eventStoreSequencedMessages(ctx context.Context, sessionDir, sessionID string) ([]SequencedMessage, error) {
+	batches, err := ReadCommittedEventBatches(ctx, sessionDir, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	overrides := make(map[string]provider.Message)
+	for _, batch := range batches {
+		for _, record := range batch.Events {
+			if EntryType(record.Kind) != EntryContentOverride {
+				continue
+			}
+			decoded, err := DecodeEventRecord(record)
+			if err != nil {
+				return nil, err
+			}
+			override, ok := decoded.(ContentOverrideEntry)
+			if ok && override.TargetEntryID != "" {
+				overrides[override.TargetEntryID] = override.Message
+			}
+		}
+	}
+	state := sequencedReplayState{}
+	for _, batch := range batches {
+		for index, record := range batch.Events {
+			decoded, err := DecodeEventRecord(record)
+			if err != nil {
+				return nil, err
+			}
+			seq := batch.SeqFrom + int64(index)
+			switch entry := decoded.(type) {
+			case MessageEntry:
+				message := entry.Message
+				if replacement, ok := overrides[entry.ID]; ok {
+					message = replacement
+				}
+				state.messages = append(state.messages, SequencedMessage{Seq: seq, EntryID: entry.ID, Message: cloneMessage(message)})
+				state.entryIDs = append(state.entryIDs, entry.ID)
+			case CompactionEntry:
+				applySequencedCompactionEntry(&state, entry, seq)
+			}
+		}
+	}
+	return state.messages, nil
+}
+
+// eventStoreMessageWindow projects an EventStore replay onto the same seq
+// window the SQLite `entries` table would have returned.
+//
+// Both stores number their replay cursor from 1 (`eventStoreSeqBase` mirrors
+// the legacy AUTOINCREMENT ROWID base), so `afterSeq`/`beforeSeq` mean exactly
+// what the SQL predicates `seq > ?` / `seq < ?` mean and zero remains the
+// "no cursor yet" sentinel for every entry point. Paging therefore needs no
+// store-specific special casing; only the physical source differs.
+func eventStoreMessageWindow(messages []SequencedMessage, afterSeq, beforeSeq int64, newestFirst bool, limit int) []SequencedMessage {
+	if afterSeq < 0 {
+		afterSeq = 0
+	}
+	if beforeSeq < 0 {
+		beforeSeq = 0
+	}
+	first := 0
+	last := len(messages)
+	// A zero bound is the shared "no cursor yet" sentinel, exactly like the
+	// legacy SQL predicates: `seq > 0` admits every row and `seq < 0` never
+	// fires, so an unset bound must stay unbounded rather than filter all.
+	if afterSeq > 0 {
+		for first < len(messages) && messages[first].Seq <= afterSeq {
+			first++
+		}
+	}
+	if beforeSeq > 0 {
+		for last > first && messages[last-1].Seq >= beforeSeq {
+			last--
+		}
+	}
+	filtered := make([]SequencedMessage, 0, len(messages))
+	filtered = append(filtered, messages[first:last]...)
+	if limit > 0 && len(filtered) > limit {
+		if newestFirst {
+			filtered = filtered[len(filtered)-limit:]
+		} else {
+			filtered = filtered[:limit]
+		}
+	}
+	return filtered
 }
 
 // ListSessionRunEventsWithSeq returns run events with their session_run_events.seq cursor.
@@ -2461,6 +2878,41 @@ func buildSessionDetails(sessions []SessionInfo) ([]SessionDetail, error) {
 		var entry SessionInfoEntry
 		if err := json.Unmarshal([]byte(data), &entry); err == nil {
 			details[idx].Name = entry.Name
+		}
+	}
+
+	// EventStore sessions keep payloads out of SQLite, so preview/name data is
+	// reconstructed through the canonical Runtime-owned replay rather than by
+	// reintroducing a payload column into the projection table.
+	for i := range details {
+		if details[i].MessageCount == 0 || details[i].Preview != "" || details[i].Name != "" {
+			continue
+		}
+		manager, err := OpenByIDExact(filepath.Dir(resolveDBPath(sessions[i].Path)), details[i].ID)
+		if err != nil {
+			continue
+		}
+		messages := manager.GetMessages()
+		for _, message := range messages {
+			if message.Role != "user" {
+				continue
+			}
+			text := message.Content
+			if text == "" {
+				for _, block := range message.Contents {
+					if block.Type == "text" && block.Text != "" {
+						text = block.Text
+						break
+					}
+				}
+			}
+			if text != "" {
+				details[i].Preview = util.TruncateWithSuffix(text, 60, "...")
+			}
+			break
+		}
+		if info, ok := manager.GetLatestSessionInfo(); ok {
+			details[i].Name = info.Name
 		}
 	}
 	// Sort by modification time (newest first).

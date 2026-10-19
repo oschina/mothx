@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/oschina/mothx/internal/dao"
@@ -93,6 +94,154 @@ func StartConversationTurn(sessionDir string, turn ConversationTurn) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (m *Manager) startEventStoreTurnLocked(ctx context.Context, turn ConversationTurn) error {
+	sessionDir := m.sessionDir
+	if sessionDir == "" {
+		sessionDir = filepath.Dir(resolveDBPath(m.file))
+	}
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		return err
+	}
+	turnDAO := dao.NewConversationTurnDAO(db.Bun())
+	state, err := turnDAO.State(ctx, db.Bun(), turn.SessionID, turn.ID)
+	if err == nil && state.Status == "open" {
+		if state.RunID == turn.RunID && turn.RunID != "" {
+			return nil
+		}
+		return fmt.Errorf("conversation turn already open for session %s", turn.SessionID)
+	}
+	if err != nil && err != dao.ErrNoRows {
+		return err
+	}
+	if turn.StartedAt.IsZero() {
+		turn.StartedAt = time.Now()
+	}
+	if turn.Kind == "" {
+		turn.Kind = "conversation"
+	}
+	entryID := stableTurnEntryID(turn.ID, "start")
+	entry := TurnStartEntry{EntryBase: EntryBase{Type: EntryTurnStart, ID: entryID, ParentID: m.leafID, Timestamp: turn.StartedAt}, TurnID: turn.ID, IntentID: turn.IntentID, RunID: turn.RunID, Attempt: turn.Attempt}
+	// If the process crashed after the start event committed but before the
+	// control row was inserted, retain the original timestamp and parent on the
+	// idempotent retry.
+	if batches, scanErr := ReadCommittedEventBatches(ctx, sessionDir, turn.SessionID); scanErr == nil {
+		for _, batch := range batches {
+			for _, record := range batch.Events {
+				if record.EventID != entryID {
+					continue
+				}
+				decoded, decodeErr := DecodeEventRecord(record)
+				if decodeErr != nil {
+					return decodeErr
+				}
+				previous, ok := decoded.(TurnStartEntry)
+				if !ok || previous.TurnID != turn.ID || previous.RunID != turn.RunID {
+					return fmt.Errorf("turn-start event %s conflicts with requested turn", entryID)
+				}
+				entry = previous
+			}
+		}
+	} else {
+		return scanErr
+	}
+	ids, err := m.appendEventStoreEntriesLocked(ctx, turn.RunID, turn.ID, []interface{}{entry})
+	if err != nil {
+		return err
+	}
+	seq, err := dao.NewSessionEventProjectionDAO(nil).Seq(ctx, db.Bun(), turn.SessionID, ids[0])
+	if err != nil {
+		return err
+	}
+	return db.RunInTx(ctx, nil, func(_ context.Context, tx dao.Tx) error {
+		if err := validateRuntimeLeaseTx(&tx, sessionDir, turn.SessionID); err != nil {
+			return err
+		}
+		openCount, err := dao.NewConversationTurnDAO(nil).OpenCount(ctx, &tx, turn.SessionID)
+		if err != nil {
+			return err
+		}
+		if openCount != 0 {
+			return fmt.Errorf("conversation turn already open for session %s", turn.SessionID)
+		}
+		if existing, stateErr := dao.NewConversationTurnDAO(nil).State(ctx, &tx, turn.SessionID, turn.ID); stateErr == nil {
+			if existing.Status == "open" {
+				return nil
+			}
+			return dao.NewConversationTurnDAO(nil).Reopen(ctx, &tx, &dao.ConversationTurnRecord{ID: turn.ID, SessionID: turn.SessionID, IntentID: turn.IntentID, Kind: turn.Kind, StartedAt: entry.Timestamp.Format(time.RFC3339Nano)})
+		} else if stateErr != dao.ErrNoRows {
+			return stateErr
+		}
+		return dao.NewConversationTurnDAO(nil).Insert(ctx, &tx, &dao.ConversationTurnRecord{ID: turn.ID, SessionID: turn.SessionID, IntentID: turn.IntentID, Kind: turn.Kind, Status: "open", StartSeq: seq, StartedAt: entry.Timestamp.Format(time.RFC3339Nano)})
+	})
+}
+
+func (m *Manager) endEventStoreTurnLocked(ctx context.Context, turnID, status, stopReason string) error {
+	sessionDir := m.sessionDir
+	if sessionDir == "" {
+		sessionDir = filepath.Dir(resolveDBPath(m.file))
+	}
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		return err
+	}
+	turnDAO := dao.NewConversationTurnDAO(db.Bun())
+	state, err := turnDAO.State(ctx, db.Bun(), m.header.ID, turnID)
+	if err == dao.ErrNoRows {
+		return fmt.Errorf("%w: %s", ErrConversationTurnNotOpen, turnID)
+	}
+	if err != nil {
+		return err
+	}
+	if state.Status != "open" {
+		return nil
+	}
+	endedAt := time.Now()
+	entryID := stableTurnEntryID(turnID, "end")
+	entry := TurnEndEntry{EntryBase: EntryBase{Type: EntryTurnEnd, ID: entryID, ParentID: m.leafID, Timestamp: endedAt}, TurnID: turnID, IntentID: state.IntentID, RunID: state.RunID, Status: normalizeTurnStatus(status), StopReason: stopReason}
+	if batches, scanErr := ReadCommittedEventBatches(ctx, sessionDir, m.header.ID); scanErr == nil {
+		for _, batch := range batches {
+			for _, record := range batch.Events {
+				if record.EventID != entryID {
+					continue
+				}
+				decoded, decodeErr := DecodeEventRecord(record)
+				if decodeErr != nil {
+					return decodeErr
+				}
+				previous, ok := decoded.(TurnEndEntry)
+				if !ok || previous.TurnID != turnID || previous.Status != normalizeTurnStatus(status) {
+					return fmt.Errorf("turn-end event %s conflicts with requested status", entryID)
+				}
+				entry = previous
+			}
+		}
+	} else {
+		return scanErr
+	}
+	ids, err := m.appendEventStoreEntriesLocked(ctx, state.RunID, turnID, []interface{}{entry})
+	if err != nil {
+		return err
+	}
+	seq, err := dao.NewSessionEventProjectionDAO(nil).Seq(ctx, db.Bun(), m.header.ID, ids[0])
+	if err != nil {
+		return err
+	}
+	return db.RunInTx(ctx, nil, func(_ context.Context, tx dao.Tx) error {
+		if err := validateRuntimeLeaseTx(&tx, sessionDir, m.header.ID); err != nil {
+			return err
+		}
+		current, err := dao.NewConversationTurnDAO(nil).State(ctx, &tx, m.header.ID, turnID)
+		if err != nil {
+			return err
+		}
+		if current.Status != "open" {
+			return nil
+		}
+		return dao.NewConversationTurnDAO(nil).Close(ctx, &tx, m.header.ID, turnID, normalizeTurnStatus(status), seq, entry.Timestamp.Format(time.RFC3339Nano))
+	})
 }
 
 // startConversationTurnTx is the shared transaction primitive used by both

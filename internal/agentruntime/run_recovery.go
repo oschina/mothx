@@ -301,6 +301,13 @@ func recoverOrphanedRun(ctx context.Context, sessionDir string, run session.Sess
 	if err != nil {
 		return "", fmt.Errorf("record recovery attempt for run %s: %w", run.ID, err)
 	}
+	// Reconcile any session EventStore batch that was left in-flight by the
+	// crashed owner before terminalizing the Run. The recovery lease is the only
+	// identity allowed to adopt an unresolved intent; a missing appended batch is
+	// kept blocked rather than being guessed into canonical history.
+	if err := session.ReconcileEventIntents(ctx, sessionDir, run.SessionID, run.ID, guard, nil); err != nil {
+		return "", failRunRecoveryAttemptContext(ctx, sessionDir, run, recovery.Attempt, fmt.Errorf("reconcile session event store for run %s: %w", run.ID, err))
+	}
 	if err := ctx.Err(); err != nil {
 		return "", failRunRecoveryAttemptContext(ctx, sessionDir, run, recovery.Attempt, err)
 	}

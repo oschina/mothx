@@ -64,6 +64,12 @@ func (d *ForkDAO) FindSession(ctx context.Context, executor bun.IDB, id string) 
 	err := executor.NewSelect().Table("sessions").Column("id", "cwd", "timestamp", "parent_session", "channel_type", "channel_id", "fork_boundary_seq", "seed_length", "fork_kind").Where("id = ?", id).Limit(1).Scan(ctx, r)
 	return r, err
 }
+
+func (d *ForkDAO) ChildSessionIDs(ctx context.Context, executor bun.IDB, parentID string) ([]string, error) {
+	var ids []string
+	err := executor.NewSelect().Table("sessions").Column("id").Where("parent_session = ?", parentID).OrderExpr("timestamp ASC").Scan(ctx, &ids)
+	return ids, err
+}
 func (d *ForkDAO) ActiveRunCount(ctx context.Context, executor bun.IDB, sessionID string, statuses []string) (int, error) {
 	var n int
 	err := executor.NewSelect().Table("session_runs").ColumnExpr("COUNT(*)").Where("session_id = ? AND status IN (?)", sessionID, bun.In(statuses)).Scan(ctx, &n)
@@ -86,10 +92,10 @@ func (d *ForkDAO) EntryAtSeq(ctx context.Context, executor bun.IDB, sessionID st
 }
 func (d *ForkDAO) Fingerprint(ctx context.Context, executor bun.IDB, sessionID string, statuses []string) (ForkFingerprintRecord, error) {
 	var r ForkFingerprintRecord
-	if err := executor.NewSelect().Table("entries").ColumnExpr("COALESCE(MAX(seq), 0)").Where("session_id = ?", sessionID).Scan(ctx, &r.MaxSeq); err != nil {
+	if err := executor.NewRaw("SELECT COALESCE(MAX(seq), 0) FROM (SELECT seq FROM entries WHERE session_id = ? UNION ALL SELECT seq FROM session_event_projections WHERE session_id = ?)", sessionID, sessionID).Scan(ctx, &r.MaxSeq); err != nil {
 		return r, err
 	}
-	if err := executor.NewSelect().Table("entries").ColumnExpr("COALESCE((SELECT id FROM entries WHERE session_id = ? ORDER BY seq DESC LIMIT 1), '')", sessionID).Scan(ctx, &r.Leaf); err != nil {
+	if err := executor.NewRaw("SELECT COALESCE((SELECT id FROM (SELECT id, seq FROM entries WHERE session_id = ? UNION ALL SELECT id, seq FROM session_event_projections WHERE session_id = ?) ORDER BY seq DESC LIMIT 1), '')", sessionID, sessionID).Scan(ctx, &r.Leaf); err != nil {
 		return r, err
 	}
 	if err := executor.NewSelect().Table("conversation_turns").ColumnExpr("COUNT(*)").Where("session_id = ? AND status = ?", sessionID, "open").Scan(ctx, &r.OpenTurns); err != nil {

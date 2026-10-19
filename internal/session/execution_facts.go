@@ -20,6 +20,11 @@ const (
 	RuntimeLeasePurposeRecovery  RuntimeLeasePurpose = "recovery"
 	RuntimeLeasePurposeMutation  RuntimeLeasePurpose = "mutation"
 	RuntimeLeasePurposeFork      RuntimeLeasePurpose = "fork"
+	// RuntimeLeasePurposeLegacy is the compatibility reservation taken by calls
+	// that reach the Session Manager without a Runtime execution lease. It is a
+	// short reservation like mutation/fork: it never binds a Run and never
+	// grants execution authority. See AcquireContentWriteReservation.
+	RuntimeLeasePurposeLegacy RuntimeLeasePurpose = "legacy"
 )
 
 // RuntimeLeaseSnapshot is an immutable database view of one Session lease.

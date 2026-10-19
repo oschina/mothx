@@ -435,6 +435,36 @@ func (s *Server) HandleSubmitRun(w http.ResponseWriter, r *http.Request) {
 	// Note: runtimeRelease is intentionally NOT deferred here; ownership
 	// transfers to the background goroutine.
 
+	// Reserve the pool drain slot before anything durable is written. The run
+	// becomes an active ExecutionRuntime entry once admission succeeds, and only
+	// the background executor terminalizes it, so a Shutdown slipping in between
+	// the durable admit and the goroutine hand-off would leave a live Run that
+	// nothing drains and that keeps appending to a session directory its own
+	// process is already closing. Reserving first makes that window impossible:
+	// Shutdown waits for this request either to launch the executor or to give
+	// the slot back. A refused reserve means draining, so no Run has been
+	// admitted yet and rejecting here costs nothing.
+	drainRelease, drainOK := s.pool.ReserveBackground()
+	if !drainOK {
+		sess.Unlock()
+		runtimeRelease()
+		writeError(w, http.StatusServiceUnavailable, "session pool is shutting down", "server_shutdown")
+		return
+	}
+	// Fold the drain slot into the same once-guarded release chain as the
+	// runtime pin and the concurrency slot. Every admission error path below
+	// already calls runtimeRelease, so each of them hands the slot back too;
+	// the successful path transfers the whole chain to the executor goroutine.
+	// handOffRelease is the outermost release and the only one the pool drain
+	// waits on. It must stay separate from runtimeRelease: the executor calls
+	// runtimeRelease from a defer registered before its artifact-collector close
+	// and before cancel(), so chaining the drain slot there would let Shutdown
+	// return while the run still removes its dynamic tool or cancels its context,
+	// and later while FinalizeRun reads the canonical row. The executor therefore
+	// calls this last, after every deferred session write has happened.
+	handOffRelease := drainRelease
+	runtimeRelease = chainReleases(runtimeRelease, drainRelease)
+
 	// The runtime lock is the admission guard for concurrent runs. The session
 	// mutex is also used by short-lived capability/SkillHub refreshes, so wait
 	// for it after admission instead of turning that harmless overlap into a
@@ -799,10 +829,42 @@ func (s *Server) HandleSubmitRun(w http.ResponseWriter, r *http.Request) {
 	if s.runManager != nil {
 		_ = s.runManager.Register(session.SessionRun{ID: runID, SessionID: sess.ID, IntentID: intent.ID, RetryOf: retryOf, Attempt: attempt})
 	}
+	// Hand the run to a pool-tracked executor. The reservation taken above is
+	// what makes this safe: the slot stays held from before durable admission
+	// until this statement, so Shutdown can neither slip in between the admit and
+	// the hand-off nor return while this Run is still executing. Ownership of the
+	// slot now splits across two releases with a fixed nesting: the runtime pin
+	// and the concurrency slot travel inside runtimeRelease, while the drain slot
+	// travels alone inside handOffRelease. The executor registers handOffRelease
+	// first, so it is the outermost defer and only hands the drain slot back after
+	// runtimeRelease and every later deferred step have run.
+	//
+	// LaunchBackground deliberately does not hand the run the pool's stop
+	// signal the way GoCtx does for optional work: cancelling a live Run from the
+	// drain would abandon its fenced execution lease instead of terminalizing it.
+	// Shutdown waits here and then offers the session runtime a graceful cancel.
+	launched := false
 	if !forceAgentLoopFromRequest(r) && len(input.Resources) == 0 && s.responsesBackgroundEnabled() && strings.EqualFold(providerName, configuredProviderName) {
-		go s.executeResponsesBackgroundRun(sess, runID, runtimeRelease, currentModel, mode, msg, req.Transcript)
+		launched = s.pool.LaunchBackground(handOffRelease, func() {
+			s.executeResponsesBackgroundRun(sess, runID, runtimeRelease, handOffRelease, currentModel, mode, msg, req.Transcript)
+		})
 	} else {
-		go s.executeBackgroundRun(sess, runID, intent.ID, runtimeRelease, currentProvider, currentModel, providerName, runSource, mode, msg, req.Transcript)
+		launched = s.pool.LaunchBackground(handOffRelease, func() {
+			s.executeBackgroundRun(sess, runID, intent.ID, runtimeRelease, handOffRelease, currentProvider, currentModel, providerName, runSource, mode, msg, req.Transcript)
+		})
+	}
+	if !launched {
+		// Unreachable while ReserveBackground succeeded: the pool is not
+		// draining, so LaunchBackground cannot refuse. Fail closed rather than
+		// answer 202 for a Run that would never be executed.
+		sess.finishRun(runID)
+		sess.Unlock()
+		runtimeRelease()
+		info := submitErrorInfo(session.ErrRuntimeLeaseLost, http.StatusServiceUnavailable, "run_handoff_failed", "server_error", agentruntime.FailureTransient, agentruntime.PhaseAdmission, "run.error.sessionPoolUnavailable", "The session pool stopped accepting work before the run could start.", agentruntime.RetryReconcile, true)
+		info.RunID = runID
+		info.IntentID = intent.ID
+		writeErrorInfo(w, http.StatusServiceUnavailable, info)
+		return
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
@@ -817,7 +879,7 @@ func (s *Server) HandleSubmitRun(w http.ResponseWriter, r *http.Request) {
 // executeBackgroundRun runs the agent in a background goroutine and publishes
 // all events via the EventBroker. It is responsible for releasing the session
 // lock and runtime lock when done.
-func (s *Server) executeBackgroundRun(sess *APISession, runID, intentID string, runtimeRelease func(), runProvider provider.Provider, model *provider.Model, providerName, source, mode string, msg provider.Message, transcript bool) {
+func (s *Server) executeBackgroundRun(sess *APISession, runID, intentID string, runtimeRelease, handOffRelease func(), runProvider provider.Provider, model *provider.Model, providerName, source, mode string, msg provider.Message, transcript bool) {
 	terminalStatus := "failed"
 	terminalErrMsg := ""
 	firstTurn := len(sess.Manager.GetMessages()) == 0
@@ -827,6 +889,9 @@ func (s *Server) executeBackgroundRun(sess *APISession, runID, intentID string, 
 	// below performs these steps itself and sets finalized to skip this fallback.
 	durableLifecycle := sess.isDurableRun(runID)
 	finalized := false
+	// Registered first so it runs last: the pool drain slot is only handed back
+	// after every deferred write below has completed.
+	defer handOffRelease()
 	defer func() {
 		if !finalized {
 			terminalData := map[string]any{}
@@ -956,16 +1021,20 @@ func (s *Server) executeBackgroundRun(sess *APISession, runID, intentID string, 
 	// Session title generation is best-effort and must not delay the run
 	// completion events published above.
 	if firstTurn && terminalStatus == "completed" {
-		if s.pool == nil {
-			// A server without a session pool is only used by small embedded
-			// adapters/tests; preserve the best-effort behavior there.
-			s.generateSessionTitle(sess, model)
-		} else {
-			// If shutdown won the race with the execution goroutine, skip this
-			// optional write rather than starting untracked work after the pool has
-			// stopped accepting background tasks.
-			_ = s.pool.Go(func() { s.generateSessionTitle(sess, model) })
-		}
+		// The task must be pool-tracked even when this Server has no pool at all:
+		// an untracked goroutine outlives the run that spawned it, so it appends
+		// its title entry into the session database and EventStore after the
+		// caller has already returned. Nothing drains it — neither server
+		// shutdown nor a test's temporary-directory cleanup — which is how a
+		// finished request kept writing manifest.json into a directory that was
+		// already being removed. `(*SessionPool)(nil).Go` reports false for
+		// exactly this case, so a pool-less server skips the optional write
+		// instead of inventing an undrainable one. When shutdown won the race
+		// with the execution goroutine the same check skips the write too.
+		// GoCtx also hands the task the shutdown context: a title call parked in
+		// the provider is cancelled by the very drain waiting for it, instead of
+		// holding Shutdown hostage until its own internal timeout expires.
+		_ = s.pool.GoCtx(func(ctx context.Context) { s.generateSessionTitle(ctx, sess, model) })
 	}
 }
 
@@ -1044,9 +1113,22 @@ func (s *Server) runRetriesPersistedMessage(runID string, sess *APISession, mess
 	return false
 }
 
-func (s *Server) generateSessionTitle(sess *APISession, model *provider.Model) {
+// generateSessionTitle writes the optional display title for a freshly started
+// session. ctx is the pool's shutdown-derived context when called through
+// GoCtx: cancelling it must stop the provider call, because the drain that
+// cancels it is simultaneously waiting for this task to return.
+func (s *Server) generateSessionTitle(ctx context.Context, sess *APISession, model *provider.Model) {
 	if s == nil {
 		log.Printf("[serve] session title generation skipped: server is nil")
+		return
+	}
+	if s.pool.Draining() {
+		// The pool accepts this task and then drains; being handed over after
+		// Shutdown began still means the process is leaving. Appending the title
+		// entry now would write into the session database and EventStore once no
+		// caller is left to observe it, which is exactly the untracked late write
+		// this task exists to avoid.
+		log.Printf("[serve] session title generation skipped: session=%s pool is draining", sess.ID)
 		return
 	}
 	if sess == nil {
@@ -1076,11 +1158,19 @@ func (s *Server) generateSessionTitle(sess *APISession, model *provider.Model) {
 	}
 
 	log.Printf("[serve] generating session title: session=%s provider=%s api=%s model=%s", sess.ID, provider.Name(), provider.API(), model.ID)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	name, err := (title.Generator{Provider: provider, Model: model}).Generate(ctx, sess.Manager.GetMessages())
 	if err != nil {
 		log.Printf("[serve] session title generation failed: session=%s provider=%s model=%s: %v", sess.ID, provider.Name(), model.ID, err)
+		return
+	}
+	if ctx.Err() != nil {
+		// The provider call was cut short by shutdown. `Generate` still returns a
+		// usable fallback title taken from the first user message, so without this
+		// check a cancelled task would perform exactly the late durable write it
+		// was cancelled to avoid. Best-effort work stops when its owner stops.
+		log.Printf("[serve] session title generation aborted: session=%s: %v", sess.ID, ctx.Err())
 		return
 	}
 	if name == "" {

@@ -57,7 +57,7 @@ func (d *ConversationTurnDAO) Entry(ctx context.Context, executor bun.IDB, id st
 
 func (d *ConversationTurnDAO) CurrentLeaf(ctx context.Context, executor bun.IDB, sessionID, excludedType string) (string, error) {
 	var id string
-	err := executor.NewSelect().Table("entries").Column("id").Where("session_id = ? AND type <> ?", sessionID, excludedType).OrderExpr("seq DESC").Limit(1).Scan(ctx, &id)
+	err := executor.NewRaw("SELECT id FROM (SELECT id, seq FROM entries WHERE session_id = ? AND type <> ? UNION ALL SELECT id, seq FROM session_event_projections WHERE session_id = ? AND type <> ?) ORDER BY seq DESC LIMIT 1", sessionID, excludedType, sessionID, excludedType).Scan(ctx, &id)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -67,7 +67,7 @@ func (d *ConversationTurnDAO) CurrentLeaf(ctx context.Context, executor bun.IDB,
 func (d *ConversationTurnDAO) State(ctx context.Context, executor bun.IDB, sessionID, turnID string) (ConversationTurnState, error) {
 	var state ConversationTurnState
 	err := executor.NewSelect().TableExpr("conversation_turns AS ct").
-		ColumnExpr("ct.intent_id, ct.status, COALESCE((SELECT json_extract(e.data, '$.runId') FROM entries e WHERE e.session_id = ct.session_id AND e.type = 'turn_start' AND json_extract(e.data, '$.turnId') = ct.id ORDER BY e.seq DESC LIMIT 1), '') AS run_id").
+		ColumnExpr("ct.intent_id, ct.status, COALESCE((SELECT json_extract(e.data, '$.runId') FROM entries e WHERE e.session_id = ct.session_id AND e.type = 'turn_start' AND json_extract(e.data, '$.turnId') = ct.id ORDER BY e.seq DESC LIMIT 1), (SELECT p.run_id FROM session_event_projections p WHERE p.session_id = ct.session_id AND p.type = 'turn_start' AND p.turn_id = ct.id ORDER BY p.seq DESC LIMIT 1), '') AS run_id").
 		Where("ct.id = ? AND ct.session_id = ?", turnID, sessionID).Limit(1).Scan(ctx, &state)
 	return state, err
 }
@@ -94,6 +94,45 @@ func (d *ConversationTurnDAO) Close(ctx context.Context, executor bun.IDB, sessi
 		Set("status = ?", status).Set("end_seq = ?", endSeq).Set("ended_at = ?", endedAt).
 		Where("id = ? AND session_id = ? AND status = ?", turnID, sessionID, "open").Exec(ctx)
 	return err
+}
+
+func (d *ConversationTurnDAO) UpdateStartSeq(ctx context.Context, executor bun.IDB, sessionID, turnID string, startSeq int64) error {
+	_, err := executor.NewUpdate().Model((*ConversationTurnRecord)(nil)).Set("start_seq = ?", startSeq).Where("session_id = ? AND id = ?", sessionID, turnID).Exec(ctx)
+	return err
+}
+
+// TranslateBoundaries moves one turn's boundary sequences into the sequence
+// space of a session's new content store. It is used when the transcript leaves
+// the legacy `entries` table: the recorded numbers stop addressing anything, so
+// both bounds must move in one statement or a reader observes a half-translated
+// interval.
+//
+// The identity guard makes the translation idempotent and unsafe to double-apply
+// at once: a row whose bounds already equal the target is not counted, so a
+// replayed migration reports zero rows instead of drifting the interval. Status,
+// timing, and every other column stay untouched — the turn's lifecycle facts are
+// independent of where its content bytes live.
+func (d *ConversationTurnDAO) TranslateBoundaries(ctx context.Context, executor bun.IDB, sessionID, turnID string, startSeq int64, endSeq *int64) (int, error) {
+	set := executor.NewUpdate().Model((*ConversationTurnRecord)(nil)).Set("start_seq = ?", startSeq)
+	if endSeq == nil {
+		set = set.Set("end_seq = NULL")
+	} else {
+		set = set.Set("end_seq = ?", *endSeq)
+	}
+	if endSeq == nil {
+		set = set.Where("id = ? AND session_id = ? AND (start_seq <> ? OR end_seq IS NOT NULL)", turnID, sessionID, startSeq)
+	} else {
+		set = set.Where("id = ? AND session_id = ? AND (start_seq <> ? OR end_seq IS NULL OR end_seq <> ?)", turnID, sessionID, startSeq, *endSeq)
+	}
+	result, err := set.Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
 func (d *ConversationTurnDAO) List(ctx context.Context, sessionID string) ([]ConversationTurnRecord, error) {

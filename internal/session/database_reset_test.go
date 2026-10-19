@@ -39,6 +39,46 @@ func TestResetDatabaseCreatesFreshDatabaseWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestResetDatabaseArchivesSessionEventStore(t *testing.T) {
+	sessionDir := t.TempDir()
+	manager := New("/tmp/event-reset", sessionDir)
+	if err := manager.InitWithID("event-reset-session"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewEventStore(sessionDir, "event-reset-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append("batch-1", "event-reset-session", "", "", []EventRecord{{EventID: "event-1", Kind: "message", Payload: []byte(`{}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := CloseDatabases(); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ResetDatabase(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archived string
+	for _, item := range report.Archived {
+		if filepath.Base(item.From) == eventStoreDirectoryName {
+			archived = item.To
+		}
+	}
+	if archived == "" {
+		t.Fatalf("archived = %#v, want the session event store", report.Archived)
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, eventStoreDirectoryName)); !os.IsNotExist(err) {
+		t.Fatalf("fresh event store directory still exists: %v", err)
+	}
+	if _, err := os.Stat(archived); err != nil {
+		t.Fatalf("archived event store missing: %v", err)
+	}
+	if err := CloseDatabases(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResetDatabaseMovesDatabaseAndPreservesPreviousSessions(t *testing.T) {
 	workDir := t.TempDir()
 	sessionDir := t.TempDir()

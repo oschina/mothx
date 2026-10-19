@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2321,6 +2322,165 @@ func TestSessionPool_EvictIdleKeepsPinnedSession(t *testing.T) {
 	pool.evictIdle()
 	if got := pool.Get("sess-1"); got != sess {
 		t.Fatal("pinned session should not be evicted")
+	}
+}
+
+// TestSessionPool_ReserveBackgroundBlocksShutdown pins the drain contract that
+// the submit handlers rely on: a reservation counts against Shutdown exactly
+// like a running task, so admitting a durable Run and only then handing it to an
+// executor cannot race a shutdown into leaving a live Run undrained.
+func TestSessionPool_ReserveBackgroundBlocksShutdown(t *testing.T) {
+	pool := NewSessionPool(0, 0)
+	release, ok := pool.ReserveBackground()
+	if !ok {
+		t.Fatal("reserve background on a fresh pool")
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- pool.Shutdown(context.Background()) }()
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("Shutdown returned while a drain slot was reserved: %v", err)
+	case <-time.After(75 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("shutdown session runtime: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown did not return after the reservation was released")
+	}
+}
+
+// TestSessionPool_LaunchBackgroundTransfersReservation proves the hand-off is
+// continuous: once launched, the slot belongs to the goroutine, so the caller
+// returning from its own work must not let Shutdown finish early, and the task's
+// release (which is the same once-guarded chain the Run uses) frees it.
+func TestSessionPool_LaunchBackgroundTransfersReservation(t *testing.T) {
+	pool := NewSessionPool(0, 0)
+	release, ok := pool.ReserveBackground()
+	if !ok {
+		t.Fatal("reserve background on a fresh pool")
+	}
+
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	var chained sync.Once
+	chainedRelease := func() { chained.Do(release) }
+	if !pool.LaunchBackground(chainedRelease, func() {
+		close(started)
+		time.Sleep(75 * time.Millisecond)
+		chainedRelease()
+		close(finished)
+	}) {
+		t.Fatal("launch background on a fresh pool")
+	}
+	<-started
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- pool.Shutdown(context.Background()) }()
+	select {
+	case <-finished:
+		t.Fatal("task finished while Shutdown waited")
+	case <-time.After(25 * time.Millisecond):
+	}
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("shutdown session runtime: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown did not return after the launched task released its slot")
+	}
+}
+
+// The launch must not run the task inline. A submit handler hands over a Run
+// that still holds the session lock and the runtime admission, so executing it
+// on the caller's goroutine would deadlock the HTTP request against its own
+// drain slot and delay the 202 response until the Run finished.
+func TestSessionPool_LaunchBackgroundDoesNotRunInline(t *testing.T) {
+	pool := NewSessionPool(0, 0)
+	release, ok := pool.ReserveBackground()
+	if !ok {
+		t.Fatal("reserve background on a fresh pool")
+	}
+
+	entered := make(chan struct{})
+	blocked := make(chan struct{})
+	if !pool.LaunchBackground(release, func() {
+		close(entered)
+		<-blocked
+	}) {
+		t.Fatal("launch background on a fresh pool")
+	}
+	<-entered
+	select {
+	case <-blocked:
+		t.Fatal("launched task ran inline while the caller was still blocked")
+	default:
+	}
+	close(blocked)
+	if err := pool.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown session pool: %v", err)
+	}
+}
+
+// A refused launch must hand the reservation back rather than leak it, or the
+// drain would wedge forever on a slot no goroutine will ever release. This is
+// the fail-closed half of the submit contract: when the pool is already
+// draining, ReserveBackground refuses before any Run is admitted.
+func TestSessionPool_LaunchBackgroundRefusalReleasesReservation(t *testing.T) {
+	pool := NewSessionPool(0, 0)
+	var releases atomic.Int32
+	release, ok := pool.ReserveBackground()
+	if !ok {
+		t.Fatal("reserve background on a fresh pool")
+	}
+	countRelease := func() {
+		releases.Add(1)
+		release()
+	}
+
+	// Drain while the reservation is outstanding so the launch must refuse.
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- pool.Shutdown(context.Background()) }()
+	for !pool.Draining() {
+		time.Sleep(time.Millisecond)
+	}
+	if pool.LaunchBackground(countRelease, func() { t.Error("task ran on a draining pool") }) {
+		t.Fatal("LaunchBackground succeeded on a draining pool")
+	}
+	if got := releases.Load(); got != 1 {
+		t.Fatalf("refused launch released the reservation %d times, want 1", got)
+	}
+	release() // idempotent chain: the caller's own cleanup must not double-count
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("shutdown session runtime: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown did not return after the refused reservation was released")
+	}
+}
+
+// Once draining, both entry points must refuse so a caller never hands work to a
+// pool whose drain has already passed its wait.
+func TestSessionPool_ReserveBackgroundRefusesWhileDraining(t *testing.T) {
+	pool := NewSessionPool(0, 0)
+	if err := pool.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown session runtime: %v", err)
+	}
+	if _, ok := pool.ReserveBackground(); ok {
+		t.Fatal("ReserveBackground succeeded on a drained pool")
+	}
+	release, _ := pool.ReserveBackground()
+	release()
+	if pool.Draining() != true {
+		t.Fatal("draining pool reported itself as accepting work")
 	}
 }
 

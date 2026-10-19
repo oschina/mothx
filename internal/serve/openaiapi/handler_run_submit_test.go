@@ -168,6 +168,206 @@ func (p *historyRecordingProvider) recordedCalls() []provider.ChatParams {
 	return append([]provider.ChatParams(nil), p.calls...)
 }
 
+// blockingTitleProvider never returns from Chat, so a title-generation task
+// using it stays inside the pool's background accounting until the caller
+// cancels the context the pool handed the task.
+type blockingTitleProvider struct {
+	models []*provider.Model
+	called chan struct{}
+}
+
+func (p *blockingTitleProvider) Chat(ctx context.Context, _ provider.ChatParams) <-chan provider.StreamEvent {
+	close(p.called)
+	ch := make(chan provider.StreamEvent)
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch
+}
+
+func (p *blockingTitleProvider) Name() string              { return "blocking-title" }
+func (p *blockingTitleProvider) API() string               { return "openai-chat" }
+func (p *blockingTitleProvider) Models() []*provider.Model { return p.models }
+func (p *blockingTitleProvider) GetModel(id string) *provider.Model {
+	for _, m := range p.models {
+		if m.ID == id {
+			return m
+		}
+	}
+	return nil
+}
+
+// TestSessionTitleTaskIsDrainable pins the ownership of best-effort post-run
+// work. Session title generation runs after the run has already finalized, so
+// it appends its entry into the session database and the EventStore while the
+// HTTP caller is long gone. Spawning it untracked made that write undrainable:
+// neither server shutdown nor a test's temporary-directory cleanup waited for
+// it, so a finished request kept publishing `manifest.json` into a directory
+// being removed and TempDir cleanup failed with "directory not empty".
+//
+// The contract is therefore that the task goes through the pool's tracked
+// background boundary, which Shutdown drains, and that a server without a pool
+// skips the optional write rather than inventing an untracked one.
+// releaseOnCancelTitleProvider blocks until the task context is cancelled and
+// then closes `released`. It proves both halves of the contract at once: the
+// drain really waited for an in-flight task, and the task was interruptible
+// rather than parked until its own internal timeout.
+type releaseOnCancelTitleProvider struct {
+	models   []*provider.Model
+	called   chan struct{}
+	released chan struct{}
+}
+
+func (p *releaseOnCancelTitleProvider) Chat(ctx context.Context, _ provider.ChatParams) <-chan provider.StreamEvent {
+	close(p.called)
+	ch := make(chan provider.StreamEvent)
+	go func() {
+		defer close(ch)
+		<-ctx.Done()
+		close(p.released)
+	}()
+	return ch
+}
+
+// cancelledTitleProvider fails immediately, the way a request whose context was
+// already cancelled does. Title generation must not fall back to the first user
+// message in that case: a fallback would be exactly the late durable write that
+// a draining server has no caller left to observe.
+type cancelledTitleProvider struct {
+	models []*provider.Model
+	called chan struct{}
+}
+
+func (p *cancelledTitleProvider) Chat(ctx context.Context, _ provider.ChatParams) <-chan provider.StreamEvent {
+	close(p.called)
+	ch := make(chan provider.StreamEvent, 1)
+	err := ctx.Err()
+	if err == nil {
+		err = context.Canceled
+	}
+	ch <- provider.StreamEvent{Type: provider.StreamError, Error: err}
+	close(ch)
+	return ch
+}
+
+func (p *cancelledTitleProvider) Name() string              { return "cancelled-title" }
+func (p *cancelledTitleProvider) API() string               { return "openai-chat" }
+func (p *cancelledTitleProvider) Models() []*provider.Model { return p.models }
+func (p *cancelledTitleProvider) GetModel(id string) *provider.Model {
+	for _, m := range p.models {
+		if m.ID == id {
+			return m
+		}
+	}
+	return nil
+}
+
+func (p *releaseOnCancelTitleProvider) Name() string              { return "release-on-cancel-title" }
+func (p *releaseOnCancelTitleProvider) API() string               { return "openai-chat" }
+func (p *releaseOnCancelTitleProvider) Models() []*provider.Model { return p.models }
+func (p *releaseOnCancelTitleProvider) GetModel(id string) *provider.Model {
+	for _, m := range p.models {
+		if m.ID == id {
+			return m
+		}
+	}
+	return nil
+}
+
+func TestSessionTitleTaskIsDrainable(t *testing.T) {
+	srv := newTestServer(t)
+	srv.cfg.DefaultMode = "yolo"
+	srv.pool.Stop()
+
+	settings := config.DefaultSettings()
+	settings.SessionDir = srv.settings.GetSessionDir()
+	// New(cwd, sessionDir): the work directory owns the session, the settings
+	// directory holds the shared database and the EventStore.
+	mgr := session.New(srv.cfg.GetWorkDir(), settings.SessionDir)
+	if err := mgr.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.AppendMessage(provider.NewUserMessage("随便聊点什么")); err != nil {
+		t.Fatal(err)
+	}
+	sess := &APISession{ID: mgr.GetHeader().ID, Manager: mgr, WorkDir: srv.cfg.GetWorkDir()}
+
+	// No pool: the best-effort write is skipped instead of leaking a goroutine.
+	poolless := &Server{settings: settings}
+	poolless.generateSessionTitle(context.Background(), sess, &provider.Model{ID: "m1"})
+	if title, _, err := session.LatestSessionTitle(settings.SessionDir, sess.ID); err != nil || strings.TrimSpace(title) != "" {
+		t.Fatalf("pool-less server wrote a session title: title=%q err=%v", title, err)
+	}
+
+	// A direct call with an already-cancelled context performs no write: this is
+	// the hand-over-lost-to-shutdown case, where the pool accepted the task and
+	// drained before the task reached the provider.
+	cancelledCtx, cancelCancelled := context.WithCancel(context.Background())
+	cancelCancelled()
+	interrupted := &cancelledTitleProvider{
+		models: []*provider.Model{{ID: "m1", Name: "Model 1", ContextWindow: 32768, MaxTokens: 2048}},
+		called: make(chan struct{}),
+	}
+	srv.provider = interrupted
+	srv.model = interrupted.models[0]
+	srv.generateSessionTitle(cancelledCtx, sess, srv.model)
+	select {
+	case <-interrupted.called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled title task never reached the provider")
+	default:
+	}
+	if title, _, err := session.LatestSessionTitle(settings.SessionDir, sess.ID); err != nil || strings.TrimSpace(title) != "" {
+		t.Fatalf("cancelled title task persisted a title: title=%q err=%v", title, err)
+	}
+
+	// With a pool: the task is tracked, so Shutdown waits for it, and the context
+	// the pool supplies cancels it so the wait cannot outlast the shutdown.
+	p := &releaseOnCancelTitleProvider{
+		models:   []*provider.Model{{ID: "m1", Name: "Model 1", ContextWindow: 32768, MaxTokens: 2048}},
+		called:   make(chan struct{}),
+		released: make(chan struct{}),
+	}
+	srv.provider = p
+	srv.model = p.models[0]
+	tracked := NewSessionPool(0, 0)
+	srv.pool = tracked
+	if !srv.pool.GoCtx(func(ctx context.Context) { srv.generateSessionTitle(ctx, sess, srv.model) }) {
+		t.Fatal("pool refused a background task before it was stopped")
+	}
+	select {
+	case <-p.called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("title generation task never reached the provider")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		tracked.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pool shutdown did not drain the in-flight title task")
+	}
+	select {
+	case <-p.released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pool shutdown did not cancel the in-flight title provider call")
+	}
+	// The drained task must not have written either. A title entry lands in the
+	// shared database and the EventStore, so a task handed over while draining
+	// would recreate exactly the late write this test exists to prevent.
+	if err := session.CloseDatabases(); err != nil {
+		t.Fatal(err)
+	}
+	if title, _, err := session.LatestSessionTitle(settings.SessionDir, sess.ID); err != nil || strings.TrimSpace(title) != "" {
+		t.Fatalf("blocked title task persisted a title: title=%q err=%v", title, err)
+	}
+}
+
 // TestSubmitRunReplaysSessionHistory verifies that a background run submitted
 // through POST /api/sessions/{id}/runs (the WebUI chat path) loads the
 // persisted session history into the fresh agent — including after a runtime
@@ -289,6 +489,24 @@ func newHistoryRecordingServer(t *testing.T) (*Server, *historyRecordingProvider
 	p := newHistoryRecordingProvider()
 	srv.provider = p
 	srv.model = p.models[0]
+	// Drain the pool when the test ends. A submit hands its Run to a
+	// pool-tracked executor and returns 202 while the Run is still in flight, so
+	// waitForProviderCall observing the first provider call does not mean the Run
+	// terminalized. Without this cleanup the previous iteration's live Run keeps
+	// appending event batches and manifest segments into a session directory that
+	// t.TempDir() has already removed, and the next -count iteration reusing the
+	// same fixed session ID then terminalizes a Run whose EventStore bytes are
+	// gone ("committed event intent has no event batch"). Draining here makes the
+	// harness own the wait instead of each test remembering a defer that is easy
+	// to omit; tests that already call pool.Stop() are unaffected because
+	// Shutdown is once-guarded.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.pool.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown session pool: %v", err)
+		}
+	})
 	return srv, p
 }
 

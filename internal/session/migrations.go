@@ -10,7 +10,7 @@ import (
 	"github.com/oschina/mothx/internal/dao"
 )
 
-const currentSchemaVersion = 44
+const currentSchemaVersion = 48
 
 type schemaMigration struct {
 	version int
@@ -636,6 +636,91 @@ var schemaMigrations = []schemaMigration{
 		}
 		_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_worktrees_project ON worktrees(project_id, updated_at)`)
 		return err
+	}},
+	{version: 45, name: "create_session_event_intents", apply: func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS session_event_intents (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+			run_id TEXT NOT NULL DEFAULT '',
+			turn_id TEXT NOT NULL DEFAULT '',
+			seq_from INTEGER NOT NULL,
+			seq_to INTEGER NOT NULL,
+			digest TEXT NOT NULL,
+			state TEXT NOT NULL,
+			owner_instance_id TEXT NOT NULL DEFAULT '',
+			lease_epoch INTEGER NOT NULL DEFAULT 0,
+			lease_token_hash TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			last_error TEXT NOT NULL DEFAULT ''
+		)`); err != nil {
+			return fmt.Errorf("create session event intents: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_session_event_intents_recovery
+			ON session_event_intents(session_id, state, updated_at)`); err != nil {
+			return fmt.Errorf("index session event intents for recovery: %w", err)
+		}
+		_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_session_event_intents_run
+			ON session_event_intents(run_id) WHERE run_id <> ''`)
+		return err
+	}},
+	{version: 46, name: "create_session_event_projections", apply: func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS session_event_projections (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+			seq INTEGER NOT NULL,
+			type TEXT NOT NULL,
+			parent_id TEXT,
+			run_id TEXT NOT NULL DEFAULT '',
+			turn_id TEXT NOT NULL DEFAULT '',
+			timestamp TEXT NOT NULL,
+			batch_id TEXT NOT NULL,
+			UNIQUE(session_id, seq)
+		)`); err != nil {
+			return fmt.Errorf("create session event projections: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_session_event_projections_type
+			ON session_event_projections(session_id, type, timestamp)`); err != nil {
+			return fmt.Errorf("index session event projections by type: %w", err)
+		}
+		_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_session_event_projections_batch
+			ON session_event_projections(batch_id)`)
+		return err
+	}},
+	{version: 47, name: "add_session_content_store_mode", apply: func(tx *sql.Tx) error {
+		if err := addColumnIfMissing(tx, "sessions", "content_store", "TEXT NOT NULL DEFAULT 'sqlite'"); err != nil {
+			return err
+		}
+		exists, err := tableExists(tx, "sub_session")
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+		return addColumnIfMissing(tx, "sub_session", "content_store", "TEXT NOT NULL DEFAULT 'sqlite'")
+	}},
+	// Version 47 recorded itself as applied on databases where the sub_session
+	// half of the change never landed, so the version bookkeeping alone is no
+	// longer proof that the content store column exists. requiredSchema treats a
+	// missing column as unrecoverable and internal/db answers by backing the
+	// database up and rebuilding it empty, which would discard every session.
+	// Converge both tables here instead: this runs after 47 for fresh upgrades
+	// and re-checks the columns for any database 47 left partial.
+	{version: 48, name: "converge_content_store_columns", apply: func(tx *sql.Tx) error {
+		for _, table := range []string{"sessions", "sub_session"} {
+			exists, err := tableExists(tx, table)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				continue
+			}
+			if err := addColumnIfMissing(tx, table, "content_store", "TEXT NOT NULL DEFAULT 'sqlite'"); err != nil {
+				return err
+			}
+		}
+		return nil
 	}},
 }
 
