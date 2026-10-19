@@ -3,7 +3,6 @@ package agentruntime
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
@@ -166,12 +165,13 @@ func TestAttachSessionResourcesDefersMigrationForActiveRun(t *testing.T) {
 	}
 }
 
-// TestAttachSessionResourcesFailsClosedOnUnhealthyEventStore pins the migration
-// contract for genuinely unsafe data: a legacy session whose EventStore already
-// holds bytes SQLite cannot account for must refuse the export instead of
-// attaching on top of content no intent authorizes. This is the deliberate new
-// failure surface the unified entry adds to ACP/WebUI/Channel attaches.
-func TestAttachSessionResourcesFailsClosedOnUnhealthyEventStore(t *testing.T) {
+// TestAttachSessionResourcesHealsStaleEventStoreBeforeExport pins the
+// self-healing export contract: a legacy session (content store still sqlite)
+// whose EventStore holds bytes SQLite cannot account for — a previous
+// interrupted export — must discard them and migrate cleanly instead of wedging
+// the attach. The legacy rows are authoritative, so the orphan bytes are
+// disposable.
+func TestAttachSessionResourcesHealsStaleEventStoreBeforeExport(t *testing.T) {
 	workDir := t.TempDir()
 	sessionDir := t.TempDir()
 	manager := session.New(workDir, sessionDir)
@@ -179,12 +179,13 @@ func TestAttachSessionResourcesFailsClosedOnUnhealthyEventStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionID := manager.GetHeader().ID
-	if _, err := manager.AppendMessage(provider.NewUserMessage("legacy before fail-closed")); err != nil {
+	if _, err := manager.AppendMessage(provider.NewUserMessage("legacy before heal")); err != nil {
 		t.Fatal(err)
 	}
 
 	// Orphan bytes with no SQLite intent: InspectEventStore classifies this as
-	// blocked ("bytes without intent"), which the export must never adopt.
+	// blocked ("bytes without intent"), which a previous build refused to
+	// migrate. The export must discard it instead.
 	store, err := session.NewEventStore(sessionDir, sessionID)
 	if err != nil {
 		t.Fatal(err)
@@ -195,10 +196,27 @@ func TestAttachSessionResourcesFailsClosedOnUnhealthyEventStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	registry := tools.NewRegistry(workDir, sandbox.NewNoneSandbox())
-	if _, err := AttachSessionResources(AttachedResources{
-		Source: SourceACP, WorkDir: workDir, Manager: manager, Registry: registry,
-	}); !errors.Is(err, session.ErrEventStoreNotHealthy) {
-		t.Fatalf("attach with an unhealthy EventStore = %v, want ErrEventStoreNotHealthy", err)
+	attachMigratedSession(t, workDir, sessionDir, manager)
+
+	contentStore, payloadRows := attachedContentStore(t, sessionDir, sessionID)
+	if contentStore != "event_store" {
+		t.Fatalf("content store after healing attach = %q, want event_store", contentStore)
+	}
+	if payloadRows != 0 {
+		t.Fatalf("legacy payload rows after healing attach = %d, want 0", payloadRows)
+	}
+	if messages := manager.GetMessages(); len(messages) != 1 || messages[0].Content != "legacy before heal" {
+		t.Fatalf("replayed transcript after healing attach = %#v", messages)
+	}
+	batches, err := session.ReadCommittedEventBatches(context.Background(), sessionDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, batch := range batches {
+		for _, event := range batch.Events {
+			if event.EventID == "orphan-event" {
+				t.Fatal("stale orphan event survived the export")
+			}
+		}
 	}
 }

@@ -153,6 +153,19 @@ func (m *Manager) convergeEventStoreLocked(ctx context.Context) error {
 // legacy SQLite transcript becomes a committed EventStore batch and the session's
 // content store flips. It runs only for a Manager that still observes a legacy
 // transcript after convergence, i.e. only from MigrateToEventStore.
+// exportLegacyTranscript is the one irreversible migration step: it exports a
+// session's legacy SQLite transcript into its EventStore and then flips the
+// canonical content store. Only MigrateToEventStore calls it, after convergence
+// confirmed the session has not already been flipped.
+//
+// The export is bounded (batches of maxEventStoreEntriesPerBatch) so one fsync
+// and one SQLite projection transaction stay bounded regardless of transcript
+// size, and it is self-healing: because the content store is still sqlite the
+// legacy rows are authoritative, so any EventStore bytes or intents a previous
+// interrupted attempt left behind are discarded before a fresh export instead of
+// wedging the attach. Because the exported batches stay reversible until the
+// flip, they are written under the lease identity this process already holds
+// rather than reserving an idle session.
 func (m *Manager) exportLegacyTranscript(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -166,9 +179,8 @@ func (m *Manager) exportLegacyTranscript(ctx context.Context) error {
 	sessionID := m.header.ID
 	// The exported transcript replaces the legacy `entries` rows, so every
 	// sequence number recorded before this point stops addressing anything.
-	// Rebuild the transcript order from the persisted parent chain, translate the
-	// turn boundaries into the new space, and publish both inside the same fenced
-	// commit transaction so no reader can observe one without the other.
+	// Rebuild the transcript order from the persisted parent chain and translate
+	// the turn boundaries into the new space once the whole export has committed.
 	identities, err := m.orderedSessionEntries(ctx)
 	if err != nil {
 		return err
@@ -179,71 +191,16 @@ func (m *Manager) exportLegacyTranscript(ctx context.Context) error {
 		// the session being idle.
 		return m.flipSessionContentStore(ctx, sessionDir)
 	}
-	inspection, err := InspectEventStore(ctx, sessionDir, m.header.ID)
+	binding, release, err := resolveEventStoreExportBinding(sessionDir, sessionID)
 	if err != nil {
 		return err
 	}
-	if len(inspection.Batches) > 0 || len(inspection.Intents) > 0 {
-		// Committed bytes exist while the session has not been flipped yet. The
-		// export is complete; adopt it instead of writing a second, divergent
-		// batch over the same legacy transcript.
-		if inspection.State != EventStoreHealthy {
-			return fmt.Errorf("%w: cannot migrate session with EventStore state %s: %s", ErrEventStoreNotHealthy, inspection.State, inspection.Reason)
-		}
-		committed, err := ReadCommittedEventBatches(ctx, sessionDir, m.header.ID)
-		if err != nil {
-			return err
-		}
-		seen := make(map[string]struct{})
-		for _, batch := range committed {
-			for _, record := range batch.Events {
-				seen[record.EventID] = struct{}{}
-			}
-		}
-		for _, identity := range identities {
-			if _, ok := seen[identity.id]; !ok {
-				return fmt.Errorf("EventStore already has content but legacy entry %s is not covered; refusing to merge uncertain histories", identity.id)
-			}
-		}
-		// A previous attempt committed the export and died before, or during, the
-		// flip. Re-issue the fenced flip (idempotent) and converge. The boundary
-		// translation rides in the same commit transaction as the projection, so a
-		// crash after that commit leaves both already retargeted; re-converging
-		// here cannot double-apply it.
-		if err := m.flipSessionContentStore(ctx, sessionDir); err != nil {
-			return err
-		}
-		return m.convergeFlippedSession(ctx, sessionDir)
+	defer release()
+	if err := resetEventStoreExportAttempt(ctx, sessionDir, sessionID); err != nil {
+		return err
 	}
-	// First export of a legacy transcript. The prepared/committed batch is
-	// reversible — the legacy rows stay authoritative until the flip — so it is
-	// written under the lease identity this process already holds instead of
-	// reserving the session. A session with no lease is idle, and an idle session
-	// is the only case where a mutation reservation is legitimate.
-	var binding RuntimeLeaseBinding
-	held, lostCh, holding := HeldRuntimeLeaseBinding(sessionDir, sessionID)
-	switch {
-	case holding:
-		binding = held
-	default:
-		guard, err := AcquireMutation(sessionDir, sessionID)
-		if err != nil {
-			if err == ErrSessionRunActive {
-				return fmt.Errorf("%w: session %s has an active durable run but no lease held by this process", ErrRuntimeLeaseLost, sessionID)
-			}
-			return err
-		}
-		binding = guard.Binding()
-		defer guard.Release()
-	}
-	if lostCh != nil {
-		select {
-		case <-lostCh:
-			return fmt.Errorf("%w: session lease was lost before the EventStore export", ErrRuntimeLeaseLost)
-		default:
-		}
-	}
-	store, err := NewEventStore(sessionDir, m.header.ID)
+
+	store, err := NewEventStore(sessionDir, sessionID)
 	if err != nil {
 		return err
 	}
@@ -258,24 +215,99 @@ func (m *Manager) exportLegacyTranscript(ctx context.Context) error {
 	for i := range records {
 		records[i].RunID = binding.RunID
 	}
-	digest, err := DigestEventBatch(records)
-	if err != nil {
-		return err
+
+	for start := 0; start < len(records); start += maxEventStoreEntriesPerBatch {
+		end := min(start+maxEventStoreEntriesPerBatch, len(records))
+		chunk := records[start:end]
+		digest, err := DigestEventBatch(chunk)
+		if err != nil {
+			return err
+		}
+		spec := EventIntentSpec{
+			ID: GenerateID(), SessionID: sessionID, RunID: binding.RunID,
+			SeqFrom: seqFrom + int64(start), SeqTo: seqFrom + int64(end) - 1, Digest: digest,
+			OwnerInstanceID: binding.OwnerInstanceID, LeaseEpoch: binding.Epoch, LeaseTokenHash: binding.TokenHash,
+		}
+		batch, err := AppendPreparedEventBatch(ctx, sessionDir, spec, chunk)
+		if err != nil {
+			return err
+		}
+		// The final chunk carries the turn-boundary translation: every sequence a
+		// boundary references must already exist on disk before it commits.
+		if end < len(records) {
+			if err := CommitEventIntent(ctx, sessionDir, spec, &batch, nil); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := CommitEventIntent(ctx, sessionDir, spec, &batch, func(tx *dao.Tx) error {
+			return translateConversationTurnBoundaries(ctx, tx, sessionID, boundaries)
+		}); err != nil {
+			return err
+		}
 	}
-	spec := EventIntentSpec{ID: GenerateID(), SessionID: sessionID, RunID: binding.RunID, SeqFrom: seqFrom, SeqTo: seqFrom + int64(len(records)) - 1, Digest: digest, OwnerInstanceID: binding.OwnerInstanceID, LeaseEpoch: binding.Epoch, LeaseTokenHash: binding.TokenHash}
-	batch, err := AppendPreparedEventBatch(ctx, sessionDir, spec, records)
-	if err != nil {
-		return err
-	}
-	if err := CommitEventIntent(ctx, sessionDir, spec, &batch, func(tx *dao.Tx) error {
-		return translateConversationTurnBoundaries(ctx, tx, sessionID, boundaries)
-	}); err != nil {
-		return err
-	}
+
 	if err := m.flipSessionContentStore(ctx, sessionDir); err != nil {
 		return err
 	}
 	return m.convergeFlippedSession(ctx, sessionDir)
+}
+
+// resolveEventStoreExportBinding returns the lease identity to write an export
+// under, plus a release for the reservation when one had to be taken. A session
+// with no live lease is idle, and an idle session is the only case where a
+// mutation reservation is legitimate; a session another owner is running returns
+// ErrRuntimeLeaseLost so the attach defers instead of blocking.
+func resolveEventStoreExportBinding(sessionDir, sessionID string) (RuntimeLeaseBinding, func(), error) {
+	held, lostCh, holding := HeldRuntimeLeaseBinding(sessionDir, sessionID)
+	if !holding {
+		guard, err := AcquireMutation(sessionDir, sessionID)
+		if err != nil {
+			if err == ErrSessionRunActive {
+				return RuntimeLeaseBinding{}, func() {}, fmt.Errorf("%w: session %s has an active durable run but no lease held by this process", ErrRuntimeLeaseLost, sessionID)
+			}
+			return RuntimeLeaseBinding{}, func() {}, err
+		}
+		if leaseLost(lostCh) {
+			guard.Release()
+			return RuntimeLeaseBinding{}, func() {}, fmt.Errorf("%w: session lease was lost before the EventStore export", ErrRuntimeLeaseLost)
+		}
+		return guard.Binding(), guard.Release, nil
+	}
+	if leaseLost(lostCh) {
+		return RuntimeLeaseBinding{}, func() {}, fmt.Errorf("%w: session lease was lost before the EventStore export", ErrRuntimeLeaseLost)
+	}
+	return held, func() {}, nil
+}
+
+func leaseLost(lostCh <-chan struct{}) bool {
+	if lostCh == nil {
+		return false
+	}
+	select {
+	case <-lostCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// resetEventStoreExportAttempt discards EventStore bytes and intents a previous
+// export attempt left for a session whose content store is still sqlite. Those
+// bytes are never canonical — the legacy rows are — so a stale, partial, or
+// unhealthy leftover must not wedge the next attach. Intents are removed first:
+// a crash between the two steps leaves bytes without intents, which the next
+// attempt resets again.
+func resetEventStoreExportAttempt(ctx context.Context, sessionDir, sessionID string) error {
+	if err := WriteRootDatabase(ctx, sessionDir, func(tx *dao.Tx) error {
+		return dao.NewSessionEventIntentDAO(nil).DeleteSession(ctx, tx, sessionID)
+	}); err != nil {
+		return fmt.Errorf("clear stale event intents before export: %w", err)
+	}
+	if err := RemoveEventStore(sessionDir, sessionID); err != nil {
+		return fmt.Errorf("remove stale event store before export: %w", err)
+	}
+	return nil
 }
 
 // sessionDirOrDerive returns the canonical root directory holding sessions.db

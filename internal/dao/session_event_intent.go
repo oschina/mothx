@@ -112,6 +112,14 @@ func (d *SessionEventIntentDAO) List(ctx context.Context, executor bun.IDB, sess
 	return d.list(ctx, executor, sessionID, nil)
 }
 
+// DeleteSession removes every event intent for a session. It is used only to
+// discard a non-canonical export attempt before a fresh export, so it removes
+// rows regardless of state.
+func (d *SessionEventIntentDAO) DeleteSession(ctx context.Context, executor bun.IDB, sessionID string) error {
+	_, err := executor.NewDelete().Model((*SessionEventIntentRecord)(nil)).Where("session_id = ?", sessionID).Exec(ctx)
+	return err
+}
+
 // CommittedStateCounts returns how many of the session's event intents are
 // committed and how many are in any other state. It is the O(1) control-plane
 // half of the append write gate: with a single fenced writer and an unchanged
