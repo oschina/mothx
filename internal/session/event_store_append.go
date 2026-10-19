@@ -208,18 +208,19 @@ func (m *Manager) exportLegacyTranscript(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	records, boundaries, err := planEventStoreExport(ctx, sessionDir, sessionID, identities, seqFrom)
+	boundaries, err := exportTurnBoundaries(ctx, sessionDir, sessionID, identities, seqFrom)
 	if err != nil {
 		return err
 	}
-	for i := range records {
-		records[i].RunID = binding.RunID
-	}
 
-	for start := 0; start < len(records); start += maxEventStoreEntriesPerBatch {
-		end := min(start+maxEventStoreEntriesPerBatch, len(records))
-		chunk := records[start:end]
-		digest, err := DigestEventBatch(chunk)
+	total := len(identities)
+	for start := 0; start < total; start += maxEventStoreEntriesPerBatch {
+		end := min(start+maxEventStoreEntriesPerBatch, total)
+		records, err := exportRecordChunk(sessionID, binding.RunID, identities, seqFrom, start, end)
+		if err != nil {
+			return err
+		}
+		digest, err := DigestEventBatch(records)
 		if err != nil {
 			return err
 		}
@@ -228,13 +229,13 @@ func (m *Manager) exportLegacyTranscript(ctx context.Context) error {
 			SeqFrom: seqFrom + int64(start), SeqTo: seqFrom + int64(end) - 1, Digest: digest,
 			OwnerInstanceID: binding.OwnerInstanceID, LeaseEpoch: binding.Epoch, LeaseTokenHash: binding.TokenHash,
 		}
-		batch, err := AppendPreparedEventBatch(ctx, sessionDir, spec, chunk)
+		batch, err := AppendPreparedEventBatch(ctx, sessionDir, spec, records)
 		if err != nil {
 			return err
 		}
 		// The final chunk carries the turn-boundary translation: every sequence a
 		// boundary references must already exist on disk before it commits.
-		if end < len(records) {
+		if end < total {
 			if err := CommitEventIntent(ctx, sessionDir, spec, &batch, nil); err != nil {
 				return err
 			}
@@ -787,41 +788,54 @@ func exportMarkerTurnID(entry interface{}) string {
 	return turnID
 }
 
-func planEventStoreExport(ctx context.Context, sessionDir, sessionID string, identities []sessionEntryIdentity, seqFrom int64) ([]EventRecord, []conversationTurnTranslation, error) {
-	records := make([]EventRecord, 0, len(identities))
-	seqByEntryID := make(map[string]int64, len(identities))
-	for i, identity := range identities {
+// exportRecordChunk converts identities[start:end] into export records; the
+// chunk occupies sequences seqFrom+start .. seqFrom+end-1. Building records one
+// bounded chunk at a time is what keeps the export's peak memory to a single
+// batch of marshaled payloads instead of a second full copy of the transcript.
+func exportRecordChunk(sessionID, runID string, identities []sessionEntryIdentity, seqFrom int64, start, end int) ([]EventRecord, error) {
+	records := make([]EventRecord, 0, end-start)
+	for i := start; i < end; i++ {
+		identity := identities[i]
 		// The exported batch is unowned, but a turn boundary marker carries its
 		// own logical identity in the payload. Stamping it here is what lets the
 		// projection row address the turn afterwards; without it every migrated
 		// marker would be indistinguishable from an ordinary append.
-		runID, turnID := exportMarkerIdentity(identity.self)
-		record, err := EventRecordFromEntry(identity.self, sessionID, runID, turnID)
+		markerRunID, turnID := exportMarkerIdentity(identity.self)
+		record, err := EventRecordFromEntry(identity.self, sessionID, markerRunID, turnID)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		seq := seqFrom + int64(i)
+		// The batch envelope carries the exporting owner's run, not the marker's.
+		record.RunID = runID
 		records = append(records, record)
-		seqByEntryID[identity.id] = seq
 	}
+	return records, nil
+}
+
+// exportTurnBoundaries plans the conversation_turn translations for an export
+// whose entries start at seqFrom. It retains only identity metadata, so it never
+// holds a second copy of the message payloads.
+func exportTurnBoundaries(ctx context.Context, sessionDir, sessionID string, identities []sessionEntryIdentity, seqFrom int64) ([]conversationTurnTranslation, error) {
+	seqByEntryID := make(map[string]int64, len(identities))
 	// Legacy sequence -> entry ID, so a recorded turn bound can be resolved to
 	// the exported sequence of the very row it pointed at.
 	entryIDByLegacySeq := make(map[int64]string, len(identities))
-	for _, identity := range identities {
+	for i, identity := range identities {
+		seqByEntryID[identity.id] = seqFrom + int64(i)
 		if existing, duplicate := entryIDByLegacySeq[identity.seq]; duplicate && existing != identity.id {
 			// Two rows of one session claiming the same legacy sequence means the
 			// transcript itself is inconsistent; refuse rather than pick one.
-			return nil, nil, fmt.Errorf("legacy transcript has entries %s and %s both at sequence %d", existing, identity.id, identity.seq)
+			return nil, fmt.Errorf("legacy transcript has entries %s and %s both at sequence %d", existing, identity.id, identity.seq)
 		}
 		entryIDByLegacySeq[identity.seq] = identity.id
 	}
 	db, err := OpenRootDB(sessionDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	rows, err := dao.NewConversationTurnDAO(db.Bun()).List(ctx, sessionID)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	boundaries := make([]conversationTurnTranslation, 0, len(rows))
 	for _, row := range rows {
@@ -849,7 +863,7 @@ func planEventStoreExport(ctx context.Context, sessionDir, sessionID string, ide
 		}
 		boundaries = append(boundaries, translation)
 	}
-	return records, boundaries, nil
+	return boundaries, nil
 }
 
 // translateConversationTurnBoundaries rewrites the exported turns' boundary
