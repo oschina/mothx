@@ -34,7 +34,8 @@
     "dist:win": "npm run version:set && npm run ensure:electron && npm run build:runtime -- --platform win32 && npm run build && electron-builder --win --config electron-builder.yml",
     "dist:linux": "npm run version:set && npm run ensure:electron && npm run build:runtime -- --platform linux && npm run build && electron-builder --linux --config electron-builder.yml",
     "version:set": "node scripts/set-version.cjs",
-    "version:check": "tsx scripts/check-release-version.ts"
+    "version:check": "tsx scripts/check-release-version.ts",
+    "e2e:acp": "node scripts/acp-roundtrip.mjs"
   },
   "devDependencies": {
     "@radix-ui/react-collapsible": "^1.1.20",

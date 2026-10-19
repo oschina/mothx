@@ -3,11 +3,12 @@
 // Desktop 当作 smoke 通过。
 // 用法：npm run build && npm run e2e
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
 const isLinux = process.platform === 'linux';
 if (isLinux && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
@@ -70,7 +71,10 @@ const observe = (stream) => {
     }
     if (seen.size === checks.length && !finished) {
       console.log('E2E SMOKE DONE');
-      finish(0);
+      // Startup alone is a weak gate: also drive the packaged runtime through a
+      // real session round trip (new -> prompt -> close -> load) before passing.
+      const roundtrip = spawnSync(process.execPath, [fileURLToPath(new URL('./acp-roundtrip.mjs', import.meta.url))], { stdio: 'inherit' });
+      finish(roundtrip.status === 0 ? 0 : 1, roundtrip.status === 0 ? undefined : 'ACP roundtrip failed');
     }
   });
 };
