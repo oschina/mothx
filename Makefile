@@ -298,8 +298,15 @@ ui-preview:
 	cd ui && $(NPM) run preview
 
 # Lint
+# golangci-lint defaults to one worker per logical CPU, which can blow past a
+# laptop's memory on this module, so cap the workers and the Go heap. Override
+# on demand, e.g. `make lint LINT_CONCURRENCY=4 GOMEMLIMIT=4GiB`.
+# Requires a golangci-lint built with a Go version >= the module's go directive.
+LINT_CONCURRENCY ?= 2
+LINT_TIMEOUT ?= 30m
+GOMEMLIMIT ?= 6GiB
 lint:
-	golangci-lint run ./...
+	GOMEMLIMIT=$(GOMEMLIMIT) GOGC=25 golangci-lint run -j $(LINT_CONCURRENCY) --timeout=$(LINT_TIMEOUT) ./...
 
 # Format
 fmt:
