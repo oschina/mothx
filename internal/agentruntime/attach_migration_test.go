@@ -2,6 +2,8 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -161,5 +163,42 @@ func TestAttachSessionResourcesDefersMigrationForActiveRun(t *testing.T) {
 	}
 	if messages := manager.GetMessages(); len(messages) != 1 || messages[0].Content != "legacy busy transcript" {
 		t.Fatalf("deferred replay = %#v", messages)
+	}
+}
+
+// TestAttachSessionResourcesFailsClosedOnUnhealthyEventStore pins the migration
+// contract for genuinely unsafe data: a legacy session whose EventStore already
+// holds bytes SQLite cannot account for must refuse the export instead of
+// attaching on top of content no intent authorizes. This is the deliberate new
+// failure surface the unified entry adds to ACP/WebUI/Channel attaches.
+func TestAttachSessionResourcesFailsClosedOnUnhealthyEventStore(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+	manager := session.New(workDir, sessionDir)
+	if err := manager.Init(); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := manager.GetHeader().ID
+	if _, err := manager.AppendMessage(provider.NewUserMessage("legacy before fail-closed")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Orphan bytes with no SQLite intent: InspectEventStore classifies this as
+	// blocked ("bytes without intent"), which the export must never adopt.
+	store, err := session.NewEventStore(sessionDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append("orphan-batch", sessionID, "", "", []session.EventRecord{{
+		EventID: "orphan-event", SessionID: sessionID, Kind: "message", Payload: json.RawMessage(`{}`),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := tools.NewRegistry(workDir, sandbox.NewNoneSandbox())
+	if _, err := AttachSessionResources(AttachedResources{
+		Source: SourceACP, WorkDir: workDir, Manager: manager, Registry: registry,
+	}); !errors.Is(err, session.ErrEventStoreNotHealthy) {
+		t.Fatalf("attach with an unhealthy EventStore = %v, want ErrEventStoreNotHealthy", err)
 	}
 }

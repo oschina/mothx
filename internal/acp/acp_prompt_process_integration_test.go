@@ -2,6 +2,7 @@ package acp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/dao"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestACPStdioProcessInitializeNewPromptClose(t *testing.T) {
@@ -173,10 +176,39 @@ func TestACPStdioProcessInitializeNewPromptClose(t *testing.T) {
 
 	sendACPRequest(t, stdin, map[string]any{"jsonrpc": "2.0", "id": 6, "method": "session/close", "params": map[string]any{"sessionId": sessionID}})
 	assertACPResponseID(t, reader, 6)
+
+	// Leaving and returning to a task is the Desktop round trip: a session
+	// created and prompted over ACP must be persisted on the EventStore, and
+	// re-opening it must replay the same transcript from the new store.
+	if store := acpProcessContentStore(t, settings.GetSessionDir(), sessionID); store != "event_store" {
+		t.Fatalf("content store after ACP new+prompt = %q, want event_store", store)
+	}
+	sendACPRequest(t, stdin, map[string]any{"jsonrpc": "2.0", "id": 7, "method": "session/load", "params": map[string]any{"sessionId": sessionID, "cwd": workDir}})
+	reloaded := assertACPResponseIDCollecting(t, reader, 7)
+	if !containsACPNotification(reloaded, "session/update", "agent_message_chunk", "ACP smoke response") {
+		t.Fatalf("session/load after prompt did not replay the assistant message: %#v", reloaded)
+	}
+
 	if err := stdin.Close(); err != nil {
 		t.Fatal(err)
 	}
 	waitForACPProcess(t, cmd)
+}
+
+// acpProcessContentStore reads the persisted content-store selection a session
+// ended up on. It runs in the test process against the same session directory
+// the ACP subprocess wrote, so it cannot mask an in-process-only migration.
+func acpProcessContentStore(t *testing.T, sessionDir, sessionID string) string {
+	t.Helper()
+	db, err := session.OpenRootDB(sessionDir)
+	if err != nil {
+		t.Fatalf("open root db: %v", err)
+	}
+	header, err := dao.NewSessionDAO(db.Bun()).Header(context.Background(), "sessions", sessionID)
+	if err != nil {
+		t.Fatalf("read session header: %v", err)
+	}
+	return header.ContentStore
 }
 
 func containsACPNotification(messages []map[string]any, method, update, text string) bool {
