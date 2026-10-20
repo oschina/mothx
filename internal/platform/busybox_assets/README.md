@@ -10,7 +10,11 @@ Vendored Windows shell fallbacks, embedded into the binary.
 ## Source
 
 [`startvibecoding/agentbusybox`](https://github.com/startvibecoding/agentbusybox) —
-Windows release assets, taken from the latest published release.
+Windows release assets. The current files were built from
+`v1.38.1.git-11-g1a0bdf20a` with the UTF-8 child-environment baseline
+(`LC_ALL`/`LANG=C.UTF-8` and `PYTHONIOENCODING=utf-8`). Replace them with the
+matching assets from the next published release, which will include that
+change under the same feature name.
 
 ## Use
 
@@ -19,11 +23,21 @@ extracts the one matching the current Windows architecture into the Windows
 config `bin` directory on first use, and exposes it as the default shell for the
 `bash` tool when no other shell is available.
 
+MothX does not rely on the shell for arbitrary child-process encoding. Captured
+stdout/stderr is normalized at the tool boundary by
+`platform.DecodeProcessOutput`; the shell's UTF-8 environment baseline is a
+best-effort optimization for tools which honor it.
+
 ## Update
 
 1. Download `busybox-windows-x86.exe` and `busybox-windows-x86_64.exe` from
    the latest `startvibecoding/agentbusybox` release.
 2. Replace both files here with the same names.
 3. Run `go test ./internal/platform/` and `go build ./...`.
+
+Existing extracted copies under `%APPDATA%\mothx\bin\` are compared by
+SHA-256 with the embedded asset and replaced on the next startup when they
+differ. If a running BusyBox holds the executable image locked, MothX keeps
+using the old copy for that run and retries the refresh on the next startup.
 
 These files are third-party binaries; do not edit them by hand.

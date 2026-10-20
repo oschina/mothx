@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"crypto/sha256"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -25,8 +26,9 @@ var (
 )
 
 // EnsureWindowsBusybox extracts the embedded BusyBox executable for the
-// current Windows architecture into the Windows config bin directory when it
-// is missing.
+// current Windows architecture into the Windows config bin directory. A
+// previously extracted copy is replaced when its contents differ from the
+// embedded asset, so upgrades do not keep using a stale shell.
 func EnsureWindowsBusybox() error {
 	busyboxOnce.Do(func() {
 		busyboxPath, busyboxErr = ensureWindowsBusybox()
@@ -50,23 +52,42 @@ func ensureWindowsBusybox() (string, error) {
 	if !ok {
 		return "", nil
 	}
+	return ensureBusyboxAsset(filepath.Join(ConfigDir(), "bin"), name, data)
+}
 
-	dir := filepath.Join(ConfigDir(), "bin")
+// ensureBusyboxAsset installs data as dir/name and returns its path. The
+// existing file is compared by content hash, so replacing an embedded BusyBox
+// does not leave an old extracted copy behind.
+func ensureBusyboxAsset(dir, name string, data []byte) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create busybox dir: %w", err)
 	}
 
 	path := filepath.Join(dir, name)
-	if info, err := os.Stat(path); err == nil {
+	want := sha256.Sum256(data)
+
+	info, statErr := os.Stat(path)
+	switch {
+	case statErr == nil:
 		if info.IsDir() {
 			return "", fmt.Errorf("busybox path is a directory: %s", path)
 		}
-		return path, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("check busybox path: %w", err)
+		if info.Size() == int64(len(data)) {
+			if current, readErr := os.ReadFile(path); readErr == nil && sha256.Sum256(current) == want {
+				return path, nil
+			}
+		}
+	case !errors.Is(statErr, os.ErrNotExist):
+		return "", fmt.Errorf("check busybox path: %w", statErr)
 	}
 
 	if err := writeAtomic(path, data); err != nil {
+		// A running BusyBox can keep its executable image locked. Keep using
+		// the old copy rather than breaking the shell; the next startup will
+		// retry the refresh.
+		if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() {
+			return path, nil
+		}
 		return "", err
 	}
 	return path, nil
