@@ -107,6 +107,29 @@ func newMockOpenAIProvider(t *testing.T, models []*provider.Model, sse string, b
 	return p
 }
 
+// newMockOpenAIProviderAtURL is newMockOpenAIProvider with an explicit base
+// URL, for tests whose behavior depends on gateway auto-detection.
+func newMockOpenAIProviderAtURL(t *testing.T, baseURL string, models []*provider.Model, sse string, bodyCh chan<- string) *Provider {
+	t.Helper()
+	p := NewProviderWithModels("fake-key", baseURL, models)
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if bodyCh != nil {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				return nil, err
+			}
+			bodyCh <- string(body)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewBufferString(sse)),
+			Request:    r,
+		}, nil
+	})}
+	return p
+}
+
 func TestOpenAIRetriesEarlyStreamReadError(t *testing.T) {
 	streamErr := errors.New("read tcp 192.168.1.143:44252->180.76.199.86:443: read: connection reset by peer")
 	attempts := 0
@@ -947,35 +970,116 @@ func TestIsDoubaoSeedModel(t *testing.T) {
 	}
 }
 
-func TestOpenAIThinkingFormatDeepSeekV41NoReasoningEffort(t *testing.T) {
+func TestOpenAIThinkingFormatDeepSeekV41UsesEffortByDefault(t *testing.T) {
 	bodyCh := make(chan string, 1)
 	p := newMockOpenAIProvider(t, []*provider.Model{
 		{ID: "deepseek-v4.1-flash", Reasoning: true},
 	}, "data: [DONE]\n", bodyCh, nil)
-	params := provider.ChatParams{
+	for range p.Chat(context.Background(), provider.ChatParams{
 		ModelID:       "deepseek-v4.1-flash",
 		Messages:      []provider.Message{provider.NewUserMessage("hi")},
 		ThinkingLevel: provider.ThinkingHigh,
 		Abort:         make(chan struct{}),
+	}) {
 	}
-	for range p.Chat(context.Background(), params) {
-	}
-
 	var req openAIRequest
-	select {
-	case body := <-bodyCh:
-		if err := json.Unmarshal([]byte(body), &req); err != nil {
-			t.Fatalf("unmarshal request body: %v\nbody: %s", err, body)
-		}
-	default:
-		t.Fatal("no request body captured")
+	if err := json.Unmarshal([]byte(<-bodyCh), &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
 	}
+	if req.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", req.ReasoningEffort)
+	}
+	if req.Thinking != nil {
+		t.Fatalf("thinking = %+v, want omitted", req.Thinking)
+	}
+}
 
-	if req.Thinking == nil || req.Thinking.Type != "enabled" {
-		t.Fatalf("thinking = %#v, want enabled", req.Thinking)
+func TestOpenAIThinkingFormatDeepSeekV41EffortScale(t *testing.T) {
+	levels := []struct {
+		level  provider.ThinkingLevel
+		effort string
+	}{
+		{provider.ThinkingMinimal, "minimal"},
+		{provider.ThinkingLow, "low"},
+		{provider.ThinkingMedium, "medium"},
+		{provider.ThinkingHigh, "high"},
+		{provider.ThinkingXHigh, "xhigh"},
+		{provider.ThinkingMax, "max"},
 	}
-	if req.ReasoningEffort != "" {
-		t.Fatalf("reasoning_effort = %q, want empty: vLLM-backed gateways reject reasoning_effort for DeepSeek V4.1 chat template", req.ReasoningEffort)
+	for _, baseURL := range []string{"https://ai.gitee.com/v1", "https://api.moark.com/v1"} {
+		for _, tc := range levels {
+			bodyCh := make(chan string, 1)
+			p := newMockOpenAIProviderAtURL(t, baseURL, []*provider.Model{
+				{ID: "deepseek-v4.1-flash-1017", Reasoning: true},
+			}, "data: [DONE]\n", bodyCh)
+			for range p.Chat(context.Background(), provider.ChatParams{
+				ModelID:       "deepseek-v4.1-flash-1017",
+				Messages:      []provider.Message{provider.NewUserMessage("hi")},
+				ThinkingLevel: tc.level,
+				Abort:         make(chan struct{}),
+			}) {
+			}
+			var req openAIRequest
+			body := <-bodyCh
+			if err := json.Unmarshal([]byte(body), &req); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if req.ReasoningEffort != tc.effort {
+				t.Fatalf("%s %s reasoning_effort = %q, want %q", baseURL, tc.level, req.ReasoningEffort, tc.effort)
+			}
+			if req.Thinking != nil {
+				t.Fatalf("%s %s thinking = %+v, want omitted (effort-only format)", baseURL, tc.level, req.Thinking)
+			}
+		}
+	}
+}
+
+func TestOpenAIThinkingFormatDeepSeekV41OffSendsNone(t *testing.T) {
+	// Gitee/Moark V4.1 gateways think by default when no parameter is sent,
+	// so an explicit off level must send reasoning_effort="none".
+	bodyCh := make(chan string, 1)
+	p := newMockOpenAIProviderAtURL(t, "https://api.moark.com/v1", []*provider.Model{
+		{ID: "deepseek-v4.1-flash", Reasoning: true},
+	}, "data: [DONE]\n", bodyCh)
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "deepseek-v4.1-flash",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingOff,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+	var req openAIRequest
+	if err := json.Unmarshal([]byte(<-bodyCh), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.ReasoningEffort != "none" {
+		t.Fatalf("reasoning_effort = %q, want none", req.ReasoningEffort)
+	}
+	if req.Thinking != nil {
+		t.Fatalf("thinking = %+v, want omitted", req.Thinking)
+	}
+}
+
+func TestOpenAIThinkingFormatCompatOverridesV41AutoDetect(t *testing.T) {
+	// An explicit compat thinkingFormat wins over the gateway auto-detection,
+	// letting users force either direction per provider/model.
+	bodyCh := make(chan string, 1)
+	p := newMockOpenAIProviderAtURL(t, "https://ai.gitee.com/v1", []*provider.Model{
+		{ID: "deepseek-v4.1-flash-1017", Reasoning: true, Compat: &provider.ModelCompat{ThinkingFormat: "thinking-only"}},
+	}, "data: [DONE]\n", bodyCh)
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "deepseek-v4.1-flash-1017",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingHigh,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+	var req openAIRequest
+	if err := json.Unmarshal([]byte(<-bodyCh), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.Thinking == nil || req.ReasoningEffort != "" {
+		t.Fatalf("thinking=%+v reasoning_effort=%q, want thinking-only override", req.Thinking, req.ReasoningEffort)
 	}
 }
 
@@ -986,6 +1090,7 @@ func TestIsDeepSeekV41Model(t *testing.T) {
 	}{
 		{"deepseek-v4.1-flash", true},
 		{"DeepSeek-V4.1-Flash", true},
+		{"deepseek-v4.1-flash-1017", true},
 		{"deepseek-v4-1", true},
 		{"deepseek-v4-flash", false},
 		{"deepseek-v4-pro", false},

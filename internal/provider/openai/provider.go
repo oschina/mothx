@@ -290,16 +290,15 @@ func (p *Provider) IsReasoningDisabled() bool {
 	return p.disableReasoning
 }
 
-// SetThinkingFormat sets the thinking parameter format.
+// SetThinkingFormat sets the thinking format used for reasoning models.
 // "openai" = reasoning_effort, "deepseek" = thinking + reasoning_effort,
 // "kimi" = reasoning_effort with Kimi's low/high/max levels,
 // "doubao-seed" = reasoning_effort with minimal/low/medium/high (minimal = no thinking),
 // "xiaomi" = legacy thinking-only format.
-// "thinking-only" = thinking switch without any effort field. DeepSeek V4.1
-// models auto-select this format: their chat templates accept only a thinking
-// switch, and any OpenAI-style reasoning_effort string makes vLLM-backed
-// gateways fail with
-// "cannot unmarshal bool into ... chat_template_kwargs.reasoning_effort".
+// "deepseek-v4.1" = reasoning_effort only, passing the full DeepSeek V4.1
+// effort scale (none/minimal/low/medium/high/xhigh/max) through verbatim.
+// DeepSeek V4.1 selects this format automatically; a deployment that only
+// accepts its thinking switch can opt out with thinkingFormat="thinking-only".
 func (p *Provider) SetThinkingFormat(format string) {
 	p.thinkingFormat = format
 }
@@ -508,37 +507,50 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 			}
 		}
 
-		if !p.disableReasoning && params.ThinkingLevel != provider.ThinkingOff && model != nil && model.Reasoning {
-			// Determine thinking format: explicit config > URL auto-detect > default
+		if !p.disableReasoning && model != nil && model.Reasoning {
 			format := p.thinkingFormatForModel(model)
-			switch format {
-			case "deepseek":
-				reqBody.Thinking = &thinkingConfig{Type: "enabled"}
-				if supportsReasoningEffort(model) {
-					reqBody.ReasoningEffort = deepseekReasoningEffort(params.ThinkingLevel)
+			if params.ThinkingLevel == provider.ThinkingOff {
+				// DeepSeek V4.1 gateways think by default when no parameter is
+				// sent, so an explicit off must map to "none" instead of
+				// omitting the field.
+				if format == "deepseek-v4.1" && supportsReasoningEffort(model) {
+					reqBody.ReasoningEffort = deepSeekV41ReasoningEffort(provider.ThinkingOff)
 				}
-			case "kimi":
-				if supportsReasoningEffort(model) {
-					reqBody.ReasoningEffort = kimiReasoningEffort(params.ThinkingLevel)
-				}
-			case "doubao-seed":
-				if supportsReasoningEffort(model) {
-					reqBody.ReasoningEffort = doubaoSeedReasoningEffort(params.ThinkingLevel)
-				}
-			case "thinking-only", "xiaomi":
-				reqBody.Thinking = &thinkingConfig{Type: "enabled"}
-			case "qwen":
-				enabled := true
-				reqBody.EnableThinking = &enabled
-				if budget := qwenThinkingBudget(params.ThinkingLevel); budget > 0 {
-					reqBody.ThinkingBudget = budget
-				}
-			default: // "openai" or ""
-				if supportsReasoningEffort(model) {
-					reqBody.ReasoningEffort = openAIReasoningEffort(params.ThinkingLevel)
-					// OpenAI reasoning models reject temperature/top_p.
-					reqBody.Temperature = nil
-					reqBody.TopP = nil
+			} else {
+				// Determine thinking format: explicit config > URL auto-detect > default
+				switch format {
+				case "deepseek":
+					reqBody.Thinking = &thinkingConfig{Type: "enabled"}
+					if supportsReasoningEffort(model) {
+						reqBody.ReasoningEffort = deepseekReasoningEffort(params.ThinkingLevel)
+					}
+				case "kimi":
+					if supportsReasoningEffort(model) {
+						reqBody.ReasoningEffort = kimiReasoningEffort(params.ThinkingLevel)
+					}
+				case "deepseek-v4.1":
+					if supportsReasoningEffort(model) {
+						reqBody.ReasoningEffort = deepSeekV41ReasoningEffort(params.ThinkingLevel)
+					}
+				case "doubao-seed":
+					if supportsReasoningEffort(model) {
+						reqBody.ReasoningEffort = doubaoSeedReasoningEffort(params.ThinkingLevel)
+					}
+				case "thinking-only", "xiaomi":
+					reqBody.Thinking = &thinkingConfig{Type: "enabled"}
+				case "qwen":
+					enabled := true
+					reqBody.EnableThinking = &enabled
+					if budget := qwenThinkingBudget(params.ThinkingLevel); budget > 0 {
+						reqBody.ThinkingBudget = budget
+					}
+				default: // "openai" or ""
+					if supportsReasoningEffort(model) {
+						reqBody.ReasoningEffort = openAIReasoningEffort(params.ThinkingLevel)
+						// OpenAI reasoning models reject temperature/top_p.
+						reqBody.Temperature = nil
+						reqBody.TopP = nil
+					}
 				}
 			}
 		}
@@ -966,7 +978,7 @@ func (p *Provider) thinkingFormatForModel(model *provider.Model) string {
 		return model.Compat.ThinkingFormat
 	}
 	if model != nil && isDeepSeekV41Model(model.ID) {
-		return "thinking-only"
+		return "deepseek-v4.1"
 	}
 	if model != nil && isQwenModel(model.ID) {
 		return "qwen"
@@ -995,6 +1007,28 @@ func isQwenModel(modelID string) bool {
 func isDeepSeekV41Model(modelID string) bool {
 	lower := strings.ToLower(modelID)
 	return strings.Contains(lower, "deepseek-v4.1") || strings.Contains(lower, "deepseek-v4-1")
+}
+
+// deepSeekV41ReasoningEffort maps a thinking level onto the DeepSeek V4.1
+// effort scale. "none" disables the gateway's think-by-default behavior and
+// is sent for ThinkingOff; it is also the fallback for unknown levels.
+func deepSeekV41ReasoningEffort(level provider.ThinkingLevel) string {
+	switch level {
+	case provider.ThinkingMinimal:
+		return "minimal"
+	case provider.ThinkingLow:
+		return "low"
+	case provider.ThinkingMedium:
+		return "medium"
+	case provider.ThinkingHigh:
+		return "high"
+	case provider.ThinkingXHigh:
+		return "xhigh"
+	case provider.ThinkingMax:
+		return "max"
+	default:
+		return "none"
+	}
 }
 
 func isDoubaoSeedModel(modelID string) bool {

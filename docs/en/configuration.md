@@ -277,7 +277,6 @@ The built-in `volcengine` provider uses the Ark OpenAI-compatible endpoint and s
       "apiKey": "${VOLCENGINE_API_KEY}",
       "api": "openai-chat",
       "models": [
-        { "id": "doubao-seed-2-1-turbo-260628", "name": "Doubao Seed 2.1 Turbo", "contextWindow": 262144, "maxTokens": 262144, "input": ["text"] },
         { "id": "doubao-seed-evolving", "name": "Doubao Seed Evolving", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] },
         { "id": "doubao-seed-2-1-pro-260628", "name": "Doubao Seed 2.1 Pro", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] }
       ]
@@ -455,12 +454,15 @@ Specifies how thinking/reasoning parameters are sent to the API:
 | `"anthropic"` | Use Anthropic `thinking` with `budget_tokens` |
 | `"deepseek"` | Use DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort` (OpenAI) or `output_config.effort` (Anthropic) |
 | `"xiaomi"` | Legacy thinking-only format: `thinking: {type: "enabled"}` |
+| `"thinking-only"` | Thinking switch without an effort field; use it to opt a DeepSeek V4.1 deployment out of `reasoning_effort` |
+| `"deepseek-v4.1"` | DeepSeek V4.1 `reasoning_effort`: `none` (no thinking), `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `"doubao-seed"` | Doubao Seed 2.1 / Evolving `reasoning_effort`: `minimal` (no thinking), `low`, `medium`, `high` (default) |
 
 When not set, automatically detects:
 - URL contains `deepseek` → `"deepseek"`
 - URL contains `xiaomimimo` → `"xiaomi"`
 - Model ID matches `doubao-seed-2.1*` or `doubao-seed-evolving` → `"doubao-seed"`
+- Model ID contains `deepseek-v4.1` or `deepseek-v4-1` → `"deepseek-v4.1"`
 
 ```json
 {

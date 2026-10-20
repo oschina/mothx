@@ -208,36 +208,37 @@ func TestGetModelConfig(t *testing.T) {
 func TestMoarkModelMaxTokens(t *testing.T) {
 	s := DefaultSettings()
 	want := map[string]int{
-		"auto":                   0,
-		"glm-5.1":                131072,
-		"qwen3.5-flash":          65536,
-		"qwen3.6-flash":          65536,
-		"qwen3.6-plus":           65536,
-		"deepseek-v4-pro":        384000,
-		"deepseek-v4-pro-0813":   0,
-		"qwen3.7-max":            65536,
-		"qwen3.8-max":            0,
-		"qwen3.8-max-0902":       131072,
-		"qwen3.8-27b":            0,
-		"qwen3.8-omni-flash":     131072,
-		"glm-5.3":                131072,
-		"glm-5.3-flash":          131072,
-		"ernie-5.0-thinking":     65536,
-		"kimi-k2.5":              262144,
-		"kimi-k2.6":              262144,
-		"kimi-k2.7-code":         262144,
-		"kimi-k3":                262144,
-		"glm-5":                  32768,
-		"qwen3.7-plus":           65536,
-		"minimax-m2.7":           131072,
-		"minimax-m3":             128000,
-		"mimo-v2.5-pro":          131072,
-		"gemma-4-26b-a4b-it":     32768,
-		"deepseek-v4-flash":      384000,
-		"deepseek-v4-flash-0731": 0,
-		"deepseek-v4.1-flash":    0,
-		"step-3.7-flash":         16384,
-		"qwen3.8-flash":          0,
+		"auto":                     0,
+		"glm-5.1":                  131072,
+		"qwen3.5-flash":            65536,
+		"qwen3.6-flash":            65536,
+		"qwen3.6-plus":             65536,
+		"deepseek-v4-pro":          384000,
+		"deepseek-v4-pro-0813":     0,
+		"qwen3.7-max":              65536,
+		"qwen3.8-max":              0,
+		"qwen3.8-max-0902":         131072,
+		"qwen3.8-27b":              0,
+		"qwen3.8-omni-flash":       131072,
+		"glm-5.3":                  131072,
+		"glm-5.3-flash":            131072,
+		"ernie-5.0-thinking":       65536,
+		"kimi-k2.5":                262144,
+		"kimi-k2.6":                262144,
+		"kimi-k2.7-code":           262144,
+		"kimi-k3":                  262144,
+		"glm-5":                    32768,
+		"qwen3.7-plus":             65536,
+		"minimax-m2.7":             131072,
+		"minimax-m3":               128000,
+		"mimo-v2.5-pro":            131072,
+		"gemma-4-26b-a4b-it":       32768,
+		"deepseek-v4-flash":        384000,
+		"deepseek-v4-flash-0731":   0,
+		"deepseek-v4.1-flash":      0,
+		"deepseek-v4.1-flash-1017": 0,
+		"step-3.7-flash":           16384,
+		"qwen3.8-flash":            0,
 	}
 
 	moark := s.Providers["moark"]
@@ -457,6 +458,51 @@ func TestVolcenginePlanModelsUseSharedMaxTokens(t *testing.T) {
 	}
 }
 
+func TestMinimaxM31FlashDefaults(t *testing.T) {
+	s := DefaultSettings()
+	model := s.GetModelConfig("minimax", "MiniMax-M3.1-Flash")
+	if model == nil {
+		t.Fatal("minimax missing MiniMax-M3.1-Flash")
+	}
+	if !model.Reasoning || model.ContextWindow != 1000000 {
+		t.Fatalf("MiniMax-M3.1-Flash = %#v, want reasoning model with 1M context", model)
+	}
+	wantInput := []string{"text", "image", "video"}
+	if len(model.Input) != len(wantInput) {
+		t.Fatalf("MiniMax-M3.1-Flash input = %#v, want %#v", model.Input, wantInput)
+	}
+	for i := range wantInput {
+		if model.Input[i] != wantInput[i] {
+			t.Fatalf("MiniMax-M3.1-Flash input = %#v, want %#v", model.Input, wantInput)
+		}
+	}
+	// No output-token ceiling: MaxTokens equals the context window so the
+	// agent never caps a request below the model's (unlimited) output.
+	if model.MaxTokens != 1000000 {
+		t.Fatalf("MiniMax-M3.1-Flash MaxTokens = %d, want 1000000 (no output limit)", model.MaxTokens)
+	}
+	// Thinking intensity rides the adaptive output_config.effort format.
+	if model.Compat == nil || model.Compat.ThinkingFormat != "adaptive" {
+		t.Fatalf("MiniMax-M3.1-Flash compat = %#v, want thinkingFormat adaptive", model.Compat)
+	}
+}
+
+func TestVolcengineChannelsOmitRetiredModels(t *testing.T) {
+	s := DefaultSettings()
+	retired := []string{"kimi-k2.7-code", "doubao-seed-2.1-turbo", "doubao-seed-2-1-turbo-260628", "minimax-m3"}
+	for _, providerName := range []string{"volcengine", "volcengine-agentplan", "volcengine-codingplan"} {
+		p := s.Providers[providerName]
+		if p == nil {
+			t.Fatalf("expected %s provider", providerName)
+		}
+		for _, modelID := range retired {
+			if s.GetModelConfig(providerName, modelID) != nil {
+				t.Fatalf("%s still lists retired model %q", providerName, modelID)
+			}
+		}
+	}
+}
+
 func TestVolcengineGLMModelsUseOneMillionContextAndProviderDefaultMaxTokens(t *testing.T) {
 	s := DefaultSettings()
 	for _, providerName := range []string{"volcengine", "volcengine-agentplan", "volcengine-codingplan"} {
@@ -557,6 +603,7 @@ func TestRoutedProviderModelMaxTokensAreExplicit(t *testing.T) {
 			"tencent/hy3": 38106,
 		},
 		"minimax": {
+			"MiniMax-M3.1-Flash":     1000000,
 			"MiniMax-M3":             128000,
 			"MiniMax-M2.7":           131072,
 			"MiniMax-M2.7-highspeed": 131072,
@@ -611,27 +658,27 @@ func TestRoutedProviderModelMaxTokensAreExplicit(t *testing.T) {
 			"ZhipuAI/GLM-5.2":                            131072,
 		},
 		"gitee": {
-			"glm-5.1":                131072,
-			"qwen3.6-plus":           65536,
-			"deepseek-v4-pro":        384000,
-			"deepseek-v4-pro-0813":   0,
-			"qwen3.7-max":            65536,
-			"qwen3.8-max":            0,
-			"qwen3.8-max-0902":       131072,
-			"qwen3.8-27b":            0,
-			"qwen3.8-omni-flash":     131072,
-			"glm-5.3":                131072,
-			"glm-5.3-flash":          131072,
-			"kimi-k2.7-code":         262144,
-			"kimi-k3":                262144,
-			"glm-5":                  32768,
-			"qwen3.7-plus":           65536,
-			"minimax-m2.7":           131072,
-			"minimax-m3":             128000,
-			"deepseek-v4-flash":      384000,
-			"deepseek-v4-flash-0731": 0,
-			"deepseek-v4.1-flash":    0,
-			"qwen3.8-flash":          0,
+			"glm-5.1":                  131072,
+			"qwen3.6-plus":             65536,
+			"deepseek-v4-pro":          384000,
+			"deepseek-v4-pro-0813":     0,
+			"qwen3.7-max":              65536,
+			"qwen3.8-max":              0,
+			"qwen3.8-max-0902":         131072,
+			"qwen3.8-27b":              0,
+			"qwen3.8-omni-flash":       131072,
+			"glm-5.3":                  131072,
+			"glm-5.3-flash":            131072,
+			"kimi-k2.7-code":           262144,
+			"kimi-k3":                  262144,
+			"glm-5":                    32768,
+			"qwen3.7-plus":             65536,
+			"minimax-m2.7":             131072,
+			"minimax-m3":               128000,
+			"deepseek-v4-flash":        384000,
+			"deepseek-v4-flash-0731":   0,
+			"deepseek-v4.1-flash":      0,
+			"deepseek-v4.1-flash-1017": 0,
 		},
 		"alibaba-standard": {
 			"qwen3.6-plus":      65536,

@@ -6,6 +6,16 @@ This file contains the changes for the **current version only**. The full histor
 
 ### ✨ New Features
 
+- **New Gitee/Moark Model: `deepseek-v4.1-flash-1017`**
+  - Added `deepseek-v4.1-flash-1017` to the `gitee` and `moark` providers, directly after `deepseek-v4.1-flash` and with identical parameters: a 1M context window, reasoning support, and text+image input; no default max_tokens is sent.
+
+- **New MiniMax Model: `MiniMax-M3.1-Flash`**
+  - Added `MiniMax-M3.1-Flash` to the `minimax` provider: reasoning support with thinking intensity via the Anthropic-compatible `output_config.effort` scale (adaptive thinking format, mapped 1:1 from MothX thinking levels), 1M context window, text+image+video input, and no output-token cap (the preset uses the full context window as the ceiling, and requests are still clamped to remaining context).
+
+- **Volcengine Retired Models Removed.** Volcengine has taken `kimi-k2.7-code`, `doubao-seed-2.1-turbo`, and `minimax-m3` offline, so the `volcengine`, `volcengine-agentplan`, and `volcengine-codingplan` presets no longer list them (including the standard channel's `doubao-seed-2-1-turbo-260628` snapshot). The same IDs remain available on other providers such as Gitee/Moark.
+
+- **DeepSeek V4.1 Thinking Intensity.** All DeepSeek V4.1 channels now use the verified `reasoning_effort` parameter instead of only a thinking switch. MothX's `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` levels map one-to-one to the gateway scale, while `off` sends `none` to disable these gateways' think-by-default behavior. Gitee/Moark and Volcengine Agent Plan were validated live across the complete accepted enum; an incompatible custom deployment can opt out by setting its provider or model `thinkingFormat` to `thinking-only`.
+
 - **Sessions reject unusable working directories early.** `internal/session` is the single owner of working-directory validation, with the Runtime API delegating to it. Session creation, reopening, rebinding, ACP `mothx/session/setWorkDir`, and channel session resolution now require an existing absolute directory before persisting or assembling sandbox and tool resources. An ACP same-directory request no longer detaches a usable runtime when its directory has disappeared, and a channel run validates the bound session's persisted cwd rather than the platform default.
 - **Desktop uses an explicit draft-directory model.** The legacy workspace-default fallback and settings panel were removed. Quick-start drafts receive one process-local `mkdtemp` scratch directory, while a New Task draft remains unset until its native picker or worktree action supplies a directory. Picker history is only a convenience for the next dialog; draft state carries a generation so a stale quick-start, picker, or ACP completion cannot overwrite a newer New Task.
 - **Runtime coordinates local session submissions.** `SessionRuntime` owns one `(database identity, session ID)` FIFO `SubmissionCoordinator`, and `ExecutionRuntime.Completion` is the authoritative completion barrier. TUI queued input, ACP prompt admission, Channel/Cron/ESM/Knowledge admission handoffs, shutdown, cancellation, and structured local/external busy classification now share that lifecycle instead of polling lease errors or starting a successor from an Agent finish event.

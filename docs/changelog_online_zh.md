@@ -6,6 +6,16 @@
 
 ### ✨ 新功能
 
+- **Gitee/Moark 新增模型：`deepseek-v4.1-flash-1017`**
+  - `gitee` 和 `moark` 两个提供商均新增 `deepseek-v4.1-flash-1017`，紧随 `deepseek-v4.1-flash` 之后且参数完全一致：1M 上下文窗口、支持思考、文本/图片输入；默认不发送 max_tokens。
+
+- **MiniMax 新增模型：`MiniMax-M3.1-Flash`**
+  - `minimax` 提供商新增 `MiniMax-M3.1-Flash`：支持思考，并经 Anthropic 兼容协议的 `output_config.effort`（adaptive thinking 格式，与 MothX 思考档位一一映射）支持思考强度；1M 上下文窗口，文本/图片/视频输入；不限制最大输出 tokens（预设以整个上下文窗口为上限，请求时仍会按剩余上下文收夹）。
+
+- **火山引擎下线模型移除。** 火山引擎已下线 `kimi-k2.7-code`、`doubao-seed-2.1-turbo` 与 `minimax-m3`，`volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 预设不再列出这些模型（含标准版的 `doubao-seed-2-1-turbo-260628` 快照）。同名模型在 Gitee/Moark 等其他 provider 仍可使用。
+
+- **DeepSeek V4.1 思考强度。** 所有 DeepSeek V4.1 渠道现改用已经验证的 `reasoning_effort` 参数，不再只发送思考开关。MothX 的 `minimal`、`low`、`medium`、`high`、`xhigh`、`max` 与网关刻度一一对应；`off` 会发送 `none`，关闭这些网关默认开启的思考。Gitee/Moark 与火山引擎 Agent Plan 已对完整合法枚举进行实测；不兼容的自定义部署可将 provider 或 model 的 `thinkingFormat` 设为 `thinking-only` 退回旧格式。
+
 - **会话更早拒绝不可用的工作目录。** `internal/session` 成为工作目录校验的唯一 owner，Runtime API 仅做委托。创建、重开、重绑定会话，ACP `mothx/session/setWorkDir` 与消息通道解析会话时，都必须先确认目标是存在的绝对目录，才会持久化或组装沙箱及工具资源。ACP 对同目录请求不再因目录已消失而拆掉可用 Runtime；通道运行也会校验已绑定会话持久化的 cwd，而不是平台默认目录。
 - **Desktop 使用显式的草稿目录模型。** 移除了遗留的 workspace 默认回退及其设置面板。Quick Start 草稿获得一个进程内 `mkdtemp` 临时目录；New Task 草稿保持未设置，直到原生目录选择器或 worktree 操作提供目录。选择历史只为下一次对话框定位便利；草稿状态携带 generation，迟到的 quick-start、picker 或 ACP 回调不会覆盖更新的 New Task。
 - **Runtime 统一协调本地会话提交。** `SessionRuntime` 为每个 `(database identity, session ID)` 持有一个 FIFO `SubmissionCoordinator`，`ExecutionRuntime.Completion` 成为权威完成屏障。TUI 排队输入、ACP prompt admission、Channel/Cron/ESM/Knowledge 的准入交接、关闭、取消以及本地/外部忙碌的结构化分类共享同一生命周期，不再轮询 lease 错误或以 Agent 结束事件启动后继提交。

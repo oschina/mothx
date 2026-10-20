@@ -277,7 +277,6 @@ TUI 专用状态行命令配置。启用后，MothX 会在交互式 TUI 中把�
       "apiKey": "${VOLCENGINE_API_KEY}",
       "api": "openai-chat",
       "models": [
-        { "id": "doubao-seed-2-1-turbo-260628", "name": "Doubao Seed 2.1 Turbo", "contextWindow": 262144, "maxTokens": 262144, "input": ["text"] },
         { "id": "doubao-seed-evolving", "name": "Doubao Seed Evolving", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] },
         { "id": "doubao-seed-2-1-pro-260628", "name": "Doubao Seed 2.1 Pro", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] }
       ]
@@ -455,12 +454,15 @@ Google 原生 provider 可以直接配置：
 | `"anthropic"` | 使用 Anthropic `thinking` 带 `budget_tokens` |
 | `"deepseek"` | 使用 DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort` (OpenAI) 或 `output_config.effort` (Anthropic) |
 | `"xiaomi"` | 旧的 thinking-only 格式: `thinking: {type: "enabled"}` |
+| `"thinking-only"` | 只发送思考开关，不发送强度字段；用于让不兼容的 DeepSeek V4.1 部署退出 `reasoning_effort` |
+| `"deepseek-v4.1"` | DeepSeek V4.1 `reasoning_effort`: `none`（不思考）、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` |
 | `"doubao-seed"` | 豆包 Seed 2.1 / Evolving `reasoning_effort`: `minimal`（不思考）、`low`、`medium`、`high`（默认） |
 
 未设置时自动检测：
 - URL 包含 `deepseek` → `"deepseek"`
 - URL 包含 `xiaomimimo` → `"xiaomi"`
 - 模型 ID 匹配 `doubao-seed-2.1*` 或 `doubao-seed-evolving` → `"doubao-seed"`
+- 模型 ID 包含 `deepseek-v4.1` 或 `deepseek-v4-1` → `"deepseek-v4.1"`
 
 ```json
 {
