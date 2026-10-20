@@ -329,11 +329,17 @@ func (p *Provider) Chat(ctx context.Context, params provider.ChatParams) <-chan 
 					reqBody.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: &budget}
 				}
 			}
+		} else if params.ThinkingLevel == provider.ThinkingOff && model != nil && model.Reasoning &&
+			p.thinkingFormatForModel(model) == "adaptive" {
+			// Adaptive third-party models (MiniMax) think by default when the
+			// field is omitted, so honor an explicit off with the disabled
+			// switch, mirroring DeepSeek V4.1's reasoning_effort="none".
+			reqBody.Thinking = &anthropicThinking{Type: "disabled"}
 		}
 
 		// The Anthropic API rejects temperature/top_p when thinking is enabled,
 		// and some models reject sampling parameters entirely (compat flag).
-		if reqBody.Thinking != nil || provider.SamplingParamsDisabled(model) {
+		if (reqBody.Thinking != nil && reqBody.Thinking.Type != "disabled") || provider.SamplingParamsDisabled(model) {
 			reqBody.Temperature = nil
 			reqBody.TopP = nil
 		}

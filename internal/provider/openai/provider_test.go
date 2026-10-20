@@ -130,6 +130,20 @@ func newMockOpenAIProviderAtURL(t *testing.T, baseURL string, models []*provider
 	return p
 }
 
+// capturedRequestBody returns the request body recorded by a mock transport.
+// The stream is drained before this is called, so the buffered channel is
+// already populated; fail instead of hanging if the request was never sent.
+func capturedRequestBody(t *testing.T, bodyCh <-chan string) string {
+	t.Helper()
+	select {
+	case body := <-bodyCh:
+		return body
+	default:
+		t.Fatal("no request body captured")
+		return ""
+	}
+}
+
 func TestOpenAIRetriesEarlyStreamReadError(t *testing.T) {
 	streamErr := errors.New("read tcp 192.168.1.143:44252->180.76.199.86:443: read: connection reset by peer")
 	attempts := 0
@@ -970,6 +984,123 @@ func TestIsDoubaoSeedModel(t *testing.T) {
 	}
 }
 
+func TestOpenAIReasoningEffortUnsupportedRetriesWithoutIt(t *testing.T) {
+	var requests int
+	bodies := make(chan string, 4)
+	p := NewProviderWithModels("fake-key", "https://api.moark.com/v1", []*provider.Model{
+		{ID: "deepseek-v4.1-flash", Reasoning: true},
+	})
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		bodies <- string(body)
+		requests++
+		if requests == 1 {
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"unsupported parameter: reasoning_effort"}}`)),
+				Request:    r,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n")),
+			Request:    r,
+		}, nil
+	})}
+	var recorded provider.ParameterFallback
+	p.SetParameterFallbackHandler(func(fb provider.ParameterFallback) { recorded = fb })
+
+	var retryNoticed bool
+	for e := range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "deepseek-v4.1-flash",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingHigh,
+		Abort:         make(chan struct{}),
+	}) {
+		if e.Type == provider.StreamRetry && strings.Contains(e.RetryDetail, "reasoning_effort") {
+			retryNoticed = true
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2 (original + fallback retry)", requests)
+	}
+	var first, second openAIRequest
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodies)), &first); err != nil {
+		t.Fatalf("unmarshal first request: %v", err)
+	}
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodies)), &second); err != nil {
+		t.Fatalf("unmarshal second request: %v", err)
+	}
+	if first.ReasoningEffort != "high" {
+		t.Fatalf("first reasoning_effort = %q, want high", first.ReasoningEffort)
+	}
+	if second.ReasoningEffort != "" {
+		t.Fatalf("second reasoning_effort = %q, want omitted", second.ReasoningEffort)
+	}
+	if second.Thinking == nil || second.Thinking.Type != "enabled" {
+		t.Fatalf("second thinking = %#v, want enabled for the V4.1 thinking-only fallback", second.Thinking)
+	}
+	if !retryNoticed {
+		t.Fatal("expected a StreamRetry carrying the reasoning_effort fallback detail")
+	}
+	if recorded.Parameter != provider.ParameterReasoningEffort || recorded.ModelID != "deepseek-v4.1-flash" || recorded.ThinkingFormat != "thinking-only" {
+		t.Fatalf("recorded fallback = %#v, want reasoning_effort/thinking-only", recorded)
+	}
+
+	// The provider remembers the fallback, so a later turn omits the field too.
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "deepseek-v4.1-flash",
+		Messages:      []provider.Message{provider.NewUserMessage("again")},
+		ThinkingLevel: provider.ThinkingHigh,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+	var later openAIRequest
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodies)), &later); err != nil {
+		t.Fatalf("unmarshal later request: %v", err)
+	}
+	if later.ReasoningEffort != "" {
+		t.Fatalf("later reasoning_effort = %q, want omitted", later.ReasoningEffort)
+	}
+	if later.Thinking == nil || later.Thinking.Type != "enabled" {
+		t.Fatalf("later thinking = %#v, want enabled", later.Thinking)
+	}
+}
+
+func TestOpenAIReasoningEffortFallbackIgnoresUnrelatedBadRequests(t *testing.T) {
+	// A 400 that does not name the parameter must surface normally.
+	p := NewProviderWithModels("fake-key", "https://api.moark.com/v1", []*provider.Model{
+		{ID: "deepseek-v4.1-flash", Reasoning: true},
+	})
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"invalid value for temperature"}}`)),
+			Request:    r,
+		}, nil
+	})}
+	var streamErr error
+	for e := range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "deepseek-v4.1-flash",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingHigh,
+		Abort:         make(chan struct{}),
+	}) {
+		if e.Type == provider.StreamError {
+			streamErr = e.Error
+		}
+	}
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "temperature") {
+		t.Fatalf("stream error = %v, want the original 400 error", streamErr)
+	}
+}
+
 func TestOpenAIThinkingFormatDeepSeekV41UsesEffortByDefault(t *testing.T) {
 	bodyCh := make(chan string, 1)
 	p := newMockOpenAIProvider(t, []*provider.Model{
@@ -983,7 +1114,7 @@ func TestOpenAIThinkingFormatDeepSeekV41UsesEffortByDefault(t *testing.T) {
 	}) {
 	}
 	var req openAIRequest
-	if err := json.Unmarshal([]byte(<-bodyCh), &req); err != nil {
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodyCh)), &req); err != nil {
 		t.Fatalf("unmarshal request body: %v", err)
 	}
 	if req.ReasoningEffort != "high" {
@@ -1020,7 +1151,7 @@ func TestOpenAIThinkingFormatDeepSeekV41EffortScale(t *testing.T) {
 			}) {
 			}
 			var req openAIRequest
-			body := <-bodyCh
+			body := capturedRequestBody(t, bodyCh)
 			if err := json.Unmarshal([]byte(body), &req); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
@@ -1030,6 +1161,23 @@ func TestOpenAIThinkingFormatDeepSeekV41EffortScale(t *testing.T) {
 			if req.Thinking != nil {
 				t.Fatalf("%s %s thinking = %+v, want omitted (effort-only format)", baseURL, tc.level, req.Thinking)
 			}
+		}
+	}
+}
+
+func TestDeepSeekV41ReasoningEffortDefaultsToMedium(t *testing.T) {
+	// An unset level must not silently disable thinking on gateways whose
+	// default is on; only an explicit ThinkingOff maps to "none".
+	for _, tc := range []struct {
+		level provider.ThinkingLevel
+		want  string
+	}{
+		{"", "medium"},
+		{provider.ThinkingOff, "none"},
+		{provider.ThinkingMedium, "medium"},
+	} {
+		if got := deepSeekV41ReasoningEffort(tc.level); got != tc.want {
+			t.Fatalf("deepSeekV41ReasoningEffort(%q) = %q, want %q", tc.level, got, tc.want)
 		}
 	}
 }
@@ -1049,7 +1197,7 @@ func TestOpenAIThinkingFormatDeepSeekV41OffSendsNone(t *testing.T) {
 	}) {
 	}
 	var req openAIRequest
-	if err := json.Unmarshal([]byte(<-bodyCh), &req); err != nil {
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodyCh)), &req); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if req.ReasoningEffort != "none" {
@@ -1075,7 +1223,7 @@ func TestOpenAIThinkingFormatCompatOverridesV41AutoDetect(t *testing.T) {
 	}) {
 	}
 	var req openAIRequest
-	if err := json.Unmarshal([]byte(<-bodyCh), &req); err != nil {
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodyCh)), &req); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if req.Thinking == nil || req.ReasoningEffort != "" {

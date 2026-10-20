@@ -18,7 +18,7 @@ type providerEditState struct {
 	HTTPProxy           string
 	ForceHTTP11         bool
 	Headers             map[string]string // nil means "no custom headers"
-	ThinkingFormat      string            // "", "openai", "anthropic", "deepseek", "xiaomi", "zai"
+	ThinkingFormat      string            // "", "openai", "anthropic", "deepseek", "deepseek-v4.1", "thinking-only", "doubao-seed", "kimi", "qwen", "xiaomi", "zai"
 	CacheControl        *bool             // nil = auto, true = on, false = off
 	MaxImagesPerRequest int               // 0 = provider default, -1 = unlimited
 

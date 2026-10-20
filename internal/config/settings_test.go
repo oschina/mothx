@@ -476,15 +476,57 @@ func TestMinimaxM31FlashDefaults(t *testing.T) {
 			t.Fatalf("MiniMax-M3.1-Flash input = %#v, want %#v", model.Input, wantInput)
 		}
 	}
-	// No output-token ceiling: MaxTokens equals the context window so the
-	// agent never caps a request below the model's (unlimited) output.
+	// The preset declares the full context window as the model's output
+	// ceiling; the runtime still applies its normal output-token default.
 	if model.MaxTokens != 1000000 {
-		t.Fatalf("MiniMax-M3.1-Flash MaxTokens = %d, want 1000000 (no output limit)", model.MaxTokens)
+		t.Fatalf("MiniMax-M3.1-Flash MaxTokens = %d, want 1000000 (context-window ceiling)", model.MaxTokens)
 	}
 	// Thinking intensity rides the adaptive output_config.effort format.
 	if model.Compat == nil || model.Compat.ThinkingFormat != "adaptive" {
 		t.Fatalf("MiniMax-M3.1-Flash compat = %#v, want thinkingFormat adaptive", model.Compat)
 	}
+}
+
+func TestRecordModelCompatFallbackPersists(t *testing.T) {
+	t.Setenv("MOTHX_DIR", t.TempDir())
+	disabled := false
+	if err := RecordModelCompatFallback("gitee", "deepseek-v4.1-flash-1017", ModelCompatFallback{
+		ThinkingFormat:          "thinking-only",
+		SupportsReasoningEffort: &disabled,
+	}); err != nil {
+		t.Fatalf("RecordModelCompatFallback: %v", err)
+	}
+
+	loaded, err := LoadGlobalSettingsOrDefault()
+	if err != nil {
+		t.Fatalf("LoadGlobalSettingsOrDefault: %v", err)
+	}
+	persisted := loaded.GetModelConfig("gitee", "deepseek-v4.1-flash-1017")
+	if persisted == nil || persisted.Compat == nil || persisted.Compat.ThinkingFormat != "thinking-only" || persisted.Compat.SupportsReasoningEffort == nil || *persisted.Compat.SupportsReasoningEffort {
+		t.Fatalf("persisted compat = %#v, want thinking-only with effort disabled", persisted)
+	}
+	// The written model list keeps builtin metadata and ordering.
+	models := loaded.Providers["gitee"].Models
+	if len(models) < 2 || models[0].ID != "deepseek-v4.1-flash" || models[1].ID != "deepseek-v4.1-flash-1017" {
+		t.Fatalf("persisted model order = %#v, want builtin order preserved", modelIDs(models))
+	}
+	if persisted.ContextWindow != 1000000 {
+		t.Fatalf("persisted contextWindow = %d, want 1000000", persisted.ContextWindow)
+	}
+	// Unrelated providers are not materialized into settings.json.
+	if raw, err := os.ReadFile(GlobalSettingsPath()); err != nil {
+		t.Fatalf("read settings: %v", err)
+	} else if strings.Contains(string(raw), `"openai"`) {
+		t.Fatal("unrelated providers must stay sparse in settings.json")
+	}
+}
+
+func modelIDs(models []ModelConfig) []string {
+	ids := make([]string, len(models))
+	for i := range models {
+		ids[i] = models[i].ID
+	}
+	return ids
 }
 
 func TestVolcengineChannelsOmitRetiredModels(t *testing.T) {
@@ -679,6 +721,7 @@ func TestRoutedProviderModelMaxTokensAreExplicit(t *testing.T) {
 			"deepseek-v4-flash-0731":   0,
 			"deepseek-v4.1-flash":      0,
 			"deepseek-v4.1-flash-1017": 0,
+			"qwen3.8-flash":            0,
 		},
 		"alibaba-standard": {
 			"qwen3.6-plus":      65536,

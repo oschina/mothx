@@ -818,6 +818,38 @@ func TestAnthropicThinkingAdaptiveFromModelCompat(t *testing.T) {
 	}
 }
 
+func TestAnthropicThinkingAdaptiveOffSendsDisabled(t *testing.T) {
+	// Adaptive third-party models think by default when the thinking field is
+	// omitted, so an explicit off must send the disabled switch.
+	bodyCh := make(chan string, 1)
+	p := newMockAnthropicProvider(t, []*provider.Model{
+		{ID: "MiniMax-M3.1-Flash", Reasoning: true, Compat: &provider.ModelCompat{ThinkingFormat: "adaptive"}},
+	}, "data: {\"type\":\"message_stop\"}\n", bodyCh, nil)
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "MiniMax-M3.1-Flash",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingOff,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+
+	var req anthropicRequest
+	select {
+	case body := <-bodyCh:
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatalf("unmarshal request body: %v\nbody: %s", err, body)
+		}
+	default:
+		t.Fatal("no request body captured")
+	}
+	if req.Thinking == nil || req.Thinking.Type != "disabled" {
+		t.Fatalf("thinking = %#v, want disabled", req.Thinking)
+	}
+	if req.OutputConfig != nil {
+		t.Fatalf("output_config = %#v, want omitted when thinking is disabled", req.OutputConfig)
+	}
+}
+
 // TestAnthropicCache_FirstTurn: cache is created for the first time.
 // message_start carries cache_creation_input_tokens; no cache_read yet.
 func TestAnthropicCache_FirstTurn(t *testing.T) {

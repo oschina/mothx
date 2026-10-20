@@ -464,6 +464,10 @@ When not set, automatically detects:
 - Model ID matches `doubao-seed-2.1*` or `doubao-seed-evolving` → `"doubao-seed"`
 - Model ID contains `deepseek-v4.1` or `deepseek-v4-1` → `"deepseek-v4.1"`
 
+An explicit provider `thinkingFormat` (or a model's `compat.thinkingFormat`) always wins over these heuristics. A deployment that only accepts the older thinking switch can opt out of `reasoning_effort` by setting `thinkingFormat` to `thinking-only`.
+
+MothX also learns this at runtime: when an OpenAI-compatible gateway rejects `reasoning_effort`, it retries immediately without the field, shows the reason in the retry notice, and records `thinkingFormat: "thinking-only"` plus `supportsReasoningEffort: false` on that model so later runs omit it.
+
 ```json
 {
   "providers": {

@@ -1,14 +1,80 @@
 package factory
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/provider"
 	"github.com/oschina/mothx/internal/provider/anthropic"
 )
+
+func TestCreateRecordsReasoningEffortFallback(t *testing.T) {
+	t.Setenv("MOTHX_DIR", t.TempDir())
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"unknown field reasoning_effort"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: [DONE]\n"))
+	}))
+	defer srv.Close()
+
+	s := config.DefaultSettings()
+	s.Providers["gitee"] = &config.ProviderConfig{BaseURL: srv.URL, APIKey: "test", API: "openai-chat"}
+	p, model, err := Create(s, "gitee", "deepseek-v4.1-flash")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if model == nil {
+		t.Fatal("expected model")
+	}
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "deepseek-v4.1-flash",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingHigh,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("requests = %d, want 2", got)
+	}
+
+	loaded, err := config.LoadGlobalSettingsOrDefault()
+	if err != nil {
+		t.Fatalf("LoadGlobalSettingsOrDefault: %v", err)
+	}
+	persisted := loaded.GetModelConfig("gitee", "deepseek-v4.1-flash")
+	if persisted == nil || persisted.Compat == nil || persisted.Compat.ThinkingFormat != "thinking-only" {
+		t.Fatalf("persisted compat = %#v, want thinking-only", persisted)
+	}
+	if persisted.Compat.SupportsReasoningEffort == nil || *persisted.Compat.SupportsReasoningEffort {
+		t.Fatalf("persisted supportsReasoningEffort = %#v, want false", persisted.Compat.SupportsReasoningEffort)
+	}
+
+	// A provider constructed again in this process observes the learned
+	// fallback without waiting for a settings reload.
+	_, nextModel, err := Create(s, "gitee", "deepseek-v4.1-flash")
+	if err != nil {
+		t.Fatalf("second Create: %v", err)
+	}
+	if nextModel == nil || nextModel.Compat == nil || nextModel.Compat.ThinkingFormat != "thinking-only" {
+		t.Fatalf("second model compat = %#v, want learned thinking-only", nextModel)
+	}
+	if nextModel.Compat.SupportsReasoningEffort == nil || *nextModel.Compat.SupportsReasoningEffort {
+		t.Fatalf("second model supportsReasoningEffort = %#v, want false", nextModel.Compat.SupportsReasoningEffort)
+	}
+}
 
 func TestParseQualifiedModel(t *testing.T) {
 	providerName, modelID, err := ParseQualifiedModel("openai/gpt-5/coding")

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oschina/mothx/internal/config"
@@ -35,6 +36,13 @@ type Provider struct {
 	useResponsesAPI     bool
 	responsesConfig     *responsesConfig
 	maxImagesPerRequest int
+
+	// parameterFallbackHandler records parameters the endpoint rejected so
+	// later runs can omit them.
+	parameterFallbackHandler provider.ParameterFallbackHandler
+	// parameterFallbacks holds per-model fallbacks learned at runtime:
+	// model ID -> provider.ParameterFallback.
+	parameterFallbacks sync.Map
 
 	// Retry configuration
 	retryConfig *provider.RetryConfig
@@ -303,6 +311,12 @@ func (p *Provider) SetThinkingFormat(format string) {
 	p.thinkingFormat = format
 }
 
+// SetParameterFallbackHandler registers a best-effort handler for request
+// parameters the endpoint rejected. A nil handler disables reporting.
+func (p *Provider) SetParameterFallbackHandler(handler provider.ParameterFallbackHandler) {
+	p.parameterFallbackHandler = handler
+}
+
 // openAIRequest represents the request body for OpenAI Chat Completions.
 type openAIRequest struct {
 	Model               string          `json:"model"`
@@ -509,11 +523,23 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 
 		if !p.disableReasoning && model != nil && model.Reasoning {
 			format := p.thinkingFormatForModel(model)
+			effortAllowed := supportsReasoningEffort(model)
+			// A previous request may have proved that this endpoint rejects
+			// reasoning_effort. Omit it from then on and use the recorded
+			// fallback format instead of the configured one.
+			if fallback, ok := p.parameterFallbacks.Load(model.ID); ok {
+				if fb, ok := fallback.(provider.ParameterFallback); ok {
+					if fb.ThinkingFormat != "" {
+						format = fb.ThinkingFormat
+					}
+					effortAllowed = false
+				}
+			}
 			if params.ThinkingLevel == provider.ThinkingOff {
 				// DeepSeek V4.1 gateways think by default when no parameter is
 				// sent, so an explicit off must map to "none" instead of
 				// omitting the field.
-				if format == "deepseek-v4.1" && supportsReasoningEffort(model) {
+				if format == "deepseek-v4.1" && effortAllowed {
 					reqBody.ReasoningEffort = deepSeekV41ReasoningEffort(provider.ThinkingOff)
 				}
 			} else {
@@ -521,19 +547,19 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 				switch format {
 				case "deepseek":
 					reqBody.Thinking = &thinkingConfig{Type: "enabled"}
-					if supportsReasoningEffort(model) {
+					if effortAllowed {
 						reqBody.ReasoningEffort = deepseekReasoningEffort(params.ThinkingLevel)
 					}
 				case "kimi":
-					if supportsReasoningEffort(model) {
+					if effortAllowed {
 						reqBody.ReasoningEffort = kimiReasoningEffort(params.ThinkingLevel)
 					}
 				case "deepseek-v4.1":
-					if supportsReasoningEffort(model) {
+					if effortAllowed {
 						reqBody.ReasoningEffort = deepSeekV41ReasoningEffort(params.ThinkingLevel)
 					}
 				case "doubao-seed":
-					if supportsReasoningEffort(model) {
+					if effortAllowed {
 						reqBody.ReasoningEffort = doubaoSeedReasoningEffort(params.ThinkingLevel)
 					}
 				case "thinking-only", "xiaomi":
@@ -545,7 +571,7 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 						reqBody.ThinkingBudget = budget
 					}
 				default: // "openai" or ""
-					if supportsReasoningEffort(model) {
+					if effortAllowed {
 						reqBody.ReasoningEffort = openAIReasoningEffort(params.ThinkingLevel)
 						// OpenAI reasoning models reject temperature/top_p.
 						reqBody.Temperature = nil
@@ -580,6 +606,7 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 		}
 
 		completionTokenFallbackUsed := false
+		reasoningEffortFallbackUsed := false
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			if err := ctx.Err(); err != nil {
 				ch <- provider.StreamEvent{Type: provider.StreamError, Error: err, StopReason: "aborted"}
@@ -624,6 +651,42 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 						return
 					}
 					completionTokenFallbackUsed = true
+					attempt--
+					continue
+				}
+				if resp.StatusCode == http.StatusBadRequest && !reasoningEffortFallbackUsed &&
+					reqBody.ReasoningEffort != "" && isReasoningEffortUnsupportedResponse(bodyBytes) {
+					// The endpoint rejects reasoning_effort. Retry immediately
+					// without it (this does not consume a retry attempt) and
+					// remember the fallback for later requests.
+					fallback := provider.ParameterFallback{
+						ModelID:   modelID,
+						Parameter: provider.ParameterReasoningEffort,
+					}
+					if model != nil && p.thinkingFormatForModel(model) == "deepseek-v4.1" {
+						// Preserve the old thinking-switch behavior for DeepSeek
+						// V4.1 chat templates that only accept that switch.
+						fallback.ThinkingFormat = "thinking-only"
+					}
+					reqBody.ReasoningEffort = ""
+					if fallback.ThinkingFormat == "thinking-only" {
+						reqBody.Thinking = &thinkingConfig{Type: "enabled"}
+					}
+					body, err = json.Marshal(reqBody)
+					if err != nil {
+						ch <- provider.StreamEvent{Type: provider.StreamError, Error: fmt.Errorf("marshal reasoning_effort fallback: %w", err)}
+						return
+					}
+					p.parameterFallbacks.Store(modelID, fallback)
+					if p.parameterFallbackHandler != nil {
+						p.parameterFallbackHandler(fallback)
+					}
+					reasoningEffortFallbackUsed = true
+					ch <- provider.StreamEvent{
+						Type:             provider.StreamRetry,
+						RetryMaxAttempts: maxRetries,
+						RetryDetail:      reasoningEffortFallbackDetail(fallback.ThinkingFormat),
+					}
 					attempt--
 					continue
 				}
@@ -1010,10 +1073,13 @@ func isDeepSeekV41Model(modelID string) bool {
 }
 
 // deepSeekV41ReasoningEffort maps a thinking level onto the DeepSeek V4.1
-// effort scale. "none" disables the gateway's think-by-default behavior and
-// is sent for ThinkingOff; it is also the fallback for unknown levels.
+// effort scale. ThinkingOff disables the gateway's think-by-default behavior
+// with "none"; an empty or unset level falls back to "medium", matching
+// provider.NormalizeThinkingLevel.
 func deepSeekV41ReasoningEffort(level provider.ThinkingLevel) string {
 	switch level {
+	case provider.ThinkingOff:
+		return "none"
 	case provider.ThinkingMinimal:
 		return "minimal"
 	case provider.ThinkingLow:
@@ -1027,7 +1093,7 @@ func deepSeekV41ReasoningEffort(level provider.ThinkingLevel) string {
 	case provider.ThinkingMax:
 		return "max"
 	default:
-		return "none"
+		return "medium"
 	}
 }
 
@@ -1050,6 +1116,45 @@ func isMaxTokensUnsupportedResponse(body []byte) bool {
 	message := strings.ToLower(string(body))
 	return strings.Contains(message, "max_tokens") &&
 		(strings.Contains(message, "max_completion_tokens") || strings.Contains(message, "not supported"))
+}
+
+// isReasoningEffortUnsupportedResponse reports whether a provider rejected the
+// reasoning_effort parameter itself (as opposed to rejecting a particular
+// effort value). Gateways commonly answer with an unsupported/unknown field or
+// a vLLM chat-template unmarshal error.
+func isReasoningEffortUnsupportedResponse(body []byte) bool {
+	message := strings.ToLower(string(body))
+	if !strings.Contains(message, "reasoning_effort") && !strings.Contains(message, "reasoning effort") {
+		return false
+	}
+	for _, marker := range []string{
+		"unsupported",
+		"not supported",
+		"does not support",
+		"unknown",
+		"unrecognized",
+		"unexpected",
+		"cannot unmarshal",
+		"invalid parameter",
+		"extra fields",
+		"extra_forbidden",
+		"unexpected keyword",
+		"not permitted",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// reasoningEffortFallbackDetail is the sanitized, bounded diagnostic shown by
+// retry projections when reasoning_effort is dropped for the next attempt.
+func reasoningEffortFallbackDetail(thinkingFormat string) string {
+	if thinkingFormat == "thinking-only" {
+		return "This endpoint does not support reasoning_effort; continued with the thinking switch only. The model was updated to stop sending reasoning_effort."
+	}
+	return "This endpoint does not support reasoning_effort; retried without it. The model was updated to stop sending reasoning_effort."
 }
 
 func maxTokensField(model *provider.Model) string {

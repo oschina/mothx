@@ -8,11 +8,13 @@
   - `gitee` 和 `moark` 两个提供商均新增 `deepseek-v4.1-flash-1017`，紧随 `deepseek-v4.1-flash` 之后且参数完全一致：1M 上下文窗口、支持思考、文本/图片输入；默认不发送 max_tokens。
 
 - **MiniMax 新增模型：`MiniMax-M3.1-Flash`**
-  - `minimax` 提供商新增 `MiniMax-M3.1-Flash`：支持思考，并经 Anthropic 兼容协议的 `output_config.effort`（adaptive thinking 格式，与 MothX 思考档位一一映射）支持思考强度；1M 上下文窗口，文本/图片/视频输入；不限制最大输出 tokens（预设以整个上下文窗口为上限，请求时仍会按剩余上下文收夹）。
+  - `minimax` 提供商新增 `MiniMax-M3.1-Flash`：支持思考，并经 Anthropic 兼容协议的 `output_config.effort`（adaptive thinking 格式；`minimal` 与 `low` 映射为 `low`，其余档位一一映射为 `medium`/`high`/`xhigh`/`max`）支持思考强度；1M 上下文窗口，文本/图片/视频输入。预设声明 1M 的输出上限（即整个上下文窗口），请求仍使用 MothX 常规输出 token 默认值，除非用户显式调高。
 
-- **火山引擎下线模型移除。** 火山引擎已下线 `kimi-k2.7-code`、`doubao-seed-2.1-turbo` 与 `minimax-m3`，`volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 预设不再列出这些模型（含标准版的 `doubao-seed-2-1-turbo-260628` 快照）。同名模型在 Gitee/Moark 等其他 provider 仍可使用。
+- **火山引擎下线模型移除。** 火山引擎已下线 `kimi-k2.7-code`、`doubao-seed-2.1-turbo` 与 `minimax-m3`，`volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 预设不再列出这些模型（含标准版的 `doubao-seed-2-1-turbo-260628` 快照）。同名模型在 Gitee/Moark 等其他 provider 仍可使用。由于预设顺序也是未配置默认模型时的回退顺序，未配置的标准版 `volcengine` 会话现在默认使用 `doubao-seed-evolving`，而非已下线的快照模型。
 
-- **DeepSeek V4.1 思考强度。** 所有 DeepSeek V4.1 渠道现改用已经验证的 `reasoning_effort` 参数，不再只发送思考开关。MothX 的 `minimal`、`low`、`medium`、`high`、`xhigh`、`max` 与网关刻度一一对应；`off` 会发送 `none`，关闭这些网关默认开启的思考。Gitee/Moark 与火山引擎 Agent Plan 已对完整合法枚举进行实测；不兼容的自定义部署可将 provider 或 model 的 `thinkingFormat` 设为 `thinking-only` 退回旧格式。
+- **DeepSeek V4.1 思考强度。** Gitee/Moark 与火山引擎预设中的 DeepSeek V4.1 模型现改用已经验证的 `reasoning_effort` 参数，不再只发送思考开关。MothX 的 `minimal`、`low`、`medium`、`high`、`xhigh`、`max` 与网关刻度一一对应；`off` 会发送 `none`，关闭这些网关默认开启的思考。Gitee/Moark 与火山引擎 Agent Plan 已对完整合法枚举进行实测。所有 DeepSeek V4.1 模型 ID 默认使用该格式（包括第三方网关）；仅接受旧思考开关的部署可将 `thinkingFormat` 设为 `thinking-only` 退回。
+
+- **不支持的 `reasoning_effort` 自动降级。** 当 OpenAI 兼容端点拒绝 `reasoning_effort` 时，MothX 会立即去掉该参数重试（保留 DeepSeek V4.1 的思考开关），在重试提示中说明原因，并把该模型的兼容配置记录为 `thinkingFormat: "thinking-only"` 与 `supportsReasoningEffort: false`，后续运行不再发送该参数。此降级不消耗重试次数。
 
 - **会话更早拒绝不可用的工作目录。** `internal/session` 成为工作目录校验的唯一 owner，Runtime API 仅做委托。创建、重开、重绑定会话，ACP `mothx/session/setWorkDir` 与消息通道解析会话时，都必须先确认目标是存在的绝对目录，才会持久化或组装沙箱及工具资源。ACP 对同目录请求不再因目录已消失而拆掉可用 Runtime；通道运行也会校验已绑定会话持久化的 cwd，而不是平台默认目录。
 - **Desktop 使用显式的草稿目录模型。** 移除了遗留的 workspace 默认回退及其设置面板。Quick Start 草稿获得一个进程内 `mkdtemp` 临时目录；New Task 草稿保持未设置，直到原生目录选择器或 worktree 操作提供目录。选择历史只为下一次对话框定位便利；草稿状态携带 generation，迟到的 quick-start、picker 或 ACP 回调不会覆盖更新的 New Task。

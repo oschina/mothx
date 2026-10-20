@@ -464,6 +464,10 @@ Google 原生 provider 可以直接配置：
 - 模型 ID 匹配 `doubao-seed-2.1*` 或 `doubao-seed-evolving` → `"doubao-seed"`
 - 模型 ID 包含 `deepseek-v4.1` 或 `deepseek-v4-1` → `"deepseek-v4.1"`
 
+显式的 provider `thinkingFormat`（或模型的 `compat.thinkingFormat`）始终优先于上述自动检测。仅接受旧思考开关的部署可将 `thinkingFormat` 设为 `thinking-only`，退回不使用 `reasoning_effort`。
+
+MothX 也会在运行时学习该能力：当 OpenAI 兼容网关拒绝 `reasoning_effort` 时，会立即去掉该参数重试，在重试提示中说明原因，并把该模型的 `thinkingFormat` 记录为 `thinking-only`、`supportsReasoningEffort` 记录为 `false`，后续运行不再发送该参数。
+
 ```json
 {
   "providers": {

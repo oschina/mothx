@@ -1,12 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oschina/mothx/internal/platform"
@@ -1656,6 +1658,112 @@ func SaveGlobalSettingsPatch(updates map[string]any) error {
 		return fmt.Errorf("marshal settings patch: %w", err)
 	}
 	return writeGlobalSettingsData(data)
+}
+
+// ModelCompatFallback describes a compatibility fact learned from a provider
+// response that should be recorded on one model.
+type ModelCompatFallback struct {
+	// ThinkingFormat, when non-empty, replaces the model's thinking format.
+	ThinkingFormat string
+	// SupportsReasoningEffort, when non-nil, replaces the model's effort flag.
+	SupportsReasoningEffort *bool
+}
+
+// modelCompatFallbackMu serializes runtime-learned model compatibility
+// updates so concurrent fallbacks cannot clobber each other's settings patch.
+var modelCompatFallbackMu sync.Mutex
+
+// RecordModelCompatFallback persists a runtime-discovered compatibility
+// fallback for one model in the global settings file. Callers keep process-wide
+// behavior in their own cache; this function owns only the durable patch.
+func RecordModelCompatFallback(providerName, modelID string, fallback ModelCompatFallback) error {
+	providerName = strings.TrimSpace(providerName)
+	modelID = strings.TrimSpace(modelID)
+	if providerName == "" || modelID == "" {
+		return fmt.Errorf("provider and model are required")
+	}
+	if fallback.ThinkingFormat == "" && fallback.SupportsReasoningEffort == nil {
+		return nil
+	}
+	modelCompatFallbackMu.Lock()
+	defer modelCompatFallbackMu.Unlock()
+
+	global, err := LoadGlobalSettingsOrDefault()
+	if err != nil {
+		return err
+	}
+	pc := ResolveProviderConfig(providerName, global)
+	if pc == nil {
+		return nil
+	}
+	updated := false
+	for i := range pc.Models {
+		if pc.Models[i].ID != modelID {
+			continue
+		}
+		applyModelCompatFallback(&pc.Models[i], fallback)
+		updated = true
+		break
+	}
+	if !updated {
+		return nil
+	}
+	return saveProviderModels(providerName, pc.Models)
+}
+
+func applyModelCompatFallback(model *ModelConfig, fallback ModelCompatFallback) {
+	if model.Compat == nil {
+		model.Compat = &ModelCompat{}
+	}
+	if fallback.ThinkingFormat != "" {
+		model.Compat.ThinkingFormat = fallback.ThinkingFormat
+	}
+	if fallback.SupportsReasoningEffort != nil {
+		model.Compat.SupportsReasoningEffort = CloneBoolPtr(fallback.SupportsReasoningEffort)
+	}
+}
+
+// saveProviderModels writes a provider's model list into the global settings
+// file while keeping every sibling provider field byte-for-byte intact.
+func saveProviderModels(providerName string, models []ModelConfig) error {
+	raw := map[string]json.RawMessage{}
+	if data, err := os.ReadFile(GlobalSettingsPath()); err == nil {
+		if len(bytes.TrimSpace(data)) > 0 {
+			if err := json.Unmarshal(data, &raw); err != nil {
+				return fmt.Errorf("parse global settings: %w", err)
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read global settings %s: %w", GlobalSettingsPath(), err)
+	}
+
+	providers := map[string]json.RawMessage{}
+	if existing := raw["providers"]; len(bytes.TrimSpace(existing)) > 0 && !bytes.Equal(bytes.TrimSpace(existing), []byte("null")) {
+		if err := json.Unmarshal(existing, &providers); err != nil {
+			return fmt.Errorf("parse settings providers: %w", err)
+		}
+	}
+	entry := map[string]json.RawMessage{}
+	if existing := providers[providerName]; len(bytes.TrimSpace(existing)) > 0 && !bytes.Equal(bytes.TrimSpace(existing), []byte("null")) {
+		if err := json.Unmarshal(existing, &entry); err != nil {
+			return fmt.Errorf("parse provider %s: %w", providerName, err)
+		}
+	}
+	encodedModels, err := json.Marshal(models)
+	if err != nil {
+		return fmt.Errorf("marshal models for %s: %w", providerName, err)
+	}
+	entry["models"] = encodedModels
+	encodedEntry, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal provider %s: %w", providerName, err)
+	}
+	providers[providerName] = encodedEntry
+	encodedProviders, err := json.Marshal(providers)
+	if err != nil {
+		return fmt.Errorf("marshal settings providers: %w", err)
+	}
+	return SaveGlobalSettingsPatch(map[string]any{"providers": json.RawMessage(encodedProviders)})
 }
 
 func writeGlobalSettingsData(data []byte) error {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/provider"
@@ -11,6 +12,47 @@ import (
 	"github.com/oschina/mothx/internal/provider/google"
 	"github.com/oschina/mothx/internal/provider/openai"
 )
+
+// learnedModelCompat caches compatibility fallbacks discovered from provider
+// responses. It keeps later providers in this process aligned with the
+// persisted settings even when the caller does not reload them.
+var learnedModelCompat sync.Map // providerName\x00modelID -> config.ModelCompatFallback
+
+func learnedModelCompatKey(providerName, modelID string) string {
+	return providerName + "\x00" + modelID
+}
+
+func applyLearnedModelCompat(providerName string, models []*provider.Model) []*provider.Model {
+	for _, model := range models {
+		if model == nil {
+			continue
+		}
+		// An explicit model compatibility block wins over a learned fallback,
+		// so a later settings edit can re-enable reasoning_effort.
+		if model.Compat != nil && (model.Compat.ThinkingFormat != "" || model.Compat.SupportsReasoningEffort != nil) {
+			continue
+		}
+		value, ok := learnedModelCompat.Load(learnedModelCompatKey(providerName, model.ID))
+		if !ok {
+			continue
+		}
+		fallback, ok := value.(config.ModelCompatFallback)
+		if !ok {
+			continue
+		}
+		if model.Compat == nil {
+			model.Compat = &provider.ModelCompat{}
+		}
+		if fallback.ThinkingFormat != "" {
+			model.Compat.ThinkingFormat = fallback.ThinkingFormat
+		}
+		if fallback.SupportsReasoningEffort != nil {
+			disabled := *fallback.SupportsReasoningEffort
+			model.Compat.SupportsReasoningEffort = &disabled
+		}
+	}
+	return models
+}
 
 // Create creates a provider and model from settings without changing the config schema.
 func Create(settings *config.Settings, providerName, modelID string) (provider.Provider, *provider.Model, error) {
@@ -43,7 +85,7 @@ func CreateWithOptions(settings *config.Settings, providerName, modelID string, 
 
 	pc := config.ResolveProviderConfig(providerName, settings)
 	apiKey := settings.ResolveKey(providerName)
-	models := ConvertModelConfigs(providerName, pc.Models)
+	models := applyLearnedModelCompat(providerName, ConvertModelConfigs(providerName, pc.Models))
 	resolved := provider.ResolveAdapterConfig(pc)
 	httpOpts := provider.HTTPClientOptions{
 		ProxyURL:    pc.HTTPProxy,
@@ -80,6 +122,19 @@ func CreateWithOptions(settings *config.Settings, providerName, modelID string, 
 		if resolved.ThinkingFormat != "" {
 			op.SetThinkingFormat(resolved.ThinkingFormat)
 		}
+		op.SetParameterFallbackHandler(func(fb provider.ParameterFallback) {
+			if fb.ModelID == "" || fb.Parameter != provider.ParameterReasoningEffort {
+				return
+			}
+			disabled := false
+			fallback := config.ModelCompatFallback{
+				ThinkingFormat:          fb.ThinkingFormat,
+				SupportsReasoningEffort: &disabled,
+			}
+			learnedModelCompat.Store(learnedModelCompatKey(providerName, fb.ModelID), fallback)
+			// Best-effort: a failed settings write must never fail the run.
+			_ = config.RecordModelCompatFallback(providerName, fb.ModelID, fallback)
+		})
 		if resolved.API == "openai-responses" || resolved.API == "responses" {
 			op.SetUseResponsesAPI(true)
 			if err := op.SetResponsesConfig(pc.Responses); err != nil {
@@ -152,7 +207,7 @@ func ResolvedModels(settings *config.Settings, providerName string) []*provider.
 		return nil
 	}
 	pc := config.ResolveProviderConfig(providerName, settings)
-	return ConvertModelConfigs(providerName, pc.Models)
+	return applyLearnedModelCompat(providerName, ConvertModelConfigs(providerName, pc.Models))
 }
 
 // ProviderSortPriority ranks well-known providers before custom ones so the
