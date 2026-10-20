@@ -6,15 +6,19 @@ const theme = await readFile(new URL('./theme.ts', import.meta.url), 'utf8');
 const app = await readFile(new URL('../App.tsx', import.meta.url), 'utf8');
 const homeView = await readFile(new URL('../views/HomeView.tsx', import.meta.url), 'utf8');
 const appearance = await readFile(new URL('../views/settings/AppearancePanel.tsx', import.meta.url), 'utf8');
+const styles = await readFile(new URL('../index.css', import.meta.url), 'utf8');
 
 test('background images use the restricted Desktop bridge instead of file URLs', () => {
   assert.match(theme, /desktop\.homeBackgroundDataURL\(path\)/);
   assert.doesNotMatch(theme, /file:\/\//, 'packaged renderers must not load the selected image through file://');
 });
 
-test('app background removes the opaque bg-background utility so the image is visible', () => {
-  assert.match(app, /background\.app \? 'app-surface-veil' : 'bg-background'/, 'app-scope background must not be covered by an opaque bg-background layer');
-  assert.doesNotMatch(app, /bg-background.*app-surface-veil/, 'bg-background and app-surface-veil must not both be applied at the same time');
+test('app background removes the opaque canvas layer so the image is visible', () => {
+  assert.match(app, /background\.app \? 'app-surface-veil' : 'app-canvas'/, 'app-scope background must not be covered by an opaque canvas layer');
+  assert.doesNotMatch(app, /app-canvas.*app-surface-veil/, 'app-canvas and app-surface-veil must not both be applied at the same time');
+  assert.match(styles, /\.app-canvas \{[\s\S]*?background-image: var\(--canvas-mesh\), var\(--canvas-bg\)/, 'the default canvas must render the brand mesh and ambient glow');
+  assert.match(styles, /:root \{[\s\S]*?--brand-blue: #2563eb/, 'light theme must expose the brand blue token');
+  assert.match(styles, /\[data-theme="dark"\] \{[\s\S]*?--brand-blue: #3b82f6/, 'dark theme must expose the brand blue token');
 });
 
 test('background image errors are surfaced as bilingual toast strings instead of failing silently', () => {

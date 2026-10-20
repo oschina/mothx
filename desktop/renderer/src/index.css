@@ -1,9 +1,9 @@
 /* MothX Desktop renderer — React + shadcn/ui + Tailwind CSS.
-   布局与视觉延续 workbuddy 原型:38px 标题栏 / 220px 侧边栏 / 22px 状态栏,
-   IDE Light / IDE Night 双主题。设计 token 采用 shadcn 规范命名并映射原
-   MothX 调色板:中性主色用于交互(primary=近黑/近白),绿色表示成功状态。
-   复杂的 CSS 系统(应用背景图、home 极光渐变、拖拽区、自动隐藏滚动条)保留
-   为组件层样式;其余界面样式一律使用 Tailwind 工具类。 */
+   布局与视觉延续 workbuddy 原型:mothx-harness 青蓝玻璃配色 / 220px 侧边栏 /
+   22px 状态栏,IDE Light / IDE Night 双主题。设计 token 采用 shadcn 规范命名,
+   主色为品牌蓝(青蓝渐变),绿色只表示成功状态。标题栏支持 macOS / Windows 11
+   两种窗体样式投影。复杂的 CSS 系统(应用背景图、home 极光渐变、拖拽区、
+   自动隐藏滚动条、动效)保留为组件层样式;其余界面样式一律使用 Tailwind 工具类。 */
 
 @import "tailwindcss";
 @import "tw-animate-css";
@@ -11,44 +11,44 @@
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
 :root {
-  /* ---- shadcn 语义 token(IDE Light) ---- */
+  /* ---- shadcn 语义 token(IDE Light · Clean Pearl) ---- */
   --background: #ffffff;
-  --foreground: #1a1a1a;
+  --foreground: #0f172a;
   --card: #ffffff;
-  --card-foreground: #1a1a1a;
+  --card-foreground: #0f172a;
   --popover: #ffffff;
-  --popover-foreground: #1a1a1a;
-  --primary: #111111;
+  --popover-foreground: #0f172a;
+  --primary: #2563eb;
   --primary-foreground: #ffffff;
-  --secondary: #f4f4f5;
-  --secondary-foreground: #1a1a1a;
-  --muted: #f4f4f5;
-  --muted-foreground: #6b6b6b;
-  --accent: #ececec;
-  --accent-foreground: #1a1a1a;
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0f172a;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #eef4fb;
+  --accent-foreground: #0f172a;
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
-  --border: #e4e4e3;
-  --input: #d4d4d4;
-  --ring: #111111;
+  --border: #e2e8f0;
+  --input: #cbd5e1;
+  --ring: #2563eb;
 
   /* ---- MothX 扩展 token ---- */
-  --fg-strong: #1a1a1a;
-  --fg-muted: #6b6b6b;
-  --fg-faint: #9a9a9a;
-  --border-strong: #d4d4d4;
-  --hover: #ececec;
-  --active: #e8e8e6;
-  --placeholder-bg: #f4f4f5;
-  --titlebar-bg: #f8f8f7;
-  --sidebar-bg: #f5f5f4;
-  --statusbar-bg: #f8f8f7;
-  --code-bg: #f8f8f7;
+  --fg-strong: #0f172a;
+  --fg-muted: #64748b;
+  --fg-faint: #94a3b8;
+  --border-strong: #cbd5e1;
+  --hover: #eef2f7;
+  --active: #e0e9f5;
+  --placeholder-bg: #f1f5f9;
+  --titlebar-bg: #f8fafc;
+  --sidebar-bg: #f8fafc;
+  --statusbar-bg: #f1f5f9;
+  --code-bg: #f8fafc;
   --input-bg: #ffffff;
-  --blue: #3b82f6;
-  --blue-soft: rgba(59, 130, 246, 0.12);
-  --green: #22c55e;
-  --green-soft: #f0fdf4;
+  --blue: #2563eb;
+  --blue-soft: rgba(37, 99, 235, 0.1);
+  --green: #10b981;
+  --green-soft: #ecfdf5;
   --amber: #d97706;
   --amber-soft: rgba(217, 119, 6, 0.12);
   --red: #dc2626;
@@ -57,28 +57,42 @@
   --purple: #7c5cd6;
   --purple-soft: rgba(124, 92, 214, 0.12);
   --overlay: rgba(0, 0, 0, 0.35);
-  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 2px 12px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.14);
+  --shadow-sm: 0 1px 4px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 2px 12px rgba(15, 23, 42, 0.1);
+  --shadow-lg: 0 8px 32px rgba(15, 23, 42, 0.14);
 
-  /* ---- 首页 macOS 材质与系统蓝 ---- */
-  --home-bg: #f5f5f7;
-  --home-surface: rgba(255, 255, 255, 0.72);
+  /* ---- 品牌青蓝与画布 ---- */
+  --brand-cyan: #06b6d4;
+  --brand-blue: #2563eb;
+  --brand-blue-hover: #1d4ed8;
+  --brand-gradient: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
+  --brand-glow: rgba(37, 99, 235, 0.16);
+  --canvas-bg: radial-gradient(circle at 50% 8%, rgba(6, 182, 212, 0.1) 0%, rgba(37, 99, 235, 0.06) 34%, rgba(248, 250, 252, 0) 72%);
+  --canvas-mesh: radial-gradient(rgba(148, 163, 184, 0.16) 1px, transparent 1px);
+  --glass-card-bg: rgba(255, 255, 255, 0.82);
+  --glass-card-border: #e2e8f0;
+  --glass-card-hover-border: #93c5fd;
+  --glass-card-shadow: 0 4px 14px -2px rgba(15, 23, 42, 0.05), 0 1px 3px rgba(15, 23, 42, 0.03);
+  --glass-card-shadow-hover: 0 14px 28px -4px rgba(37, 99, 235, 0.14), 0 4px 10px -2px rgba(15, 23, 42, 0.04);
+
+  /* ---- 首页青蓝玻璃材质 ---- */
+  --home-bg: #f8fafc;
+  --home-surface: rgba(255, 255, 255, 0.78);
   --home-surface-solid: #ffffff;
-  --home-border: rgba(60, 60, 67, 0.16);
-  --home-text: #1d1d1f;
-  --home-muted: #6e6e73;
-  --home-faint: #86868b;
-  --home-accent: #007aff;
-  --home-accent-hover: #0066cc;
-  --home-accent-soft: rgba(0, 122, 255, 0.12);
-  --home-accent-softer: rgba(0, 122, 255, 0.06);
-  --home-accent-shadow: rgba(0, 122, 255, 0.24);
-  --home-aurora-start: rgba(90, 200, 250, 0.28);
-  --home-aurora-end: rgba(52, 211, 153, 0.2);
-  --home-shadow: 0 18px 50px rgba(35, 35, 40, 0.12);
-  --home-image-overlay-rgb: 245 245 247;
-  --app-outline-rgb: 24 24 27;
+  --home-border: rgba(148, 163, 184, 0.34);
+  --home-text: #0f172a;
+  --home-muted: #64748b;
+  --home-faint: #94a3b8;
+  --home-accent: #2563eb;
+  --home-accent-hover: #1d4ed8;
+  --home-accent-soft: rgba(37, 99, 235, 0.1);
+  --home-accent-softer: rgba(37, 99, 235, 0.055);
+  --home-accent-shadow: rgba(37, 99, 235, 0.22);
+  --home-aurora-start: rgba(6, 182, 212, 0.22);
+  --home-aurora-end: rgba(37, 99, 235, 0.16);
+  --home-shadow: 0 18px 50px rgba(15, 23, 42, 0.12);
+  --home-image-overlay-rgb: 248 250 252;
+  --app-outline-rgb: 15 23 42;
 
   /* ---- 骨架尺寸 ---- */
   --titlebar-h: 38px;
@@ -100,49 +114,55 @@
 
   /* macOS 原生红绿灯占据标题栏左上角约 78px。标题栏的 Tailwind 工具类
      `pl-3` 位于 utilities 层,会覆盖同名的组件层规则,因此这条让位规则
-     必须留在 utilities 层,才能盖过 `pl-3` 的 12px 左内边距。 */
+     必须留在 utilities 层,才能盖过 `pl-3` 的 12px 左内边距。切换到
+     Windows 11 投影时原生红绿灯被隐藏,让位规则随之失效。 */
   body.platform-darwin .titlebar-drag {
     padding-left: 78px;
+  }
+  html[data-window-style="win"] body.platform-darwin .titlebar-drag {
+    padding-left: 12px;
   }
 }
 
 [data-theme="dark"] {
-  --background: #111312;
-  --foreground: #f2f4f2;
-  --card: #111312;
-  --card-foreground: #f2f4f2;
-  --popover: #181a19;
-  --popover-foreground: #f2f4f2;
-  --primary: #f2f4f2;
-  --primary-foreground: #111312;
-  --secondary: #222522;
-  --secondary-foreground: #f2f4f2;
-  --muted: #222522;
-  --muted-foreground: #b5bbb5;
-  --accent: #222522;
-  --accent-foreground: #f2f4f2;
+  --background: #0b1120;
+  --foreground: #f8fafc;
+  --card: #0f172a;
+  --card-foreground: #f8fafc;
+  --popover: #0f172a;
+  --popover-foreground: #f8fafc;
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+  --secondary: #1e293b;
+  --secondary-foreground: #f8fafc;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --accent: #1e293b;
+  --accent-foreground: #f8fafc;
   --destructive: #f87171;
-  --destructive-foreground: #111312;
-  --border: #2d302d;
-  --input: #3a3f3a;
-  --ring: #f2f4f2;
+  --destructive-foreground: #ffffff;
+  --border: #1e293b;
+  --input: #334155;
+  --ring: #38bdf8;
 
-  --fg-strong: #f2f4f2;
-  --fg-muted: #b5bbb5;
-  --fg-faint: #7f867f;
-  --border-strong: #3a3f3a;
-  --hover: #222522;
-  --active: #262a27;
-  --placeholder-bg: #222522;
-  --titlebar-bg: #181a19;
-  --sidebar-bg: #151716;
-  --statusbar-bg: #181a19;
-  --code-bg: #181a19;
-  --input-bg: #181a19;
-  --blue: #60a5fa;
-  --blue-soft: #111d2e;
-  --green: #22c55e;
-  --green-soft: #0f2418;
+  --fg-strong: #f8fafc;
+  --fg-muted: #94a3b8;
+  --fg-faint: #64748b;
+  --border-strong: #334155;
+  --hover: #172033;
+  --active: #1e2b44;
+  --placeholder-bg: #1e293b;
+  --titlebar-bg: #090e1a;
+  --sidebar-bg: #090e1a;
+  --statusbar-bg: #070b14;
+  --code-bg: #0f172a;
+  --input-bg: #0f172a;
+  --blue: #3b82f6;
+  --blue-soft: rgba(59, 130, 246, 0.16);
+  --green: #34d399;
+  --green-soft: rgba(16, 185, 129, 0.12);
+  --amber: #fbbf24;
+  --amber-soft: rgba(245, 158, 11, 0.18);
   --red: #f87171;
   --red-soft: #2a1515;
   --red-hover: #fca5a5;
@@ -151,23 +171,45 @@
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
   --overlay: rgba(0, 0, 0, 0.5);
 
-  --home-bg: #000000;
-  --home-surface: rgba(28, 28, 30, 0.72);
-  --home-surface-solid: #1c1c1e;
-  --home-border: rgba(235, 235, 245, 0.16);
-  --home-text: #f5f5f7;
-  --home-muted: #a1a1a6;
-  --home-faint: #86868b;
-  --home-accent: #0a84ff;
-  --home-accent-hover: #409cff;
-  --home-accent-soft: rgba(10, 132, 255, 0.2);
-  --home-accent-softer: rgba(10, 132, 255, 0.1);
-  --home-accent-shadow: rgba(10, 132, 255, 0.32);
-  --home-aurora-start: rgba(10, 132, 255, 0.25);
-  --home-aurora-end: rgba(52, 211, 153, 0.22);
+  --brand-cyan: #22d3ee;
+  --brand-blue: #3b82f6;
+  --brand-blue-hover: #60a5fa;
+  --brand-gradient: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+  --brand-glow: rgba(59, 130, 246, 0.28);
+  --canvas-bg: radial-gradient(circle at 50% 8%, rgba(6, 182, 212, 0.14) 0%, rgba(37, 99, 235, 0.09) 36%, rgba(11, 17, 32, 0) 75%);
+  --canvas-mesh: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  --glass-card-bg: rgba(15, 23, 42, 0.72);
+  --glass-card-border: rgba(255, 255, 255, 0.08);
+  --glass-card-hover-border: rgba(56, 189, 248, 0.45);
+  --glass-card-shadow: 0 4px 18px -2px rgba(0, 0, 0, 0.45);
+  --glass-card-shadow-hover: 0 14px 32px -4px rgba(34, 211, 238, 0.2), 0 0 0 1px rgba(56, 189, 248, 0.35);
+
+  --home-bg: #0b1120;
+  --home-surface: rgba(15, 23, 42, 0.72);
+  --home-surface-solid: #0f172a;
+  --home-border: rgba(255, 255, 255, 0.1);
+  --home-text: #f8fafc;
+  --home-muted: #94a3b8;
+  --home-faint: #64748b;
+  --home-accent: #3b82f6;
+  --home-accent-hover: #60a5fa;
+  --home-accent-soft: rgba(59, 130, 246, 0.16);
+  --home-accent-softer: rgba(59, 130, 246, 0.09);
+  --home-accent-shadow: rgba(59, 130, 246, 0.32);
+  --home-aurora-start: rgba(6, 182, 212, 0.16);
+  --home-aurora-end: rgba(37, 99, 235, 0.16);
   --home-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
-  --home-image-overlay-rgb: 0 0 0;
-  --app-outline-rgb: 245 245 247;
+  --home-image-overlay-rgb: 11 17 32;
+  --app-outline-rgb: 248 250 252;
+}
+
+/* 标题栏高度跟随窗体样式投影:macOS 42px / Windows 11 40px。 */
+html[data-window-style="mac"] {
+  --titlebar-h: 42px;
+}
+
+html[data-window-style="win"] {
+  --titlebar-h: 40px;
 }
 
 @theme inline {
@@ -374,6 +416,216 @@
   .titlebar-no-drag {
     -webkit-app-region: no-drag;
   }
+
+  /* ---- 品牌动效基础 ---- */
+  @keyframes mx-fade-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes mx-pulse-dot {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.2); opacity: 0.6; }
+  }
+  @keyframes mx-hero-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+  .mx-rise {
+    animation: mx-fade-up 0.35s ease-out both;
+  }
+  .session-live-dot {
+    animation: mx-pulse-dot 2.4s ease-in-out infinite;
+    box-shadow: 0 0 6px color-mix(in srgb, var(--green) 55%, transparent);
+  }
+
+  /* ---- 主画布:青蓝氛围光 + 点阵网格 ---- */
+  .app-canvas {
+    background-color: var(--background);
+    background-image: var(--canvas-mesh), var(--canvas-bg);
+    background-size: 24px 24px, auto;
+    background-attachment: local, local;
+  }
+
+  /* ---- 鼠标跟随聚光卡片 ---- */
+  .mx-spotlight-card {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s, border-color 0.25s, background-color 0.25s;
+  }
+  .mx-spotlight-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    border-radius: inherit;
+    background: radial-gradient(320px circle at var(--mx, 50%) var(--my, 50%), var(--brand-glow), transparent 45%);
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  .mx-spotlight-card:hover::before {
+    opacity: 1;
+  }
+  .mx-spotlight-card > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ---- Composer 玻璃卡片 ---- */
+  .composer-card {
+    backdrop-filter: blur(10px);
+  }
+
+  /* ---- 首页 hero 氛围光与渐变标题 ---- */
+  .hero-ambient-glow {
+    position: absolute;
+    top: -34px;
+    left: calc(50% - 160px);
+    width: 320px;
+    height: 200px;
+    background: radial-gradient(ellipse at center, rgba(6, 182, 212, 0.26) 0%, rgba(37, 99, 235, 0.16) 45%, transparent 75%);
+    filter: blur(32px);
+    pointer-events: none;
+    z-index: 0;
+    transition: transform 0.2s ease-out;
+  }
+  .home-hero-logo {
+    animation: mx-hero-float 7s ease-in-out infinite;
+  }
+  .home-gradient-text {
+    background: var(--brand-gradient);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* ---- 标题栏:品牌 logo / 窗体样式分段开关 / macOS 与 Windows 控件 ---- */
+  .brand-logo-small {
+    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .brand-logo-small:hover {
+    transform: scale(1.12) rotate(4deg);
+  }
+
+  .mac-traffic-lights {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: 6px;
+  }
+  .mac-btn {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    transition: transform 0.15s, opacity 0.15s;
+  }
+  .mac-btn svg {
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .mac-traffic-lights:hover .mac-btn svg {
+    opacity: 0.8;
+  }
+  .mac-btn:hover {
+    transform: scale(1.1);
+  }
+  .mac-btn.close {
+    background: #ff5f56;
+    border: 1px solid #e0443e;
+    color: #5a0002;
+  }
+  .mac-btn.minimize {
+    background: #ffbd2e;
+    border: 1px solid #dea123;
+    color: #634300;
+  }
+  .mac-btn.maximize {
+    background: #27c93f;
+    border: 1px solid #1aab29;
+    color: #014300;
+  }
+
+  .win-window-controls {
+    display: flex;
+    align-items: center;
+    height: var(--titlebar-h);
+    margin-left: 2px;
+  }
+  .win-ctrl-btn {
+    width: 46px;
+    height: var(--titlebar-h);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .win-ctrl-btn:hover {
+    background: var(--hover);
+    color: var(--fg-strong);
+  }
+  .win-ctrl-btn.close:hover {
+    background: #e81123;
+    color: #ffffff;
+  }
+
+  .os-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--placeholder-bg);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+  }
+  .os-switch-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s, box-shadow 0.2s;
+  }
+  .os-switch-btn:hover {
+    color: var(--fg-strong);
+  }
+  .os-switch-btn.active {
+    background: var(--brand-blue);
+    color: #ffffff;
+    box-shadow: 0 2px 8px var(--brand-glow);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mx-rise,
+    .session-live-dot,
+    .home-hero-logo {
+      animation: none !important;
+    }
+    .mx-spotlight-card::before {
+      display: none;
+    }
+    .brand-logo-small,
+    .mx-spotlight-card {
+      transition: none;
+    }
+  }
   /* ---- 应用背景图系统:runtime 通过 CSS 变量注入用户图片 ---- */
   .app-shell {
     position: relative;
@@ -439,10 +691,24 @@
 
   /* ---- 首页极光渐变 ---- */
   .home-aurora {
+    position: relative;
     background:
       radial-gradient(760px circle at 16% -18%, var(--home-aurora-start), transparent 64%),
       radial-gradient(640px circle at 88% 2%, var(--home-aurora-end), transparent 62%),
       var(--home-bg);
+  }
+  .home-aurora::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: var(--canvas-mesh);
+    background-size: 24px 24px;
+    opacity: 0.7;
+    pointer-events: none;
+  }
+  .home-aurora > * {
+    position: relative;
+    z-index: 1;
   }
   .has-home-background .home-aurora,
   .has-app-background .home-aurora {

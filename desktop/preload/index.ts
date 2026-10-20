@@ -51,6 +51,7 @@ export interface MothxDesktopBridge {
     storeGet: () => Promise<unknown>;
     storeSet: (patch: unknown) => Promise<unknown>;
     windowControl: (action: 'minimize' | 'maximize' | 'close') => void;
+    setWindowStyle: (style: 'mac' | 'win') => Promise<{ windowStyle: 'mac' | 'win' }>;
     logDiagnostic: (message: string) => void;
     getDiagnosticLogs: () => Promise<DiagnosticLogEntry[]>;
     onDiagnosticLog: (callback: (entry: DiagnosticLogEntry) => void) => () => void;
@@ -90,6 +91,7 @@ const bridge: MothxDesktopBridge = {
     storeGet: () => ipcRenderer.invoke('desktop:store-get'),
     storeSet: (patch) => ipcRenderer.invoke('desktop:store-set', patch),
     windowControl: (action) => ipcRenderer.send('desktop:window-control', action),
+    setWindowStyle: (style) => ipcRenderer.invoke('desktop:set-window-style', style),
     logDiagnostic: (message) => ipcRenderer.send('desktop:log-diagnostic', String(message).slice(0, 2000)),
     getDiagnosticLogs: () => ipcRenderer.invoke('desktop:diagnostic-logs'),
     onDiagnosticLog: (callback) => {

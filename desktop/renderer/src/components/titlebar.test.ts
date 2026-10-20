@@ -15,12 +15,25 @@ test('titlebar keeps its normal inactive styling and drag semantics', () => {
   assert.match(styles, /@layer utilities \{[\s\S]*?body\.platform-darwin \.titlebar-drag \{[\s\S]*?padding-left: 78px/, 'macOS traffic-light offset must live in the utilities layer so it beats the `pl-3` utility');
 });
 
-test('macOS hides custom window controls while Windows/Linux keep them', () => {
-  assert.match(titlebar, /desktop\.platform\(\) === 'darwin'/, 'platform detection must gate the controls');
-  assert.match(titlebar, /isDarwin \? null :/, 'darwin must not render custom window controls');
+test('native macOS traffic lights are used only in the macOS projection on darwin', () => {
+  assert.match(titlebar, /desktop\.platform\(\) === 'darwin'/, 'platform detection must gate native traffic lights');
+  assert.match(titlebar, /windowStyle === 'mac' && !isDarwin/, 'only the macOS projection on non-mac hosts draws traffic lights');
+  assert.match(titlebar, /windowStyle === 'win' \? <WindowsWindowControls/, 'the Windows projection must render the custom controls');
   assert.match(titlebar, /windowControl\('minimize'\)/);
   assert.match(titlebar, /windowControl\('maximize'\)/);
   assert.match(titlebar, /windowControl\('close'\)/);
+});
+
+test('titlebar exposes a macOS / Windows 11 window-style switch', () => {
+  assert.match(titlebar, /WindowStyleSwitch/, 'titlebar must render the segmented window-style switch');
+  assert.match(titlebar, /windowStyle === 'mac' && 'active'/, 'macOS segment must project the active state');
+  assert.match(titlebar, /windowStyle === 'win' && 'active'/, 'Windows segment must project the active state');
+  assert.match(titlebar, /applyWindowStyle\(style\)/, 'switching must go through the shared theme action');
+  assert.match(titlebar, /windowStyle\.macToast/, 'macOS switch must announce the change');
+  assert.match(titlebar, /windowStyle\.winToast/, 'Windows switch must announce the change');
+  assert.match(styles, /html\[data-window-style="mac"\] \{[\s\S]*?--titlebar-h: 42px/, 'macOS projection must use a 42px titlebar');
+  assert.match(styles, /html\[data-window-style="win"\] \{[\s\S]*?--titlebar-h: 40px/, 'Windows projection must use a 40px titlebar');
+  assert.match(styles, /html\[data-window-style="win"\] body\.platform-darwin \.titlebar-drag \{[\s\S]*?padding-left: 12px/, 'Windows projection must reclaim the native traffic-light inset');
 });
 
 test('global-background titlebar uses readable contrast surfaces for text and window controls', () => {

@@ -17,6 +17,10 @@ import { join } from 'node:path';
 export interface DesktopStoreData {
   theme: 'light' | 'dark';
   locale: 'zh' | 'en';
+  // Titlebar window-style projection. It changes renderer chrome only; the
+  // Electron window is always frameless/hidden-titlebar and native macOS
+  // traffic lights are toggled through setWindowButtonVisibility.
+  windowStyle: WindowStyle;
   homeBackgroundImage: string;
   homeBackgroundOpacity: number;
   homeBackgroundBlur: number;
@@ -34,9 +38,18 @@ export interface DesktopStoreData {
   sessionStatus: Record<string, string>;
 }
 
+export type WindowStyle = 'mac' | 'win';
+
+export const DEFAULT_WINDOW_STYLE: WindowStyle = process.platform === 'darwin' ? 'mac' : 'win';
+
+export function normalizeWindowStyle(value: unknown, fallback: WindowStyle = DEFAULT_WINDOW_STYLE): WindowStyle {
+  return value === 'mac' || value === 'win' ? value : fallback;
+}
+
 const DEFAULTS: DesktopStoreData = {
   theme: 'light',
   locale: 'zh',
+  windowStyle: DEFAULT_WINDOW_STYLE,
   homeBackgroundImage: '',
   homeBackgroundOpacity: 32,
   homeBackgroundBlur: 0,
@@ -59,6 +72,9 @@ const DEFAULTS: DesktopStoreData = {
 // chooser-owned path with an empty string.
 export function restrictRendererStorePatch(patch: Partial<DesktopStoreData>): Partial<DesktopStoreData> {
   const restricted = { ...patch };
+  // Window style must go through the dedicated IPC handler so the main process
+  // can update native macOS window buttons in the same transaction.
+  delete restricted.windowStyle;
   if (restricted.homeBackgroundImage !== undefined && restricted.homeBackgroundImage !== '') {
     delete restricted.homeBackgroundImage;
   }
@@ -117,6 +133,7 @@ export class DesktopStore {
       return {
         theme: parsed.theme === 'dark' ? 'dark' : 'light',
         locale: parsed.locale === 'en' ? 'en' : 'zh',
+        windowStyle: normalizeWindowStyle(parsed.windowStyle),
         homeBackgroundImage: typeof parsed.homeBackgroundImage === 'string' ? parsed.homeBackgroundImage.slice(0, 4096) : '',
         homeBackgroundOpacity: clampNumber(parsed.homeBackgroundOpacity, DEFAULTS.homeBackgroundOpacity, 0, 100),
         homeBackgroundBlur: clampNumber(parsed.homeBackgroundBlur, DEFAULTS.homeBackgroundBlur, 0, 24),
@@ -148,6 +165,7 @@ export class DesktopStore {
   set(patch: Partial<DesktopStoreData>): DesktopStoreData {
     if (patch.theme === 'light' || patch.theme === 'dark') this.data.theme = patch.theme;
     if (patch.locale === 'zh' || patch.locale === 'en') this.data.locale = patch.locale;
+    if (patch.windowStyle === 'mac' || patch.windowStyle === 'win') this.data.windowStyle = patch.windowStyle;
     if (typeof patch.homeBackgroundImage === 'string') this.data.homeBackgroundImage = patch.homeBackgroundImage.slice(0, 4096);
     if (patch.homeBackgroundOpacity !== undefined) this.data.homeBackgroundOpacity = clampNumber(patch.homeBackgroundOpacity, this.data.homeBackgroundOpacity, 0, 100);
     if (patch.homeBackgroundBlur !== undefined) this.data.homeBackgroundBlur = clampNumber(patch.homeBackgroundBlur, this.data.homeBackgroundBlur, 0, 24);

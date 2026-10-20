@@ -288,7 +288,7 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
   return (
     <div
       className={cn(
-        'rounded-xl border shadow-panel transition-[border-color,box-shadow]',
+        'composer-card rounded-xl border shadow-panel transition-[border-color,box-shadow]',
         isHome
           ? 'border-home-border bg-home-solid shadow-[var(--home-shadow)] focus-within:border-home-accent focus-within:shadow-[var(--home-shadow),0_0_0_4px_var(--home-accent-softer)]'
           : 'border-borderstrong bg-inputbg focus-within:border-primary focus-within:ring-[3px] focus-within:ring-primary/10',

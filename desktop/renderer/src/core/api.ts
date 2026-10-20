@@ -53,6 +53,7 @@ export interface SessionEventPayload {
 export interface StoreData {
   theme: 'light' | 'dark';
   locale: 'zh' | 'en';
+  windowStyle: 'mac' | 'win';
   homeBackgroundImage: string;
   homeBackgroundOpacity: number;
   homeBackgroundBlur: number;
@@ -120,6 +121,7 @@ interface MothxBridge {
     storeGet: () => Promise<StoreData>;
     storeSet: (patch: Partial<StoreData>) => Promise<StoreData>;
     windowControl: (action: 'minimize' | 'maximize' | 'close') => void;
+    setWindowStyle: (style: 'mac' | 'win') => Promise<{ windowStyle: 'mac' | 'win' }>;
     logDiagnostic: (message: string) => void;
     getDiagnosticLogs: () => Promise<DiagnosticLogEntry[]>;
     onDiagnosticLog: (callback: (entry: DiagnosticLogEntry) => void) => () => void;
@@ -174,6 +176,7 @@ export const desktop = {
   storeGet: () => bridge().desktop.storeGet(),
   storeSet: (patch: Partial<StoreData>) => bridge().desktop.storeSet(patch),
   windowControl: (action: 'minimize' | 'maximize' | 'close') => bridge().desktop.windowControl(action),
+  setWindowStyle: (style: 'mac' | 'win') => bridge().desktop.setWindowStyle(style),
   log: (message: string) => bridge().desktop.logDiagnostic(message),
   getDiagnosticLogs: () => bridge().desktop.getDiagnosticLogs(),
   onDiagnosticLog: (callback: (entry: DiagnosticLogEntry) => void) => bridge().desktop.onDiagnosticLog(callback),

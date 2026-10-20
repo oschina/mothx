@@ -12,7 +12,7 @@ import {
 } from './dev-mode';
 import { initialNewSessionDirectory } from './default-new-session-directory';
 import { createDiagnosticLogger, DiagnosticLogBuffer } from './diagnostic-logs';
-import { registerIpc, sendRendererEvent, type IpcDeps } from './ipc';
+import { applyNativeWindowButtons, registerIpc, sendRendererEvent, type IpcDeps } from './ipc';
 import {
   describeRuntimeBinary,
   resolveRuntimeBinary,
@@ -148,6 +148,9 @@ function createWindow(): void {
     },
   });
   const win = windowRef;
+  // Apply the persisted titlebar projection immediately: on macOS the native
+  // traffic lights are hidden when the user picked the Windows 11 chrome.
+  applyNativeWindowButtons(win, store.get().windowStyle);
   win.webContents.setWindowOpenHandler(({ url: target }) => {
     if (target.startsWith('http://') || target.startsWith('https://')) void shell.openExternal(target);
     return { action: 'deny' };

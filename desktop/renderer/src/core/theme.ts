@@ -21,6 +21,23 @@ export function applyLocalePreference(locale: 'zh' | 'en'): void {
   emit();
 }
 
+// 窗体样式只是渲染层投影与原生红绿灯可见性的开关;不重建议程,也不改变任何
+// 会话/Run/安全边界。偏好由 main 进程持久化并同步应用。
+export function applyWindowStyle(style: 'mac' | 'win'): void {
+  state.store.windowStyle = style;
+  if (typeof document !== 'undefined') {
+    document.documentElement.dataset.windowStyle = style;
+  }
+  void desktop.setWindowStyle(style).catch(() => undefined);
+  emit();
+}
+
+export function applyWindowStyleClass(style: 'mac' | 'win'): void {
+  if (typeof document !== 'undefined') {
+    document.documentElement.dataset.windowStyle = style;
+  }
+}
+
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
 }

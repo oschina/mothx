@@ -50,7 +50,7 @@ export function App() {
         <main
           className={cn(
             'relative min-w-0 flex-1 overflow-hidden',
-            background.app ? 'app-surface-veil' : 'bg-background'
+            background.app ? 'app-surface-veil' : 'app-canvas'
           )}
         >
           {appState.view === 'home' ? <HomeView /> : null}

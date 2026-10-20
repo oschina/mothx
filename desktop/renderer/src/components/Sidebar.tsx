@@ -161,7 +161,7 @@ function SessionItem({ session, registerFlip }: { session: ListedSessionShape; r
         if (event.key === 'Enter') void openSession(session.sessionId);
       }}
     >
-      <span className={cn('size-1.5 shrink-0 rounded-full', DOT_CLASS[status] || 'bg-faint')} />
+      <span className={cn('size-1.5 shrink-0 rounded-full', DOT_CLASS[status] || 'bg-faint', (status === 'working' || status === 'planning') && 'session-live-dot')} />
       <span className="flex-1 truncate text-[12.5px]">{title}</span>
       {isPinned(session.sessionId) ? <Pin className="size-3 shrink-0 text-faint" /> : null}
       <SessionMenu session={session} />
@@ -387,7 +387,7 @@ export function Sidebar() {
                 }
               }}
             >
-              {active ? <span className="absolute top-1/2 -left-2.5 h-4 w-[3px] -translate-y-1/2 rounded-r-[3px] bg-primary" /> : null}
+              {active ? <span className="absolute top-1/2 -left-2.5 h-4 w-[3px] -translate-y-1/2 rounded-r-[3px] bg-[linear-gradient(180deg,var(--brand-cyan),var(--brand-blue))] shadow-[0_0_8px_var(--brand-glow)]" /> : null}
               <Icon className={cn('size-4 shrink-0', active ? 'text-primary' : 'text-muted-foreground')} />
               <span className="min-w-0 flex-1 truncate">{entry.label}</span>
               {entry.sub ? <span className="shrink-0 text-[10.5px] text-muted-foreground">{entry.sub}</span> : null}

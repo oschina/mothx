@@ -8,7 +8,7 @@ import { SelectedFileGrants } from './file-grants';
 import { readHomeImageDataURL } from './home-image';
 import type { ReadHomeImageResult } from './home-image';
 import { isRunnableBinary, type RuntimeBinarySource, type RuntimeBinaryStatus } from './runtime-binary';
-import { createStoreSetHandler, type DesktopStore, type DesktopStoreData } from './store';
+import { createStoreSetHandler, normalizeWindowStyle, type DesktopStore, type DesktopStoreData, type WindowStyle } from './store';
 
 export type RendererEvent =
   | { type: 'state'; snapshot: AcpClientSnapshot }
@@ -51,6 +51,14 @@ function serializeError(error: unknown): { message: string; code?: number; data?
     };
   }
   return { message: String(error) };
+}
+
+export function applyNativeWindowButtons(win: BrowserWindow | undefined, style: WindowStyle): void {
+  // macOS traffic lights are the only native chrome still present (the window
+  // itself is frameless/hidden-titlebar). Windows/Linux frameless windows are
+  // fully renderer-drawn, so there is nothing to toggle there.
+  if (!win || win.isDestroyed() || process.platform !== 'darwin') return;
+  win.setWindowButtonVisibility(style === 'mac');
 }
 
 // registerIpc installs every renderer-facing channel exactly once. The ACP
@@ -240,6 +248,17 @@ export function registerIpc(deps: IpcDeps): void {
       default:
         break;
     }
+  });
+
+  // Window-style projection is presentation state, but the main process must
+  // apply the native macOS traffic-light visibility together with the persisted
+  // preference. The generic store-set channel deliberately cannot set it.
+  ipcMain.handle('desktop:set-window-style', (event, style: unknown) => {
+    const next = normalizeWindowStyle(style, deps.store.get().windowStyle);
+    const win = BrowserWindow.fromWebContents(event.sender) || deps.getWindow();
+    deps.store.set({ windowStyle: next });
+    applyNativeWindowButtons(win, next);
+    return { windowStyle: next };
   });
 
   ipcMain.handle('desktop:read-file-base64', async (_event, grant: unknown) => {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { DesktopStore, restrictRendererStorePatch } from './store.ts';
+import { createStoreSetHandler, DEFAULT_WINDOW_STYLE, DesktopStore, normalizeWindowStyle, restrictRendererStorePatch } from './store.ts';
 import { readHomeImageDataURL } from './home-image.ts';
 
 test('store defaults to visible home logo and no custom image', () => {
@@ -62,6 +62,36 @@ test('generic renderer store patches cannot grant non-empty image paths', () => 
     store.set(restrictRendererStorePatch({ homeBackgroundImage: '', homeLogoImage: '' }));
     assert.equal(store.get().homeBackgroundImage, '');
     assert.equal(store.get().homeLogoImage, '');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('store persists the window-style projection and rejects unknown values', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mothx-store-'));
+  try {
+    const store = new DesktopStore(dir);
+    assert.equal(store.get().windowStyle, DEFAULT_WINDOW_STYLE);
+    store.set({ windowStyle: 'mac' });
+    assert.equal(new DesktopStore(dir).get().windowStyle, 'mac');
+    store.set({ windowStyle: 'win' });
+    assert.equal(store.get().windowStyle, 'win');
+    assert.equal(normalizeWindowStyle('unknown', 'mac'), 'mac');
+    assert.equal(normalizeWindowStyle('win', 'mac'), 'win');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('generic renderer store patches cannot desync window style from native chrome', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mothx-store-'));
+  try {
+    const store = new DesktopStore(dir);
+    store.set({ windowStyle: 'mac' });
+    const handler = createStoreSetHandler(store);
+    handler({ windowStyle: 'win', theme: 'dark' });
+    assert.equal(store.get().windowStyle, 'mac');
+    assert.equal(store.get().theme, 'dark');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

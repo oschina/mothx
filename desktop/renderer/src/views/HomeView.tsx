@@ -1,6 +1,7 @@
 // 首页视图:hero、场景预设(办公/代码/创作)、快捷操作卡与 composer。
 // 极光渐变与用户背景图延续旧 renderer 的材质系统(index.css 组件层)。
 
+import { useRef, type PointerEvent } from 'react';
 import { AlertCircle, Sparkles } from 'lucide-react';
 
 import { Composer } from '@/components/Composer';
@@ -48,6 +49,7 @@ export function HomeView() {
   const prompts = isZh ? preset.promptsZh : preset.promptsEn;
 
   const conn = appState.connection;
+  const heroGlowRef = useRef<HTMLDivElement>(null);
   const heroSlogan =
     conn.state === 'ready'
       ? `${t('conn.ready')} · mothx ${conn.agentInfo?.version || ''} · ACP v1`
@@ -56,38 +58,50 @@ export function HomeView() {
         : t(`conn.${conn.state}`);
 
   return (
-    <section className="absolute inset-0 isolate flex flex-col overflow-hidden">
+    <section
+      className="absolute inset-0 isolate flex flex-col overflow-hidden"
+      onPointerMove={(event: PointerEvent<HTMLElement>) => {
+        // 鼠标横向视差只移动 hero 光晕，不参与布局或状态。
+        const glow = heroGlowRef.current;
+        if (!glow) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        const delta = (event.clientX - (rect.left + rect.width / 2)) * 0.05;
+        glow.style.transform = `translateX(${delta}px)`;
+      }}
+    >
       {background.home ? <div className="home-background-layer" /> : null}
       <div className="home-aurora relative z-1 flex min-h-0 flex-1 flex-col items-center overflow-y-auto">
         <div className="box-border flex min-h-full w-[min(820px,92%)] flex-col justify-center pt-8 pb-12">
           <ConnBanner />
 
-          <div className="mb-[26px] text-center">
+          <div className="relative mb-[26px] text-center">
+            <div ref={heroGlowRef} className="hero-ambient-glow" aria-hidden="true" />
             {!logo.hidden && (
-              <span className="mx-auto mb-3.5 block size-[58px] rounded-[14px] [filter:drop-shadow(0_8px_18px_var(--home-accent-shadow))]">
+              <span className="home-hero-logo relative z-1 mx-auto mb-3.5 block size-[58px] rounded-[14px] [filter:drop-shadow(0_8px_18px_var(--home-accent-shadow))]">
                 <HomeLogo logo={logo} />
               </span>
             )}
-            <h1 className="text-[26px] font-bold tracking-[-.35px] text-home-text">
+            <h1 className="relative z-1 text-[26px] font-bold tracking-[-.35px] text-home-text">
               MothX
-              <span className="font-medium text-[color-mix(in_srgb,var(--home-accent)_55%,var(--home-muted))]">
+              <span className="home-gradient-text font-medium text-[color-mix(in_srgb,var(--home-accent)_55%,var(--home-muted))]">
                 {t('home.heroAccent')}
               </span>
             </h1>
-            <div className="mt-2 text-[13px] text-home-text opacity-78">{t('home.heroSubtitle')}</div>
-            <div className="mt-[5px] text-[11.5px] text-home-muted">{heroSlogan}</div>
+            <div className="relative z-1 mt-2 text-[13px] text-home-text opacity-78">{t('home.heroSubtitle')}</div>
+            <div className="relative z-1 mt-[5px] text-[11.5px] text-home-muted">{heroSlogan}</div>
           </div>
 
           <div className="mb-3.5 flex justify-center gap-2.5">
-            {(['working', 'coding', 'design'] as const).map((presetId) => {
+            {(['working', 'coding', 'design'] as const).map((presetId, index) => {
               const active = appState.preset === presetId;
               const labels = { working: t('home.presetWorking'), coding: t('home.presetCoding'), design: t('home.presetDesign') };
               return (
                 <button
                   key={presetId}
                   type="button"
+                  style={{ animationDelay: `${index * 45}ms` }}
                   className={cn(
-                    'rounded-2xl border border-home-border bg-home-surface px-[18px] py-[7px] text-[13px] font-medium text-home-text shadow-[0_1px_1px_rgba(0,0,0,0.03)] backdrop-blur-[18px] backdrop-saturate-150 transition-all hover:-translate-y-px hover:border-home-accent hover:text-home-accent',
+                    'mx-rise rounded-2xl border border-home-border bg-home-surface px-[18px] py-[7px] text-[13px] font-medium text-home-text shadow-[0_1px_1px_rgba(0,0,0,0.03)] backdrop-blur-[18px] backdrop-saturate-150 transition-all hover:-translate-y-px hover:border-home-accent hover:text-home-accent',
                     active && 'border-home-accent bg-home-solid font-semibold text-home-accent shadow-[0_5px_16px_var(--home-accent-softer)]'
                   )}
                   aria-pressed={active}
@@ -112,7 +126,13 @@ export function HomeView() {
               <button
                 key={label}
                 type="button"
-                className="flex flex-col items-stretch rounded-[10px] border border-home-border bg-home-surface px-3 py-2.5 text-left text-[color-mix(in_srgb,var(--home-text)_90%,transparent)] backdrop-blur-[14px] backdrop-saturate-[1.4] transition-all hover:-translate-y-px hover:border-home-accent hover:bg-home-accent-soft hover:text-home-accent"
+                style={{ animationDelay: `${120 + index * 45}ms` }}
+                onPointerMove={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  event.currentTarget.style.setProperty('--mx', `${event.clientX - rect.left}px`);
+                  event.currentTarget.style.setProperty('--my', `${event.clientY - rect.top}px`);
+                }}
+                className="mx-rise mx-spotlight-card flex flex-col items-stretch rounded-[10px] border border-home-border bg-home-surface px-3 py-2.5 text-left text-[color-mix(in_srgb,var(--home-text)_90%,transparent)] backdrop-blur-[14px] backdrop-saturate-[1.4] transition-all hover:-translate-y-[3px] hover:border-home-accent hover:bg-home-solid hover:text-home-accent hover:shadow-[var(--glass-card-shadow-hover)]"
                 onClick={() => requestComposerReplace(prompts[index] ?? label)}
               >
                 <span className="flex min-w-0 flex-col gap-1">
@@ -128,7 +148,7 @@ export function HomeView() {
             ))}
           </div>
 
-          <div className="mt-9 w-full">
+          <div className="mx-rise mt-9 w-full" style={{ animationDelay: '300ms' }}>
             <Composer source="home" />
           </div>
         </div>

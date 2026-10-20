@@ -6,7 +6,7 @@ import { refreshDraftConfigOptions } from './composer';
 import { setLocale } from './i18n';
 import { refreshProjects, refreshSessions } from './sessions';
 import { emit, isCurrentDraftWorkspace, state } from './state';
-import { applyHomeBackground, applyTheme } from './theme';
+import { applyHomeBackground, applyTheme, applyWindowStyleClass } from './theme';
 import { applyReverseRequest, applySessionEvent, applySessionUpdate } from './transcript';
 import { applyWorktreeStatus } from './worktrees';
 
@@ -83,6 +83,7 @@ export async function bootstrapStore(): Promise<void> {
   state.appInfo = await desktop.appInfo().catch(() => state.appInfo);
   setLocale(state.store.locale);
   applyTheme(state.store.theme);
+  applyWindowStyleClass(state.store.windowStyle);
 }
 
 // bootstrapConnection 订阅 ACP 事件并同步一次连接状态;ready 时加载任务库。
