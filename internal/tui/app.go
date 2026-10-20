@@ -108,6 +108,16 @@ type queuedPrompt struct {
 
 type queuedPromptStartMsg struct{}
 
+// tuiSessionReadyMsg reports the result of the slow first-submission session
+// bootstrap. seq invalidates a result that the user aborted or superseded while
+// creation was in flight.
+type tuiSessionReadyMsg struct {
+	seq   uint64
+	sess  *session.Manager
+	input string
+	err   error
+}
+
 type submissionCompletedMsg struct {
 	completion agentruntime.ExecutionCompletion
 }
@@ -200,16 +210,24 @@ type App struct {
 	timer      stopwatch.Model
 
 	// State
-	messages               []string
-	hiddenEventIdx         map[int]bool // full-only event rows hidden by compact mode
-	auth                   authDialogState
-	envDialog              envDialogState
-	modelDialog            modelDialogState
-	defaultModelDialog     defaultModelDialogState
-	sessionsDialog         sessionsDialogState
-	toolResults            []toolResult // Store tool results for expansion
-	toolGroupSeq           int          // monotonic id source for parallel tool-call groups
-	isThinking             bool
+	messages           []string
+	hiddenEventIdx     map[int]bool // full-only event rows hidden by compact mode
+	auth               authDialogState
+	envDialog          envDialogState
+	modelDialog        modelDialogState
+	defaultModelDialog defaultModelDialogState
+	sessionsDialog     sessionsDialogState
+	toolResults        []toolResult // Store tool results for expansion
+	toolGroupSeq       int          // monotonic id source for parallel tool-call groups
+	isThinking         bool
+	// preparingSession marks the first submission of a session whose creation is
+	// running off the Bubble Tea update loop. The live view stays in the waiting
+	// state and later submissions queue locally until the Runtime can admit them.
+	preparingSession bool
+	sessionPrepSeq   uint64
+	// spinnerLoopActive prevents a second spinner tick chain when a prompt first
+	// waits for session creation and then transitions into the agent run.
+	spinnerLoopActive      bool
 	manualCompactionActive bool
 	pendingAbortReason     string
 	queuedPrompts          []queuedPrompt
@@ -826,7 +844,7 @@ func (a *App) currentCwd() string {
 // because an aborted stream can leave a running entry until its late event is
 // drained.
 func (a *App) isAgentActive() bool {
-	return a.isThinking || a.waitingForApproval
+	return a.isThinking || a.preparingSession || a.waitingForApproval
 }
 
 // processInputQueue returns a command that processes queued input events
@@ -855,6 +873,10 @@ var splitPasteCoalescingEnabled = func() bool {
 
 // tickSpinner returns a command that updates the spinner
 func (a *App) tickSpinner() tea.Cmd {
+	if a.spinnerLoopActive {
+		return nil
+	}
+	a.spinnerLoopActive = true
 	return tea.Tick(spinnerInterval, func(t time.Time) tea.Msg {
 		return spinnerTickMsg(t)
 	})
@@ -917,6 +939,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinnerTickMsg:
 		// Update timed UI affordances while the agent is active or user input is pending.
+		a.spinnerLoopActive = false
 		if a.isAgentActive() {
 			a.spinnerIndex = (a.spinnerIndex + 1) % len(spinnerChars)
 			cmds = append(cmds, a.tickSpinner())
@@ -1143,6 +1166,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.stopPrintLoop()
 			return a, tea.Quit
 		case tea.KeyEsc:
+			if a.preparingSession {
+				return a, a.cancelSessionPreparation()
+			}
 			if a.isThinking || a.waitingForApproval || a.waitingForQuestion {
 				return a, a.abortPendingRequest("user pressed Esc")
 			} else {
@@ -1247,6 +1273,30 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := a.queueInput(msg)
 		a.resetInputHistoryNavigation()
 		return a, cmd
+
+	case tuiSessionReadyMsg:
+		// The slow first-submission bootstrap finished. Ignore stale results: the
+		// user aborted, or a new submission superseded this one before it landed.
+		if msg.seq != a.sessionPrepSeq || !a.preparingSession {
+			return a, nil
+		}
+		a.preparingSession = false
+		if msg.err != nil {
+			a.failPromptStart()
+			a.discardPendingInput()
+			a.addCommandError(sessionCreationError(a.translator, msg.err, a.getSessionDir()))
+			return a, a.timer.Stop()
+		}
+		if err := a.activateSession(msg.sess); err != nil {
+			a.failPromptStart()
+			a.discardPendingInput()
+			a.addCommandError(sessionCreationError(a.translator, err, a.getSessionDir()))
+			return a, a.timer.Stop()
+		}
+		if a.backgroundSubmitter != nil && providerResponsesBackgroundEnabled(a.provider) {
+			return a, a.submitBackgroundInput(msg.input)
+		}
+		return a, a.launchPromptRun(msg.input, false)
 
 	case agentStreamStartMsg:
 		if msg.run != nil && msg.run != a.run {
@@ -1727,7 +1777,7 @@ func (a *App) View() string {
 	}
 
 	// 3. Loading indicator (spinner + timer + tokens when thinking)
-	if loading := renderLoadingIndicator(a.translator, a.isThinking, a.spinnerIndex, a.timer.Elapsed(), 0, a.width); loading != "" {
+	if loading := renderLoadingIndicator(a.translator, a.isThinking || a.preparingSession, a.spinnerIndex, a.timer.Elapsed(), 0, a.width); loading != "" {
 		parts = append(parts, loading)
 	}
 	// Queued submissions waiting for the active run: typing during a run must

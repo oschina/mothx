@@ -16,6 +16,7 @@ import (
 	"github.com/oschina/mothx/internal/provider"
 	serviceruntime "github.com/oschina/mothx/internal/serve/runtime"
 	"github.com/oschina/mothx/internal/session"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 func (a *App) addMessage(msg string) {
@@ -451,6 +452,16 @@ func (a *App) processInput(input string) tea.Cmd {
 		a.addCommandError("Cannot send input while context compaction is running.")
 		return nil
 	}
+	// Session creation for the very first submission runs off the Bubble Tea
+	// update loop. While it is in flight the Runtime has no session to admit
+	// against, so additional submissions stay in the TUI queue.
+	if a.preparingSession {
+		resources := a.pendingInputResources
+		a.pendingInputResources = nil
+		a.queuedPrompts = append(a.queuedPrompts, queuedPrompt{text: input, resources: resources})
+		a.scheduleRender()
+		return nil
+	}
 	// A session permits exactly one foreground execution at a time. Keep later
 	// user submissions in the TUI instead of replacing a.run: replacing it
 	// would orphan the active run's terminal cleanup and its runtime lease.
@@ -479,7 +490,51 @@ func (a *App) processInput(input string) tea.Cmd {
 		return a.handleCommand(input)
 	}
 
+	if a.session == nil {
+		return a.beginSessionPreparation(input)
+	}
+	return a.launchPromptRun(input, true)
+}
+
+// beginSessionPreparation accepts the prompt immediately and moves the slow
+// session bootstrap into a Bubble Tea command. The transcript echo and waiting
+// state are committed before any database work, so Enter never appears to hang
+// while a new session is created, migrated, or recovered.
+func (a *App) beginSessionPreparation(input string) tea.Cmd {
+	cwd := a.currentCwd()
+	sessionDir := a.getSessionDir()
+	background := a.backgroundSubmitter != nil && providerResponsesBackgroundEnabled(a.provider)
+
+	a.preparingSession = true
+	a.sessionPrepSeq++
+	seq := a.sessionPrepSeq
+	if !background {
+		a.isThinking = true
+		a.spinnerIndex = 0
+		a.requestStart = time.Now()
+		a.addMessage(userStyle.Render(a.translator.Text(i18n.MsgYouPrefix)) + input)
+	}
+	a.scheduleRender()
+
+	create := func() tea.Msg {
+		sess, err := agentruntime.CreateSession(agentruntime.CreateSessionOptions{WorkDir: cwd, SessionDir: sessionDir})
+		return tuiSessionReadyMsg{seq: seq, sess: sess, input: input, err: err}
+	}
+	if background {
+		return tea.Batch(create, a.tickSpinner())
+	}
+	// Reset only; the run-start transition owns the stopwatch start so the first
+	// submission cannot create a second concurrent tick chain.
+	return tea.Batch(create, a.tickSpinner(), a.timer.Reset())
+}
+
+// launchPromptRun performs the adapter-side preparation for one accepted
+// prompt and returns the command that starts its Runtime execution. echo asks
+// the stream-start message to render the user transcript line; paths that
+// already rendered it immediately pass false.
+func (a *App) launchPromptRun(input string, echo bool) tea.Cmd {
 	if err := a.ensureSession(); err != nil {
+		a.failPromptStart()
 		a.addCommandError(sessionCreationError(a.translator, err, a.getSessionDir()))
 		return nil
 	}
@@ -487,6 +542,7 @@ func (a *App) processInput(input string) tea.Cmd {
 		return a.submitBackgroundInput(input)
 	}
 	if err := a.syncESMTools(); err != nil {
+		a.failPromptStart()
 		a.addCommandError(fmt.Sprintf("Failed to sync ESM tools: %v", err))
 		return nil
 	}
@@ -498,6 +554,7 @@ func (a *App) processInput(input string) tea.Cmd {
 	}(), a.getSessionDir())
 	if err := a.ensureRuntime(); err != nil {
 		a.run = nil
+		a.failPromptStart()
 		a.addCommandError(fmt.Sprintf("Failed to initialize session runtime: %v", err))
 		return nil
 	}
@@ -522,6 +579,7 @@ func (a *App) processInput(input string) tea.Cmd {
 	if err != nil {
 		a.discardPendingInput()
 		a.run = nil
+		a.failPromptStart()
 		a.addCommandError(fmt.Sprintf("Failed to accept input: %v", err))
 		return nil
 	}
@@ -530,6 +588,7 @@ func (a *App) processInput(input string) tea.Cmd {
 	if err != nil {
 		a.runtime.DiscardInput(context.Background(), runInput)
 		a.run = nil
+		a.failPromptStart()
 		a.addCommandError(fmt.Sprintf("Failed to initialize artifact publishing: %v", err))
 		return nil
 	}
@@ -538,6 +597,7 @@ func (a *App) processInput(input string) tea.Cmd {
 		artifacts.Close()
 		a.runtime.DiscardInput(context.Background(), runInput)
 		a.run = nil
+		a.failPromptStart()
 		a.addCommandError(fmt.Sprintf("Failed to normalize input: %v", err))
 		return nil
 	}
@@ -555,15 +615,22 @@ func (a *App) processInput(input string) tea.Cmd {
 		a.runtime.DiscardInput(context.Background(), runInput)
 		a.run.finish(agentruntime.RunStateFailed)
 		a.run = nil
+		a.failPromptStart()
 		return nil
 	}
 	a.registerManagedAgent()
 	run := a.run
 	runtimeAgent := a.agent
+	streamInput := input
+	if !echo {
+		// The first-submission path already rendered the user line before the
+		// asynchronous session bootstrap so the acknowledgement is immediate.
+		streamInput = ""
+	}
 	return func() tea.Msg {
 		eventCh, err := run.start(context.Background(), runtimeAgent, runInput, userMessage)
 		return agentStreamStartMsg{
-			input:      input,
+			input:      streamInput,
 			submission: runInput,
 			eventCh:    eventCh,
 			err:        err,
@@ -571,6 +638,31 @@ func (a *App) processInput(input string) tea.Cmd {
 			compacting: false,
 		}
 	}
+}
+
+// failPromptStart clears the immediate waiting state when launchPromptRun
+// fails before an agent stream owns it.
+func (a *App) failPromptStart() {
+	if a.isThinking || a.preparingSession {
+		a.finishRequestTimer()
+	}
+	a.isThinking = false
+	a.preparingSession = false
+}
+
+// cancelSessionPreparation abandons a pending first submission. Session
+// creation itself is not cancellable, so its late result is invalidated by seq.
+func (a *App) cancelSessionPreparation() tea.Cmd {
+	a.sessionPrepSeq++
+	a.preparingSession = false
+	a.isThinking = false
+	a.discardPendingInput()
+	a.finishRequestTimer()
+	a.addMessage(statusStyle.Render(a.translator.Text(i18n.MsgAborted)))
+	a.scheduleRender()
+	// Prompts queued behind the abandoned first submission still run; nothing
+	// else restarts the local queue because no run terminal event will arrive.
+	return tea.Batch(a.timer.Stop(), a.scheduleNextQueuedPrompt())
 }
 
 // enqueueRuntimeSubmission transfers a queued foreground input to the shared
@@ -746,7 +838,7 @@ func (a *App) watchQueuedSubmission(handle *agentruntime.ExecutionHandle) {
 // startNextQueuedPrompt starts exactly one queued foreground submission after
 // the preceding run has reached its canonical terminal state.
 func (a *App) startNextQueuedPrompt() tea.Cmd {
-	if a == nil || len(a.queuedPrompts) == 0 || a.run != nil || a.isThinking || a.manualCompactionActive {
+	if a == nil || len(a.queuedPrompts) == 0 || a.run != nil || a.isThinking || a.preparingSession || a.manualCompactionActive {
 		return nil
 	}
 	prompt := a.queuedPrompts[0]
