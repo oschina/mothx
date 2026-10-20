@@ -23,6 +23,39 @@ test('thought blocks render as a button with aria-expanded and default collapsed
   assert.match(items, /\{item\.open \? \(/, 'thought text must only render while expanded');
 });
 
+test('collapsed streaming thought shows a one-line ticker pinned to the newest text', () => {
+  assert.match(
+    items,
+    /!item\.open && live \? thoughtPreview\(item\.text\)/,
+    'the live preview must only appear while the thought is collapsed and streaming',
+  );
+  assert.match(
+    items,
+    /thought-preview block min-w-0 flex-1 overflow-hidden[^\"]*whitespace-nowrap/,
+    'the live preview must occupy the remaining row width without wrapping',
+  );
+  assert.match(
+    items,
+    /const target = node\.scrollWidth - node\.clientWidth;/,
+    'the ticker must scroll to keep the newest reasoning text visible',
+  );
+  assert.match(
+    items,
+    /node\.scrollLeft \+= Math\.ceil\(remaining \* 0\.35\);/,
+    'the ticker must animate catch-up without restarting on every token',
+  );
+  assert.match(
+    stream,
+    /isSessionRunning\(appState\.activeSessionId\)/,
+    'only the active run may project a live reasoning ticker',
+  );
+  assert.match(
+    stream,
+    /live=\{item\.key === liveThoughtKey\}/,
+    'ChatStream must pass liveness to the current thought entry',
+  );
+});
+
 test('tool cards render a button header with aria-expanded and never auto-expand on failure', () => {
   assert.match(
     items,

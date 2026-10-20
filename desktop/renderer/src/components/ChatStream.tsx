@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import { chatScrollEvents } from '@/core/bus';
 import { t } from '@/core/i18n';
+import { isSessionRunning } from '@/core/state';
 import { loadOlderTranscript } from '@/core/sessions';
 import { useAppState } from '@/hooks/useAppState';
 import { TranscriptEntry } from '@/components/TranscriptItems';
@@ -15,6 +16,17 @@ export function ChatStream() {
   const autoScrollRef = useRef(true);
   const anchorRef = useRef<{ top: number; height: number; count: number } | null>(null);
   const loadingRef = useRef(false);
+  // Only the thought that is currently producing tokens gets the inline live
+  // preview; completed thought blocks stay as compact as before.
+  let liveThoughtKey: string | null = null;
+  if (isSessionRunning(appState.activeSessionId)) {
+    for (let index = appState.transcript.length - 1; index >= 0; index -= 1) {
+      const item = appState.transcript[index];
+      if (item.kind === 'status') continue;
+      liveThoughtKey = item.kind === 'thought' ? item.key : null;
+      break;
+    }
+  }
 
   useEffect(() => {
     return chatScrollEvents.on(({ force }) => {
@@ -78,7 +90,7 @@ export function ChatStream() {
       </div>
       <div className="mx-auto flex w-[min(760px,94%)] flex-col gap-4">
         {appState.transcript.map((item) => (
-          <TranscriptEntry key={item.key} item={item} />
+          <TranscriptEntry key={item.key} item={item} live={item.key === liveThoughtKey} />
         ))}
       </div>
     </div>

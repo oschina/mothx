@@ -2,7 +2,7 @@
 // 子代理卡/错误卡。展开(open)状态保存在条目对象上,流式更新不覆盖用户
 // 的展开选择;审批/提问倒计时由 useNow 驱动。
 
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -113,11 +113,39 @@ export function AgentMessage({ item }: { item: Extract<TranscriptItem, { kind: '
   );
 }
 
-export function ThoughtBlock({ item }: { item: Extract<TranscriptItem, { kind: 'thought' }> }) {
+function thoughtPreview(text: string): string {
+  const tail = text.length > 600 ? text.slice(-600) : text;
+  const compact = tail.replace(/\s+/g, ' ').trim();
+  return text.length > 600 ? `…${compact}` : compact;
+}
+
+export function ThoughtBlock({ item, live = false }: { item: Extract<TranscriptItem, { kind: 'thought' }>; live?: boolean }) {
+  const previewRef = useRef<HTMLSpanElement>(null);
+  const preview = !item.open && live ? thoughtPreview(item.text) : '';
   const toggle = () => {
     item.open = !item.open;
     emit();
   };
+
+  // Keep the one-line preview pinned to the newest tokens while reasoning
+  // streams. A frame-based catch-up avoids restarting a smooth scroll on every
+  // token chunk. Expanded text remains a normal scrollable block.
+  useLayoutEffect(() => {
+    const node = previewRef.current;
+    if (!node || !preview) return;
+    const target = node.scrollWidth - node.clientWidth;
+    if (target <= 0) return;
+    let frame = 0;
+    const step = () => {
+      const remaining = target - node.scrollLeft;
+      if (Math.abs(remaining) < 1) return;
+      node.scrollLeft += Math.ceil(remaining * 0.35);
+      frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [preview]);
+
   return (
     <div className={cn('animate-in fade-in border-l-2 border-borderstrong pl-2.5 duration-300', item.open && '[&_.thought-chev]:rotate-90')}>
       <button
@@ -127,7 +155,16 @@ export function ThoughtBlock({ item }: { item: Extract<TranscriptItem, { kind: '
         onClick={toggle}
       >
         <ChevronRight className="thought-chev size-3.5 shrink-0 transition-transform" />
-        <span>{t('chat.thinking')}</span>
+        <span className="shrink-0">{t('chat.thinking')}</span>
+        {preview ? (
+          <span
+            ref={previewRef}
+            className="thought-preview block min-w-0 flex-1 overflow-hidden text-[11.5px] whitespace-nowrap text-faint"
+            aria-hidden="true"
+          >
+            {preview}
+          </span>
+        ) : null}
       </button>
       {item.open ? (
         <div className="mt-1.5 max-h-60 overflow-y-auto text-[12px] leading-[1.7] break-words whitespace-pre-wrap text-muted-foreground">
@@ -469,14 +506,14 @@ export function ErrorCard({ item }: { item: Extract<TranscriptItem, { kind: 'err
   );
 }
 
-export function TranscriptEntry({ item }: { item: TranscriptItem }) {
+export function TranscriptEntry({ item, live = false }: { item: TranscriptItem; live?: boolean }) {
   switch (item.kind) {
     case 'user':
       return <UserBubble item={item} />;
     case 'agent':
       return <AgentMessage item={item} />;
     case 'thought':
-      return <ThoughtBlock item={item} />;
+      return <ThoughtBlock item={item} live={live} />;
     case 'tool':
       return <ToolCard item={item} />;
     case 'plan':
