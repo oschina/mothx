@@ -35,9 +35,9 @@ test('chat composer exposes an independent visible Expert Teams picker', () => {
 });
 
 test('new-session expert selection is independent from Mode and is carried into the initial session config', () => {
-  const modeMenu = composer.match(/\{\/\* 模式 \+ 思考等级 \*\/\}[\s\S]*?<\/DropdownMenu>/)?.[0] || '';
-  assert.ok(modeMenu.length > 0, 'mode menu block must be locatable');
-  assert.doesNotMatch(modeMenu, /expertOption|chooseSessionExpert/, 'Mode must not duplicate the dedicated Expert picker');
+  const configPicker = composer.match(/\{\/\* 模式 \+ 供应商 \+ 模型[\s\S]*?\{\/\* 主角团/)?.[0] || '';
+  assert.ok(configPicker.length > 0, 'merged mode/provider/model panel must be locatable');
+  assert.doesNotMatch(configPicker, /expertOption|chooseSessionExpert/, 'the merged config panel must not duplicate the dedicated Expert picker');
   assert.match(composerCore, /mothx\/session\/draft-config-options/, 'draft options must come from the shared ACP Runtime projection');
   assert.match(composerCore, /pendingConfig\[configId\] = value/, 'a pre-session expert choice must be retained for session creation');
   assert.match(composerCore, /pendingConfig\.expert = undefined/, 'the pending expert choice must be cleared after it is applied');

@@ -62,6 +62,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 const FALLBACK_MODES = [
@@ -125,97 +126,77 @@ function BorderedTool({ className, ...props }: ComponentProps<'button'>) {
   return <ToolButton className={cn('border-borderstrong bg-card', className)} {...props} />;
 }
 
-function SearchablePicker({
-  label,
+type ConfigChoice = NonNullable<SessionConfigOptionShape['options']>[number];
+
+// ConfigChoiceList is the shared searchable body of the merged Provider/Model
+// panel. It only projects ACP config choices; selection stays in the Runtime.
+function ConfigChoiceList({
   placeholder,
   icon,
   choices,
   currentValue,
   searchText,
   onSelect,
-  triggerClassName,
-  buttonLabel,
   renderItem,
 }: {
-  label: string;
   placeholder: string;
   icon: ReactNode;
-  choices: NonNullable<SessionConfigOptionShape['options']>;
+  choices: ConfigChoice[];
   currentValue: string;
-  searchText: (choice: NonNullable<SessionConfigOptionShape['options']>[number]) => string;
+  searchText: (choice: ConfigChoice) => string;
   onSelect: (value: string) => void;
-  triggerClassName?: string;
-  buttonLabel: string;
-  renderItem?: (choice: NonNullable<SessionConfigOptionShape['options']>[number], selected: boolean) => ReactNode;
+  renderItem?: (choice: ConfigChoice, selected: boolean) => ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const term = query.trim().toLowerCase();
   const visible = choices.filter((choice) => !term || searchText(choice).toLowerCase().includes(term));
   return (
-    <Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setQuery(''); }}>
-      <PopoverTrigger asChild>
-        <BorderedTool className={triggerClassName} title={label} aria-label={label} aria-expanded={open}>
-          {icon}
-          <span>{buttonLabel}</span>
-          <ChevronRight className="size-3.5 rotate-90 shrink-0" />
-        </BorderedTool>
-      </PopoverTrigger>
-      <PopoverContent className="w-72 p-0" align="start">
-        <Command shouldFilter={false}>
-          <CommandInput
-            placeholder={placeholder}
-            aria-label={placeholder}
-            value={query}
-            onValueChange={setQuery}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                const first = visible[0];
-                if (first) {
-                  event.preventDefault();
-                  onSelect(first.value);
-                  setOpen(false);
-                  setQuery('');
-                }
-              }
-            }}
-          />
-          <CommandList>
-            <CommandEmpty>{t('composer.noMatches')}</CommandEmpty>
-            <CommandGroup>
-              {visible.map((choice) => {
-                const selected = choice.value === currentValue;
-                return (
-                  <CommandItem
-                    key={choice.value}
-                    value={choice.value}
-                    onSelect={() => {
-                      onSelect(choice.value);
-                      setOpen(false);
-                      setQuery('');
-                    }}
-                    className={cn(selected && 'bg-primary/8')}
-                  >
-                    {renderItem ? (
-                      renderItem(choice, selected)
-                    ) : (
-                      <>
-                        <Cloud className="size-4 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1">
-                          <span className={cn('block truncate', selected && 'font-semibold text-primary')}>{choice.name}</span>
-                          {choice.description ? <span className="block truncate text-[10.5px] text-faint">{choice.description}</span> : null}
-                        </span>
-                        {selected ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
-                      </>
-                    )}
-                  </CommandItem>
-                );
-              })}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
+    <Command shouldFilter={false}>
+      <CommandInput
+        placeholder={placeholder}
+        aria-label={placeholder}
+        value={query}
+        onValueChange={setQuery}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            const first = visible[0];
+            if (first) {
+              event.preventDefault();
+              onSelect(first.value);
+            }
+          }
+        }}
+      />
+      <CommandList>
+        <CommandEmpty>{t('composer.noMatches')}</CommandEmpty>
+        <CommandGroup>
+          {visible.map((choice) => {
+            const selected = choice.value === currentValue;
+            return (
+              <CommandItem
+                key={choice.value}
+                value={choice.value}
+                onSelect={() => onSelect(choice.value)}
+                className={cn(selected && 'bg-primary/8')}
+              >
+                {renderItem ? (
+                  renderItem(choice, selected)
+                ) : (
+                  <>
+                    {icon}
+                    <span className="min-w-0 flex-1">
+                      <span className={cn('block truncate', selected && 'font-semibold text-primary')}>{choice.name}</span>
+                      {choice.description ? <span className="block truncate text-[10.5px] text-faint">{choice.description}</span> : null}
+                    </span>
+                    {selected ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
+                  </>
+                )}
+              </CommandItem>
+            );
+          })}
+        </CommandGroup>
+      </CommandList>
+    </Command>
   );
 }
 
@@ -223,6 +204,8 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
   const appState = useAppState();
   const background = useAppBackground();
   const [value, setValue] = useState('');
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configTab, setConfigTab] = useState<'model' | 'provider'>('model');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const autoGrow = useCallback(() => {
@@ -277,6 +260,8 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
   const expertOption = configOptions.find((option) => option.id === 'expert');
   const modes = modeOption?.options?.length ? modeOption.options : FALLBACK_MODES;
   const currentModeValue = modeOption?.currentValue || appState.currentMode;
+  const currentModeLabel = modes.find((mode) => mode.value === currentModeValue)?.name || currentModeValue || '…';
+  const configTitle = `${t('composer.model')}: ${currentModelLabel()} · ${t('composer.provider')}: ${currentProviderLabel() || '…'} · ${t('composer.mode')}: ${currentModeLabel}`;
 
   const expertAvailable = Boolean(expertOption?.options?.length);
   const currentExpert = expertOption?.options?.find((choice) => choice.value === expertOption.currentValue);
@@ -403,46 +388,152 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* 模式 + 思考等级 */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <ToolButton aria-label="Mode" title="Mode" className={cn(isHome && 'hover:bg-home-accent-softer hover:text-home-accent')}>
-              <SlidersHorizontal className={cn('size-3.5 shrink-0', isHome && 'text-home-text/85')} />
-              <span>{appState.currentMode || '…'}</span>
-            </ToolButton>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuLabel>Mode</DropdownMenuLabel>
-            {modes.map((mode) => (
-              <DropdownMenuItem
-                key={mode.value}
-                className={cn(mode.value === currentModeValue && 'bg-primary/8')}
-                onSelect={() => void applyConfigOption('mode', mode.value)}
+        {/* 模式 + 供应商 + 模型:合并为一个配置入口 */}
+        <Popover
+          open={configOpen}
+          onOpenChange={(next) => {
+            setConfigOpen(next);
+            if (next) setConfigTab('model');
+          }}
+        >
+          <PopoverTrigger asChild>
+            <BorderedTool
+              title={configTitle}
+              aria-label={configTitle}
+              aria-expanded={configOpen}
+              className={cn('max-w-[260px]', isHome && 'border-home-border bg-home-surface hover:bg-home-accent-softer hover:text-home-accent')}
+            >
+              <Cpu className={cn('size-3.5 shrink-0', isHome && 'text-home-text/85')} />
+              <span>{currentModelLabel()}</span>
+              <span
+                className={cn(
+                  'shrink-0 rounded bg-primary/8 px-1 py-px text-[9.5px] font-semibold uppercase leading-snug tracking-[.2px] text-primary',
+                  isHome && 'bg-home-accent-softer text-home-accent',
+                )}
               >
-                <SlidersHorizontal />
-                <span className={cn('min-w-0 flex-1', mode.value === currentModeValue && 'font-semibold text-primary')}>{mode.name}</span>
-                {mode.value === currentModeValue ? <Check className="size-3.5" /> : null}
-              </DropdownMenuItem>
-            ))}
-            {thinkingOption?.options?.length ? (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>Thinking</DropdownMenuLabel>
-                {thinkingOption.options.map((choice) => (
-                  <DropdownMenuItem
-                    key={choice.value}
-                    className={cn(choice.value === thinkingOption.currentValue && 'bg-primary/8')}
-                    onSelect={() => void applyConfigOption('thinking_level', choice.value)}
-                  >
-                    <Sparkles />
-                    <span className={cn('min-w-0 flex-1', choice.value === thinkingOption.currentValue && 'font-semibold text-primary')}>{choice.name}</span>
-                    {choice.value === thinkingOption.currentValue ? <Check className="size-3.5" /> : null}
-                  </DropdownMenuItem>
-                ))}
-              </>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
+                {currentModeLabel}
+              </span>
+              <ChevronRight className="size-3.5 rotate-90 shrink-0" />
+            </BorderedTool>
+          </PopoverTrigger>
+          <PopoverContent className="w-[340px] max-w-[calc(100vw-16px)] overflow-hidden p-0" align="start">
+            <div className="space-y-2 border-b border-border p-2.5">
+              {/* 模式 + 思考等级 */}
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="mr-1 inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[.3px] text-muted-foreground">
+                  <SlidersHorizontal className="size-3" />
+                  {t('composer.mode')}
+                </span>
+                {modes.map((mode) => {
+                  const selected = mode.value === currentModeValue;
+                  return (
+                    <button
+                      key={mode.value}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => void applyConfigOption('mode', mode.value)}
+                      className={cn(
+                        'rounded-[6px] border px-2 py-1 text-[11.5px] leading-none transition-colors',
+                        selected
+                          ? 'border-primary/45 bg-primary/8 font-semibold text-primary'
+                          : 'border-transparent text-muted-foreground hover:bg-hoverbg hover:text-strong',
+                      )}
+                    >
+                      {mode.name}
+                    </button>
+                  );
+                })}
+              </div>
+              {thinkingOption?.options?.length ? (
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="mr-1 inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[.3px] text-muted-foreground">
+                    <Sparkles className="size-3" />
+                    {t('composer.thinking')}
+                  </span>
+                  {thinkingOption.options.map((choice) => {
+                    const selected = choice.value === thinkingOption.currentValue;
+                    return (
+                      <button
+                        key={choice.value}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => void applyConfigOption('thinking_level', choice.value)}
+                        className={cn(
+                          'rounded-[6px] border px-2 py-1 text-[11.5px] leading-none transition-colors',
+                          selected
+                            ? 'border-primary/45 bg-primary/8 font-semibold text-primary'
+                            : 'border-transparent text-muted-foreground hover:bg-hoverbg hover:text-strong',
+                        )}
+                      >
+                        {choice.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+            <Tabs value={configTab} onValueChange={(next) => setConfigTab(next as 'model' | 'provider')}>
+              <TabsList aria-label={t('composer.config')}>
+                <TabsTrigger value="model">{t('composer.model')}</TabsTrigger>
+                <TabsTrigger value="provider">{t('composer.provider')}</TabsTrigger>
+              </TabsList>
+              <TabsContent value="model">
+                <ConfigChoiceList
+                  placeholder={t('composer.searchModel')}
+                  icon={<Cpu className="size-4 shrink-0 text-muted-foreground" />}
+                  choices={modelOption?.options || []}
+                  currentValue={modelOption?.currentValue || ''}
+                  searchText={(choice) => {
+                    const capability = modelCapability(provider, choice.value);
+                    return [choice.value, choice.name, choice.description, ...(capability?.input || []), capability?.reasoning ? t('composer.reasoning') : ''].join(' ');
+                  }}
+                  onSelect={(next) => {
+                    setConfigOpen(false);
+                    void applyConfigOption('model', next);
+                  }}
+                  renderItem={(choice, selected) => {
+                    const capability = modelCapability(provider, choice.value);
+                    return (
+                      <>
+                        <Cpu className="size-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1">
+                          <span className={cn('block truncate', selected && 'font-semibold text-primary')}>{choice.name}</span>
+                          {choice.description ? <span className="block truncate text-[10.5px] text-faint">{choice.description}</span> : null}
+                        </span>
+                        <span className="ml-auto flex shrink-0 flex-wrap items-center gap-1">
+                          {(capability?.input || []).map((input) => (
+                            <span key={input} className="rounded bg-primary/8 px-1 py-px text-[10px] leading-snug whitespace-nowrap text-primary">
+                              {modalityLabel(input)}
+                            </span>
+                          ))}
+                          {capability?.reasoning ? (
+                            <span className="rounded bg-expert-soft px-1 py-px text-[10px] leading-snug whitespace-nowrap text-expert">
+                              {t('composer.reasoning')}
+                            </span>
+                          ) : null}
+                          {selected ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
+                        </span>
+                      </>
+                    );
+                  }}
+                />
+              </TabsContent>
+              <TabsContent value="provider">
+                <ConfigChoiceList
+                  placeholder={t('composer.searchProvider')}
+                  icon={<Cloud className="size-4 shrink-0 text-muted-foreground" />}
+                  choices={providerOption?.options || []}
+                  currentValue={providerOption?.currentValue || ''}
+                  searchText={(choice) => `${choice.value} ${choice.name} ${choice.description || ''}`}
+                  onSelect={(next) => {
+                    setConfigTab('model');
+                    void applyConfigOption('provider', next);
+                  }}
+                />
+              </TabsContent>
+            </Tabs>
+          </PopoverContent>
+        </Popover>
 
         {/* 主角团(仅在 runtime 投影出 expert 配置项时可见) */}
         {expertAvailable ? (
@@ -486,59 +577,6 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
           </DropdownMenu>
         ) : null}
 
-        {/* 供应商(可搜索) */}
-        <SearchablePicker
-          label={t('composer.provider')}
-          placeholder={t('composer.searchProvider')}
-          icon={<Cloud className={cn('size-3.5 shrink-0', isHome && 'text-home-text/85')} />}
-          choices={providerOption?.options || []}
-          currentValue={providerOption?.currentValue || ''}
-          searchText={(choice) => `${choice.value} ${choice.name} ${choice.description || ''}`}
-          onSelect={(value) => void applyConfigOption('provider', value)}
-          buttonLabel={currentProviderLabel() || '…'}
-          triggerClassName={cn('max-w-[138px]', isHome && 'border-home-border bg-home-surface hover:bg-home-accent-softer hover:text-home-accent')}
-        />
-
-        {/* 模型(可搜索,带能力徽章) */}
-        <SearchablePicker
-          label={t('composer.model')}
-          placeholder={t('composer.searchModel')}
-          icon={<Cpu className={cn('size-3.5 shrink-0', isHome && 'text-home-text/85')} />}
-          choices={modelOption?.options || []}
-          currentValue={modelOption?.currentValue || ''}
-          searchText={(choice) => {
-            const capability = modelCapability(provider, choice.value);
-            return [choice.value, choice.name, choice.description, ...(capability?.input || []), capability?.reasoning ? t('composer.reasoning') : ''].join(' ');
-          }}
-          onSelect={(value) => void applyConfigOption('model', value)}
-          buttonLabel={currentModelLabel()}
-          triggerClassName={cn('max-w-[190px]', isHome && 'border-home-border bg-home-surface hover:bg-home-accent-softer hover:text-home-accent')}
-          renderItem={(choice, selected) => {
-            const capability = modelCapability(provider, choice.value);
-            return (
-              <>
-                <Cpu className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1">
-                  <span className={cn('block truncate', selected && 'font-semibold text-primary')}>{choice.name}</span>
-                  {choice.description ? <span className="block truncate text-[10.5px] text-faint">{choice.description}</span> : null}
-                </span>
-                <span className="ml-auto flex shrink-0 flex-wrap items-center gap-1">
-                  {(capability?.input || []).map((input) => (
-                    <span key={input} className="rounded bg-primary/8 px-1 py-px text-[10px] leading-snug whitespace-nowrap text-primary">
-                      {modalityLabel(input)}
-                    </span>
-                  ))}
-                  {capability?.reasoning ? (
-                    <span className="rounded bg-expert-soft px-1 py-px text-[10px] leading-snug whitespace-nowrap text-expert">
-                      {t('composer.reasoning')}
-                    </span>
-                  ) : null}
-                  {selected ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
-                </span>
-              </>
-            );
-          }}
-        />
 
         {/* 工作目录:会话内改会话 cwd,无会话改下一任务默认目录 */}
         <Tooltip>

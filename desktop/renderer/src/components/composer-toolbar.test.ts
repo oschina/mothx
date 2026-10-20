@@ -23,10 +23,10 @@ test('toolbar controls keep a stable hit area and never shrink below it', () => 
   assert.match(composer, /size-8 shrink-0[\s\S]*?Send/, 'send button must keep its fixed square dimensions');
 });
 
-test('provider, model, workspace and expert labels truncate cleanly', () => {
+test('merged config, workspace and expert labels truncate cleanly', () => {
   assert.match(composer, /\[&>span:not\(\.sr-only\)\]:truncate/, 'toolbar labels must truncate with ellipsis');
-  assert.match(composer, /max-w-\[138px\]/, 'provider trigger must bound its width');
-  assert.match(composer, /max-w-\[190px\]/, 'model and workspace triggers must bound their width');
+  assert.match(composer, /max-w-\[260px\]/, 'merged model/provider/mode trigger must bound its width');
+  assert.match(composer, /max-w-\[190px\]/, 'workspace trigger must bound its width');
 });
 
 test('both composer surfaces share one implementation with home/chat variants', () => {

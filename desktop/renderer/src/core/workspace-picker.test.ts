@@ -9,11 +9,11 @@ const bootstrapSrc = await readFile(new URL('./bootstrap.ts', import.meta.url), 
 const stateSrc = await readFile(new URL('./state.ts', import.meta.url), 'utf8');
 const pickerSrc = await readFile(new URL('./workspace-picker.ts', import.meta.url), 'utf8');
 
-test('working-directory picker follows the model picker in the shared composer toolbar', () => {
-  const modelIndex = composerSrc.indexOf("label={t('composer.model')}");
+test('working-directory picker follows the merged model/provider/mode picker in the shared composer toolbar', () => {
+  const modelIndex = composerSrc.indexOf("t('composer.model')");
   const workspaceIndex = composerSrc.indexOf('aria-label={workspaceTitle}');
-  assert.ok(modelIndex >= 0, 'model picker must exist');
-  assert.ok(workspaceIndex > modelIndex, 'workspace picker must follow the model picker');
+  assert.ok(modelIndex >= 0, 'merged config picker must exist');
+  assert.ok(workspaceIndex > modelIndex, 'workspace picker must follow the merged config picker');
   assert.doesNotMatch(composerSrc, /workspace-chip/, 'the title bar must not own a working-directory selector');
 });
 

@@ -6,25 +6,26 @@ const composer = await readFile(new URL('./Composer.tsx', import.meta.url), 'utf
 const composerCore = await readFile(new URL('../core/composer.ts', import.meta.url), 'utf8');
 const translations = await readFile(new URL('../core/i18n.ts', import.meta.url), 'utf8');
 
-test('composer keeps linked provider and model controls in the shared toolbar', () => {
-  assert.match(composer, /label=\{t\('composer\.provider'\)\}/, 'provider picker must exist');
-  assert.match(composer, /label=\{t\('composer\.model'\)\}/, 'model picker must exist');
-  const providerIndex = composer.indexOf("t('composer.provider')");
-  const modelIndex = composer.indexOf("t('composer.model')");
-  assert.ok(providerIndex >= 0 && modelIndex > providerIndex, 'model picker must follow the provider picker');
-  assert.match(composer, /currentProviderLabel\(\)/, 'provider labels must render separately from models');
-  assert.match(composer, /currentModelLabel\(\)/, 'model labels must render separately from providers');
+test('composer merges mode, provider and model into one toolbar control', () => {
+  assert.match(composer, /\{\/\* 模式 \+ 供应商 \+ 模型:合并为一个配置入口 \*\//, 'one merged config control must replace the three separate toolbar buttons');
+  assert.match(composer, /const configTitle = `\$\{t\('composer\.model'\)\}.*t\('composer\.provider'\)/s, 'the merged trigger must summarize model and provider');
+  assert.match(composer, /t\('composer\.mode'\)/, 'mode must stay available inside the merged panel');
+  assert.match(composer, /currentModelLabel\(\)/, 'the trigger label must project the canonical model');
+  assert.match(composer, /aria-expanded=\{configOpen\}/, 'the trigger must expose its panel state');
+  assert.doesNotMatch(composer, /function SearchablePicker/, 'separate provider and model pickers must be gone');
 });
 
-test('provider and model menus use searchable ACP-projected choices', () => {
-  assert.match(composer, /function SearchablePicker/, 'pickers must share one searchable implementation');
+test('merged panel keeps searchable ACP-projected provider and model choices', () => {
+  assert.match(composer, /function ConfigChoiceList/, 'provider and model tabs must share one searchable implementation');
   assert.match(composer, /placeholder=\{placeholder\}/, 'picker must render a search input');
   assert.match(composer, /searchText\(choice\)\.toLowerCase\(\)\.includes\(term\)/, 'picker must filter through the projected searchable text');
   assert.match(composer, /event\.key === 'Enter'/, 'Enter must choose the first filtered option');
   assert.match(composer, /onSelect\(first\.value\)/, 'Enter must select the first visible choice');
-  assert.match(composer, /onOpenChange=\{\(next\) => \{ setOpen\(next\);/, 'Popover open state must close the picker (Escape handled by Radix)');
-  assert.match(composer, /applyConfigOption\('provider', value\)/, 'provider selection must use session config options');
-  assert.match(composer, /applyConfigOption\('model', value\)/, 'model selection must use session config options');
+  assert.match(composer, /onOpenChange=\{\(next\) => \{/, 'Popover open state must close the merged panel (Escape handled by Radix)');
+  assert.match(composer, /applyConfigOption\('provider', next\)/, 'provider selection must use session config options');
+  assert.match(composer, /applyConfigOption\('model', next\)/, 'model selection must use session config options');
+  assert.match(composer, /TabsTrigger value="model"/, 'model choices must stay directly reachable');
+  assert.match(composer, /TabsTrigger value="provider"/, 'provider choices must stay directly reachable');
   assert.match(composer, /t\('composer\.noMatches'\)/, 'empty search state must stay localized');
 });
 
@@ -45,7 +46,7 @@ test('draft config options come from the shared ACP Runtime projection', () => {
 });
 
 test('composer picker copy remains bilingual', () => {
-  for (const key of ['composer.provider', 'composer.model', 'composer.searchProvider', 'composer.searchModel', 'composer.noMatches', 'composer.reasoning']) {
+  for (const key of ['composer.provider', 'composer.model', 'composer.mode', 'composer.thinking', 'composer.config', 'composer.searchProvider', 'composer.searchModel', 'composer.noMatches', 'composer.reasoning']) {
     assert.equal(translations.split(`'${key}'`).length - 1, 2, `${key} must exist in both locales`);
   }
 });
