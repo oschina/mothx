@@ -56,6 +56,14 @@ func ReadCommittedEventBatches(ctx context.Context, sessionDir, sessionID string
 	if inspection.State == EventStoreCorrupt || inspection.State == EventStoreInconsistent || inspection.State == EventStoreBlocked {
 		return nil, fmt.Errorf("event store is not replayable: %s", inspection.Reason)
 	}
+	return committedEventBatches(inspection), nil
+}
+
+// committedEventBatches filters the physically complete batches of an already
+// performed inspection by their committed SQLite intents. It deliberately does
+// not rescan the EventStore: callers that just inspected it must not pay for a
+// second full digest pass merely to select the replayable subset.
+func committedEventBatches(inspection EventStoreInspection) []EventBatch {
 	committed := make(map[string]struct{}, len(inspection.Intents))
 	for _, intent := range inspection.Intents {
 		if intent.State == EventIntentCommitted {
@@ -68,7 +76,7 @@ func ReadCommittedEventBatches(ctx context.Context, sessionDir, sessionID string
 			batches = append(batches, batch)
 		}
 	}
-	return batches, nil
+	return batches
 }
 
 // RebuildEventProjection reconstructs the SQLite metadata index from

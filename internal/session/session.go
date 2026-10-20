@@ -509,10 +509,11 @@ func stringValue(value *string) string {
 }
 
 type listOptions struct {
-	limit        int
-	offset       int
-	messagesOnly bool
-	search       string
+	limit                 int
+	offset                int
+	messagesOnly          bool
+	search                string
+	skipEventStorePreview bool
 }
 
 type ListOption func(*listOptions)
@@ -543,6 +544,16 @@ func WithMessagesOnly() ListOption {
 func WithSearch(search string) ListOption {
 	return func(o *listOptions) {
 		o.search = strings.TrimSpace(search)
+	}
+}
+
+// WithDeferredEventStorePreview leaves EventStore preview/title projection to
+// the caller's current page. Callers that sort and filter on cheap SQLite
+// metadata first can use this to avoid replaying every EventStore transcript
+// just to render the first page.
+func WithDeferredEventStorePreview() ListOption {
+	return func(o *listOptions) {
+		o.skipEventStorePreview = true
 	}
 }
 
@@ -738,6 +749,135 @@ func LatestModelChangeByID(sessionDir, sessionID string) (ModelChangeEntry, bool
 	}
 	entry, ok := m.GetLatestModelChange()
 	return entry, ok, nil
+}
+
+// SessionBindings is the latest persisted front-end-neutral binding state of a
+// session: provider/model, execution mode, thinking level, and additional
+// directory roots. List projections use it instead of replaying a whole
+// transcript just to recover a handful of metadata entries.
+type SessionBindings struct {
+	ModelChange              ModelChangeEntry
+	HasModelChange           bool
+	ModeChange               ModeChangeEntry
+	HasModeChange            bool
+	ThinkingLevelChange      ThinkingLevelChangeEntry
+	HasThinkingLevelChange   bool
+	AdditionalDirectories    AdditionalDirectoriesEntry
+	HasAdditionalDirectories bool
+}
+
+var sessionBindingEntryTypes = []string{
+	string(EntryModelChange),
+	string(EntryModeChange),
+	string(EntryThinkingChange),
+	string(EntryAdditionalDirectories),
+}
+
+// LatestSessionBindings reads the newest binding entries for the requested
+// sessions without replaying their message transcripts. Legacy SQLite sessions
+// are resolved by one indexed metadata query. EventStore sessions use the
+// fingerprint-cached read-only display projection (the same one session lists
+// use), falling back to the canonical session open only if that projection is
+// unavailable. Missing sessions and corrupt metadata rows are omitted rather
+// than failing the whole projection.
+func LatestSessionBindings(sessionDir string, sessionIDs []string) (map[string]SessionBindings, error) {
+	result := make(map[string]SessionBindings, len(sessionIDs))
+	if len(sessionIDs) == 0 {
+		return result, nil
+	}
+	db, ok, err := openExistingSessionDB(sessionDir)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return result, nil
+	}
+	sessionDAO := dao.NewSessionDAO(db.Bun())
+	stores, err := sessionDAO.ContentStores(context.Background(), sessionIDs)
+	if err != nil {
+		return nil, err
+	}
+	legacyIDs := make([]string, 0, len(sessionIDs))
+	eventStoreIDs := make([]string, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		if stores[sessionID] == "event_store" {
+			eventStoreIDs = append(eventStoreIDs, sessionID)
+			continue
+		}
+		legacyIDs = append(legacyIDs, sessionID)
+	}
+	if len(legacyIDs) > 0 {
+		records, err := sessionDAO.LatestEntriesByTypes(context.Background(), legacyIDs, sessionBindingEntryTypes)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range records {
+			state := result[record.SessionID]
+			if !applySessionBindingEntry(&state, record.Type, record.Data) {
+				continue
+			}
+			result[record.SessionID] = state
+		}
+	}
+	for _, sessionID := range eventStoreIDs {
+		if state, ok := loadEventStoreDisplay(sessionDir, sessionID); ok {
+			result[sessionID] = state.Bindings
+			continue
+		}
+		manager, err := OpenByIDExact(sessionDir, sessionID)
+		if err != nil {
+			continue
+		}
+		state := SessionBindings{}
+		if entry, ok := manager.GetLatestModelChange(); ok {
+			state.ModelChange, state.HasModelChange = entry, true
+		}
+		if entry, ok := manager.GetLatestModeChange(); ok {
+			state.ModeChange, state.HasModeChange = entry, true
+		}
+		if entry, ok := manager.GetLatestThinkingLevelChange(); ok {
+			state.ThinkingLevelChange, state.HasThinkingLevelChange = entry, true
+		}
+		if entry, ok := manager.GetLatestAdditionalDirectories(); ok {
+			state.AdditionalDirectories, state.HasAdditionalDirectories = entry, true
+		}
+		result[sessionID] = state
+	}
+	return result, nil
+}
+
+// applySessionBindingEntry decodes one persisted metadata row into state. It
+// reports whether the row was a recognized binding entry with a valid payload.
+func applySessionBindingEntry(state *SessionBindings, entryType, data string) bool {
+	switch EntryType(entryType) {
+	case EntryModelChange:
+		var entry ModelChangeEntry
+		if json.Unmarshal([]byte(data), &entry) != nil {
+			return false
+		}
+		state.ModelChange, state.HasModelChange = entry, true
+	case EntryModeChange:
+		var entry ModeChangeEntry
+		if json.Unmarshal([]byte(data), &entry) != nil {
+			return false
+		}
+		state.ModeChange, state.HasModeChange = entry, true
+	case EntryThinkingChange:
+		var entry ThinkingLevelChangeEntry
+		if json.Unmarshal([]byte(data), &entry) != nil {
+			return false
+		}
+		state.ThinkingLevelChange, state.HasThinkingLevelChange = entry, true
+	case EntryAdditionalDirectories:
+		var entry AdditionalDirectoriesEntry
+		if json.Unmarshal([]byte(data), &entry) != nil {
+			return false
+		}
+		state.AdditionalDirectories, state.HasAdditionalDirectories = entry, true
+	default:
+		return false
+	}
+	return true
 }
 
 // findHandleForID finds the .db handle file that contains the given session ID.
@@ -1999,10 +2139,10 @@ func (m *Manager) loadCommittedEventEntries(ctx context.Context, sessionID strin
 	if inspection.State != EventStoreHealthy && inspection.State != EventStoreReconciling {
 		return nil, false, fmt.Errorf("session event store is %s: %s", inspection.State, inspection.Reason)
 	}
-	batches, err := ReadCommittedEventBatches(ctx, sessionDir, sessionID)
-	if err != nil {
-		return nil, false, err
-	}
+	// Reuse the physical batches from the inspection above instead of calling
+	// ReadCommittedEventBatches, which would rescan (and re-digest) every
+	// event-store segment a second time on every session open.
+	batches := committedEventBatches(inspection)
 	entries := make([]interface{}, 0)
 	for _, batch := range batches {
 		for _, event := range batch.Events {
@@ -2802,19 +2942,39 @@ func ListForDirDetailed(cwd, sessionDir string) ([]SessionDetail, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildSessionDetails(sessions)
+	return buildSessionDetails(sessions, false)
 }
 
 // ListAllDetailed lists sessions with details across all working directories.
 func ListAllDetailed(sessionDir string, opts ...ListOption) ([]SessionDetail, error) {
+	var options listOptions
+	for _, fn := range opts {
+		fn(&options)
+	}
 	sessions, err := ListAll(sessionDir, opts...)
 	if err != nil {
 		return nil, err
 	}
-	return buildSessionDetails(sessions)
+	return buildSessionDetails(sessions, options.skipEventStorePreview)
 }
 
-func buildSessionDetails(sessions []SessionInfo) ([]SessionDetail, error) {
+// FillSessionDetailPreviews loads EventStore preview/title projection for a
+// page of already-listed details. Legacy SQLite previews are already present.
+// It is the page-scoped completion step for WithDeferredEventStorePreview and
+// is safe to call for sessions that are already complete.
+func FillSessionDetailPreviews(sessionDir string, details []SessionDetail) {
+	for i := range details {
+		if details[i].MessageCount == 0 || details[i].Preview != "" || details[i].Name != "" {
+			continue
+		}
+		if state, ok := loadEventStoreDisplay(sessionDir, details[i].ID); ok {
+			details[i].Preview = state.Preview
+			details[i].Name = state.Title
+		}
+	}
+}
+
+func buildSessionDetails(sessions []SessionInfo, skipEventStorePreview bool) ([]SessionDetail, error) {
 	if len(sessions) == 0 {
 		return nil, nil
 	}
@@ -2883,12 +3043,28 @@ func buildSessionDetails(sessions []SessionInfo) ([]SessionDetail, error) {
 
 	// EventStore sessions keep payloads out of SQLite, so preview/name data is
 	// reconstructed through the canonical Runtime-owned replay rather than by
-	// reintroducing a payload column into the projection table.
+	// reintroducing a payload column into the projection table. The display
+	// projection is cached by physical event-store fingerprint, so a repeated
+	// list (Desktop loads several pages on startup) does not rescan every
+	// session's transcript. Callers that paginate before rendering use
+	// FillSessionDetailPreviews to do this for the current page only.
+	if skipEventStorePreview {
+		sort.Slice(details, func(i, j int) bool {
+			return details[i].ModTime.After(details[j].ModTime)
+		})
+		return details, nil
+	}
 	for i := range details {
 		if details[i].MessageCount == 0 || details[i].Preview != "" || details[i].Name != "" {
 			continue
 		}
-		manager, err := OpenByIDExact(filepath.Dir(resolveDBPath(sessions[i].Path)), details[i].ID)
+		sessionDir := filepath.Dir(resolveDBPath(sessions[i].Path))
+		if state, ok := loadEventStoreDisplay(sessionDir, details[i].ID); ok {
+			details[i].Preview = state.Preview
+			details[i].Name = state.Title
+			continue
+		}
+		manager, err := OpenByIDExact(sessionDir, details[i].ID)
 		if err != nil {
 			continue
 		}

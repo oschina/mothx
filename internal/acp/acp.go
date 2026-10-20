@@ -3709,7 +3709,7 @@ func (s *server) sessionCascadeIDs(root string) ([]string, error) {
 	if s == nil || s.currentSettings() == nil {
 		return []string{root}, nil
 	}
-	details, err := session.ListAllDetailed(s.currentSettings().GetSessionDir())
+	details, err := session.ListAllDetailed(s.currentSettings().GetSessionDir(), session.WithDeferredEventStorePreview())
 	if err != nil {
 		return nil, err
 	}
@@ -3971,7 +3971,7 @@ func (s *server) handleListSessions(req rpcRequest) {
 		return
 	}
 
-	details, err := session.ListAllDetailed(s.currentSettings().GetSessionDir())
+	details, err := session.ListAllDetailed(s.currentSettings().GetSessionDir(), session.WithDeferredEventStorePreview())
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
 		return
@@ -4005,7 +4005,15 @@ func (s *server) handleListAllSessions(req rpcRequest) {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: "ACP settings are unavailable"})
 		return
 	}
-	details, err := session.ListAllDetailed(s.currentSettings().GetSessionDir())
+	// A page can be rendered from cheap SQLite metadata; EventStore previews
+	// are projected only for the page that is actually returned. A content
+	// search still needs every candidate's title/preview, so it keeps the full
+	// projection path.
+	listOpts := []session.ListOption{}
+	if strings.TrimSpace(in.Query) == "" {
+		listOpts = append(listOpts, session.WithDeferredEventStorePreview())
+	}
+	details, err := session.ListAllDetailed(s.currentSettings().GetSessionDir(), listOpts...)
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
 		return
@@ -4111,10 +4119,15 @@ func (s *server) writeSessionList(req rpcRequest, details []session.SessionDetai
 	if end > len(details) {
 		end = len(details)
 	}
-	pageIDs := make([]string, 0, end-offset)
-	for _, detail := range details[offset:end] {
+	pageDetails := details[offset:end]
+	pageIDs := make([]string, 0, len(pageDetails))
+	for _, detail := range pageDetails {
 		pageIDs = append(pageIDs, detail.ID)
 	}
+	sessionDir := s.currentSettings().GetSessionDir()
+	// ListAll may have deferred EventStore preview/title projection until the
+	// page is known. Complete it here, once, for this page only.
+	session.FillSessionDetailPreviews(sessionDir, pageDetails)
 	// Additive _meta projections: latest durable run status and persisted
 	// pin/project metadata, both resolved in one pass for the current page
 	// through Runtime/session read-only projections.
@@ -4123,23 +4136,53 @@ func (s *server) writeSessionList(req rpcRequest, details []session.SessionDetai
 	// Additive cross-process execution projection (feature key
 	// sessionExecutionState) for the current page only; idle sessions carry no
 	// execution key and unreadable sessions are omitted (unknown, never idle).
-	pageExecutions := agentruntime.InspectSessionExecutions(s.currentSettings().GetSessionDir(), pageIDs)
-	result := listSessionsResult{Sessions: make([]listedSession, 0, end-offset)}
-	for _, detail := range details[offset:end] {
+	pageExecutions := agentruntime.InspectSessionExecutions(sessionDir, pageIDs)
+	// Binding metadata (model/mode/thinking/additional directories) is read in
+	// one batch. Opening each session to replay its full transcript per listing
+	// made the initial Desktop task-library load scale with total history size.
+	bindings, bindingErr := session.LatestSessionBindings(sessionDir, pageIDs)
+	if bindingErr != nil {
+		log.Printf("[acp] list session bindings: %v", bindingErr)
+	}
+	bindingsAvailable := bindingErr == nil
+	result := listSessionsResult{Sessions: make([]listedSession, 0, len(pageDetails))}
+	for _, detail := range pageDetails {
 		title := detail.Name
 		if title == "" {
 			title = detail.Preview
 		}
 		modelProvider, modelID, mode, thoughtLevel := "", "", "", ""
-		if binding, ok, bindingErr := session.LatestModelChangeByID(s.currentSettings().GetSessionDir(), detail.ID); bindingErr == nil && ok {
-			modelProvider, modelID = binding.Provider, binding.ModelID
-		}
-		if mgr, openErr := session.OpenByIDExact(s.currentSettings().GetSessionDir(), detail.ID); openErr == nil {
-			if modeEntry, ok := mgr.GetLatestModeChange(); ok {
-				mode = modeEntry.Mode
+		additionalDirectories := []string{}
+		binding, hasBinding := bindings[detail.ID]
+		if bindingsAvailable && hasBinding {
+			if binding.HasModelChange {
+				modelProvider, modelID = binding.ModelChange.Provider, binding.ModelChange.ModelID
 			}
-			if thinkingEntry, ok := mgr.GetLatestThinkingLevelChange(); ok {
-				thoughtLevel = thinkingEntry.ThinkingLevel
+			if binding.HasModeChange {
+				mode = binding.ModeChange.Mode
+			}
+			if binding.HasThinkingLevelChange {
+				thoughtLevel = binding.ThinkingLevelChange.ThinkingLevel
+			}
+			if binding.HasAdditionalDirectories {
+				additionalDirectories = append(additionalDirectories, binding.AdditionalDirectories.Directories...)
+			}
+		} else if !bindingsAvailable {
+			// Batch lookup failed: preserve the canonical single-session replay
+			// fallback, but open the session once instead of three times.
+			if mgr, openErr := session.OpenByIDExact(sessionDir, detail.ID); openErr == nil {
+				if entry, ok := mgr.GetLatestModelChange(); ok {
+					modelProvider, modelID = entry.Provider, entry.ModelID
+				}
+				if entry, ok := mgr.GetLatestModeChange(); ok {
+					mode = entry.Mode
+				}
+				if entry, ok := mgr.GetLatestThinkingLevelChange(); ok {
+					thoughtLevel = entry.ThinkingLevel
+				}
+				if entry, ok := mgr.GetLatestAdditionalDirectories(); ok {
+					additionalDirectories = append(additionalDirectories, entry.Directories...)
+				}
 			}
 		}
 		if modelProvider == "" {
@@ -4164,23 +4207,17 @@ func (s *server) writeSessionList(req rpcRequest, details []session.SessionDetai
 			meta["execution"] = snapshot
 		}
 		result.Sessions = append(result.Sessions, listedSession{
-			SessionID: detail.ID,
-			Cwd:       detail.Cwd,
-			AdditionalDirectories: func() []string {
-				directories, err := session.LatestAdditionalDirectoriesByID(s.currentSettings().GetSessionDir(), detail.ID)
-				if err != nil {
-					return []string{}
-				}
-				return directories
-			}(),
-			Title:           title,
-			Provider:        modelProvider,
-			Model:           modelID,
-			Mode:            mode,
-			ThoughtLevel:    thoughtLevel,
-			ParentSessionID: detail.ParentSession,
-			UpdatedAt:       detail.ModTime.UTC().Format(time.RFC3339),
-			Meta:            meta,
+			SessionID:             detail.ID,
+			Cwd:                   detail.Cwd,
+			AdditionalDirectories: additionalDirectories,
+			Title:                 title,
+			Provider:              modelProvider,
+			Model:                 modelID,
+			Mode:                  mode,
+			ThoughtLevel:          thoughtLevel,
+			ParentSessionID:       detail.ParentSession,
+			UpdatedAt:             detail.ModTime.UTC().Format(time.RFC3339),
+			Meta:                  meta,
 		})
 	}
 	if end < len(details) {

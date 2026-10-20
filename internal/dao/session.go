@@ -160,6 +160,47 @@ func (d *SessionDAO) DetailAggregates(ctx context.Context, sessionIDs []string) 
 	return result, nil
 }
 
+// ContentStores returns the persisted content-store mode for each requested
+// session ("sqlite" or "event_store"). Callers use it to choose the cheap
+// indexed projection path instead of replaying a transcript they do not need.
+// Unknown IDs are absent from the result.
+func (d *SessionDAO) ContentStores(ctx context.Context, sessionIDs []string) (map[string]string, error) {
+	result := make(map[string]string, len(sessionIDs))
+	if len(sessionIDs) == 0 {
+		return result, nil
+	}
+	var rows []struct {
+		ID           string `bun:"id"`
+		ContentStore string `bun:"content_store"`
+	}
+	if err := d.db.NewSelect().Table("sessions").Column("id", "content_store").Where("id IN (?)", bun.In(sessionIDs)).Scan(ctx, &rows); err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		result[row.ID] = row.ContentStore
+	}
+	return result, nil
+}
+
+// LatestEntriesByTypes returns the persisted payload rows of the requested
+// entry types for the requested sessions, in ascending sequence order. Callers
+// keep the last row per (session, type); this reads only metadata entries and
+// never message payloads, so a session list does not have to replay a whole
+// transcript to recover the newest binding.
+func (d *SessionDAO) LatestEntriesByTypes(ctx context.Context, sessionIDs, types []string) ([]EntryRecord, error) {
+	if len(sessionIDs) == 0 || len(types) == 0 {
+		return nil, nil
+	}
+	var rows []EntryRecord
+	err := d.db.NewSelect().Table("entries").
+		Column("session_id", "type", "data").
+		Where("session_id IN (?)", bun.In(sessionIDs)).
+		Where("type IN (?)", bun.In(types)).
+		OrderExpr("seq ASC").
+		Scan(ctx, &rows)
+	return rows, err
+}
+
 func (d *SessionDAO) InsertSession(ctx context.Context, executor bun.IDB, table string, id, cwd, timestamp, parent string, version int, channelType, channelID string, boundary, seed int64, kind, expertID string) error {
 	_, err := executor.NewRaw("INSERT INTO "+table+" (id,cwd,timestamp,parent_session,version,channel_type,channel_id,fork_boundary_seq,seed_length,fork_kind,expert_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)", id, cwd, timestamp, nullableSessionString(parent), version, channelType, channelID, boundary, seed, kind, expertID).Exec(ctx)
 	return err
