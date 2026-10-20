@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/oschina/mothx/internal/platform"
 )
 
 // JobsTool lists and manages background jobs.
@@ -110,10 +112,10 @@ func formatJobDetail(job *BackgroundJob) string {
 		}
 
 		if len(job.stdout) > 0 {
-			result += fmt.Sprintf("STDOUT:\n%s\n", string(job.stdout))
+			result += fmt.Sprintf("STDOUT:\n%s\n", platform.DecodeProcessOutput(job.stdout))
 		}
 		if len(job.stderr) > 0 {
-			result += fmt.Sprintf("STDERR:\n%s\n", string(job.stderr))
+			result += fmt.Sprintf("STDERR:\n%s\n", platform.DecodeProcessOutput(job.stderr))
 		}
 		if job.err != nil {
 			result += fmt.Sprintf("Error: %s\n", job.err)

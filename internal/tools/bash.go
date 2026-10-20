@@ -350,8 +350,8 @@ func (t *BashTool) runCommand(cmd *exec.Cmd, command, workDir string, async bool
 		return ToolResult{}, err, true
 	}
 
-	stdoutStr := strings.TrimRight(string(stdout.Bytes()), "\n")
-	stderrStr := string(stderr.Bytes())
+	stdoutStr := strings.TrimRight(platform.DecodeProcessOutput(stdout.Bytes()), "\n")
+	stderrStr := platform.DecodeProcessOutput(stderr.Bytes())
 	stderrStr = strings.TrimRight(stderrStr, "\n")
 	if stdoutStr == "" {
 		stdoutStr = "(no output)"
