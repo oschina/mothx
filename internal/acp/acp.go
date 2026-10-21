@@ -1405,6 +1405,10 @@ func (s *server) dispatchRequest(req rpcRequest) {
 		s.handleAttachmentFetch(req)
 	case "mothx/attachment/list":
 		s.handleAttachmentList(req)
+	case "mothx/subagent/list":
+		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handleSubagentList(req) })
+	case "mothx/subagent/messages":
+		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handleSubagentMessages(req) })
 	case "session/list":
 		s.handleListSessions(req)
 	case "mothx/session/listAll":
@@ -1944,6 +1948,9 @@ func (s *server) handleInitialize(req rpcRequest) {
 				"workspaceExtend",
 				"decisionDeadline",
 				"subagentEvents",
+				// subagentPanel advertises the read-only child-agent list and
+				// transcript projections (mothx/subagent/list|messages).
+				"subagentPanel",
 				"toolResultImages",
 				// usage_update carries the cumulative prompt-cache totals under
 				// _meta["mothx.dev"] only while this key is advertised.
@@ -5578,6 +5585,11 @@ func (s *server) messageUpdates(sessionID string, msg provider.Message, entryID 
 					RawInput:      toolRawInput(rawInput),
 				})
 			}
+		}
+		// Providers that store a plain assistant string instead of typed content
+		// blocks must still replay one message chunk.
+		if len(updates) == 0 && msg.Content != "" {
+			updates = append(updates, sessionUpdate{SessionUpdate: "agent_message_chunk", MessageID: messageID("message", 0, msg.Content), Content: &contentBlock{Type: "text", Text: msg.Content}})
 		}
 		return updates
 	}

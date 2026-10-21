@@ -7,6 +7,7 @@ import { Check, ChevronDown, ChevronUp, List, Pencil, ServerCog, Share2, Trash2 
 import { ChatStream } from '@/components/ChatStream';
 import { Composer } from '@/components/Composer';
 import { StatusChip } from '@/components/StatusChip';
+import { SubagentDialog, SubagentSummaryButton } from '@/components/SubagentDialog';
 import { WorktreeMenu } from '@/components/WorktreeMenu';
 import { Button } from '@/components/ui/button';
 import {
@@ -31,8 +32,10 @@ export function ChatView() {
   const appState = useAppState();
   const background = useAppBackground();
   const [projectMcpOpen, setProjectMcpOpen] = useState(false);
+  const [subagentsOpen, setSubagentsOpen] = useState(false);
   const [planCollapsed, setPlanCollapsed] = useState(false);
   const projectMcpEnabled = Boolean(appState.activeSessionId) && hasFeature('manageMcp');
+  const subagentPanelEnabled = hasFeature('subagentPanel');
   // 隔离工作区入口:已有对话后放在头部右上角,不再占用 composer 工具栏。
   const worktreeEnabled = Boolean(appState.activeSessionId) && worktreeSupported();
   const activePlan = useMemo(
@@ -57,6 +60,9 @@ export function ChatView() {
           {appState.activeTitle || t('chat.newTask')}
         </div>
         <div className="flex gap-0.5">
+          {subagentPanelEnabled ? (
+            <SubagentSummaryButton sessionId={appState.activeSessionId} onClick={() => setSubagentsOpen(true)} />
+          ) : null}
           {worktreeEnabled ? <WorktreeMenu /> : null}
           {projectMcpEnabled ? (
             <Tooltip>
@@ -147,6 +153,10 @@ export function ChatView() {
           <McpPanel scope="project" sessionId={appState.activeSessionId || undefined} />
         </DialogContent>
       </Dialog>
+
+      {subagentPanelEnabled ? (
+        <SubagentDialog open={subagentsOpen} onOpenChange={setSubagentsOpen} sessionId={appState.activeSessionId} />
+      ) : null}
     </section>
   );
 }

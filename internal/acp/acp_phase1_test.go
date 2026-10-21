@@ -547,7 +547,7 @@ func TestACPInitializeDeclaresPhaseOneFeatureKeys(t *testing.T) {
 	}
 	for _, want := range []string{
 		"runStatus", "sessionMeta", "projects", "workspaceExtend",
-		"decisionDeadline", "subagentEvents", "toolResultImages", "attachmentList",
+		"decisionDeadline", "subagentEvents", "subagentPanel", "toolResultImages", "attachmentList",
 		"sessionListAll", "sessionWorkDir",
 		// Phase 0 keys must survive the additive change.
 		"artifactProjection", "attachmentFetch",

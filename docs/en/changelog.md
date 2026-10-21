@@ -16,6 +16,8 @@
 
 - **Stop handling now projects one Runtime decision across TUI and ACP, with race and recovery fixes.** ACP `session/cancel` snapshots the Run ID under `cancelMu` instead of racing the prompt handler, and the shared stop projection is bounded so it cannot stall the JSON-RPC read loop. TUI abort/reset moves the canonical stop and terminal write off the Bubble Tea update loop (quit waits for completion), so the UI no longer freezes; a canonical Run terminalized by another owner is adopted locally even when the terminal state differs, with the full terminal broadcast, instead of leaving the session permanently busy. A stopped recovered Responses background task now terminalizes as `cancelled` rather than `failed`.
 
+- **Desktop shows and inspects sub-agents.** The chat header now reports how many sub-agents the session has and whether they are running; opening it shows a read-only panel listing every child with its status and renders one child's transcript with the ordinary chat message, tool-card, and reasoning styles. ACP adds the read-only `mothx/subagent/list` and `mothx/subagent/messages` projections plus the `subagentPanel` capability key, so Desktop no longer relies on isolated started/terminal cards.
+
 ## v1.3.105-pre-1
 
 ### ✨ New Features

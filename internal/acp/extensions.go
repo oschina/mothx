@@ -574,6 +574,8 @@ func (s *server) emitDecisionDeadline(sessionID, requestID string, kind agentrun
 type subagentProjection struct {
 	started           bool
 	terminal          bool
+	status            string
+	startedAt         time.Time
 	memberID          string
 	expertID          string
 	memberDisplayName string
@@ -611,6 +613,10 @@ func (s *server) observeSubagentEvent(sessionID string, ev agentpkg.Event) {
 	}
 	first := !state.started
 	state.started = true
+	if first {
+		state.status = "running"
+		state.startedAt = time.Now()
+	}
 	if ev.MemberID != "" {
 		state.memberID = ev.MemberID
 	}
@@ -645,6 +651,9 @@ func (s *server) observeSubagentEvent(sessionID string, ev agentpkg.Event) {
 			state.terminal = true
 			terminalStatus = "completed"
 		}
+	}
+	if terminalStatus != "" {
+		state.status = terminalStatus
 	}
 	meta := subagentEventMeta{
 		memberID:          state.memberID,

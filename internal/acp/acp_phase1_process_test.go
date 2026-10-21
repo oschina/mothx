@@ -253,7 +253,7 @@ func TestACPStdioProcessRunStatusProjectionAndEvents(t *testing.T) {
 			features[name] = true
 		}
 	}
-	for _, want := range []string{"runStatus", "sessionMeta", "projects", "workspaceExtend", "decisionDeadline", "subagentEvents", "toolResultImages", "attachmentList"} {
+	for _, want := range []string{"runStatus", "sessionMeta", "projects", "workspaceExtend", "decisionDeadline", "subagentEvents", "subagentPanel", "toolResultImages", "attachmentList"} {
 		if !features[want] {
 			t.Fatalf("initialize features = %#v, want %q", rawFeatures, want)
 		}
@@ -916,6 +916,33 @@ func TestACPStdioProcessSubagentEventsAndToolResultImages(t *testing.T) {
 	terminalEvents := findACPSessionEvents(notifications, "terminal")
 	if len(terminalEvents) != 1 || terminalEvents[0]["status"] != "completed" || terminalEvents[0]["sessionId"] != sessionID {
 		t.Fatalf("terminal events = %#v, want exactly one completed parent projection", terminalEvents)
+	}
+
+	// The read-only child projections expose the same agent after the run:
+	// list reports its terminal status and messages replays its transcript.
+	process.send(t, map[string]any{"jsonrpc": "2.0", "id": 4, "method": "mothx/subagent/list", "params": map[string]any{"sessionId": sessionID}})
+	listed := process.respond(t, 4)
+	agents, _ := listed["result"].(map[string]any)["agents"].([]any)
+	if len(agents) != 1 {
+		t.Fatalf("subagent list = %#v, want exactly one child", listed)
+	}
+	info, _ := agents[0].(map[string]any)
+	if info["agentId"] != agentID || info["status"] != "completed" || info["active"] != true {
+		t.Fatalf("subagent list entry = %#v, want completed active %s", info, agentID)
+	}
+	process.send(t, map[string]any{"jsonrpc": "2.0", "id": 5, "method": "mothx/subagent/messages", "params": map[string]any{"sessionId": sessionID, "agentId": agentID}})
+	history := process.respond(t, 5)
+	rawUpdates, _ := history["result"].(map[string]any)["updates"].([]any)
+	childText := ""
+	for _, raw := range rawUpdates {
+		update, _ := raw.(map[string]any)
+		content, _ := update["content"].(map[string]any)
+		if text, ok := content["text"].(string); ok {
+			childText += text
+		}
+	}
+	if !strings.Contains(childText, "sub-agent-result") {
+		t.Fatalf("subagent transcript = %#v, want the child response", rawUpdates)
 	}
 
 	// Child text stays on the parent session stream (single stream).

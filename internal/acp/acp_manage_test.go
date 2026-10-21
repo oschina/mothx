@@ -1595,7 +1595,7 @@ func TestInitializeFeaturesIncludeManageKeys(t *testing.T) {
 		}
 	}
 	// Phase 0/1 discovery keys must survive (additive rule).
-	for _, want := range []string{"artifactProjection", "attachmentFetch", "runStatus", "sessionMeta", "projects", "workspaceExtend", "decisionDeadline", "subagentEvents", "toolResultImages", "attachmentList"} {
+	for _, want := range []string{"artifactProjection", "attachmentFetch", "runStatus", "sessionMeta", "projects", "workspaceExtend", "decisionDeadline", "subagentEvents", "subagentPanel", "toolResultImages", "attachmentList"} {
 		if !features[want] {
 			t.Fatalf("features lost pre-existing key %q: %#v", want, rawFeatures)
 		}

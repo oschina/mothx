@@ -26,6 +26,7 @@ import {
 } from './state';
 import { sortTaskSessions } from './task-tree';
 import { applyTranscriptPage, clearTranscript } from './transcript';
+import { refreshSubagents } from './subagents';
 import { confirmDanger, promptModal, toast } from './ui-host';
 import { switchView } from './views';
 import { createWorktree, waitForWorktree, worktreeSupported } from './worktrees';
@@ -299,6 +300,9 @@ export async function openSession(sessionId: string): Promise<void> {
     };
     if (hasFeature('sessionHistoryPaging')) params.historyLimit = TRANSCRIPT_PAGE_SIZE;
     const result = await invoke<NewSessionResultShape>('session/load', params);
+    // The session runtime now exists; read its child projection from ACP
+    // rather than inferring children from the transcript.
+    void refreshSubagents(sessionId);
     // A delayed load from a previously selected session is allowed to restore
     // that session's own run projection below, but must never overwrite the
     // now-active session's configuration, mode, or transcript.

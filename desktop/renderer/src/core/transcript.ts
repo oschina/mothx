@@ -6,6 +6,7 @@ import { acp, desktop, invoke } from './api';
 import { requestChatScroll } from './bus';
 import { getLocale, t } from './i18n';
 import { emit, isSessionRunning, sessionOwnsTranscript, sessionRunStatus, setSessionRunStatus, setSessionStatus, state, type PendingDecisionItem, type RunStatus, type ToolCallContentShape, type TranscriptItem, type UsageCacheProjection } from './state';
+import { applySubagentEvent, refreshSubagents, subagentStatusKind } from './subagents';
 
 const RUN_STATUS_VALUES = new Set<string>(['idle', 'loading', 'planning', 'working', 'pending', 'cancelling', 'completed', 'failed', 'cancelled']);
 import { previewImage, toast } from './ui-host';
@@ -375,10 +376,13 @@ export function applySessionEvent(event: Record<string, unknown>): void {
     return;
   }
   if (name === 'subagent') {
+    // The list projection belongs to the session, not to the visible
+    // transcript: a background team still reports how many children it has.
+    applySubagentEvent(event);
     if (!matchesTranscript(sessionId)) return;
     const agentId = String(event.agentId || '');
     if (!agentId) return;
-    const status = String(event.status || 'started');
+    const status = subagentStatusKind(String(event.status || 'started'));
     const memberName = String(event.memberDisplayName || event.memberId || event.title || event.agentId);
     const emoji = String(event.memberEmoji || '');
     upsert({
@@ -414,6 +418,9 @@ export function applySessionEvent(event: Record<string, unknown>): void {
     }
     if (sessionOwnsTranscript(sessionId)) state.currentPlanKey = null;
     dismissPendingDecisions(sessionId);
+    // The terminal projection is authoritative for final child counts and
+    // statuses; re-read the Runtime list instead of inferring completion.
+    void refreshSubagents(sessionId);
     emit();
     requestChatScroll();
     return;

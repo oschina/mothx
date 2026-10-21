@@ -104,6 +104,26 @@ export type UsageCacheProjection = {
   totalInputTokens: number;
 };
 
+// SubagentInfo is the ACP projection (mothx/subagent/list) of one managed
+// child agent. It never becomes Desktop persistence: the Runtime manager owns
+// lifecycle, status, and the transcript.
+export interface SubagentInfo {
+  agentId: string;
+  parentAgentId?: string;
+  memberId?: string;
+  expertId?: string;
+  memberDisplayName?: string;
+  memberEmoji?: string;
+  memberRole?: string;
+  status: string;
+  active?: boolean;
+  messageCount?: number;
+  lastResponse?: string;
+  error?: string;
+  startedAt?: string;
+  updatedAt?: string;
+}
+
 export type TranscriptItem =
   | { kind: 'user'; key: string; text: string }
   | { kind: 'agent'; key: string; text: string }
@@ -197,6 +217,10 @@ export interface AppState {
   pendingDecisions: Record<string, Record<string, PendingDecisionItem>>;
   transcript: TranscriptItem[];
   transcriptSessionId: string | null;
+  // Per-session sub-agent lifecycle projection. Live subagent session events
+  // update it and session load refreshes it from mothx/subagent/list; the
+  // child transcript itself is fetched read-only on demand.
+  subagents: Record<string, SubagentInfo[]>;
 	// Ephemeral ACP transcript paging projection. This never becomes Desktop
 	// persistence; the Runtime session remains the canonical history owner.
   transcriptNextCursor: string;
@@ -240,6 +264,7 @@ export const state: AppState = {
   pendingDecisions: {},
   transcript: [],
   transcriptSessionId: null,
+  subagents: {},
 	  transcriptNextCursor: '',
 	  transcriptLoading: false,
   draftConfigOptions: [],
