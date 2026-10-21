@@ -248,6 +248,9 @@ func TestEscAbortFinalizesDurableRunBeforeNextInput(t *testing.T) {
 	app.eventCh = make(chan agent.Event)
 	app.isThinking = true
 	app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	// Esc finalizes off the update loop; the coordinator still gates the next
+	// submission on that completion.
+	app.waitForRunFinalization()
 
 	if _, active := run.execution.Active(); active {
 		t.Fatal("execution remains active after Esc")

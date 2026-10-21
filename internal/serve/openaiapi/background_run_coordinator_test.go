@@ -515,12 +515,22 @@ func TestRequestSessionStopCancelsResponsesBackgroundPolling(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	snapshot, err := srv.GetSessionRuntime(sessionID)
-	if err != nil {
-		t.Fatalf("GetSessionRuntime: %v", err)
-	}
-	if snapshot.Execution != nil && snapshot.Execution.Busy {
-		t.Fatalf("runtime stayed busy after stop: %#v", snapshot.Execution)
+	snapshotDeadline := time.Now().Add(10 * time.Second)
+	// The row becomes terminal before the retained execution lease finishes its
+	// release, and a releasing lease is correctly projected as busy. Wait for
+	// the ownership projection to settle instead of sampling a transient state.
+	for {
+		snapshot, err := srv.GetSessionRuntime(sessionID)
+		if err != nil {
+			t.Fatalf("GetSessionRuntime: %v", err)
+		}
+		if snapshot.Execution == nil || !snapshot.Execution.Busy {
+			break
+		}
+		if time.Now().After(snapshotDeadline) {
+			t.Fatalf("runtime stayed busy after stop: %#v", snapshot.Execution)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -914,5 +924,90 @@ func TestBackgroundRunMaxDuration(t *testing.T) {
 	srv.cfg = &Config{BackgroundRunMaxSecs: 120}
 	if got := srv.backgroundRunMaxDuration(); got != 120*time.Second {
 		t.Fatalf("configured duration = %s, want 120s", got)
+	}
+}
+
+// A recovered Responses background run observes cancellation through the
+// Runtime-owned execution context. Stopping it must terminalize the canonical
+// Run as cancelled (not failed) and best-effort cancel the provider task.
+func TestRecoveredResponsesBackgroundStopTerminalizesCancelled(t *testing.T) {
+	var mu sync.Mutex
+	cancelCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/responses/resp-recovered-stop":
+			_, _ = w.Write([]byte(`{"id":"resp-recovered-stop","status":"queued","output":[]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/responses/resp-recovered-stop/cancel":
+			mu.Lock()
+			cancelCalls++
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"id":"resp-recovered-stop","status":"cancelled"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+
+	srv := newTestServer(t)
+	model := srv.model
+	p := openaiprovider.NewProviderWithModels("test-key", upstream.URL+"/v1", []*provider.Model{model})
+	p.SetUseResponsesAPI(true)
+	if err := p.SetResponsesConfig(config.ResponsesConfig{Background: config.BoolPtr(true)}); err != nil {
+		t.Fatalf("set responses config: %v", err)
+	}
+	srv.provider = p
+	srv.model = model
+	srv.responsesRuns = p.NewResponsesRunManager(srv.settings.GetSessionDir())
+	srv.runManager = NewRunManager(srv.settings.GetSessionDir())
+
+	runID := "recovered-stop-run"
+	sess, err := srv.getOrCreateSession("recovered-stop-session", srv.cfg.GetWorkDir())
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := session.SaveSessionRun(srv.settings.GetSessionDir(), session.SessionRun{ID: runID, SessionID: sess.ID, WorkDir: sess.WorkDir, Source: "responses_background", Model: model.ID, Mode: "yolo", Status: "running", StartedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
+		t.Fatalf("save session run: %v", err)
+	}
+	responseRun := session.ResponseRun{SessionID: sess.ID, LocalRunID: "remote-recovered-stop", LocalTurnID: runID, ResponseID: "resp-recovered-stop", Provider: p.Name(), API: "openai-responses", State: "queued", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := session.SaveResponseRun(srv.settings.GetSessionDir(), responseRun); err != nil {
+		t.Fatalf("save response run: %v", err)
+	}
+
+	execution := sess.ensureExecution()
+	execution.SetRunStore(agentruntime.RunStore{SessionDir: srv.settings.GetSessionDir()})
+	execution.SetEventSink(srv.runtimeRunEventSink(sess))
+	durableCtx, err := execution.ReattachDurableRun(context.Background(), agentruntime.DurableRun{
+		ID: runID, SessionID: sess.ID, WorkDir: sess.WorkDir, Source: "responses_background", Model: model.ID, Mode: "yolo",
+		Status: "running", StartedAt: time.Now(),
+	}, agentruntime.RunStateRunning, agentruntime.RunEvent{SessionID: sess.ID, RunID: runID, EventType: "started", Source: "responses_background", Status: "running", Timestamp: time.Now()})
+	if err != nil {
+		t.Fatalf("reattach durable run: %v", err)
+	}
+	sess.markDurableRun(runID)
+	sess.beginRunBookkeeping(runID)
+	// A stop may arrive before the recovered coordinator starts polling.
+	cancelDurable := durableCtx
+	stopCtx, stop := context.WithCancel(cancelDurable)
+	stop()
+
+	sess.Lock()
+	srv.monitorRecoveredResponsesBackgroundRun(sess, stopCtx, session.SessionRun{
+		ID: runID, SessionID: sess.ID, WorkDir: sess.WorkDir, Source: "responses_background", Model: model.ID, Mode: "yolo",
+	}, &responseRun, model, func() {}, func() {})
+
+	stored, err := session.GetSessionRun(srv.settings.GetSessionDir(), runID)
+	if err != nil {
+		t.Fatalf("load session run: %v", err)
+	}
+	if stored == nil || stored.Status != "cancelled" {
+		t.Fatalf("recovered run status = %#v, want cancelled", stored)
+	}
+	if _, active := execution.Active(); active {
+		t.Fatal("recovered execution stayed active after stop")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if cancelCalls == 0 {
+		t.Fatal("provider-side recovered Responses task was not cancelled")
 	}
 }

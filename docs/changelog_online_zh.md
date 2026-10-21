@@ -16,6 +16,8 @@
 
 - **内置资产变化时会刷新已解压的 Windows BusyBox。** 已解压的副本会按 SHA-256 与内置资产比对，不同则以原子方式替换，因此升级后的 MothX 不会继续运行旧 shell。若正在运行的 BusyBox 锁住可执行映像，则本次运行继续使用旧副本，并在下次启动时重试刷新。
 
+- **停止路径在 TUI/ACP 统一为共享 Runtime 决策，并修复竞态与后台终态。** ACP 的 `session/cancel` 现在在 `cancelMu` 下快照 Run ID，避免与 prompt 安装身份竞争；共享停止投影受有界 context 约束，不再阻塞 JSON-RPC 读循环。TUI 的中止/重置把 canonical stop 与终态写入移出 Bubble Tea 更新循环（退出时等待完成），避免 UI 卡顿。已被其他 owner 终态化的 canonical Run 会被本地执行收养（即使终态不同），并走完整终态广播，不再让会话永久 busy。恢复中的 Responses 后台任务被用户停止时现在记为 `cancelled` 而不是 `failed`。
+
 ## v1.3.105-pre-1
 
 ### ✨ 新功能

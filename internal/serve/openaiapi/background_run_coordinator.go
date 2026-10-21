@@ -907,6 +907,9 @@ func (s *Server) monitorRecoveredResponsesBackgroundRun(sess *APISession, durabl
 		select {
 		case <-runCtx.Done():
 			timer.Stop()
+			// A user stop of a recovered run is still a cancellation, not a
+			// failure. The deferred Runtime transition uses terminalStatus.
+			terminalStatus = "cancelled"
 			// Best effort: stop the provider-side task as well. The local Run is
 			// the user's stop authority even though the response lives remotely.
 			cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

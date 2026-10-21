@@ -184,7 +184,11 @@ type App struct {
 	session             *session.Manager
 	runtime             *agentruntime.SessionRuntime
 	run                 *tuiRun
-	registry            *tools.Registry
+	// runFinalizeWG tracks stop+finish projections that were moved off the
+	// Bubble Tea update loop for aborts/resets. Quit waits for them so a run
+	// terminal write cannot be lost during teardown.
+	runFinalizeWG sync.WaitGroup
+	registry      *tools.Registry
 	// mcpRebuildPending records that MCP tools finished connecting while a run
 	// was active, so the cached Agent is rebuilt on the next idle submission
 	// instead of cancelling the in-flight run just to pick up the new tools.
@@ -1856,6 +1860,9 @@ func (a *App) finalizeForQuit() {
 		// and writing session data during process teardown.
 		a.agent.Abort()
 	}
+	// Abort/reset paths finalize off the update loop; wait for them before the
+	// process exits so an in-flight cancellation still reaches the durable row.
+	a.waitForRunFinalization()
 	if a.run != nil {
 		a.finalizeAbortedRun()
 		run := a.run

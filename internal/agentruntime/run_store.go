@@ -411,6 +411,26 @@ func durableRunStatus(state RunState) string {
 	return string(state)
 }
 
+// runStateFromDurableStatus maps a canonical terminal Run status back to the
+// adapter-neutral terminal state. It returns false for non-terminal statuses and
+// for any status the Runtime does not recognize.
+func runStateFromDurableStatus(status string) (RunState, bool) {
+	switch status {
+	case "completed":
+		return RunStateCompleted, true
+	case "incomplete":
+		return RunStateIncomplete, true
+	case "failed", "expired":
+		return RunStateFailed, true
+	case "cancelled", "canceled":
+		return RunStateCancelled, true
+	case "timed_out":
+		return RunStateTimedOut, true
+	default:
+		return "", false
+	}
+}
+
 func marshalErrorInfo(info ErrorInfo) json.RawMessage {
 	if info == (ErrorInfo{}) {
 		return json.RawMessage(`{}`)

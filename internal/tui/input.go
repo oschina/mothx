@@ -231,11 +231,39 @@ func (a *App) discardAgent(cause error) {
 func (a *App) resetAgent(cause error) {
 	if a.run != nil {
 		run := a.run
-		run.stop()
-		run.finish(agentruntime.RunStateCancelled)
 		a.run = nil
+		// Stop the loop immediately; the canonical stop decision and terminal
+		// persistence run off the Bubble Tea update loop. The submission
+		// coordinator remains the admission barrier, so a following prompt
+		// cannot start before this finalization releases the lease.
+		run.cancel()
+		a.startRunFinalization(run)
 	}
 	a.discardAgent(cause)
+}
+
+// startRunFinalization projects the shared Runtime stop matrix and writes the
+// terminal state without blocking the UI. resetAgent has already detached the
+// run from the view; completion is observed through the coordinator.
+func (a *App) startRunFinalization(run *tuiRun) {
+	if a == nil || run == nil {
+		return
+	}
+	a.runFinalizeWG.Add(1)
+	go func() {
+		defer a.runFinalizeWG.Done()
+		run.stop()
+		run.finish(agentruntime.RunStateCancelled)
+	}()
+}
+
+// waitForRunFinalization is the quit/session-teardown barrier for runs whose
+// stop+finish projection is still running off the update loop.
+func (a *App) waitForRunFinalization() {
+	if a == nil {
+		return
+	}
+	a.runFinalizeWG.Wait()
 }
 
 func (a *App) abortAndResetAgent(reason string) {

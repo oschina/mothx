@@ -744,9 +744,8 @@ func (r *ExecutionRuntime) finishDurableLocked(runID string, state RunState, mes
 				// was not visible to this process). Adopt that terminal outcome so
 				// the in-memory execution registration is released instead of
 				// leaving the session permanently busy.
-				if run, getErr := GetDurableRun(context.Background(), r.runtimeSessionDir(), runID); getErr == nil && run != nil && run.Status == durableRunStatus(state) {
-					_, finishErr := r.finishInMemory(runID, state, true)
-					return finishErr
+				if r.adoptCanonicalTerminalRun(runID) {
+					return nil
 				}
 				r.finishTerminalAttempt(err)
 				return fmt.Errorf("mark durable run terminalizing: %w", err)
@@ -862,4 +861,75 @@ func (r *ExecutionRuntime) finishTerminalAttempt(err error) {
 		close(wait)
 	}
 	r.mu.Unlock()
+}
+
+// terminalPersistenceAdoptionTimeout bounds the read that decides whether
+// another owner already terminalized a Run. It stays small because the caller
+// is inside a bounded terminal-persistence attempt.
+const terminalPersistenceAdoptionTimeout = 2 * time.Second
+
+// adoptCanonicalTerminalRun adopts a canonical Run row that another owner has
+// already terminalized. The canonical row is authoritative, so this aligns the
+// in-memory projection with its terminal state, releases the local registration,
+// and runs the same observable epilogue as a local terminal transition. It
+// returns true when the terminal transition is already complete and the caller
+// must not retry.
+//
+// The caller must hold transitionMu.
+func (r *ExecutionRuntime) adoptCanonicalTerminalRun(runID string) bool {
+	if r == nil || runID == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), terminalPersistenceAdoptionTimeout)
+	defer cancel()
+	run, err := GetDurableRun(ctx, r.runtimeSessionDir(), runID)
+	if err != nil || run == nil {
+		return false
+	}
+	state, ok := runStateFromDurableStatus(run.Status)
+	if !ok {
+		return false
+	}
+
+	r.mu.Lock()
+	active := r.activeLocked(runID)
+	finished := r.finished && r.runID == runID
+	r.mu.Unlock()
+	switch {
+	case active:
+		if _, finishErr := r.finishInMemory(runID, state, true); finishErr != nil {
+			return false
+		}
+	case finished:
+		// A concurrent local transition (for example the lease-loss watcher)
+		// already retired the registration. Align its projection with the
+		// canonical terminal state instead of leaving a stale local state.
+		r.mu.Lock()
+		r.state = state
+		r.mu.Unlock()
+	default:
+		// A different Run owns this execution runtime now; never disturb it.
+		return false
+	}
+
+	r.mu.Lock()
+	r.terminalErr = nil
+	r.terminalizing = false
+	wait := r.terminalDone
+	r.terminalDone = nil
+	if wait != nil {
+		close(wait)
+	}
+	sessionID := ""
+	source := ""
+	if r.durable != nil {
+		sessionID = r.durable.SessionID
+		source = r.durable.Source
+	}
+	r.mu.Unlock()
+	if sessionID != "" {
+		session.NotifyRuntimeStateChanged(r.runtimeSessionDir(), sessionID, source)
+	}
+	r.notifyTerminalObserver(runID, state)
+	return true
 }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -174,5 +175,26 @@ func TestCtrlCQuitStopsPrintLoop(t *testing.T) {
 	app.printMu.Unlock()
 	if !stopped {
 		t.Fatal("Ctrl+C quit path did not stop the print loop")
+	}
+}
+
+// TestFinalizeForQuitWaitsForAsyncRunFinalization guards the abort/reset
+// off-loop finalizer: quitting immediately after resetAgent must still wait for
+// the canonical stop + terminal write instead of exiting mid-flight.
+func TestFinalizeForQuitWaitsForAsyncRunFinalization(t *testing.T) {
+	app, _, sessionID, sessionDir := newAbortTestApp(t)
+	run := beginDurableTestRun(t, app, sessionID, sessionDir)
+
+	app.resetAgent(errors.New("test reset"))
+	if app.run != nil {
+		t.Fatal("resetAgent left the run attached")
+	}
+	app.finalizeForQuit()
+
+	if status := durableRunStatus(t, sessionDir, sessionID, run.id); status != "cancelled" {
+		t.Fatalf("durable run status after quit = %q, want cancelled", status)
+	}
+	if _, active := run.execution.Active(); active {
+		t.Fatal("execution stayed active after quit waited for finalization")
 	}
 }

@@ -3525,24 +3525,32 @@ func (s *server) handleCancel(req rpcRequest) {
 		}
 		return
 	}
-	if !s.cancelSessionRun(rt, rt.runID) {
+	// Snapshot both identities under the same lock that installs them. Reading
+	// rt.runID directly would race with the prompt handler and could target a
+	// stale Run.
+	rt.cancelMu.Lock()
+	runID := rt.runID
+	cancel := rt.cancel
+	rt.cancelMu.Unlock()
+	if !s.cancelSessionRun(rt, runID) && cancel != nil {
 		// A prompt still in admission has no durable Run; cancellation remains
 		// adapter-owned for that window.
-		rt.cancelMu.Lock()
-		if rt.cancel != nil {
-			rt.cancel()
-		}
-		rt.cancelMu.Unlock()
+		cancel()
 	}
 	if len(req.ID) > 0 {
 		s.writeResponse(req.ID, map[string]any{}, nil)
 	}
 }
 
+// acpSessionStopTimeout bounds the shared stop projection on the JSON-RPC read
+// loop. The Runtime still owns every ownership decision; this limit only keeps
+// an unreachable session database from stalling all ACP requests.
+const acpSessionStopTimeout = 2 * time.Second
+
 // cancelSessionRun projects the shared Runtime stop matrix for ACP. ACP owns
-// process-local runs only, so this always resolves to the local branch; the
-// admission window (no durable Run yet) stays adapter-owned. It returns true
-// when the caller must not apply its legacy local cancel again.
+// process-local runs only, so this normally resolves to the local branch or the
+// adapter-owned admission window (no durable Run yet). It returns true when the
+// caller must not apply its legacy local cancel again.
 func (s *server) cancelSessionRun(rt *sessionRuntime, expectedRunID string) bool {
 	if rt == nil || rt.execution == nil || expectedRunID == "" {
 		return false
@@ -3566,7 +3574,12 @@ func (s *server) cancelSessionRun(rt *sessionRuntime, expectedRunID string) bool
 		cancel()
 		return true
 	}
-	result, err := agentruntime.RequestSessionStop(context.Background(), settings.GetSessionDir(), rt.id, agentruntime.SessionStopOptions{
+	// session/cancel and $/cancel_request run on the JSON-RPC read loop, so the
+	// shared stop decision must stay bounded even when the session database or
+	// orphan recovery is slow. Local cancellation below remains immediate.
+	ctx, cancel := context.WithTimeout(context.Background(), acpSessionStopTimeout)
+	defer cancel()
+	result, err := agentruntime.RequestSessionStop(ctx, settings.GetSessionDir(), rt.id, agentruntime.SessionStopOptions{
 		ExpectedRunID:     expectedRunID,
 		LegacyLocalCancel: localCancel,
 	})

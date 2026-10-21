@@ -16,6 +16,8 @@ This file contains the changes for the **current version only**. The full histor
 
 - **The extracted Windows BusyBox is refreshed when the embedded asset changes.** A previously extracted copy is compared with the embedded asset by SHA-256 and replaced atomically when they differ, so an upgraded MothX never keeps running an old shell. If a running BusyBox holds the executable image locked, the old copy is kept for that run and the refresh is retried on the next startup.
 
+- **Stop handling now projects one Runtime decision across TUI and ACP, with race and recovery fixes.** ACP `session/cancel` snapshots the Run ID under `cancelMu` instead of racing the prompt handler, and the shared stop projection is bounded so it cannot stall the JSON-RPC read loop. TUI abort/reset moves the canonical stop and terminal write off the Bubble Tea update loop (quit waits for completion), so the UI no longer freezes; a canonical Run terminalized by another owner is adopted locally even when the terminal state differs, with the full terminal broadcast, instead of leaving the session permanently busy. A stopped recovered Responses background task now terminalizes as `cancelled` rather than `failed`.
+
 ## v1.3.105-pre-1
 
 ### ✨ New Features
