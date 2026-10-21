@@ -10,11 +10,16 @@ Vendored Windows shell fallbacks, embedded into the binary.
 ## Source
 
 [`startvibecoding/agentbusybox`](https://github.com/startvibecoding/agentbusybox) —
-Windows release assets. The current files were built from
-`v1.38.1.git-11-g1a0bdf20a` with the UTF-8 child-environment baseline
-(`LC_ALL`/`LANG=C.UTF-8` and `PYTHONIOENCODING=utf-8`). Replace them with the
-matching assets from the next published release, which will include that
-change under the same feature name.
+Windows release assets. The current files are built from the fork's **UTF-8
+configs** (`mingw64u_defconfig` for x86_64 via `./build.sh win64`,
+`mingw32w_defconfig` for x86): UTF8 manifest (`activeCodePage=UTF-8`),
+`FEATURE_UTF8_INPUT`, `FEATURE_UTF8_CONSOLE`, `FEATURE_UTF8_AUTODETECT`,
+`FEATURE_UTF8_CHILD_ENV` (`LC_ALL`/`LANG=C.UTF-8`, `PYTHONIOENCODING=utf-8`)
+and `UNICODE_SUPPORT`. The UTF8 manifest makes the process ACP UTF-8, so
+non-ASCII `sh -c` command text from MothX flows through argv as UTF-8 instead
+of being downconverted to the system ANSI code page (GBK on zh-CN Windows).
+These binaries require Windows 10+ (`FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`).
+Replace them with the matching UTF-8 assets from the next published release.
 
 ## Use
 
