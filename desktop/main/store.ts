@@ -40,7 +40,14 @@ export interface DesktopStoreData {
 
 export type WindowStyle = 'mac' | 'win';
 
-export const DEFAULT_WINDOW_STYLE: WindowStyle = process.platform === 'darwin' ? 'mac' : 'win';
+// macOS hosts use the macOS window projection; Windows, Linux, and every other
+// host use the Windows 11 projection. The renderer switch is currently hidden,
+// so this platform default is the normal way a fresh install picks its chrome.
+export function windowStyleForPlatform(platform: NodeJS.Platform): WindowStyle {
+  return platform === 'darwin' ? 'mac' : 'win';
+}
+
+export const DEFAULT_WINDOW_STYLE: WindowStyle = windowStyleForPlatform(process.platform);
 
 export function normalizeWindowStyle(value: unknown, fallback: WindowStyle = DEFAULT_WINDOW_STYLE): WindowStyle {
   return value === 'mac' || value === 'win' ? value : fallback;

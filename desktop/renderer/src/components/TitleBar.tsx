@@ -131,6 +131,11 @@ function switchWindowStyle(style: WindowStyle): void {
   toast(t(style === 'mac' ? 'windowStyle.macToast' : 'windowStyle.winToast'));
 }
 
+// The window-style switch is intentionally hidden (not removed): the platform
+// default already picks the right projection, and the component/CSS are kept so
+// the switch can be restored later without rebuilding the chrome.
+const WINDOW_STYLE_SWITCH_VISIBLE = false;
+
 // 标题栏:高度随窗体样式投影(macOS 42px / Windows 11 40px),可拖拽。
 // macOS 真机使用原生红绿灯;Windows 投影在所有平台自绘右侧控制键。
 export function TitleBar() {
@@ -182,7 +187,7 @@ export function TitleBar() {
       ) : null}
 
       <div className="titlebar-right flex items-center gap-2">
-        <WindowStyleSwitch windowStyle={windowStyle} />
+        {WINDOW_STYLE_SWITCH_VISIBLE ? <WindowStyleSwitch windowStyle={windowStyle} /> : null}
         {windowStyle === 'win' ? <WindowsWindowControls backgroundApp={background.app} /> : null}
       </div>
     </header>

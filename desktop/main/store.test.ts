@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { createStoreSetHandler, DEFAULT_WINDOW_STYLE, DesktopStore, normalizeWindowStyle, restrictRendererStorePatch } from './store.ts';
+import { createStoreSetHandler, DEFAULT_WINDOW_STYLE, DesktopStore, normalizeWindowStyle, restrictRendererStorePatch, windowStyleForPlatform } from './store.ts';
 import { readHomeImageDataURL } from './home-image.ts';
 
 test('store defaults to visible home logo and no custom image', () => {
@@ -65,6 +65,13 @@ test('generic renderer store patches cannot grant non-empty image paths', () => 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('window style defaults to macOS on darwin and Windows 11 elsewhere', () => {
+  assert.equal(windowStyleForPlatform('darwin'), 'mac');
+  assert.equal(windowStyleForPlatform('win32'), 'win');
+  assert.equal(windowStyleForPlatform('linux'), 'win');
+  assert.equal(DEFAULT_WINDOW_STYLE, windowStyleForPlatform(process.platform));
 });
 
 test('store persists the window-style projection and rejects unknown values', () => {

@@ -24,10 +24,12 @@ test('native macOS traffic lights are used only in the macOS projection on darwi
   assert.match(titlebar, /windowControl\('close'\)/);
 });
 
-test('titlebar exposes a macOS / Windows 11 window-style switch', () => {
-  assert.match(titlebar, /WindowStyleSwitch/, 'titlebar must render the segmented window-style switch');
-  assert.match(titlebar, /windowStyle === 'mac' && 'active'/, 'macOS segment must project the active state');
-  assert.match(titlebar, /windowStyle === 'win' && 'active'/, 'Windows segment must project the active state');
+test('window-style switch stays implemented but hidden from the titlebar', () => {
+  assert.match(titlebar, /function WindowStyleSwitch/, 'the switch component must remain available for re-enabling');
+  assert.match(titlebar, /WINDOW_STYLE_SWITCH_VISIBLE = false/, 'the switch must be hidden without deleting it');
+  assert.match(titlebar, /WINDOW_STYLE_SWITCH_VISIBLE \? <WindowStyleSwitch windowStyle=\{windowStyle\} \/> : null/, 'the titlebar must render the switch only when it is re-enabled');
+  assert.match(titlebar, /windowStyle === 'mac' && 'active'/, 'macOS segment must keep its active state');
+  assert.match(titlebar, /windowStyle === 'win' && 'active'/, 'Windows segment must keep its active state');
   assert.match(titlebar, /applyWindowStyle\(style\)/, 'switching must go through the shared theme action');
   assert.match(titlebar, /windowStyle\.macToast/, 'macOS switch must announce the change');
   assert.match(titlebar, /windowStyle\.winToast/, 'Windows switch must announce the change');
