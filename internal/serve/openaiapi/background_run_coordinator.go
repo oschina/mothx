@@ -34,13 +34,13 @@ func (s *Server) responsesBackgroundEnabled() bool {
 // executeResponsesBackgroundRun owns one remote Responses background task.
 // It deliberately coordinates durable run state instead of invoking Agent.Run:
 // a remote response_id can outlive this process, whereas an Agent loop cannot.
-func (s *Server) executeResponsesBackgroundRun(sess *APISession, runID string, runtimeRelease, handOffRelease func(), model *provider.Model, mode string, msg provider.Message, transcript bool) {
-	s.executeResponsesBackgroundRunWithConfig(sess, runID, runtimeRelease, handOffRelease, model, mode, msg, transcript, nil, nil, nil, nil)
+func (s *Server) executeResponsesBackgroundRun(sess *APISession, durableCtx context.Context, runID string, runtimeRelease, handOffRelease func(), model *provider.Model, mode string, msg provider.Message, transcript bool) {
+	s.executeResponsesBackgroundRunWithConfig(sess, durableCtx, runID, runtimeRelease, handOffRelease, model, mode, msg, transcript, nil, nil, nil, nil)
 }
 
 // executeResponsesBackgroundRunWithConfig lets another serve entry point hand
 // the already-resolved request configuration to the shared durable runtime.
-func (s *Server) executeResponsesBackgroundRunWithConfig(sess *APISession, runID string, runtimeRelease, handOffRelease func(), model *provider.Model, mode string, msg provider.Message, transcript bool, agentOpts *agentruntime.AgentBuildOptions, initialHistory []provider.Message, complete func(string, []provider.Attachment, error), progress func(string)) {
+func (s *Server) executeResponsesBackgroundRunWithConfig(sess *APISession, durableCtx context.Context, runID string, runtimeRelease, handOffRelease func(), model *provider.Model, mode string, msg provider.Message, transcript bool, agentOpts *agentruntime.AgentBuildOptions, initialHistory []provider.Message, complete func(string, []provider.Attachment, error), progress func(string)) {
 	terminalStatus := "failed"
 	conversationTurnID := "turn-" + runID
 	runSource := "responses_background"
@@ -158,6 +158,13 @@ func (s *Server) executeResponsesBackgroundRunWithConfig(sess *APISession, runID
 		}
 	}
 
+	// A stop may have been accepted before this coordinator was scheduled. Do
+	// not create a provider-side task that its owner has already abandoned.
+	if durableCtx != nil && durableCtx.Err() != nil {
+		terminalStatus = "cancelled"
+		_ = s.recordSessionRunEvent(sess, runID, "finished", terminalStatus, "responses_background", model.ID, mode, map[string]any{"reason": "local run context cancelled"})
+		return
+	}
 	requestCtx, requestCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	run, err := manager.Start(requestCtx, sess.ID, runID, params)
 	requestCancel()
@@ -165,7 +172,13 @@ func (s *Server) executeResponsesBackgroundRunWithConfig(sess *APISession, runID
 		_ = s.recordSessionRunEvent(sess, runID, "failed", "failed", "responses_background", model.ID, mode, map[string]any{"error": err.Error()})
 		return
 	}
-	runCtx, cancelRun := context.WithCancel(context.Background())
+	// The poll loop must observe Runtime cancellation, not an independent
+	// context: a Responses background task has no Agent loop to abort, so a
+	// stop request only reaches this coordinator through the execution context.
+	if durableCtx == nil {
+		durableCtx = context.Background()
+	}
+	runCtx, cancelRun := context.WithCancel(durableCtx)
 	defer cancelRun()
 	if !sess.attachRunAgent(runID, backgroundAgent, func() {
 		cancelRun()
@@ -283,6 +296,16 @@ func (s *Server) executeResponsesBackgroundRunWithConfig(sess *APISession, runID
 				default:
 				}
 			}
+			// Best effort: stop the provider-side task as well. A cancel
+			// request to the local coordinator must not leave the remote
+			// response running indefinitely.
+			cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = manager.Cancel(cancelCtx, sess.ID, run.LocalRunID)
+			cancel()
+			_ = s.recordSessionRunEvent(sess, runID, "finished", terminalStatus, "responses_background", model.ID, mode, map[string]any{
+				"responseRunId": run.LocalRunID, "responseId": run.ResponseID,
+				"reason": "local run context cancelled",
+			})
 			return
 		case <-timer.C:
 		}
@@ -664,7 +687,8 @@ func (s *Server) reattachResponsesBackgroundRun(localRun session.SessionRun, res
 	if sess.Runtime != nil {
 		sess.Runtime.SetExecution(execution)
 	}
-	if _, err := execution.ReattachDurableRun(context.Background(), agentruntime.DurableRun{
+	var durableCtx context.Context
+	if ctx, err := execution.ReattachDurableRun(context.Background(), agentruntime.DurableRun{
 		ID: localRun.ID, SessionID: localRun.SessionID, WorkDir: localRun.WorkDir,
 		Source: localRun.Source, Model: localRun.Model, Mode: localRun.Mode,
 		Status: localRun.Status, StartedAt: localRun.StartedAt, ConversationTurnID: responseRun.LocalTurnID, ConversationTurn: responseRun.LocalTurnID != "",
@@ -677,6 +701,8 @@ func (s *Server) reattachResponsesBackgroundRun(localRun session.SessionRun, res
 		sess.Unlock()
 		runtimeRelease()
 		return false, fmt.Errorf("reattach durable Responses run: %w", err)
+	} else {
+		durableCtx = ctx
 	}
 	sess.beginRunBookkeeping(localRun.ID)
 	sess.markDurableRun(localRun.ID)
@@ -687,7 +713,7 @@ func (s *Server) reattachResponsesBackgroundRun(localRun session.SessionRun, res
 	// terminalized (recordSessionRunEvent, FinalizeRun), so the drain slot is
 	// handed to it as the outermost release, mirroring the submit paths.
 	if !s.pool.LaunchBackground(drainRelease, func() {
-		s.monitorRecoveredResponsesBackgroundRun(sess, localRun, responseRun, model, runtimeRelease, drainRelease)
+		s.monitorRecoveredResponsesBackgroundRun(sess, durableCtx, localRun, responseRun, model, runtimeRelease, drainRelease)
 	}) {
 		// Unreachable while ReserveBackground succeeded: the pool is not
 		// draining, so LaunchBackground cannot refuse. Fail closed rather than
@@ -710,7 +736,7 @@ func isTerminalSessionRunState(state string) bool {
 	}
 }
 
-func (s *Server) monitorRecoveredResponsesBackgroundRun(sess *APISession, localRun session.SessionRun, responseRun *session.ResponseRun, model *provider.Model, runtimeRelease, drainRelease func()) {
+func (s *Server) monitorRecoveredResponsesBackgroundRun(sess *APISession, durableCtx context.Context, localRun session.SessionRun, responseRun *session.ResponseRun, model *provider.Model, runtimeRelease, drainRelease func()) {
 	// Registered first so it runs last: the pool drain slot is only handed back
 	// after the durable terminal transition, the fallback run-event write and
 	// FinalizeRun below have all completed.
@@ -760,7 +786,10 @@ func (s *Server) monitorRecoveredResponsesBackgroundRun(sess *APISession, localR
 		_ = s.recordSessionRunEvent(sess, localRun.ID, "failed", "failed", "responses_background", model.ID, localRun.Mode, map[string]any{"error": err.Error()})
 		return
 	}
-	runCtx, cancelRun := context.WithCancel(context.Background())
+	if durableCtx == nil {
+		durableCtx = context.Background()
+	}
+	runCtx, cancelRun := context.WithCancel(durableCtx)
 	defer cancelRun()
 	if !sess.attachRunAgent(localRun.ID, backgroundAgent, func() {
 		cancelRun()
@@ -878,6 +907,11 @@ func (s *Server) monitorRecoveredResponsesBackgroundRun(sess *APISession, localR
 		select {
 		case <-runCtx.Done():
 			timer.Stop()
+			// Best effort: stop the provider-side task as well. The local Run is
+			// the user's stop authority even though the response lives remotely.
+			cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = s.responsesRuns.Cancel(cancelCtx, sess.ID, responseRun.LocalRunID)
+			cancel()
 			_ = s.recordSessionRunEvent(sess, localRun.ID, "canceled", "cancelled", "responses_background", model.ID, localRun.Mode, map[string]any{"reason": "local run context cancelled"})
 			return
 		case <-timer.C:

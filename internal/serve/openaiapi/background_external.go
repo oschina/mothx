@@ -182,7 +182,8 @@ func (s *Server) SubmitExternalResponsesBackground(req serviceruntime.Background
 		sess.Runtime.SetExecution(execution)
 	}
 	sess.beginRunBookkeeping(runID)
-	if _, err := execution.BeginIntentDurable(context.Background(), intent, agentruntime.DurableRun{
+	var runCtx context.Context
+	if durableCtx, err := execution.BeginIntentDurable(context.Background(), intent, agentruntime.DurableRun{
 		ID: runID, SessionID: sess.ID, IntentID: intent.ID, Attempt: 1, WorkDir: sess.WorkDir,
 		Source: runSource, Model: model.ID, Mode: mode,
 		InputResourceIDs: req.Input.ResourceIDs(), SubmissionKeyHash: idempotencyKeyFingerprint(req.IdempotencyKey),
@@ -196,6 +197,8 @@ func (s *Server) SubmitExternalResponsesBackground(req serviceruntime.Background
 		sess.Unlock()
 		runtimeRelease()
 		return "", err
+	} else {
+		runCtx = durableCtx
 	}
 	// BeginIntentDurable atomically writes the turn boundary and the run's
 	// user entry. Reload the shared manager so the background coordinator
@@ -265,7 +268,7 @@ func (s *Server) SubmitExternalResponsesBackground(req serviceruntime.Background
 	// from the admit until the coordinator has finished every deferred step.
 	if !s.pool.LaunchBackground(handOffRelease, func() {
 		defer artifacts.Close()
-		s.executeResponsesBackgroundRunWithConfig(sess, runID, release, handOffRelease, model, mode, message, true, &agentOpts, req.InitialHistory, onComplete, req.Progress)
+		s.executeResponsesBackgroundRunWithConfig(sess, runCtx, runID, release, handOffRelease, model, mode, message, true, &agentOpts, req.InitialHistory, onComplete, req.Progress)
 	}) {
 		_ = execution.FinishDurableWithRetry(context.Background(), runID, agentruntime.RunStateFailed, "session pool stopped accepting work", agentruntime.RunEvent{
 			SessionID: sess.ID, RunID: runID, EventType: "failed", Source: runSource, Status: "failed",

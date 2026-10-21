@@ -384,7 +384,16 @@ func (r *ExecutionRuntime) SetAgent(a interface{ Abort() }) {
 		return
 	}
 	r.running = a
+	// Cancellation may arrive before the Agent is bound (for example while the
+	// Run is still queued or its resources are being built). In that window
+	// Cancel had no agent to abort, and the Agent loop does not run on this
+	// runtime's context, so the request would otherwise be silently lost and the
+	// Run would keep executing. Honor the already-requested cancellation now.
+	cancelling := r.state == RunStateCancelling
 	r.mu.Unlock()
+	if cancelling && a != nil {
+		a.Abort()
+	}
 }
 
 // Cancel requests context cancellation and aborts the core agent if present.

@@ -795,10 +795,11 @@ func (s *Server) HandleSubmitRun(w http.ResponseWriter, r *http.Request) {
 	})}
 	sess.beginRunBookkeeping(runID)
 	var beginErr error
+	var durableCtx context.Context
 	if isRetry {
-		_, _, beginErr = execution.BeginRetryDurable(context.Background(), durableRun, startEvent)
+		_, durableCtx, beginErr = execution.BeginRetryDurable(context.Background(), durableRun, startEvent)
 	} else {
-		_, beginErr = execution.BeginIntentDurable(context.Background(), intent, durableRun, startEvent)
+		durableCtx, beginErr = execution.BeginIntentDurable(context.Background(), intent, durableRun, startEvent)
 	}
 	if beginErr != nil {
 		sess.finishRun(runID)
@@ -846,11 +847,11 @@ func (s *Server) HandleSubmitRun(w http.ResponseWriter, r *http.Request) {
 	launched := false
 	if !forceAgentLoopFromRequest(r) && len(input.Resources) == 0 && s.responsesBackgroundEnabled() && strings.EqualFold(providerName, configuredProviderName) {
 		launched = s.pool.LaunchBackground(handOffRelease, func() {
-			s.executeResponsesBackgroundRun(sess, runID, runtimeRelease, handOffRelease, currentModel, mode, msg, req.Transcript)
+			s.executeResponsesBackgroundRun(sess, durableCtx, runID, runtimeRelease, handOffRelease, currentModel, mode, msg, req.Transcript)
 		})
 	} else {
 		launched = s.pool.LaunchBackground(handOffRelease, func() {
-			s.executeBackgroundRun(sess, runID, intent.ID, runtimeRelease, handOffRelease, currentProvider, currentModel, providerName, runSource, mode, msg, req.Transcript)
+			s.executeBackgroundRun(sess, durableCtx, runID, intent.ID, runtimeRelease, handOffRelease, currentProvider, currentModel, providerName, runSource, mode, msg, req.Transcript)
 		})
 	}
 	if !launched {
@@ -879,7 +880,7 @@ func (s *Server) HandleSubmitRun(w http.ResponseWriter, r *http.Request) {
 // executeBackgroundRun runs the agent in a background goroutine and publishes
 // all events via the EventBroker. It is responsible for releasing the session
 // lock and runtime lock when done.
-func (s *Server) executeBackgroundRun(sess *APISession, runID, intentID string, runtimeRelease, handOffRelease func(), runProvider provider.Provider, model *provider.Model, providerName, source, mode string, msg provider.Message, transcript bool) {
+func (s *Server) executeBackgroundRun(sess *APISession, durableCtx context.Context, runID, intentID string, runtimeRelease, handOffRelease func(), runProvider provider.Provider, model *provider.Model, providerName, source, mode string, msg provider.Message, transcript bool) {
 	terminalStatus := "failed"
 	terminalErrMsg := ""
 	firstTurn := len(sess.Manager.GetMessages()) == 0
@@ -925,6 +926,15 @@ func (s *Server) executeBackgroundRun(sess *APISession, runID, intentID string, 
 		runtimeRelease()
 	}()
 
+	// A stop may have been accepted before this executor was scheduled. Skip
+	// resource construction and let the canonical cancellation path persist the
+	// terminal state below.
+	if durableCtx != nil && durableCtx.Err() != nil {
+		terminalStatus = "cancelled"
+		terminalErrMsg = "run cancelled before execution started"
+		return
+	}
+
 	// Generated files are declared through the Runtime-owned publication tool.
 	// Register it before BuildAgent freezes the canonical tool definition set,
 	// matching channel execution rather than giving the Web UI a separate file
@@ -958,8 +968,12 @@ func (s *Server) executeBackgroundRun(sess *APISession, runID, intentID string, 
 	if len(replayState.Messages) > 0 {
 		a.LoadHistoryState(replayState.Messages, replayState.EntryIDs)
 	}
-	// Run agent
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.RequestTimeoutSecs)*time.Second)
+	// Run agent. The Runtime-owned execution context is the parent so a
+	// cancellation requested while the Agent was still being built is honored.
+	if durableCtx == nil {
+		durableCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(durableCtx, time.Duration(s.cfg.RequestTimeoutSecs)*time.Second)
 	defer cancel()
 
 	if !sess.attachRunAgent(runID, a, cancel) {

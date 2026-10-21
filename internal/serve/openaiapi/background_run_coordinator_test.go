@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/provider"
 	openaiprovider "github.com/oschina/mothx/internal/provider/openai"
@@ -424,7 +425,7 @@ func TestRecoverResponsesBackgroundFunctionContinuation(t *testing.T) {
 	sess.beginRun(runID)
 	// This test drives the monitor inline rather than through the pool, so both
 	// releases are no-ops; the pooled path is what wires them for real.
-	srv.monitorRecoveredResponsesBackgroundRun(sess, session.SessionRun{ID: runID, SessionID: sess.ID, WorkDir: sess.WorkDir, Source: "responses_background", Model: model.ID, Mode: "yolo"}, &session.ResponseRun{SessionID: sess.ID, LocalRunID: "remote-recovery", LocalTurnID: runID, ResponseID: "resp-recovery", Provider: p.Name(), API: "openai-responses", State: "queued", CreatedAt: time.Now(), UpdatedAt: time.Now()}, model, func() {}, func() {})
+	srv.monitorRecoveredResponsesBackgroundRun(sess, context.Background(), session.SessionRun{ID: runID, SessionID: sess.ID, WorkDir: sess.WorkDir, Source: "responses_background", Model: model.ID, Mode: "yolo"}, &session.ResponseRun{SessionID: sess.ID, LocalRunID: "remote-recovery", LocalTurnID: runID, ResponseID: "resp-recovery", Provider: p.Name(), API: "openai-responses", State: "queued", CreatedAt: time.Now(), UpdatedAt: time.Now()}, model, func() {}, func() {})
 	messages := sess.Manager.GetMessages()
 	if len(messages) == 0 || messageText(messages[len(messages)-1]) != "recovered continuation" {
 		t.Fatalf("recovered messages = %#v", messages)
@@ -433,6 +434,98 @@ func TestRecoverResponsesBackgroundFunctionContinuation(t *testing.T) {
 	defer mu.Unlock()
 	if continuationPosts != 2 {
 		t.Fatalf("continuation POST count = %d, want 2 (state fallback replay)", continuationPosts)
+	}
+}
+
+// A WebUI stop must reach the Responses background coordinator. That path has
+// no Agent loop to abort, so it only observes cancellation through the
+// Runtime-owned execution context; a local context would leave the poll loop
+// (and the remote task) running forever after the stop was reported as accepted.
+func TestRequestSessionStopCancelsResponsesBackgroundPolling(t *testing.T) {
+	started := make(chan struct{})
+	var startOnce sync.Once
+	var mu sync.Mutex
+	cancelCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/responses":
+			startOnce.Do(func() { close(started) })
+			_, _ = w.Write([]byte(`{"id":"resp-stop","status":"queued"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/responses/resp-stop":
+			_, _ = w.Write([]byte(`{"id":"resp-stop","status":"queued","output":[]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/responses/resp-stop/cancel":
+			mu.Lock()
+			cancelCalls++
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"id":"resp-stop","status":"cancelled"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+
+	srv := newTestServer(t)
+	model := srv.model
+	p := openaiprovider.NewProviderWithModels("test-key", upstream.URL+"/v1", []*provider.Model{model})
+	p.SetUseResponsesAPI(true)
+	if err := p.SetResponsesConfig(config.ResponsesConfig{Background: config.BoolPtr(true)}); err != nil {
+		t.Fatalf("set responses config: %v", err)
+	}
+	srv.provider = p
+	srv.model = model
+	srv.responsesRuns = p.NewResponsesRunManager(srv.settings.GetSessionDir())
+	srv.runManager = NewRunManager(srv.settings.GetSessionDir())
+
+	const sessionID = "responses-background-stop"
+	w := submitRun(t, srv, sessionID, `{"message":"long background task"}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var accepted struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &accepted); err != nil || accepted.RunID == "" {
+		t.Fatalf("accepted response = %s, err=%v", w.Body.String(), err)
+	}
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("responses background run never started")
+	}
+
+	result, err := srv.RequestSessionStop(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("RequestSessionStop: %v", err)
+	}
+	if result.Code != agentruntime.SessionStopAccepted {
+		t.Fatalf("stop code = %q, want accepted", result.Code)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		run, err := session.GetSessionRun(srv.settings.GetSessionDir(), accepted.RunID)
+		if err != nil {
+			t.Fatalf("get session run: %v", err)
+		}
+		if run != nil && run.Status == "cancelled" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background run did not terminalize after stop: %#v", run)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	snapshot, err := srv.GetSessionRuntime(sessionID)
+	if err != nil {
+		t.Fatalf("GetSessionRuntime: %v", err)
+	}
+	if snapshot.Execution != nil && snapshot.Execution.Busy {
+		t.Fatalf("runtime stayed busy after stop: %#v", snapshot.Execution)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if cancelCalls == 0 {
+		t.Fatal("provider-side Responses task was not cancelled")
 	}
 }
 
