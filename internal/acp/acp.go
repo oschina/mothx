@@ -3525,9 +3525,9 @@ func (s *server) handleCancel(req rpcRequest) {
 		}
 		return
 	}
-	if rt.execution != nil && rt.execution.Cancel() {
-		// ExecutionRuntime also aborts the core agent.
-	} else {
+	if !s.cancelSessionRun(rt, rt.runID) {
+		// A prompt still in admission has no durable Run; cancellation remains
+		// adapter-owned for that window.
 		rt.cancelMu.Lock()
 		if rt.cancel != nil {
 			rt.cancel()
@@ -3536,6 +3536,56 @@ func (s *server) handleCancel(req rpcRequest) {
 	}
 	if len(req.ID) > 0 {
 		s.writeResponse(req.ID, map[string]any{}, nil)
+	}
+}
+
+// cancelSessionRun projects the shared Runtime stop matrix for ACP. ACP owns
+// process-local runs only, so this always resolves to the local branch; the
+// admission window (no durable Run yet) stays adapter-owned. It returns true
+// when the caller must not apply its legacy local cancel again.
+func (s *server) cancelSessionRun(rt *sessionRuntime, expectedRunID string) bool {
+	if rt == nil || rt.execution == nil || expectedRunID == "" {
+		return false
+	}
+	settings := s.currentSettings()
+	if settings == nil || rt.id == "" {
+		return rt.execution.Cancel()
+	}
+	// localCancel is the adapter-owned primitive for the admission window and
+	// any state where the shared matrix cannot reach the in-memory execution.
+	localCancel := func() bool {
+		if rt.execution != nil && rt.execution.Cancel() {
+			return true
+		}
+		rt.cancelMu.Lock()
+		cancel := rt.cancel
+		rt.cancelMu.Unlock()
+		if cancel == nil {
+			return false
+		}
+		cancel()
+		return true
+	}
+	result, err := agentruntime.RequestSessionStop(context.Background(), settings.GetSessionDir(), rt.id, agentruntime.SessionStopOptions{
+		ExpectedRunID:     expectedRunID,
+		LegacyLocalCancel: localCancel,
+	})
+	if err != nil {
+		return localCancel()
+	}
+	switch result.Code {
+	case agentruntime.SessionStopAccepted:
+		return true
+	case agentruntime.SessionStopRemoteAccepted, agentruntime.SessionStopRecoveryStarted,
+		agentruntime.SessionStopNoActiveRun:
+		// The durable side is converged (or has no active Run), but ACP still
+		// owns the in-memory Agent/loop and must abort it here.
+		localCancel()
+		return true
+	default:
+		// Preserve the adapter's historical local cancel for states the matrix
+		// cannot resolve (target changed, external owner, no durable row).
+		return localCancel()
 	}
 }
 
@@ -3550,16 +3600,18 @@ func (s *server) handleCancelRequest(req rpcRequest) {
 	if pending != nil {
 		delete(s.pending, key)
 	}
-	var execution *agentruntime.ExecutionRuntime
+	var target *sessionRuntime
+	var targetRunID string
 	var cancel context.CancelFunc
 	for _, rt := range s.sessions {
 		rt.cancelMu.Lock()
 		if rt.promptID == key {
+			target = rt
+			targetRunID = rt.runID
 			cancel = rt.cancel
-			execution = rt.execution
 		}
 		rt.cancelMu.Unlock()
-		if cancel != nil || execution != nil {
+		if target != nil {
 			break
 		}
 	}
@@ -3567,9 +3619,7 @@ func (s *server) handleCancelRequest(req rpcRequest) {
 	if pending != nil {
 		pending <- json.RawMessage(`{"outcome":{"outcome":"cancelled"}}`)
 	}
-	if execution != nil && execution.Cancel() {
-		// already cancelled through shared execution state
-	} else if cancel != nil {
+	if !s.cancelSessionRun(target, targetRunID) && cancel != nil {
 		cancel()
 	}
 	// A prompt still in admission has no rt.promptID/rt.cancel yet; abort it

@@ -1859,7 +1859,7 @@ func (a *App) finalizeForQuit() {
 	if a.run != nil {
 		a.finalizeAbortedRun()
 		run := a.run
-		run.cancel()
+		run.stop()
 		run.finish(agentruntime.RunStateCancelled)
 		a.run = nil
 	}

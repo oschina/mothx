@@ -231,7 +231,7 @@ func (a *App) discardAgent(cause error) {
 func (a *App) resetAgent(cause error) {
 	if a.run != nil {
 		run := a.run
-		run.cancel()
+		run.stop()
 		run.finish(agentruntime.RunStateCancelled)
 		a.run = nil
 	}

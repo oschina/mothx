@@ -129,6 +129,48 @@ func TestTUIRunCancel(t *testing.T) {
 	}
 }
 
+// TestTUIRunStopUsesSharedRuntimeStop pins that the TUI stop entry point goes
+// through the canonical Runtime stop matrix for a durable run.
+func TestTUIRunStopUsesSharedRuntimeStop(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := filepath.Join(workDir, "sessions")
+	sess := session.New(workDir, sessionDir)
+	if err := sess.Init(); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+	sessionID := sess.GetHeader().ID
+	run := newTUIRun(sessionID, sessionDir)
+	run.execution.SetRunStore(agentruntime.RunStore{SessionDir: sessionDir})
+
+	guard, err := session.AcquireExecutionAdmission(sessionDir, sessionID)
+	if err != nil {
+		t.Fatalf("acquire admission: %v", err)
+	}
+	intent := agentruntime.ExecutionIntent{ID: "intent-tui-stop", SessionID: sessionID, Source: "tui", CreatedAt: time.Now()}
+	if _, err := run.execution.BeginIntentDurable(context.Background(), intent, agentruntime.DurableRun{
+		ID: run.id, SessionID: sessionID, IntentID: intent.ID, Source: "tui", Status: "running", StartedAt: time.Now(),
+	}, agentruntime.RunEvent{SessionID: sessionID, RunID: run.id, EventType: "started", Source: "tui", Status: "running", Timestamp: time.Now()}); err != nil {
+		guard.Release()
+		t.Fatalf("begin durable run: %v", err)
+	}
+	guard.Release()
+
+	if !run.stop() {
+		t.Fatal("stop() = false, want true")
+	}
+	stored, err := agentruntime.GetDurableRun(context.Background(), sessionDir, run.id)
+	if err != nil {
+		t.Fatalf("load cancelled run: %v", err)
+	}
+	if stored == nil || stored.Status != "cancelling" {
+		t.Fatalf("run after TUI stop = %#v, want cancelling", stored)
+	}
+	run.finish(agentruntime.RunStateCancelled)
+	if _, active := run.execution.Active(); active {
+		t.Fatal("TUI execution stayed active after terminalization")
+	}
+}
+
 func TestEventQuestionRequestRegistersDecision(t *testing.T) {
 	workDir := t.TempDir()
 	sessionDir := filepath.Join(workDir, "sessions")
@@ -220,6 +262,13 @@ func TestEscAbortFinalizesDurableRunBeforeNextInput(t *testing.T) {
 
 	next := newTUIRun(sessionID, sessionDir)
 	next.execution.SetRunStore(agentruntime.RunStore{SessionDir: sessionDir})
+	// Production TUI runs acquire a fresh execution lease before durable
+	// admission; Esc-terminalization releases the previous run's authority.
+	nextAdmission, err := session.AcquireExecutionAdmission(sessionDir, sessionID)
+	if err != nil {
+		t.Fatalf("acquire admission for next run: %v", err)
+	}
+	defer nextAdmission.Release()
 	intent.ID = "intent-next"
 	intent.CreatedAt = time.Now()
 	if _, err := next.execution.BeginIntentDurable(context.Background(), intent, agentruntime.DurableRun{

@@ -4,8 +4,77 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/session"
 )
+
+// TestHandleCancelUsesSharedRuntimeStop pins that a durable ACP prompt is
+// stopped through the canonical Runtime stop matrix (persisting the cancelling
+// state) while the adapter still owns the in-memory Agent teardown.
+func TestHandleCancelUsesSharedRuntimeStop(t *testing.T) {
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	mgr := session.New(t.TempDir(), sessionDir)
+	if err := mgr.Init(); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+	sessionID := mgr.GetHeader().ID
+	settings := config.DefaultSettings()
+	settings.SessionDir = sessionDir
+
+	srv := &server{
+		settings: settings,
+		sessions: map[string]*sessionRuntime{},
+		w:        &bytes.Buffer{},
+	}
+	runID := "acp-stop-run"
+	rt := &sessionRuntime{id: sessionID, execution: &agentruntime.ExecutionRuntime{}, runID: runID}
+	rt.execution.SetRunStore(agentruntime.RunStore{SessionDir: sessionDir})
+	rt.execution.SetEventSink(agentruntime.SessionRunEventSink{SessionDir: sessionDir})
+
+	guard, err := session.AcquireExecutionAdmission(sessionDir, sessionID)
+	if err != nil {
+		t.Fatalf("acquire admission: %v", err)
+	}
+	intent := agentruntime.ExecutionIntent{ID: "intent-acp-stop", SessionID: sessionID, Source: "acp", CreatedAt: time.Now()}
+	if _, err := rt.execution.BeginIntentDurable(context.Background(), intent, agentruntime.DurableRun{
+		ID: runID, SessionID: sessionID, IntentID: intent.ID, Source: "acp", Status: "running", StartedAt: time.Now(),
+	}, agentruntime.RunEvent{SessionID: sessionID, RunID: runID, EventType: "started", Source: "acp", Status: "running", Timestamp: time.Now()}); err != nil {
+		guard.Release()
+		t.Fatalf("begin durable run: %v", err)
+	}
+	guard.Release()
+	srv.sessions[sessionID] = rt
+
+	srv.handleCancel(rpcRequest{ID: json.RawMessage("1"), Params: json.RawMessage(`{"sessionId":"` + sessionID + `"}`)})
+
+	stored, err := agentruntime.GetDurableRun(context.Background(), sessionDir, runID)
+	if err != nil {
+		t.Fatalf("load cancelled run: %v", err)
+	}
+	if stored == nil || stored.Status != "cancelling" {
+		t.Fatalf("run after session/cancel = %#v, want cancelling", stored)
+	}
+	if err := rt.execution.FinishDurableWithRetry(context.Background(), runID, agentruntime.RunStateCancelled, "", agentruntime.RunEvent{
+		SessionID: sessionID, RunID: runID, EventType: "finished", Source: "acp", Status: "cancelled", Timestamp: time.Now(),
+	}); err != nil {
+		t.Fatalf("finish cancelled run: %v", err)
+	}
+	if _, active := rt.execution.Active(); active {
+		t.Fatal("ACP execution stayed active after cancellation terminalized")
+	}
+	snapshot, err := agentruntime.InspectSessionExecution(sessionDir, sessionID)
+	if err != nil {
+		t.Fatalf("inspect execution: %v", err)
+	}
+	if snapshot.Busy {
+		t.Fatalf("session stayed busy after ACP cancel: %#v", snapshot)
+	}
+}
 
 func promptInflightLen(s *server) int {
 	s.inflightMu.Lock()

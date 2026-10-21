@@ -251,6 +251,42 @@ func (r *tuiRun) cancel() bool {
 	return r != nil && r.execution != nil && r.execution.Cancel()
 }
 
+// stop projects the shared Runtime stop decision for the TUI. The TUI owns the
+// process-local run, so this is always the local branch of the stop matrix; the
+// adapter still owns its UI teardown and calls finish afterward. A session
+// without a durable root falls back to the local cancel primitive.
+func (r *tuiRun) stop() bool {
+	if r == nil || r.execution == nil {
+		return false
+	}
+	if r.sessionID == "" || r.sessionDir == "" {
+		return r.cancel()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := agentruntime.RequestSessionStop(ctx, r.sessionDir, r.sessionID, agentruntime.SessionStopOptions{
+		ExpectedRunID:     r.id,
+		LegacyLocalCancel: func() bool { return r.cancel() },
+	})
+	if err != nil {
+		return r.cancel()
+	}
+	switch result.Code {
+	case agentruntime.SessionStopAccepted:
+		return true
+	case agentruntime.SessionStopRemoteAccepted, agentruntime.SessionStopRecoveryStarted,
+		agentruntime.SessionStopNoActiveRun:
+		// The durable side is already converged (or has no active Run), but this
+		// adapter still owns the in-memory execution and must stop it here.
+		r.cancel()
+		return true
+	default:
+		// Preserve the adapter's local authority for states the matrix cannot act
+		// on in this process (for example an embedded session with no durable row).
+		return r.cancel()
+	}
+}
+
 func (r *tuiRun) finish(state agentruntime.RunState) {
 	if r == nil || r.execution == nil {
 		return

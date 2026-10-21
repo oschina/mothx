@@ -739,6 +739,15 @@ func (r *ExecutionRuntime) finishDurableLocked(runID string, state RunState, mes
 	if !prepared {
 		if terminalStore, ok := store.(DurableTerminalPersistenceStore); ok {
 			if err := terminalStore.MarkTerminalizing(runID, message); err != nil {
+				// Another owner may have terminalized the canonical row first (for
+				// example user-triggered orphan recovery for a local Run whose lease
+				// was not visible to this process). Adopt that terminal outcome so
+				// the in-memory execution registration is released instead of
+				// leaving the session permanently busy.
+				if run, getErr := GetDurableRun(context.Background(), r.runtimeSessionDir(), runID); getErr == nil && run != nil && run.Status == durableRunStatus(state) {
+					_, finishErr := r.finishInMemory(runID, state, true)
+					return finishErr
+				}
 				r.finishTerminalAttempt(err)
 				return fmt.Errorf("mark durable run terminalizing: %w", err)
 			}
