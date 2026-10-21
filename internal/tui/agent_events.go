@@ -248,6 +248,11 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 				state = agentruntime.RunStateFailed
 			case agent.TaskCanceled:
 				state = agentruntime.RunStateCancelled
+			case agent.TaskIncomplete:
+				// An incomplete run (iteration/context/wall-clock limit) is a
+				// distinct canonical terminal outcome, not a success. Preserve it so
+				// the durable row and every later projection agree with the event.
+				state = agentruntime.RunStateIncomplete
 			}
 			a.run.finish(state)
 			a.run = nil

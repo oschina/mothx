@@ -351,3 +351,111 @@ func TestAnnotateSessionRunErrorOnlyFillsEmptyError(t *testing.T) {
 		t.Fatalf("blank annotation: applied=%v err=%v", applied, err)
 	}
 }
+
+// TestFinishSessionRunAndConversationTurnAnchorsTurnEndAtLeafAfterPersistedAssistant
+// guards runs that end on a tool-call turn (for example an incomplete run that
+// exhausted its iteration budget). The terminal payload is an assistant message
+// that the Agent already persisted, and its tool results were persisted after
+// it, so the assistant entry is not the transcript leaf. Re-parenting the
+// turn-end under that earlier assistant entry permanently fails the leaf fence
+// and leaves the Run terminalizing while it still owns the execution lease.
+func TestFinishSessionRunAndConversationTurnAnchorsTurnEndAtLeafAfterPersistedAssistant(t *testing.T) {
+	sessionDir := t.TempDir()
+	mgr := New(t.TempDir(), sessionDir)
+	if err := mgr.InitWithID("run-turn-leaf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.MigrateToEventStore(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := mgr.GetHeader().ID
+	started := time.Unix(1_700_000_000, 0).UTC()
+	runID := "run-turn-leaf"
+	turnID := "turn-run-turn-leaf"
+	if err := CreateSessionRun(sessionDir, SessionRun{
+		ID: runID, SessionID: sessionID, IntentID: "intent-turn-leaf", Attempt: 1,
+		Source: "tui", Model: "test", Mode: "yolo", Status: "running", StartedAt: started, UpdatedAt: started,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := StartConversationTurn(sessionDir, ConversationTurn{
+		ID: turnID, SessionID: sessionID, IntentID: "intent-turn-leaf", RunID: runID, Attempt: 1, StartedAt: started,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	assistant := provider.NewAssistantMessage([]provider.ContentBlock{
+		{Type: "text", Text: "working"},
+		{Type: "toolCall", ToolCall: &provider.ToolCallBlock{ID: "call-1", Name: "read", Arguments: []byte(`{"path":"README.md"}`)}},
+	})
+	assistant.Timestamp = started.Add(time.Second)
+	assistantEntryID, err := mgr.AppendMessage(assistant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolResult := provider.NewToolResultMessage("call-1", "read", "contents", false)
+	toolResult.Timestamp = started.Add(2 * time.Second)
+	toolResultEntryID, err := mgr.AppendMessage(toolResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	finishedAt := started.Add(3 * time.Second)
+	_, err = FinishSessionRunAndConversationTurn(sessionDir, SessionRun{
+		ID: runID, SessionID: sessionID, Status: "incomplete", Error: "max iterations exceeded",
+		AssistantEntryID: assistantEntryID, AssistantMessage: &assistant, FinishedAt: &finishedAt,
+	}, SessionRunEvent{
+		SessionID: sessionID, RunID: runID, EventType: "finished", Status: "incomplete", Timestamp: finishedAt,
+	}, turnID, "incomplete", "max_iterations")
+	if err != nil {
+		t.Fatalf("finish run with already-persisted tool-call assistant: %v", err)
+	}
+
+	batches, err := ReadCommittedEventBatches(t.Context(), sessionDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var turnEnd *TurnEndEntry
+	for _, batch := range batches {
+		for _, record := range batch.Events {
+			entry, err := DecodeEventRecord(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if end, ok := entry.(TurnEndEntry); ok && end.TurnID == turnID {
+				copied := end
+				turnEnd = &copied
+			}
+		}
+	}
+	if turnEnd == nil {
+		t.Fatal("turn-end entry was not committed")
+	}
+	if turnEnd.ParentID == nil || *turnEnd.ParentID != toolResultEntryID {
+		got := ""
+		if turnEnd.ParentID != nil {
+			got = *turnEnd.ParentID
+		}
+		t.Fatalf("turn-end parent = %q, want latest leaf %q (assistant entry %q must not re-parent it)", got, toolResultEntryID, assistantEntryID)
+	}
+	if turnEnd.Status != "incomplete" {
+		t.Fatalf("turn-end status = %q, want incomplete", turnEnd.Status)
+	}
+	turns, err := ListConversationTurns(sessionDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundTurn := false
+	for _, turn := range turns {
+		if turn.ID != turnID {
+			continue
+		}
+		foundTurn = true
+		if turn.Status != "incomplete" {
+			t.Fatalf("conversation turn status = %q, want incomplete", turn.Status)
+		}
+	}
+	if !foundTurn {
+		t.Fatal("conversation turn was not recorded")
+	}
+}

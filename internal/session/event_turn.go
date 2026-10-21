@@ -76,8 +76,12 @@ func appendEventStoreRunTerminal(ctx context.Context, sessionDir string, run Ses
 			if !ok || RunAssistantMessageFingerprint(run.ID, messageEntry.Message) != RunAssistantMessageFingerprint(run.ID, message) {
 				return false, fmt.Errorf("assistant event %s conflicts with terminal Run payload", id)
 			}
-			parentID := id
-			parent = &parentID
+			// The assistant payload is already part of the committed transcript.
+			// It is not necessarily the leaf: a Run that ended on a tool-call turn
+			// (for example max iterations) persists the tool results after it. Keep
+			// the manager's current leaf so the turn-end entry chains after the
+			// latest committed entry instead of re-parenting the transcript under an
+			// earlier message (which the leaf fence rejects forever).
 		} else {
 			entry := MessageEntry{EntryBase: EntryBase{Type: EntryMessage, ID: id, ParentID: parent, Timestamp: message.Timestamp}, Message: message}
 			entries = append(entries, entry)
