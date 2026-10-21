@@ -122,3 +122,28 @@ func TestLegacyUnitLenSingleByte(t *testing.T) {
 		t.Fatalf("legacyUnitLen() = %d, want 1", got)
 	}
 }
+
+func TestUTF8StreamSignals(t *testing.T) {
+	tests := []struct {
+		name          string
+		in            string
+		wantCJK       bool
+		wantMultiByte bool
+	}{
+		{name: "ascii", in: "hello world", wantCJK: false, wantMultiByte: false},
+		{name: "cyrillic", in: "Привет", wantCJK: false, wantMultiByte: false},
+		{name: "cjk", in: "中文", wantCJK: true, wantMultiByte: true},
+		{name: "mixed", in: "Привет 中文", wantCJK: true, wantMultiByte: true},
+		{name: "emoji", in: "ok 🎉", wantCJK: false, wantMultiByte: true},
+		{name: "invalid bytes", in: "\xff\xfe", wantCJK: false, wantMultiByte: false},
+		{name: "gbk hello", in: "\xc4\xe3\xba\xc3", wantCJK: false, wantMultiByte: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cjk, multiByte := utf8StreamSignals([]byte(tt.in))
+			if cjk != tt.wantCJK || multiByte != tt.wantMultiByte {
+				t.Fatalf("utf8StreamSignals(%q) = (%v, %v), want (%v, %v)", tt.in, cjk, multiByte, tt.wantCJK, tt.wantMultiByte)
+			}
+		})
+	}
+}

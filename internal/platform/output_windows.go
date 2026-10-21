@@ -24,13 +24,17 @@ const (
 // Windows runtimes disagree about the encoding they use when stdout/stderr is a
 // pipe: Python, Java, the C runtime and shell builtins commonly use the system
 // ANSI code page (for example GBK/CP936), while Go, Rust, Node.js and many CLI
-// tools write UTF-8. A fully valid UTF-8 stream is normally trusted as UTF-8;
-// otherwise legacy-code-page runs are decoded with the Windows conversion API.
+// tools write UTF-8. Fully valid UTF-8 runs are normally trusted as UTF-8;
+// invalid bytes are decoded with the Windows conversion API.
 //
 // Some two-byte legacy sequences are also valid UTF-8 (GBK "写" is D0 B4,
-// which decodes as Cyrillic "д" under UTF-8). When the ANSI code page is a
-// CJK code page, an ambiguous valid-UTF-8 stream is treated as legacy text if
-// decoding it with that code page yields CJK characters.
+// which decodes as Cyrillic "д" under UTF-8). When the ANSI code page is a CJK
+// code page, that ambiguity is resolved per non-ASCII run instead of for the
+// whole captured block, and only when the stream carries no stronger UTF-8
+// signal (see preferLegacyForValidUTF8): a stream whose UTF-8 reading contains
+// CJK characters or any 3/4-byte sequence is never second-guessed. Real text
+// such as Cyrillic "Привет" therefore stays UTF-8 rather than being re-decoded
+// into unrelated Han characters.
 //
 // Set MOTHX_WIN_OUTPUT_ENCODING=utf-8 to disable legacy decoding, or set it to
 // a Windows code page number (for example 936) to force that code page.
@@ -55,29 +59,21 @@ func DecodeProcessOutput(data []byte) string {
 		// Unknown value: fall back to auto-detection.
 	}
 
-	codec := newLegacyTextCodec()
-	if codec == nil {
+	cp := windows.GetACP()
+	if cp == 0 || cp == cpUTF8 {
 		return strings.ToValidUTF8(string(data), "\uFFFD")
 	}
-	if utf8.Valid(data) {
-		if c, ok := codec.(ambiguousUTF8Codec); ok && c.preferLegacyForValidUTF8(data) {
-			return codec.decode(data)
-		}
-		return string(data)
+	cjk, multiByte := utf8StreamSignals(data)
+	codec := winLegacyTextCodec{
+		codePage: cp,
+		stream:   streamSignals{hasCJK: cjk, hasMultiByteUTF8: multiByte},
 	}
 	return normalizeProcessOutput(data, codec)
 }
 
-func newLegacyTextCodec() legacyTextCodec {
-	cp := windows.GetACP()
-	if cp == 0 || cp == cpUTF8 {
-		return nil
-	}
-	return winLegacyTextCodec{codePage: cp}
-}
-
 type winLegacyTextCodec struct {
 	codePage uint32
+	stream   streamSignals
 }
 
 func (c winLegacyTextCodec) decodeStrict(p []byte) (string, bool) {
@@ -109,30 +105,50 @@ func (c winLegacyTextCodec) decodeWithFlags(p []byte, flags uint32) (string, boo
 	return string(utf16.Decode(buf[:written])), true
 }
 
+// streamSignals carries whole-stream evidence that captured output is genuine
+// UTF-8, which disables legacy-code-page second-guessing for every run.
+type streamSignals struct {
+	// hasCJK reports a CJK character in the UTF-8 reading of the stream.
+	hasCJK bool
+	// hasMultiByteUTF8 reports a valid 3- or 4-byte UTF-8 sequence anywhere in
+	// the stream.
+	hasMultiByteUTF8 bool
+}
+
 // preferLegacyForValidUTF8 resolves the two-byte ambiguity between a legacy CJK
-// code page and UTF-8. It only second-guesses a valid UTF-8 stream when that
-// stream looks like GBK bytes misread as Cyrillic/Greek/Hebrew-style text and
-// the legacy decoding produces CJK text.
-func (c winLegacyTextCodec) preferLegacyForValidUTF8(data []byte) bool {
-	if !isCJKCodePage(c.codePage) || !hasNonASCII(data) {
+// code page and UTF-8 for one maximal non-ASCII run whose bytes are valid
+// UTF-8. It only second-guesses such a run when the stream carries no stronger
+// UTF-8 signal and the legacy reading is clearly CJK text:
+//
+//   - Any 3/4-byte UTF-8 sequence, or any CJK character in the UTF-8 reading,
+//     is proof of genuine UTF-8 (legacy CJK bytes misread as UTF-8 only ever
+//     form two-byte sequences), so the stream is never re-decoded.
+//   - Only short runs qualify. For n adjacent Han characters to look like valid
+//     UTF-8 at all, every pair must land in the narrow overlap of the two
+//     encodings; that coincidence shrinks exponentially with length, so a long
+//     run is far more likely real Cyrillic/Greek than Chinese misread.
+//   - The legacy decode must succeed and yield CJK text for every rune.
+func (c winLegacyTextCodec) preferLegacyForValidUTF8(run []byte) bool {
+	if c.stream.hasCJK || c.stream.hasMultiByteUTF8 || !isCJKCodePage(c.codePage) || !hasNonASCII(run) {
 		return false
 	}
 
-	cjkUTF8, suspiciousUTF8 := countOutputScripts(string(data))
-	if cjkUTF8 > 0 && cjkUTF8 >= suspiciousUTF8 {
-		return false
-	}
-	if suspiciousUTF8 == 0 {
+	cjkUTF8, suspiciousUTF8 := countOutputScripts(string(run))
+	if cjkUTF8 > 0 || suspiciousUTF8 == 0 || suspiciousUTF8 > ambiguousLegacyRuneLimit {
 		return false
 	}
 
-	legacy, ok := c.decodeStrict(data)
+	legacy, ok := c.decodeStrict(run)
 	if !ok {
 		return false
 	}
 	cjkLegacy, _ := countOutputScripts(legacy)
 	return cjkLegacy > 0 && cjkLegacy >= suspiciousUTF8
 }
+
+// ambiguousLegacyRuneLimit is the longest run of two-byte sequences that is
+// still eligible for legacy re-decoding. Longer runs are trusted as UTF-8.
+const ambiguousLegacyRuneLimit = 2
 
 func isCJKCodePage(cp uint32) bool {
 	switch cp {

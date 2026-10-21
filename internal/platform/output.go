@@ -2,6 +2,7 @@ package platform
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -20,8 +21,46 @@ type legacyTextCodec interface {
 // fully valid UTF-8 run is more likely to be legacy-code-page text. Some
 // two-byte legacy sequences are genuinely ambiguous: for example GBK "写"
 // (D0 B4) is also valid UTF-8 and decodes to Cyrillic "д".
+//
+// The hook is consulted per maximal non-ASCII run, never for a whole block,
+// so one ambiguous run can no longer flip unrelated text around it.
 type ambiguousUTF8Codec interface {
 	preferLegacyForValidUTF8([]byte) bool
+}
+
+// utf8StreamSignals reports two stream-wide facts about the UTF-8 reading of
+// data, used to suppress legacy-code-page second-guessing of ambiguous
+// two-byte runs:
+//
+//   - cjk: the UTF-8 reading contains at least one CJK character, which is
+//     strong evidence the stream really is UTF-8 (legacy CJK code pages never
+//     produce CJK through a valid UTF-8 reading).
+//   - multiByte: the UTF-8 reading contains at least one valid 3- or 4-byte
+//     sequence. Genuine legacy-Chinese text misread as UTF-8 is built from
+//     two-byte pairs only; a 3/4-byte sequence is a strong UTF-8 signal.
+func utf8StreamSignals(data []byte) (cjk, multiByte bool) {
+	for i := 0; i < len(data); {
+		r, size := utf8.DecodeRune(data[i:])
+		if r == utf8.RuneError && size <= 1 {
+			i++
+			continue
+		}
+		if size >= 3 {
+			multiByte = true
+		}
+		switch {
+		case unicode.Is(unicode.Han, r),
+			unicode.Is(unicode.Hiragana, r),
+			unicode.Is(unicode.Katakana, r),
+			unicode.Is(unicode.Hangul, r):
+			cjk = true
+		}
+		if cjk && multiByte {
+			break
+		}
+		i += size
+	}
+	return cjk, multiByte
 }
 
 // normalizeProcessOutput converts captured child-process bytes into valid UTF-8.

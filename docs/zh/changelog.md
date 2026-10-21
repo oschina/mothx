@@ -1,5 +1,19 @@
 # 更新日志
 
+## v1.3.105-pre-4
+
+### 💥 行为变更
+
+- **内置的 Windows BusyBox 现在要求 Windows 10 及以上。** `busybox-windows-x86.exe` 与 `busybox-windows-x86_64.exe` 改用该 fork 的 UTF-8 配置重新构建（x86_64 用 `mingw64u_defconfig`，x86 用 `mingw32w_defconfig`），带有 UTF-8 应用程序清单（`activeCodePage=UTF-8`）以及 `FEATURE_UTF8_INPUT`、`FEATURE_UTF8_CONSOLE`、`FEATURE_UTF8_AUTODETECT`、`FEATURE_UTF8_CHILD_ENV` 与 `UNICODE_SUPPORT`。非 ASCII 的 `sh -c` 命令文本现在以 UTF-8 传入 argv，不再被降级为系统 ANSI 代码页（简体中文 Windows 上为 GBK），子进程也保持 UTF-8 环境基线。由于构建时设置了 `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`，在 Windows 7/8 上 BusyBox 会拒绝启动；此时 `bash` 工具会像「BusyBox 不可用」一样自动回退到 PowerShell，命令仍可执行（只是没有 UTF-8 基线）。MothX 的支持范围仍标注为 Windows 10/11。
+
+### 🐛 问题修复
+
+- **Windows 捕获输出在捕获边界统一归一化。** 子进程各自决定管道编码——Python、Java、C 运行库与 shell 内建命令常用 ANSI 代码页（简体中文 Windows 上为 GBK），而 Go、Rust、Node.js 及多数 CLI 写 UTF-8，同一条命令还可能混用两者。现在不再注入针对单一运行时的环境变量，而是由 `bash` 工具通过 `platform.DecodeProcessOutput` 归一化捕获到的 stdout/stderr：非合法 UTF-8 的字节用当前代码页解码，合法 UTF-8 直接信任，混合输出则按「最大非 ASCII 连续段」分别判定。`MOTHX_WIN_OUTPUT_ENCODING=utf-8` 可强制 UTF-8，设为数字（如 `936`）可强制该代码页。
+
+- **真正的 UTF-8 文本不再被误当作 GBK 重解码。** 两种编码在双字节序列上存在重叠，此前的「整块」启发式会对整段捕获只做一次判断，把真正的 UTF-8 文本重解码成无关的汉字（`Привет` → `袩褉懈胁械褌`，混有中文的行则变成 `涓枃`）。现在改为按非 ASCII 连续段分别判定，且仅当整条流没有更强的 UTF-8 证据时才可能翻转：只要 UTF-8 读法中存在 CJK 字符或任何 3/4 字节序列，就绝不再二次猜测；只有短的双字节片段才有资格翻转。字节本身与旧编码一致的情形（例如单个 GBK `写`）仍然照旧解码。
+
+- **内置资产变化时会刷新已解压的 Windows BusyBox。** 已解压的副本会按 SHA-256 与内置资产比对，不同则以原子方式替换，因此升级后的 MothX 不会继续运行旧 shell。若正在运行的 BusyBox 锁住可执行映像，则本次运行继续使用旧副本，并在下次启动时重试刷新。
+
 ## v1.3.105-pre-1
 
 ### ✨ 新功能

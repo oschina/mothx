@@ -36,6 +36,19 @@ func TestDecodeProcessOutputWindows(t *testing.T) {
 		t.Fatalf("DecodeProcessOutput() = %q, want %q", got, "中文")
 	}
 
+	// A genuine UTF-8 Cyrillic word is not legacy text: its two-byte sequences
+	// are only accidentally valid GBK, and re-decoding it yields unrelated
+	// Han characters ("Привет" -> "袩褉懈胁械褌").
+	if got := DecodeProcessOutput([]byte("Привет")); got != "Привет" {
+		t.Fatalf("DecodeProcessOutput() = %q, want %q", got, "Привет")
+	}
+
+	// A stream mixing genuine UTF-8 CJK with ambiguous bytes stays UTF-8 as a
+	// whole; the CJK reading proves the producer writes UTF-8.
+	if got := DecodeProcessOutput([]byte("中文 Привет")); got != "中文 Привет" {
+		t.Fatalf("DecodeProcessOutput() = %q, want %q", got, "中文 Привет")
+	}
+
 	// The environment override can force UTF-8 decoding.
 	t.Setenv(outputEncodingEnv, "utf-8")
 	if got := DecodeProcessOutput(gbkHello); got != "\uFFFD" {
@@ -48,5 +61,25 @@ func TestDecodeProcessOutputWindows(t *testing.T) {
 		if got := DecodeProcessOutput(gbkHello); got != "你好" {
 			t.Fatalf("DecodeProcessOutput(forced 936) = %q, want %q", got, "你好")
 		}
+	}
+}
+
+func TestPreferLegacyForValidUTF8Windows(t *testing.T) {
+	// Code page 936 is always available through the conversion API, so this
+	// test does not depend on the machine's ANSI code page.
+	t.Setenv(outputEncodingEnv, "")
+
+	plain := winLegacyTextCodec{codePage: 936}
+	if !plain.preferLegacyForValidUTF8([]byte{0xd0, 0xb4}) {
+		t.Fatal("a lone ambiguous pair (GBK 写) should prefer legacy")
+	}
+	if plain.preferLegacyForValidUTF8([]byte("Привет")) {
+		t.Fatal("a genuine UTF-8 Cyrillic run must not be re-decoded as legacy")
+	}
+
+	// Stream-level UTF-8 evidence suppresses the flip even for a lone pair.
+	withCJK := winLegacyTextCodec{codePage: 936, stream: streamSignals{hasCJK: true, hasMultiByteUTF8: true}}
+	if withCJK.preferLegacyForValidUTF8([]byte{0xd0, 0xb4}) {
+		t.Fatal("a stream containing genuine UTF-8 CJK must not be re-decoded as legacy")
 	}
 }

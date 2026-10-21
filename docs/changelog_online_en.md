@@ -2,6 +2,20 @@
 
 This file contains the changes for the **current version only**. The full history of all versions lives in [docs/en/changelog.md](en/changelog.md).
 
+## v1.3.105-pre-4
+
+### 💥 Behavior Changes
+
+- **The embedded Windows BusyBox now requires Windows 10 or later.** `busybox-windows-x86.exe` and `busybox-windows-x86_64.exe` are rebuilt from the fork's UTF-8 configs (`mingw64u_defconfig` for x86_64, `mingw32w_defconfig` for x86) and carry a UTF-8 application manifest (`activeCodePage=UTF-8`) together with `FEATURE_UTF8_INPUT`, `FEATURE_UTF8_CONSOLE`, `FEATURE_UTF8_AUTODETECT`, `FEATURE_UTF8_CHILD_ENV` and `UNICODE_SUPPORT`. Non-ASCII `sh -c` command text now reaches argv as UTF-8 instead of being down-converted to the system ANSI code page (GBK on zh-CN Windows), and the child environment keeps the UTF-8 baseline. The build sets `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`, so on Windows 7/8 BusyBox refuses to start; the `bash` tool then falls back to PowerShell exactly as it does whenever BusyBox is unavailable, so commands keep working (without the UTF-8 baseline). MothX continues to document Windows 10/11 as its supported Windows floor.
+
+### 🐛 Bug Fixes
+
+- **Captured Windows output is normalized at the capture boundary.** Child processes choose their pipe encoding independently — Python, Java, the C runtime and shell builtins often use the ANSI code page (GBK on zh-CN Windows) while Go, Rust, Node.js and most CLIs write UTF-8, and a single command can mix both. Rather than injecting a per-runtime environment variable, the `bash` tool now normalizes captured stdout/stderr through `platform.DecodeProcessOutput`: bytes that are not valid UTF-8 are decoded with the active code page, valid UTF-8 is trusted, and mixed output is resolved per maximal non-ASCII run. `MOTHX_WIN_OUTPUT_ENCODING=utf-8` forces UTF-8, and a numeric value such as `936` forces that code page.
+
+- **Genuine UTF-8 text is no longer re-read as GBK.** The two encodings overlap on two-byte sequences, and the previous whole-block heuristic could decide once for an entire capture, re-decoding real UTF-8 text into unrelated Han characters (`Привет` → `袩褉懈胁械褌`, and a mixed line into `涓枃`). Ambiguity is now resolved per non-ASCII run and only when the stream carries no stronger UTF-8 signal: a stream whose UTF-8 reading contains CJK characters or any 3- or 4-byte sequence is never second-guessed, and only short runs of two-byte pairs are eligible. Byte-identical legacy fragments (for example a lone GBK `写`) still decode as before.
+
+- **The extracted Windows BusyBox is refreshed when the embedded asset changes.** A previously extracted copy is compared with the embedded asset by SHA-256 and replaced atomically when they differ, so an upgraded MothX never keeps running an old shell. If a running BusyBox holds the executable image locked, the old copy is kept for that run and the refresh is retried on the next startup.
+
 ## v1.3.105-pre-1
 
 ### ✨ New Features
