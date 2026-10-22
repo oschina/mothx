@@ -1663,7 +1663,7 @@ func (s *Server) syncSessionTools(sess *APISession, refreshContext bool) error {
 	}
 
 	if sess.Runtime != nil {
-		sess.Runtime.SynchronizeCoreTools(sess.Browser)
+		sess.Runtime.SynchronizeCoreTools(sess.Browser, sess.WebSearch)
 	}
 
 	if sess.A2AMaster {

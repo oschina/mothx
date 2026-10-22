@@ -4,6 +4,10 @@
 
 ### 💥 行为变更
 
+- **非托管网页搜索改用 DeepSeek Search/Fetch。** 原先通过 `webSearch` 的 provider/type/model 配置注册的 provider 搜索工具已被替换为 DeepSeek 官方 `POST /v1/tools/search` 与 `POST /v1/tools/fetch` 支撑的本地 `web_search`、`web_fetch`。OpenAI Responses 的 provider 原生托管搜索保持不变，并优先于本地 `web_search`。`webSearch` 现在配置 `provider`、`baseUrl` 与 `token`（未设置 token 时回退到 provider API key）；两个工具均为只读，可在 plan 模式使用。
+
+- **新增腾讯元宝搜索后端。** `webSearch.backend` 现在可选择 `deepseek`（官方 Search/Fetch API）或 `yuanbao`（腾讯元宝 SearchPro，`POST /SearchPro`）。元宝后端发送 `{"Query": ...}`，把返回的 `Pages` 归一化为标题、URL、站点、时间、分数与正文摘要，并使用 `webSearch.token` 或 `${TENCENTCLOUD_WSA_APIKEY}` 鉴权；元宝目前只提供搜索，因此 `web_fetch` 仅在 DeepSeek 后端可用。
+
 - **内置的 Windows BusyBox 现在要求 Windows 10 及以上。** `busybox-windows-x86.exe` 与 `busybox-windows-x86_64.exe` 改用该 fork 的 UTF-8 配置重新构建（x86_64 用 `mingw64u_defconfig`，x86 用 `mingw32w_defconfig`），带有 UTF-8 应用程序清单（`activeCodePage=UTF-8`）以及 `FEATURE_UTF8_INPUT`、`FEATURE_UTF8_CONSOLE`、`FEATURE_UTF8_AUTODETECT`、`FEATURE_UTF8_CHILD_ENV` 与 `UNICODE_SUPPORT`。非 ASCII 的 `sh -c` 命令文本现在以 UTF-8 传入 argv，不再被降级为系统 ANSI 代码页（简体中文 Windows 上为 GBK），子进程也保持 UTF-8 环境基线。由于构建时设置了 `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`，在 Windows 7/8 上 BusyBox 会拒绝启动；此时 `bash` 工具会像「BusyBox 不可用」一样自动回退到 PowerShell，命令仍可执行（只是没有 UTF-8 基线）。MothX 的支持范围仍标注为 Windows 10/11。
 
 ### 🐛 问题修复

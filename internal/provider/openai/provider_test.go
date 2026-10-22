@@ -2353,47 +2353,6 @@ func TestOpenAIResponsesAPIBackgroundFallsBackToSynchronousChat(t *testing.T) {
 	}
 }
 
-func TestOpenAIResponsesAPIHostedWebSearchTool(t *testing.T) {
-	bodyCh := make(chan string, 1)
-	p := newMockOpenAIProvider(t, []*provider.Model{{ID: "responses-test"}}, "data: [DONE]\n", bodyCh, nil)
-	p.SetUseResponsesAPI(true)
-
-	params := provider.ChatParams{
-		ModelID:  "responses-test",
-		Messages: []provider.Message{provider.NewUserMessage("latest news?")},
-		Tools: []provider.ToolDefinition{
-			{Name: "web_search", Kind: "hosted", Provider: "gpt", ProviderType: "responses"},
-		},
-		Abort: make(chan struct{}),
-	}
-	for range p.Chat(context.Background(), params) {
-	}
-
-	var raw map[string]any
-	select {
-	case body := <-bodyCh:
-		if err := json.Unmarshal([]byte(body), &raw); err != nil {
-			t.Fatalf("unmarshal request body: %v\nbody: %s", err, body)
-		}
-	default:
-		t.Fatal("no request body captured")
-	}
-	tools, ok := raw["tools"].([]any)
-	if !ok || len(tools) != 1 {
-		t.Fatalf("tools = %#v, want one hosted tool", raw["tools"])
-	}
-	tool, ok := tools[0].(map[string]any)
-	if !ok {
-		t.Fatalf("tool = %#v, want object", tools[0])
-	}
-	if tool["type"] != "web_search" {
-		t.Fatalf("tool.type = %#v, want web_search", tool["type"])
-	}
-	if _, ok := tool["name"]; ok {
-		t.Fatalf("hosted web search should not include function name: %#v", tool)
-	}
-}
-
 func TestConvertResponsesToolsDeduplicatesConfiguredAndNativeWebSearch(t *testing.T) {
 	p := &Provider{}
 	tools := p.convertResponsesTools([]provider.ToolDefinition{

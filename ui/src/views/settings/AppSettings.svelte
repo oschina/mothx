@@ -43,12 +43,10 @@
   // edits are appended so they can be chosen before saving.
   $: catalogProviders = ($modelCatalog.providers || []).map(String).filter(Boolean);
   $: defaultModelOptions = mergedModelOptions(form.defaults.defaultProvider, defaultProvider, $modelCatalog.models);
-  $: webSearchProviders = providersSupportingWebSearch(form.providers);
-  $: webSearchProvider = form.providers.find((item) => item.id === form.webSearch.provider) || null;
-  $: webSearchModelOptions = modelOptionsForProvider(webSearchProvider);
-  $: webSearchProviderMissing = Boolean(form.webSearch.provider) && !webSearchProviders.some((item) => item.id === form.webSearch.provider);
-  $: webSearchTypeOptions = apiTypeOptionsForProvider(webSearchProvider, form.webSearch.providerType);
-  $: webSearchModelMissing = Boolean(form.webSearch.model) && !webSearchModelOptions.some((model) => model.id === form.webSearch.model);
+  $: webSearchProviderMissing = Boolean(form.webSearch.provider) && !form.providers.some((item) => item.id === form.webSearch.provider);
+  $: webSearchYuanbao = form.webSearch.backend === 'yuanbao';
+  $: webSearchBaseURLPlaceholder = webSearchYuanbao ? 'https://api.wsa.cloud.tencent.com' : 'https://api.deepseek.com';
+  $: webSearchTokenPlaceholder = webSearchYuanbao ? '${TENCENTCLOUD_WSA_APIKEY}' : '${DEEPSEEK_API_KEY}';
   $: defaultProviderMissing = Boolean(form.defaults.defaultProvider)
     && !form.providers.some((item) => item.id === form.defaults.defaultProvider)
     && !catalogProviders.includes(form.defaults.defaultProvider);
@@ -85,7 +83,7 @@
         shellPath: '',
         shellCommandPrefix: ''
       },
-      webSearch: { enabled: '', provider: '', providerType: '', model: '' },
+      webSearch: { enabled: '', backend: 'deepseek', provider: '', baseUrl: '', token: '' },
       toolExecution: { mode: 'parallel', maxConcurrency: 10 },
       imageGeneration: { enabled: '', provider: '', apiType: '', baseUrl: '', token: '', model: '' },
       statusLine: { enabled: false, type: 'command', command: '', padding: 0, refreshInterval: '', timeoutMs: '', fallback: '' },
@@ -154,9 +152,10 @@
       },
       webSearch: {
         enabled: triBool(cfg.webSearch?.enabled),
+        backend: stringValue(cfg.webSearch?.backend, 'deepseek'),
         provider: stringValue(cfg.webSearch?.provider, ''),
-        providerType: stringValue(cfg.webSearch?.providerType, ''),
-        model: stringValue(cfg.webSearch?.model, '')
+        baseUrl: stringValue(cfg.webSearch?.baseUrl, ''),
+        token: stringValue(cfg.webSearch?.token, '')
       },
       toolExecution: {
         mode: stringValue(cfg.toolExecution?.mode, base.toolExecution.mode),
@@ -287,9 +286,10 @@
 
     cfg.webSearch = ensureObject(cfg, 'webSearch');
     writeTriBool(cfg.webSearch, 'enabled', form.webSearch.enabled);
+    writeString(cfg.webSearch, 'backend', form.webSearch.backend);
     writeString(cfg.webSearch, 'provider', form.webSearch.provider);
-    writeString(cfg.webSearch, 'providerType', form.webSearch.providerType);
-    writeString(cfg.webSearch, 'model', form.webSearch.model);
+    writeString(cfg.webSearch, 'baseUrl', form.webSearch.baseUrl);
+    writeString(cfg.webSearch, 'token', form.webSearch.token);
 
     cfg.toolExecution = ensureObject(cfg, 'toolExecution');
     cfg.toolExecution.mode = ['parallel', 'sequential'].includes(form.toolExecution.mode)
@@ -465,24 +465,11 @@
     form = form;
   }
 
-  function selectWebSearchProvider(value) {
-    form.webSearch.provider = value;
-    const provider = form.providers.find((item) => item.id === value) || null;
-    form.webSearch.providerType = provider?.api || '';
-    const models = modelOptionsForProvider(provider);
-    if (!models.some((model) => model.id === form.webSearch.model)) {
-      form.webSearch.model = models[0]?.id || '';
-    }
-    form = form;
-  }
-
-  function selectWebSearchType(value) {
-    form.webSearch.providerType = value;
-    form = form;
-  }
-
-  function selectWebSearchModel(value) {
-    form.webSearch.model = value;
+  function selectWebSearchBackend(value) {
+    form.webSearch.backend = value;
+    // Endpoint and credential belong to one backend.
+    form.webSearch.baseUrl = '';
+    form.webSearch.token = '';
     form = form;
   }
 
@@ -644,14 +631,6 @@
       const hay = `${provider.id || ''} ${provider.vendor || ''} ${provider.baseUrl || ''} ${provider.api || ''}`.toLowerCase();
       return hay.includes(query);
     });
-  }
-
-  function providersSupportingWebSearch(providers = []) {
-    return providers.filter((provider) => supportsWebSearchAPI(provider?.api));
-  }
-
-  function supportsWebSearchAPI(api) {
-    return api === 'openai-responses' || api === 'anthropic-messages';
   }
 
   function modelOptionsForProvider(provider) {
@@ -985,45 +964,23 @@
           <option value="false">{$t('common.disabled')}</option>
         </select>
       </SettingsField>
+      <SettingsField label={$t('settings.app.webSearchBackend')}>
+        <select value={form.webSearch.backend || 'deepseek'} on:change={(event) => selectWebSearchBackend(event.currentTarget.value)} class="settings-select">
+          <option value="deepseek">DeepSeek Search</option>
+          <option value="yuanbao">腾讯元宝搜索 (SearchPro)</option>
+        </select>
+      </SettingsField>
       <SettingsField label={$t('settings.app.webSearchProvider')}>
-        <select value={form.webSearch.provider} on:change={(event) => selectWebSearchProvider(event.currentTarget.value)} class="settings-select">
-          <option value="">{$t('common.uninitialized')}</option>
-          {#if webSearchProviderMissing}
-            <option value={form.webSearch.provider}>{form.webSearch.provider}</option>
-          {/if}
-          {#each webSearchProviders as provider}
-            <option value={provider.id}>{provider.id}</option>
-          {/each}
-        </select>
+        <Input bind:value={form.webSearch.provider} placeholder="deepseek-openai" disabled={webSearchYuanbao} />
+        {#if webSearchProviderMissing && !webSearchYuanbao}
+          <span class="settings-field-hint">{$t('settings.app.webSearchProviderHint')}</span>
+        {/if}
       </SettingsField>
-      <SettingsField label={$t('settings.app.webSearchType')}>
-        <select
-          value={form.webSearch.providerType}
-          disabled={webSearchTypeOptions.length === 0 && !form.webSearch.providerType}
-          on:change={(event) => selectWebSearchType(event.currentTarget.value)}
-          class="settings-select"
-        >
-          <option value="">{$t('common.uninitialized')}</option>
-          {#each webSearchTypeOptions as apiType}
-            <option value={apiType}>{apiType}</option>
-          {/each}
-        </select>
+      <SettingsField label={$t('settings.app.webSearchBaseUrl')}>
+        <Input bind:value={form.webSearch.baseUrl} placeholder={webSearchBaseURLPlaceholder} />
       </SettingsField>
-      <SettingsField label={$t('settings.app.webSearchModel')}>
-        <select
-          value={form.webSearch.model}
-          disabled={webSearchModelOptions.length === 0 && !form.webSearch.model}
-          on:change={(event) => selectWebSearchModel(event.currentTarget.value)}
-          class="settings-select"
-        >
-          <option value="">{$t('common.uninitialized')}</option>
-          {#if webSearchModelMissing}
-            <option value={form.webSearch.model}>{form.webSearch.model}</option>
-          {/if}
-          {#each webSearchModelOptions as model}
-            <option value={model.id}>{model.name && model.name !== model.id ? `${model.id} - ${model.name}` : model.id}</option>
-          {/each}
-        </select>
+      <SettingsField label={$t('settings.app.webSearchToken')}>
+        <Input type="password" bind:value={form.webSearch.token} placeholder={webSearchTokenPlaceholder} />
       </SettingsField>
       <SettingsField label={$t('settings.app.toolExecutionMode')}>
         <select bind:value={form.toolExecution.mode} class="settings-select">

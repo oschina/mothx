@@ -44,7 +44,7 @@ type APISession struct {
 	DisplayMode  string // session-level transcript display mode
 	DelegateMode bool   // session-level delegation mode
 	Workflows    bool   // session-level workflow mode
-	WebSearch    bool   // session-level hosted web search toggle
+	WebSearch    bool   // session-level local web_search/web_fetch toggle
 	Browser      bool   // session-level browser tool toggle
 	A2AMaster    bool   // session-level A2A dispatch tool toggle
 	MultiAgent   bool   // session-level sub-agent tools toggle
@@ -1760,7 +1760,9 @@ func (s *Server) PatchSessionCapabilities(id string, patch SessionCapabilityPatc
 		sess.DisplayMode = normalizedDisplayMode(*patch.DisplayMode)
 	}
 	if applyBoolOption(&sess.WebSearch, patch.WebSearch) {
-		// Web search affects hosted tool injection at next agent construction.
+		// Web search is a local DeepSeek-backed tool pair; reconcile the
+		// registry at the same boundary as browser.
+		registryChanged = true
 	}
 	if applyBoolOption(&sess.Browser, patch.Browser) {
 		refreshContext = true
@@ -1783,9 +1785,9 @@ func (s *Server) PatchSessionCapabilities(id string, patch SessionCapabilityPatc
 		refreshContext = true
 		registryChanged = true
 	}
-	// Mode and webSearch only affect agent construction/configuration. They do
-	// not own registry state, so a mode-only WebUI PATCH must not re-register
-	// session tools (or reinitialize optional integrations such as A2A).
+	// Mode only affects agent construction/configuration. It does not own
+	// registry state, so a mode-only WebUI PATCH must not re-register session
+	// tools (or reinitialize optional integrations such as A2A).
 	if registryChanged {
 		if err := s.syncSessionTools(sess, refreshContext); err != nil {
 			return nil, err

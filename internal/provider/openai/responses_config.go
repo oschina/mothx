@@ -468,7 +468,7 @@ func (p *Provider) validateResponsesCapabilitiesForRequest(model *provider.Model
 		if tool.Kind != "hosted" {
 			continue
 		}
-		toolType := provider.HostedWebSearchToolType(tool.ProviderType, tool.Name)
+		toolType := provider.HostedToolType(tool.ProviderType, tool.Name)
 		if toolType == "" {
 			toolType = strings.TrimSpace(tool.ProviderType)
 		}

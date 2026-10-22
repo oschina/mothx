@@ -4,6 +4,10 @@
 
 ### 💥 Behavior Changes
 
+- **Non-hosted web search now uses DeepSeek Search/Fetch.** The old `webSearch` provider/type/model configuration that registered a provider-backed search tool was replaced by local `web_search` and `web_fetch` tools backed by DeepSeek's official `POST /v1/tools/search` and `POST /v1/tools/fetch` endpoints. Provider-native hosted search for OpenAI Responses is unchanged and takes precedence over the local `web_search` function. `webSearch` now configures `provider`, `baseUrl`, and `token` (with the provider API key as fallback); both tools are read-only and available in plan mode.
+
+- **Tencent Yuanbao search backend added.** `webSearch.backend` selects `deepseek` (official Search/Fetch APIs) or `yuanbao` (Tencent Yuanbao SearchPro at `POST /SearchPro`). The Yuanbao backend sends `{"Query": ...}`, normalizes the returned `Pages` into title/URL/site/date/score/passage results, authenticates with `webSearch.token` or `${TENCENTCLOUD_WSA_APIKEY}`, and currently provides search only, so `web_fetch` remains available only with the DeepSeek backend.
+
 - **The embedded Windows BusyBox now requires Windows 10 or later.** `busybox-windows-x86.exe` and `busybox-windows-x86_64.exe` are rebuilt from the fork's UTF-8 configs (`mingw64u_defconfig` for x86_64, `mingw32w_defconfig` for x86) and carry a UTF-8 application manifest (`activeCodePage=UTF-8`) together with `FEATURE_UTF8_INPUT`, `FEATURE_UTF8_CONSOLE`, `FEATURE_UTF8_AUTODETECT`, `FEATURE_UTF8_CHILD_ENV` and `UNICODE_SUPPORT`. Non-ASCII `sh -c` command text now reaches argv as UTF-8 instead of being down-converted to the system ANSI code page (GBK on zh-CN Windows), and the child environment keeps the UTF-8 baseline. The build sets `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`, so on Windows 7/8 BusyBox refuses to start; the `bash` tool then falls back to PowerShell exactly as it does whenever BusyBox is unavailable, so commands keep working (without the UTF-8 baseline). MothX continues to document Windows 10/11 as its supported Windows floor.
 
 ### 🐛 Bug Fixes

@@ -44,7 +44,7 @@ func (a *App) authSettingsRootOptions() []authOption {
 		{Title: a.translator.Text(i18n.MsgSettingsCategoryProviders), Description: a.translator.Text(i18n.MsgSettingsSummaryProviders, len(s.Providers), valueOrDefault(s.DefaultProvider, a.translator.Text(i18n.MsgAuthValueUnset)), valueOrDefault(s.DefaultModel, a.translator.Text(i18n.MsgAuthValueUnset))), Value: "providers"},
 		{Title: a.translator.Text(i18n.MsgSettingsCategoryDefaults), Description: a.translator.Text(i18n.MsgSettingsSummaryDefaults, valueOrDefault(s.DefaultMode, "yolo"), valueOrDefault(s.DefaultThinkingLevel, "medium")), Value: "defaults"},
 		{Title: a.translator.Text(i18n.MsgSettingsCategoryBehavior), Description: a.translator.Text(i18n.MsgSettingsSummaryBehavior, valueOrDefault(s.Theme, "dark"), a.boolPtrSummary(s.EnablePlanTool, true)), Value: "behavior"},
-		{Title: a.translator.Text(i18n.MsgSettingsCategoryWebSearch), Description: a.translator.Text(i18n.MsgSettingsSummaryWebSearch, a.boolPtrSummary(s.WebSearch.Enabled, false), valueOrDefault(s.WebSearch.Provider, "openai")), Value: "webSearch"},
+		{Title: a.translator.Text(i18n.MsgSettingsCategoryWebSearch), Description: a.translator.Text(i18n.MsgSettingsSummaryWebSearch, a.boolPtrSummary(s.WebSearch.Enabled, false), valueOrDefault(s.WebSearch.Backend, config.WebSearchBackendDeepSeek)), Value: "webSearch"},
 		{Title: a.translator.Text(i18n.MsgSettingsCategoryContextFiles), Description: a.translator.Text(i18n.MsgSettingsSummaryContextFiles, a.boolYesNo(s.ContextFiles.Enabled), len(s.ContextFiles.ExtraFiles)), Value: "contextFiles"},
 		{Title: a.translator.Text(i18n.MsgSettingsCategoryStatusLine), Description: a.translator.Text(i18n.MsgSettingsSummaryStatusLine, a.boolYesNo(s.StatusLine.Enabled), valueOrDefault(s.StatusLine.Type, "command")), Value: "statusLine"},
 		{Title: a.translator.Text(i18n.MsgSettingsCategoryCompaction), Description: a.translator.Text(i18n.MsgSettingsSummaryCompaction, a.boolYesNo(s.Compaction.Enabled), authItoa(s.Compaction.ReserveTokens), authItoa(s.Compaction.KeepRecentTokens)), Value: "compaction"},
@@ -113,9 +113,10 @@ func (a *App) authSettingsTopLevelOptions(v authView) []authOption {
 	case authViewSettingsWebSearch:
 		opts = []authOption{
 			{Title: tr(i18n.MsgAuthLabelEnabled), Description: a.boolPtrSummary(s.WebSearch.Enabled, false), Value: "webSearch.enabled"},
-			{Title: tr(i18n.MsgSettingsFieldProvider), Description: valueOrDefault(s.WebSearch.Provider, "openai"), Value: "webSearch.provider"},
-			{Title: tr(i18n.MsgSettingsFieldProviderType), Description: valueOrDefault(s.WebSearch.ProviderType, "responses"), Value: "webSearch.providerType"},
-			{Title: tr(i18n.MsgSettingsFieldModel), Description: valueOrDefault(s.WebSearch.Model, tr(i18n.MsgAuthValueUnset)), Value: "webSearch.model"},
+			{Title: tr(i18n.MsgSettingsFieldWebSearchBackend), Description: valueOrDefault(s.WebSearch.Backend, config.WebSearchBackendDeepSeek), Value: "webSearch.backend"},
+			{Title: tr(i18n.MsgSettingsFieldProvider), Description: valueOrDefault(s.WebSearch.Provider, "deepseek-openai"), Value: "webSearch.provider"},
+			{Title: tr(i18n.MsgSettingsFieldWebSearchBaseURL), Description: a.shortSettingValue(webSearchBaseURLDefault(s.WebSearch)), Value: "webSearch.baseUrl"},
+			{Title: tr(i18n.MsgSettingsFieldWebSearchToken), Description: tr(i18n.MsgAuthValueHidden), Value: "webSearch.token"},
 			{Title: tr(i18n.MsgSettingsFieldImageEnabled), Description: a.boolPtrSummary(s.ImageGeneration.Enabled, false), Value: "imageGeneration.enabled"},
 			{Title: tr(i18n.MsgSettingsFieldImageProvider), Description: valueOrDefault(s.ImageGeneration.Provider, "openai"), Value: "imageGeneration.provider"},
 			{Title: tr(i18n.MsgSettingsFieldImageAPIType), Description: valueOrDefault(s.ImageGeneration.APIType, "openai-images"), Value: "imageGeneration.apiType"},
@@ -233,6 +234,13 @@ func (a *App) selectSettingsFieldValue(value string) {
 	case "webSearch.enabled":
 		next.WebSearch.Enabled = cycleSettingsBoolPtr(next.WebSearch.Enabled, false)
 		a.saveAuthSettingsPatch("webSearch.enabled", map[string]any{"webSearch": next.WebSearch})
+	case "webSearch.backend":
+		next.WebSearch.Backend = cycleString(next.WebSearch.Backend, []string{config.WebSearchBackendDeepSeek, config.WebSearchBackendYuanbao}, config.WebSearchBackendDeepSeek)
+		// Endpoint and credential belong to one backend; clear them so the new
+		// backend resolves its own defaults or environment variable.
+		next.WebSearch.BaseURL = ""
+		next.WebSearch.Token = ""
+		a.saveAuthSettingsPatch("webSearch.backend", map[string]any{"webSearch": next.WebSearch})
 	case "toolExecution.mode":
 		toolExecution := effectiveToolExecutionSettings(next)
 		toolExecution.Mode = cycleString(toolExecution.Mode, []string{"parallel", "sequential"}, "parallel")
@@ -329,6 +337,13 @@ func (a *App) saveTUILangForScope(value, scope string) error {
 	return nil
 }
 
+func webSearchBaseURLDefault(cfg config.WebSearchSettings) string {
+	if cfg.Backend == config.WebSearchBackendYuanbao {
+		return valueOrDefault(cfg.BaseURL, config.DefaultYuanbaoWebSearchBaseURL)
+	}
+	return valueOrDefault(cfg.BaseURL, config.DefaultDeepSeekWebSearchBaseURL)
+}
+
 func (a *App) authSettingsInputPrompt() string {
 	var id i18n.MessageID
 	switch a.auth.ParamField {
@@ -338,10 +353,10 @@ func (a *App) authSettingsInputPrompt() string {
 		id = i18n.MsgSettingsPromptMaxContextTokens
 	case "webSearch.provider":
 		id = i18n.MsgSettingsPromptWebProvider
-	case "webSearch.providerType":
-		id = i18n.MsgSettingsPromptWebProviderType
-	case "webSearch.model":
-		id = i18n.MsgSettingsPromptWebModel
+	case "webSearch.baseUrl":
+		id = i18n.MsgSettingsPromptWebSearchBaseURL
+	case "webSearch.token":
+		id = i18n.MsgSettingsPromptWebSearchToken
 	case "toolExecution.maxConcurrency":
 		id = i18n.MsgSettingsPromptToolMaxConcurrency
 	case "imageGeneration.provider":
@@ -413,10 +428,10 @@ func (a *App) authSettingsInputValue() string {
 		return intInputValue(s.MaxContextTokens)
 	case "webSearch.provider":
 		return s.WebSearch.Provider
-	case "webSearch.providerType":
-		return s.WebSearch.ProviderType
-	case "webSearch.model":
-		return s.WebSearch.Model
+	case "webSearch.baseUrl":
+		return s.WebSearch.BaseURL
+	case "webSearch.token":
+		return s.WebSearch.Token
 	case "toolExecution.maxConcurrency":
 		return intInputValue(effectiveToolExecutionSettings(s).MaxConcurrency)
 	case "imageGeneration.provider":
@@ -507,11 +522,11 @@ func (a *App) authSettingsSubmitInput() error {
 	case "webSearch.provider":
 		next.WebSearch.Provider = value
 		updates["webSearch"] = next.WebSearch
-	case "webSearch.providerType":
-		next.WebSearch.ProviderType = value
+	case "webSearch.baseUrl":
+		next.WebSearch.BaseURL = value
 		updates["webSearch"] = next.WebSearch
-	case "webSearch.model":
-		next.WebSearch.Model = value
+	case "webSearch.token":
+		next.WebSearch.Token = value
 		updates["webSearch"] = next.WebSearch
 	case "toolExecution.maxConcurrency":
 		v, err := a.parsePositiveInt(value)

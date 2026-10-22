@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -193,12 +194,24 @@ type ResponsesHostedToolsConfig struct {
 	RemoteMCP       []map[string]any `json:"remoteMCP,omitempty"`
 }
 
+// WebSearchSettings configures the standalone web_search and web_fetch tools.
+// The endpoint and credential default to DeepSeek's tools API and may be
+// overridden independently from the chat provider.
 type WebSearchSettings struct {
-	Enabled      *bool  `json:"enabled,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	ProviderType string `json:"providerType,omitempty"`
-	Model        string `json:"model,omitempty"`
+	Enabled  *bool  `json:"enabled,omitempty"`
+	Backend  string `json:"backend,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	BaseURL  string `json:"baseUrl,omitempty"`
+	Token    string `json:"token,omitempty"`
 }
+
+const (
+	WebSearchBackendDeepSeek = "deepseek"
+	WebSearchBackendYuanbao  = "yuanbao"
+
+	DefaultDeepSeekWebSearchBaseURL = "https://api.deepseek.com"
+	DefaultYuanbaoWebSearchBaseURL  = "https://api.wsa.cloud.tencent.com"
+)
 
 // DefaultToolExecutionMaxConcurrency is the default number of local tool
 // calls that may execute concurrently in one agent turn.
@@ -1128,7 +1141,7 @@ func DefaultSettings() *Settings {
 		EnablePlanTool:    boolPtr(true),
 		EnableArtifact:    boolPtr(false),
 		EnableACPArtifact: boolPtr(false),
-		WebSearch:         WebSearchSettings{Enabled: boolPtr(false), Provider: "openai", ProviderType: "openai-responses"},
+		WebSearch:         WebSearchSettings{Enabled: boolPtr(false), Backend: WebSearchBackendDeepSeek, Provider: "deepseek-openai"},
 		ImageGeneration:   ImageGenerationSettings{Enabled: boolPtr(false), Provider: "openai", APIType: "openai-images", BaseURL: "https://api.openai.com/v1", Model: "gpt-image-1"},
 		ContextFiles:      ContextFilesSettings{Enabled: true},
 		SkillsDir:         platform.SkillsDir(),
@@ -2133,6 +2146,93 @@ func (s *Settings) IsWebSearchEnabled() bool {
 	return *s.WebSearch.Enabled
 }
 
+// EffectiveWebSearch returns the normalized local search-backend
+// configuration, filling omitted endpoint/token fields from the selected
+// backend. An unresolved ${ENV_VAR} reference is reported as an empty token so
+// callers can return a configuration error instead of sending the literal
+// placeholder.
+func (s *Settings) EffectiveWebSearch() WebSearchSettings {
+	if s == nil {
+		return WebSearchSettings{}
+	}
+	cfg := normalizeWebSearchSettings(s.WebSearch)
+	if cfg.Backend == WebSearchBackendYuanbao {
+		if cfg.BaseURL == "" || isDeepSeekWebHost(cfg.BaseURL) {
+			cfg.BaseURL = DefaultYuanbaoWebSearchBaseURL
+		}
+		if cfg.Token == "" {
+			cfg.Token = "${TENCENTCLOUD_WSA_APIKEY}"
+		}
+	} else {
+		if cfg.Provider == "" {
+			cfg.Provider = "deepseek-openai"
+		}
+		pc := ResolveProviderConfig(cfg.Provider, s)
+		explicitBaseURL := strings.TrimSpace(cfg.BaseURL) != ""
+		providerIsDeepSeek := pc != nil && isDeepSeekWebHost(pc.BaseURL)
+		if explicitBaseURL && isYuanbaoWebHost(cfg.BaseURL) {
+			// The backend was switched back to DeepSeek but the stored base URL
+			// still points at Yuanbao.
+			cfg.BaseURL = ""
+			explicitBaseURL = false
+		}
+		if !explicitBaseURL {
+			// Legacy settings may still point provider at openai/anthropic from the
+			// old provider-backed search tool. Those credentials cannot call the
+			// DeepSeek tools API, so default the endpoint to DeepSeek instead of
+			// inheriting an unrelated provider host.
+			if providerIsDeepSeek {
+				cfg.BaseURL = pc.BaseURL
+			} else {
+				cfg.BaseURL = DefaultDeepSeekWebSearchBaseURL
+			}
+		}
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = DefaultDeepSeekWebSearchBaseURL
+		}
+		if cfg.Token == "" {
+			if pc != nil && (explicitBaseURL || providerIsDeepSeek) {
+				cfg.Token = pc.APIKey
+			} else {
+				cfg.Token = "${DEEPSEEK_API_KEY}"
+			}
+		}
+	}
+	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	cfg.Token = strings.TrimSpace(resolveKeyValue(cfg.Token))
+	if unresolvedKeyReference(cfg.Token) {
+		cfg.Token = ""
+	}
+	return cfg
+}
+
+func isDeepSeekWebHost(rawURL string) bool {
+	return webHostMatches(rawURL, "deepseek.com")
+}
+
+func isYuanbaoWebHost(rawURL string) bool {
+	return webHostMatches(rawURL, "api.wsa.cloud.tencent.com")
+}
+
+func webHostMatches(rawURL, domain string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == domain || strings.HasSuffix(host, "."+domain)
+}
+
+// ResolveWebSearchToken resolves environment/shell references in the
+// standalone web-search token without exposing the resolver itself.
+func (s *Settings) ResolveWebSearchToken() string {
+	return s.EffectiveWebSearch().Token
+}
+
+func unresolvedKeyReference(value string) bool {
+	return strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") || strings.HasPrefix(value, "!")
+}
+
 func (s *Settings) IsImageGenerationEnabled() bool {
 	if s == nil || s.ImageGeneration.Enabled == nil {
 		return false
@@ -2184,17 +2284,17 @@ func mergeWebSearchSettings(base, override WebSearchSettings) WebSearchSettings 
 	if override.Enabled != nil {
 		base.Enabled = boolPtr(*override.Enabled)
 	}
+	if override.Backend != "" {
+		base.Backend = override.Backend
+	}
 	if override.Provider != "" {
 		base.Provider = override.Provider
-		if override.ProviderType == "" {
-			base.ProviderType = ""
-		}
 	}
-	if override.ProviderType != "" {
-		base.ProviderType = override.ProviderType
+	if override.BaseURL != "" {
+		base.BaseURL = override.BaseURL
 	}
-	if override.Model != "" {
-		base.Model = override.Model
+	if override.Token != "" {
+		base.Token = override.Token
 	}
 	return normalizeWebSearchSettings(base)
 }
@@ -2203,18 +2303,24 @@ func normalizeWebSearchSettings(cfg WebSearchSettings) WebSearchSettings {
 	if cfg.Enabled == nil {
 		cfg.Enabled = boolPtr(false)
 	}
-	if cfg.Provider == "" {
-		cfg.Provider = "openai"
+	switch strings.ToLower(strings.TrimSpace(cfg.Backend)) {
+	case "", WebSearchBackendDeepSeek:
+		cfg.Backend = WebSearchBackendDeepSeek
+	case WebSearchBackendYuanbao, "tencent", "wsa", "searchpro", "yuanbao-search":
+		cfg.Backend = WebSearchBackendYuanbao
 	}
-	if cfg.ProviderType == "" {
-		switch cfg.Provider {
-		case "anthropic":
-			cfg.ProviderType = "anthropic-messages"
-		default:
-			cfg.ProviderType = "openai-responses"
-		}
+	if cfg.Backend == WebSearchBackendDeepSeek && cfg.Provider == "" {
+		cfg.Provider = "deepseek-openai"
 	}
 	return cfg
+}
+
+// WebSearchBackend returns the normalized local search backend.
+func (s *Settings) WebSearchBackend() string {
+	if s == nil {
+		return WebSearchBackendDeepSeek
+	}
+	return normalizeWebSearchSettings(s.WebSearch).Backend
 }
 
 // DefaultProviderConfigs returns a deep copy of all built-in provider presets.

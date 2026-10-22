@@ -1,8 +1,8 @@
 package provider
 
 const (
-	// HostedToolWebSearch is the MothX-configured search capability. It is
-	// controlled by the local web-search settings/session switch.
+	// HostedToolWebSearch is the provider-native web-search capability. It is
+	// independent from the local DeepSeek web_search/web_fetch tools.
 	HostedToolWebSearch = "web_search"
 	// HostedToolOpenAIResponsesWebSearch is an internal name for the native
 	// OpenAI Responses capability. Its wire type is still "web_search".

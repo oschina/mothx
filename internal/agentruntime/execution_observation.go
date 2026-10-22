@@ -428,7 +428,7 @@ func combineSideEffectState(current, next SideEffectState) SideEffectState {
 
 func toolSideEffectState(name string) SideEffectState {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "read", "read_file", "list", "list_dir", "glob", "grep", "search", "search_files", "find", "web_search":
+	case "read", "read_file", "list", "list_dir", "glob", "grep", "search", "search_files", "find", "web_search", "web_fetch":
 		return SideEffectReadOnly
 	default:
 		// Shell, MCP, browser, and unrecognized tools are all conservatively

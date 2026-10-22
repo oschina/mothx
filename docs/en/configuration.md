@@ -169,7 +169,7 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `retry` | object | *(see below)* | API call retry settings |
 | `approval` | object | *(see below)* | Bash command approval settings |
 | `maintenance` | object | *(see below)* | Runtime-owned background housekeeping (attachment storage reclamation) |
-| `webSearch` | object | *(see below)* | Hosted web search settings |
+| `webSearch` | object | *(see below)* | DeepSeek web search/fetch tool settings |
 | `updateCheck` | bool | `true` | Enable npm-based update notifications |
 
 ---
@@ -329,27 +329,44 @@ mothx --provider openai --model gpt-5.3-codex
 
 ### webSearch
 
-Hosted web search settings. This is disabled by default.
+Local web-search backend settings. This is disabled by default. When enabled, MothX registers the local `web_search` tool for chat providers without native hosted search. `web_fetch` is available for the DeepSeek backend. Provider-native hosted search (OpenAI Responses) remains available and takes precedence over the local `web_search` function when present.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `enabled` | bool | — | `false` | Enable hosted web search registration |
-| `provider` | string | — | `defaultProvider` | Provider configuration name to use for hosted web search |
-| `providerType` | string | — | auto | Hosted tool type, usually `responses` or `messages` |
-| `model` | string | — | `""` | Optional metadata for routing, display, or future provider-specific handling |
+| `enabled` | bool | — | `false` | Enable the local `web_search` tool (and `web_fetch` for DeepSeek) |
+| `backend` | string | — | `deepseek` | `deepseek` or `yuanbao` (Tencent Yuanbao SearchPro) |
+| `provider` | string | — | `deepseek-openai` | DeepSeek credential fallback provider; ignored by the Yuanbao backend |
+| `baseUrl` | string | — | backend default | DeepSeek: `https://api.deepseek.com` (`/v1/tools/search` and `/v1/tools/fetch`). Yuanbao: `https://api.wsa.cloud.tencent.com` (`/SearchPro`) |
+| `token` | string | — | backend default | DeepSeek: provider `apiKey` or `${DEEPSEEK_API_KEY}`. Yuanbao: `${TENCENTCLOUD_WSA_APIKEY}`. An explicit value overrides the fallback |
+
+DeepSeek example:
 
 ```json
 {
   "webSearch": {
     "enabled": true,
-    "provider": "gpt",
-    "providerType": "responses",
-    "model": "gpt-5.4"
+    "backend": "deepseek",
+    "provider": "deepseek-openai",
+    "baseUrl": "https://api.deepseek.com",
+    "token": "${DEEPSEEK_API_KEY}"
   }
 }
 ```
 
-When `provider` points to a configured provider name, MothX resolves that provider's `baseUrl`, `api`, and vendor behavior before registering the hosted search tool. OpenAI Responses providers also expose the native Responses `web_search` tool automatically; this native capability does not depend on `webSearch.enabled`.
+Tencent Yuanbao example:
+
+```json
+{
+  "webSearch": {
+    "enabled": true,
+    "backend": "yuanbao",
+    "baseUrl": "https://api.wsa.cloud.tencent.com",
+    "token": "${TENCENTCLOUD_WSA_APIKEY}"
+  }
+}
+```
+
+Both backends use Bearer authentication and read-only requests, so they may be used in plan mode. With `deepseek`, `web_search` accepts a query plus optional `count` (1–50), `ori_question`, `localization`, and `need_content`, and `web_fetch` accepts one HTTP/HTTPS URL and returns the page as Markdown. With `yuanbao`, `web_search` sends `{"Query": ...}` to `/SearchPro` and normalizes the returned `Pages` (title, URL, site, date, score, passage); the Yuanbao API currently provides search only, so `web_fetch` is not registered.
 
 #### api field
 

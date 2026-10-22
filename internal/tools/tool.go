@@ -590,7 +590,7 @@ func (r *Registry) ModeTools(mode string) []provider.ToolDefinition {
 		var defs []provider.ToolDefinition
 		for _, t := range r.All() {
 			switch t.Name() {
-			case "read", "grep", "find", "ls", "plan":
+			case "read", "grep", "find", "ls", "plan", "web_search", "web_fetch":
 				defs = append(defs, ToolDefinition(t))
 			case "question":
 				defs = append(defs, ToolDefinition(t))

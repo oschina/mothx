@@ -110,7 +110,7 @@ mothx serve init-config project  # 生成 .mothx/serve.json
 - **会话管理**：分页浏览，键盘快捷键，历史会话，运行时快照，能力开关及可安全重连恢复的审批状态。历史会话按最后使用时间倒序排列，最新回复的会话位于最上方；会话管理页面会显示最后回复时间。页面刷新后，活动 run 直到进入终态前仍会保持会话忙碌。
 - **Responses 后台运行**：当 `openai-responses` provider 启用 `responses.background` 时，Serve 会将支持的请求提交为远程后台任务，持久化 response lineage 与归档输出，轮询直到完成，在重启后恢复可恢复任务，并执行本地 function/custom tool 调用。经认证的 run API 支持 `GET /api/responses/runs/{localRunID}?session_id={sessionID}` 以及 `cancel`、`reconnect`、`abandon` 操作；详见[配置](configuration.md#responses-字段)。
 - **设置编辑**：Provider/Model 配置、Defaults、Web 搜索、MCP、上下文文件、压缩、沙箱、重试、审批、Provider 配置。保存 provider、app 或 Serve 配置后，相关状态与工具可用性会立即刷新，无需重启服务。MCP 设置用于编辑全局 `mcp.json`；聊天工具栏可为当前会话编辑项目级 MCP 配置。
-- **原生 Responses Web Search**：OpenAI Responses provider 会自动暴露上游 hosted `web_search` 能力；独立的 Web 搜索设置仅控制 MothX 本地搜索。
+- **DeepSeek Web Search 回退**：启用后，共享 Runtime 会为没有原生托管搜索的 provider 注册本地 `web_search` 工具，后端可通过 `webSearch.backend` 选择 DeepSeek 官方 Search API 或腾讯元宝 SearchPro；DeepSeek 后端还会注册 `web_fetch`。OpenAI Responses 继续保持 provider 原生托管搜索，并优先于本地 `web_search` 函数。
 - **通道管理**：微信 QR 登录、飞书配置
 - **WebSocket 流**：`/ws/runs` 和 `/ws/logs` 是 Web UI 使用的 Serve 事件流，不是一个可单独配置的消息通道
 - **设置**：除 provider 和 agent 设置外，还可管理 Memory、WorkDir、Logs、SkillHub、环境变量和 MCP

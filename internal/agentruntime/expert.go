@@ -381,7 +381,7 @@ func (r *SessionRuntime) publishPreparedExpertResourcesLocked(prepared *prepared
 		if r.Registry != nil {
 			r.Registry.Register(tools.NewSkillRefTool(prepared.skillsMgr))
 		}
-		r.synchronizeCoreToolsLocked(r.resourceBrowser, r.resourceSettings)
+		r.synchronizeCoreToolsLocked(r.resourceBrowser, r.WebSearchEnabled, r.resourceSettings)
 		r.SkillsMgr = prepared.skillsMgr
 		r.ExtraContext = prepared.extraContext
 		r.RuleContent = prepared.ruleContent

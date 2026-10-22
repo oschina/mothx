@@ -33,7 +33,7 @@ var manageApplicationSections = map[string]map[string]bool{
 		"mode": true, "maxConcurrency": true,
 	},
 	"webSearch": {
-		"enabled": true, "provider": true, "providerType": true, "model": true,
+		"enabled": true, "backend": true, "provider": true, "baseUrl": true, "token": true,
 	},
 	"imageGeneration": {
 		"enabled": true, "provider": true, "apiType": true, "baseUrl": true, "model": true, "token": true,
@@ -99,8 +99,9 @@ func manageApplicationView(settings *config.Settings) map[string]any {
 			"mode": settings.ToolExecution.EffectiveMode(), "maxConcurrency": settings.ToolExecution.EffectiveMaxConcurrency(),
 		},
 		"webSearch": map[string]any{
-			"enabled": settings.IsWebSearchEnabled(), "provider": settings.WebSearch.Provider,
-			"providerType": settings.WebSearch.ProviderType, "model": settings.WebSearch.Model,
+			"enabled": settings.IsWebSearchEnabled(), "backend": settings.WebSearchBackend(), "provider": settings.WebSearch.Provider,
+			"baseUrl":         settings.WebSearch.BaseURL,
+			"tokenConfigured": manageSecretUsable(settings.ResolveWebSearchToken()),
 		},
 		"imageGeneration": map[string]any{
 			"enabled": settings.IsImageGenerationEnabled(), "provider": settings.ImageGeneration.Provider,

@@ -62,6 +62,14 @@ func BuildRegistry(workDir string, sandboxMgr *sandbox.Manager, settings *config
 	if policy.ImageGeneration && settings != nil && settings.IsImageGenerationEnabled() {
 		registry.Register(tools.NewImageGenerationTool(settings))
 	}
+	if settings != nil && settings.IsWebSearchEnabled() {
+		registry.Register(tools.NewWebSearchTool(settings))
+		if settings.WebSearchBackend() == config.WebSearchBackendDeepSeek {
+			registry.Register(tools.NewWebFetchTool(settings))
+		} else {
+			registry.Remove("web_fetch")
+		}
+	}
 	if policy.Question {
 		registry.Register(tools.NewQuestionTool(registry))
 	}

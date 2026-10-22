@@ -18,14 +18,14 @@ func TestHostedWebSearchToolType(t *testing.T) {
 		toolName     string
 		want         string
 	}{
-		{name: "responses web search", providerType: "responses", toolName: "web_search", want: "web_search"},
-		{name: "openai responses web search", providerType: "openai-responses", toolName: "web_search", want: "web_search"},
-		{name: "messages web search", providerType: "messages", toolName: "web_search", want: "web_search_20250305"},
-		{name: "anthropic messages web search", providerType: "anthropic-messages", toolName: "web_search", want: "web_search_20250305"},
-		{name: "native OpenAI Responses web search", providerType: "openai-responses", toolName: "openai_responses_web_search", want: "web_search"},
-		{name: "native OpenAI web search is not an Anthropic tool", providerType: "anthropic-messages", toolName: "openai_responses_web_search", want: ""},
+		{name: "responses web search", providerType: "responses", toolName: HostedToolWebSearch, want: HostedToolWebSearch},
+		{name: "openai responses web search", providerType: "openai-responses", toolName: HostedToolWebSearch, want: HostedToolWebSearch},
+		{name: "messages web search", providerType: "messages", toolName: HostedToolWebSearch, want: HostedToolWebSearchAnthropicMessages},
+		{name: "anthropic messages web search", providerType: "anthropic-messages", toolName: HostedToolWebSearch, want: HostedToolWebSearchAnthropicMessages},
+		{name: "native OpenAI Responses web search", providerType: "openai-responses", toolName: HostedToolOpenAIResponsesWebSearch, want: HostedToolWebSearch},
+		{name: "native OpenAI web search is not an Anthropic tool", providerType: "anthropic-messages", toolName: HostedToolOpenAIResponsesWebSearch, want: ""},
 		{name: "unknown tool", providerType: "responses", toolName: "other", want: ""},
-		{name: "unknown provider type", providerType: "other", toolName: "web_search", want: ""},
+		{name: "unknown provider type", providerType: "other", toolName: HostedToolWebSearch, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

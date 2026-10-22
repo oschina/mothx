@@ -31,7 +31,7 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | `mode` | string | `"parallel"` | `"parallel"` 使用有界本地 worker 并行执行；`"sequential"` 在本地逐个执行已返回的调用（不影响 provider 侧并行出参） |
 | `maxConcurrency` | int | `10` | 每轮 agent 允许的最大并发工具调用数（设为 `1` 则为串行） |
 
-调用按模型给出的顺序上报启动，后面的调用的启动绝不会早于前面的调用可见。该顺序只约束启动上报，不阻塞执行：调用之间仍然并发运行，各自独立等待审批与写入执行记录，完成顺序不受限制；因此工具完成事件可能乱序输出，但 provider 的后续消息会按原始调用顺序还原。该设置由 TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 统一使用。`sequential` 只改变响应到达后的本地执行顺序；provider 仍可能在一条响应中返回多个 tool call。它不控制 provider 托管工具（如 OpenAI Responses `web_search`）内部的并发；这些调用仍由 provider 自身的编排负责。
+调用按模型给出的顺序上报启动，后面的调用的启动绝不会早于前面的调用可见。该顺序只约束启动上报，不阻塞执行：调用之间仍然并发运行，各自独立等待审批与写入执行记录，完成顺序不受限制；因此工具完成事件可能乱序输出，但 provider 的后续消息会按原始调用顺序还原。该设置由 TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 统一使用。`sequential` 只改变响应到达后的本地执行顺序；provider 仍可能在一条响应中返回多个 tool call。它不控制 provider 设置中直接配置的托管工具（如 Responses Code Interpreter）内部的并发；这些调用仍由 provider 自身的编排负责。
 
 
 ---
@@ -46,6 +46,8 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | [`ls`](#ls---列出目录内容) | 代码探索 | 列出目录下的文件和子目录 | 允许只读访问 | 所有模式 |
 | [`find`](#find---文件搜索) | 代码探索 | 根据通配符匹配搜索文件 | 允许只读访问 | 所有模式 |
 | [`grep`](#grep---文本内容搜索) | 代码探索 | 正则表达式搜索文件内容 | 允许只读访问 | 所有模式 |
+| [`web_search`](#web_search---deepseek-或元宝网页搜索) | 网页 | 通过 DeepSeek Search 或腾讯元宝 SearchPro 搜索实时网页 | 只读网络访问 | 没有原生托管搜索的 provider |
+| [`web_fetch`](#web_fetch---deepseek-网页抓取) | 网页 | 通过 DeepSeek Fetch API 将网页抓取为 Markdown | 只读网络访问 | 由 `webSearch` 启用 |
 | [`bash`](#bash---命令执行) | 进程执行 | 执行 Shell 命令（支持同步与异步） | 受沙箱级别限制 | CLI, ACP, Serve, Channels |
 | [`jobs`](#jobs---后台任务管理) | 进程执行 | 列出或检查后台运行任务的状态 | 允许只读访问 | 所有模式 |
 | [`kill`](#kill---终止后台任务) | 进程执行 | 终止正在运行的后台任务 | 需要 Standard/Yolo | CLI, ACP, Serve, Channels |
@@ -291,6 +293,50 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 {
   "pattern": "type ProviderConfig struct",
   "include": "*.go"
+}
+```
+
+---
+
+### web_search - DeepSeek 或元宝网页搜索
+
+通过所选本地后端搜索实时网页。`webSearch.backend = "deepseek"` 时调用 DeepSeek 官方 Search API（`POST /v1/tools/search`），使用 `webSearch.baseUrl`/`token` 或所选 provider 凭证；`backend = "yuanbao"` 时调用腾讯元宝 SearchPro（`POST /SearchPro`），发送 `{"Query": ...}`，密钥来自 `webSearch.token` 或 `${TENCENTCLOUD_WSA_APIKEY}`。结果包含排序分数、标题、URL、短摘要、长摘要、可选正文、站点信息、发布时间与权威性。当聊天 provider 具备原生托管搜索（OpenAI Responses）时，MothX 会优先使用托管搜索并省略该本地工具。
+
+#### 参数：
+
+| 参数名 | 类型 | 必填 | 描述 |
+|--------|------|------|------|
+| `query` | string | 是 | 搜索词（1–128 字符），支持 `site:`、`-site:`、`lang:`、`after:`、`before:`、`-词` 与精确短语。 |
+| `count` | integer | 否 | 返回条数，1–50，默认 10。 |
+| `ori_question` | string | 否 | 触发搜索的用户原始问题，有助于理解搜索意图。 |
+| `localization` | string | 否 | 用于优先返回本地化结果的 IP 地址。 |
+| `need_content` | boolean | 否 | 是否在 `content` 中返回网页正文。 |
+
+#### 示例载荷：
+```json
+{
+  "query": "DeepSeek V4 site:github.com OR site:huggingface.co lang:zh after:2025",
+  "count": 5,
+  "need_content": true
+}
+```
+
+---
+
+### web_fetch - DeepSeek 网页抓取
+
+通过 DeepSeek 官方 Fetch API（`POST /v1/tools/fetch`）抓取单个网页并返回 Markdown 正文。目标必须是带 host 且不含用户名/密码的 HTTP/HTTPS URL。
+
+#### 参数：
+
+| 参数名 | 类型 | 必填 | 描述 |
+|--------|------|------|------|
+| `url` | string | 是 | 网页 URL（最长 8192 字符）。 |
+
+#### 示例载荷：
+```json
+{
+  "url": "https://example.com/article"
 }
 ```
 

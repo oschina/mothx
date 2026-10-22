@@ -27,7 +27,7 @@ func TestLoadSettingsProjectSupportsFalseAndZeroOverrides(t *testing.T) {
 	}
 	data := []byte(`{
 		"maxContextTokens": 0,
-		"webSearch": {"model": "search-model"},
+		"webSearch": {"baseUrl": "https://search.example.com", "token": "search-token"},
 		"contextFiles": {"enabled": false},
 		"compaction": {"enabled": false, "reserveTokens": 0, "keepRecentTokens": 0},
 		"retry": {"enabled": false, "maxRetries": 0, "baseDelayMs": 0}
@@ -43,8 +43,8 @@ func TestLoadSettingsProjectSupportsFalseAndZeroOverrides(t *testing.T) {
 	if s.MaxContextTokens != 0 {
 		t.Fatalf("max context token zero override not applied: %d", s.MaxContextTokens)
 	}
-	if s.WebSearch.Model != "search-model" {
-		t.Fatalf("webSearch.model = %q, want search-model", s.WebSearch.Model)
+	if s.WebSearch.BaseURL != "https://search.example.com" || s.WebSearch.Token != "search-token" {
+		t.Fatalf("webSearch = %#v, want baseUrl/token override", s.WebSearch)
 	}
 	if s.ContextFiles.Enabled {
 		t.Fatal("contextFiles.enabled=false override not applied")

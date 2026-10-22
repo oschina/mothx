@@ -33,7 +33,7 @@ export interface ApplicationSettingsView {
   contextFiles?: { enabled?: boolean; extraFiles?: string[] };
   compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number; tokenizer?: string; tokenizerModel?: string; template?: string };
   toolExecution?: { mode?: string; maxConcurrency?: number };
-  webSearch?: { enabled?: boolean; provider?: string; providerType?: string; model?: string };
+  webSearch?: { enabled?: boolean; backend?: string; provider?: string; baseUrl?: string; tokenConfigured?: boolean };
   imageGeneration?: { enabled?: boolean; provider?: string; apiType?: string; baseUrl?: string; model?: string; tokenConfigured?: boolean };
   retry?: { enabled?: boolean; maxRetries?: number; baseDelayMs?: number };
   statusLine?: { enabled?: boolean; type?: string; command?: string; padding?: number; refreshInterval?: number; timeoutMs?: number; fallback?: string };

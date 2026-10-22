@@ -31,7 +31,7 @@ When an agent turn returns multiple local function or custom tool calls, MothX c
 | `mode` | string | `"parallel"` | `"parallel"` uses bounded local workers; `"sequential"` executes returned calls one at a time locally (provider-side parallel output is unaffected) |
 | `maxConcurrency` | int | `10` | Maximum concurrent tool calls per agent turn (set to `1` for serial execution) |
 
-Calls report their start in the order the model emitted them, so a later call's start is never visible before an earlier call's. This ordering never blocks execution: calls still run concurrently, each waits for its own approvals and durable execution record independently, and they may finish in any order — tool completion events may therefore stream out of order, while provider continuation messages are restored in the original call order. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. `sequential` only changes local execution after a response arrives; a provider may still return multiple tool calls in one response. It does not control concurrency inside provider-hosted tools (e.g. OpenAI Responses `web_search`); those calls remain under the provider's own orchestration.
+Calls report their start in the order the model emitted them, so a later call's start is never visible before an earlier call's. This ordering never blocks execution: calls still run concurrently, each waits for its own approvals and durable execution record independently, and they may finish in any order — tool completion events may therefore stream out of order, while provider continuation messages are restored in the original call order. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. `sequential` only changes local execution after a response arrives; a provider may still return multiple tool calls in one response. It does not control concurrency inside provider-hosted tools configured directly in provider settings (for example Responses Code Interpreter); those calls remain under the provider's own orchestration.
 
 
 ---
@@ -46,6 +46,8 @@ Calls report their start in the order the model emitted them, so a later call's 
 | [`ls`](#ls---directory-listing) | Exploration | List directory contents | Read-only access allowed | All modes |
 | [`find`](#find---file-search) | Exploration | Search for files by pattern | Read-only access allowed | All modes |
 | [`grep`](#grep---text-content-search) | Exploration | Regex search within files | Read-only access allowed | All modes |
+| [`web_search`](#web-search---deepseek-or-yuanbao-web-search) | Web | Search the live web via DeepSeek Search or Tencent Yuanbao SearchPro | Read-only network access | Providers without native hosted search |
+| [`web_fetch`](#web-fetch---deepseek-web-fetch) | Web | Fetch one page as Markdown via the DeepSeek Fetch API | Read-only network access | Enabled by `webSearch` |
 | [`bash`](#bash---command-execution) | Execution | Run shell commands (supports sync & async) | Subject to Sandbox Level | CLI, ACP, Serve, Channels |
 | [`jobs`](#jobs---background-job-management) | Execution | List or check status of background jobs | Read-only access allowed | All modes |
 | [`kill`](#kill---stop-background-job) | Execution | Stop a running background job | Requires Standard/Yolo | CLI, ACP, Serve, Channels |
@@ -291,6 +293,50 @@ Perform fast regex-based searches across codebase files. This tool runs the pure
 {
   "pattern": "type ProviderConfig struct",
   "include": "*.go"
+}
+```
+
+---
+
+### web_search - DeepSeek or Yuanbao Web Search
+
+Searches the live web through the selected local backend. With `webSearch.backend = "deepseek"` it calls DeepSeek's official Search API (`POST /v1/tools/search`) using `webSearch.baseUrl`/`token` or the selected provider credential. With `backend = "yuanbao"` it calls Tencent Yuanbao SearchPro (`POST /SearchPro`) with `{"Query": ...}` and an API key from `webSearch.token` or `${TENCENTCLOUD_WSA_APIKEY}`. Results are returned as ranked titles, URLs, snippets, long summaries, optional page content, site metadata, dates, and authority scores. When the chat provider has native hosted search (OpenAI Responses), MothX uses that hosted search instead and omits this local tool.
+
+#### Parameters:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | Search query (1–128 characters). Supports `site:`, `-site:`, `lang:`, `after:`, `before:`, `-term`, and quoted phrases. |
+| `count` | integer | No | Result count from 1 to 50 (default 10). |
+| `ori_question` | string | No | Original user question to improve intent understanding. |
+| `localization` | string | No | IP address used to prefer localized results. |
+| `need_content` | boolean | No | Include extracted page content in `content`. |
+
+#### Example Payload:
+```json
+{
+  "query": "DeepSeek V4 site:github.com OR site:huggingface.co lang:zh after:2025",
+  "count": 5,
+  "need_content": true
+}
+```
+
+---
+
+### web_fetch - DeepSeek Web Fetch
+
+Fetches one page through DeepSeek's official Fetch API (`POST /v1/tools/fetch`) and returns its Markdown content. The target must be an HTTP/HTTPS URL with a host and no embedded credentials.
+
+#### Parameters:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | Yes | Page URL (maximum 8192 characters). |
+
+#### Example Payload:
+```json
+{
+  "url": "https://example.com/article"
 }
 ```
 

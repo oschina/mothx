@@ -603,7 +603,7 @@ func (r *SessionRuntime) ConfigureCapabilities(sandboxEnabled, browserEnabled, w
 		}
 		r.Registry.SetSandbox(active)
 	}
-	r.synchronizeCoreToolsLocked(browserEnabled, r.resourceSettings)
+	r.synchronizeCoreToolsLocked(browserEnabled, webSearchEnabled, r.resourceSettings)
 	r.LastUsed = time.Now()
 	r.mu.Unlock()
 	return nil
@@ -643,7 +643,7 @@ func (r *SessionRuntime) SetCapabilityOption(id string, enabled bool) error {
 		}
 		r.Registry.SetSandbox(active)
 	}
-	r.synchronizeCoreToolsLocked(browserEnabled, r.resourceSettings)
+	r.synchronizeCoreToolsLocked(browserEnabled, webSearchEnabled, r.resourceSettings)
 	r.LastUsed = time.Now()
 	r.mu.Unlock()
 	if manager != nil {
@@ -1146,6 +1146,7 @@ func (b Builder) Build(ctx context.Context, opts BuildOptions) (*SessionRuntime,
 		RuleContent:         resources.RuleContent,
 		LastUsed:            time.Now(),
 		ArtifactEnabled:     opts.ArtifactEnabled,
+		WebSearchEnabled:    b.Settings.IsWebSearchEnabled(),
 		imageGenerationTool: registryExposesImageGeneration(registry),
 		resourceSettings:    b.Settings,
 		resourceWorkflows:   opts.Workflows,
@@ -1268,7 +1269,7 @@ func (r *SessionRuntime) RefreshResources(settings *config.Settings, opts Refres
 	if r.Registry != nil {
 		r.Registry.Register(tools.NewSkillRefTool(skillsMgr))
 	}
-	r.synchronizeCoreToolsLocked(opts.Browser, settings)
+	r.synchronizeCoreToolsLocked(opts.Browser, r.WebSearchEnabled, settings)
 	r.Expert = binding
 	r.SkillsMgr = skillsMgr
 	r.ExtraContext = extraContext + activeContext
@@ -1302,7 +1303,7 @@ func (r *SessionRuntime) rehydrateBoundResources() error {
 
 // SynchronizeCoreTools applies mutable registry tools that have no adapter
 // dependency. It is safe to call when context content itself is unchanged.
-func (r *SessionRuntime) SynchronizeCoreTools(browserEnabled bool) {
+func (r *SessionRuntime) SynchronizeCoreTools(browserEnabled, webSearchEnabled bool) {
 	if r == nil {
 		return
 	}
@@ -1311,14 +1312,14 @@ func (r *SessionRuntime) SynchronizeCoreTools(browserEnabled bool) {
 	if r.closed {
 		return
 	}
-	r.synchronizeCoreToolsLocked(browserEnabled, r.resourceSettings)
+	r.synchronizeCoreToolsLocked(browserEnabled, webSearchEnabled, r.resourceSettings)
 }
 
 // synchronizeCoreToolsLocked reconciles the conditional core tools whose
 // availability is capability/settings driven. It is the single refresh surface
 // for these tools so build, capability changes, and resource refresh cannot
 // drift apart.
-func (r *SessionRuntime) synchronizeCoreToolsLocked(browserEnabled bool, settings *config.Settings) {
+func (r *SessionRuntime) synchronizeCoreToolsLocked(browserEnabled, webSearchEnabled bool, settings *config.Settings) {
 	if r.Registry == nil {
 		return
 	}
@@ -1332,6 +1333,19 @@ func (r *SessionRuntime) synchronizeCoreToolsLocked(browserEnabled bool, setting
 			r.Registry.Register(tools.NewImageGenerationTool(settings))
 		} else {
 			r.Registry.Remove("image_generation")
+		}
+	}
+	if settings != nil {
+		if webSearchEnabled {
+			r.Registry.Register(tools.NewWebSearchTool(settings))
+			if settings.WebSearchBackend() == config.WebSearchBackendDeepSeek {
+				r.Registry.Register(tools.NewWebFetchTool(settings))
+			} else {
+				r.Registry.Remove("web_fetch")
+			}
+		} else {
+			r.Registry.Remove("web_search")
+			r.Registry.Remove("web_fetch")
 		}
 	}
 }

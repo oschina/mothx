@@ -1803,85 +1803,82 @@ func TestImageGenerationToolDefinitionUsesConfiguredResponsesProvider(t *testing
 	}
 }
 
-func TestConfiguredWebSearchToolDefinitionCarriesModelMetadata(t *testing.T) {
-	settings := &config.Settings{
-		WebSearch: config.WebSearchSettings{
-			Enabled:      config.BoolPtr(true),
-			Provider:     "anthropic",
-			ProviderType: "anthropic-messages",
-			Model:        "claude-sonnet-4-20250514",
-		},
+func TestAgentInjectsNativeHostedWebSearch(t *testing.T) {
+	tests := []struct {
+		name         string
+		api          string
+		wantName     string
+		wantProvider string
+	}{
+		{name: "openai responses", api: "openai-responses", wantName: provider.HostedToolOpenAIResponsesWebSearch, wantProvider: "openai-responses"},
 	}
-	def, ok := configuredWebSearchToolDefinition(settings)
-	if !ok {
-		t.Fatal("expected web search tool definition")
-	}
-	if def.Name != "web_search" {
-		t.Fatalf("name = %q, want web_search", def.Name)
-	}
-	if def.Provider != "anthropic" {
-		t.Fatalf("provider = %q, want anthropic", def.Provider)
-	}
-	if def.ProviderType != "anthropic-messages" {
-		t.Fatalf("providerType = %q, want anthropic-messages", def.ProviderType)
-	}
-	if def.Model != "claude-sonnet-4-20250514" {
-		t.Fatalf("model = %q, want claude-sonnet-4-20250514", def.Model)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p := provider.NewMockProvider("hosted", nil, nil)
+			p.SetAPI(test.api)
+			a := New(Config{Provider: p, Mode: "agent"}, tools.NewRegistry(".", sandbox.NewNoneSandbox()))
+			for _, def := range a.context.Tools {
+				if def.Name == test.wantName && def.Kind == "hosted" && def.ProviderType == test.wantProvider {
+					return
+				}
+			}
+			t.Fatalf("expected hosted web search %q for %s; tools = %#v", test.wantName, test.api, a.context.Tools)
+		})
 	}
 }
 
-func TestConfiguredWebSearchToolDefinitionResolvesProviderReference(t *testing.T) {
-	settings := &config.Settings{
-		DefaultProvider: "gpt",
-		WebSearch: config.WebSearchSettings{
-			Enabled:      config.BoolPtr(true),
-			Provider:     "gpt",
-			ProviderType: "openai-responses",
-		},
-		Providers: map[string]*config.ProviderConfig{
-			"gpt": {
-				BaseURL: "https://co.yes.vg/v1",
-				API:     "openai-responses",
-			},
-		},
-	}
-	def, ok := configuredWebSearchToolDefinition(settings)
-	if !ok {
-		t.Fatal("expected web search tool definition")
-	}
-	if def.Provider != "gpt" {
-		t.Fatalf("provider = %q, want gpt", def.Provider)
-	}
-	if def.ProviderType != "openai-responses" {
-		t.Fatalf("providerType = %q, want openai-responses", def.ProviderType)
-	}
-	if def.Provider == "" {
-		t.Fatal("expected hosted provider to be resolved")
-	}
-}
-
-func TestOpenAIResponsesWebSearchToolDefinition(t *testing.T) {
+func TestAgentPrefersHostedSearchOverLocalSearch(t *testing.T) {
 	p := provider.NewMockProvider("gpt", nil, nil)
 	p.SetAPI("openai-responses")
-	def, ok := openAIResponsesWebSearchToolDefinition(p)
-	if !ok {
-		t.Fatal("expected native OpenAI Responses web search definition")
-	}
-	if def.Name != provider.HostedToolOpenAIResponsesWebSearch || def.ProviderType != "openai-responses" {
-		t.Fatalf("definition = %#v", def)
-	}
-}
-
-func TestAgentInjectsNativeOpenAIResponsesWebSearchWithoutLocalSetting(t *testing.T) {
-	p := provider.NewMockProvider("gpt", nil, nil)
-	p.SetAPI("openai-responses")
-	a := New(Config{Provider: p, Mode: "agent"}, tools.NewRegistry(".", sandbox.NewNoneSandbox()))
+	settings := config.DefaultSettings()
+	settings.WebSearch.Enabled = config.BoolPtr(true)
+	settings.WebSearch.Token = "test-key"
+	registry := tools.NewRegistry(".", sandbox.NewNoneSandbox())
+	registry.Register(tools.NewWebSearchTool(settings))
+	registry.Register(tools.NewWebFetchTool(settings))
+	a := New(Config{Provider: p, Mode: "agent", Settings: settings}, registry)
+	var hosted, localSearch, localFetch bool
 	for _, def := range a.context.Tools {
-		if def.Name == provider.HostedToolOpenAIResponsesWebSearch {
-			return
+		switch {
+		case def.Kind == "hosted" && def.Name == provider.HostedToolOpenAIResponsesWebSearch:
+			hosted = true
+		case def.Kind != "hosted" && def.Name == "web_search":
+			localSearch = true
+		case def.Kind != "hosted" && def.Name == "web_fetch":
+			localFetch = true
 		}
 	}
-	t.Fatal("expected OpenAI Responses native web search to be injected")
+	if !hosted {
+		t.Fatal("expected provider-hosted web search")
+	}
+	if localSearch {
+		t.Fatal("local web_search should be omitted when provider-hosted search is available")
+	}
+	if !localFetch {
+		t.Fatal("local web_fetch should remain available alongside hosted search")
+	}
+}
+
+func TestAgentUsesLocalWebSearchWhenProviderHasNoHostedSearch(t *testing.T) {
+	p := provider.NewMockProvider("chat", nil, nil)
+	p.SetAPI("openai-chat")
+	settings := config.DefaultSettings()
+	settings.WebSearch.Enabled = config.BoolPtr(true)
+	settings.WebSearch.Token = "test-key"
+	registry := tools.NewRegistry(".", sandbox.NewNoneSandbox())
+	registry.Register(tools.NewWebSearchTool(settings))
+	registry.Register(tools.NewWebFetchTool(settings))
+	a := New(Config{Provider: p, Mode: "agent", Settings: settings}, registry)
+	found := map[string]bool{}
+	for _, def := range a.context.Tools {
+		if def.Kind == "hosted" {
+			t.Fatalf("unexpected hosted tool for a non-hosted provider: %#v", def)
+		}
+		found[def.Name] = true
+	}
+	if !found["web_search"] || !found["web_fetch"] {
+		t.Fatalf("local web tools = %#v, want web_search and web_fetch", a.context.Tools)
+	}
 }
 
 func TestBuildSystemPrompt(t *testing.T) {

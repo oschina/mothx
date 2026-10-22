@@ -122,14 +122,14 @@ func TestDefaultSettings(t *testing.T) {
 	if s.WebSearch.Enabled == nil || *s.WebSearch.Enabled {
 		t.Fatalf("expected web search to be disabled by default, got %#v", s.WebSearch.Enabled)
 	}
-	if s.WebSearch.Provider != "openai" || s.WebSearch.ProviderType != "openai-responses" {
+	if s.WebSearch.Provider != "deepseek-openai" || s.WebSearch.BaseURL != "" || s.WebSearch.Backend != WebSearchBackendDeepSeek {
 		t.Fatalf("unexpected web search defaults: %#v", s.WebSearch)
 	}
 	if !s.Retry.Enabled || s.Retry.MaxRetries != 5 || s.Retry.BaseDelayMs != 3000 {
 		t.Fatalf("unexpected retry defaults: %#v", s.Retry)
 	}
-	if s.WebSearch.Model != "" {
-		t.Fatalf("expected empty web search model by default, got %q", s.WebSearch.Model)
+	if s.WebSearch.Token != "" {
+		t.Fatalf("expected empty web search token by default, got %q", s.WebSearch.Token)
 	}
 }
 
@@ -1061,8 +1061,8 @@ func TestLoadSettings(t *testing.T) {
 	if s.DefaultProvider != "test" {
 		t.Errorf("expected provider 'test', got '%s'", s.DefaultProvider)
 	}
-	if s.WebSearch.Model != "" {
-		t.Errorf("expected empty webSearch.model, got '%s'", s.WebSearch.Model)
+	if s.WebSearch.BaseURL != "" {
+		t.Errorf("expected empty webSearch.baseUrl, got '%s'", s.WebSearch.BaseURL)
 	}
 }
 
@@ -1761,5 +1761,72 @@ func TestToolControlSettingsContract(t *testing.T) {
 	if compat == nil || compat.SupportsToolChoice == nil || *compat.SupportsToolChoice ||
 		compat.SupportsParallelToolCalls == nil || !*compat.SupportsParallelToolCalls {
 		t.Fatalf("compat tool flags lost in round trip: %#v", compat)
+	}
+}
+
+func TestEffectiveWebSearchFallsBackToProviderAndDropsUnresolvedKeys(t *testing.T) {
+	settings := DefaultSettings()
+	settings.WebSearch.Enabled = BoolPtr(true)
+	settings.WebSearch.Provider = "search-provider"
+	settings.WebSearch.BaseURL = "https://search.example.com/v1"
+	settings.Providers = map[string]*ProviderConfig{
+		"search-provider": {BaseURL: "https://search.example.com/v1", APIKey: "provider-key"},
+	}
+	cfg := settings.EffectiveWebSearch()
+	if cfg.BaseURL != "https://search.example.com/v1" || cfg.Token != "provider-key" {
+		t.Fatalf("effective web search = %#v, want provider fallback", cfg)
+	}
+
+	t.Setenv("MOTHX_TEST_MISSING_SEARCH_KEY", "")
+	settings.WebSearch.Token = "${MOTHX_TEST_MISSING_SEARCH_KEY}"
+	if token := settings.ResolveWebSearchToken(); token != "" {
+		t.Fatalf("unresolved token = %q, want empty", token)
+	}
+
+	settings.WebSearch.Token = "explicit-key"
+	if token := settings.ResolveWebSearchToken(); token != "explicit-key" {
+		t.Fatalf("explicit token = %q", token)
+	}
+}
+
+func TestEffectiveWebSearchDoesNotReuseLegacyOpenAIEndpoint(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	settings := DefaultSettings()
+	settings.WebSearch.Provider = "openai"
+	settings.Providers = map[string]*ProviderConfig{
+		"openai": {BaseURL: "https://api.openai.com/v1", APIKey: "openai-key"},
+	}
+	cfg := settings.EffectiveWebSearch()
+	if cfg.BaseURL != "https://api.deepseek.com" {
+		t.Fatalf("base URL = %q, want DeepSeek default for legacy provider", cfg.BaseURL)
+	}
+	if cfg.Token != "" {
+		t.Fatalf("token = %q, want empty until a DeepSeek key is configured", cfg.Token)
+	}
+}
+
+func TestEffectiveWebSearchYuanbaoBackend(t *testing.T) {
+	t.Setenv("TENCENTCLOUD_WSA_APIKEY", "wsa-key")
+	settings := DefaultSettings()
+	settings.WebSearch.Enabled = BoolPtr(true)
+	settings.WebSearch.Backend = "tencent"
+	settings.WebSearch.BaseURL = "https://api.deepseek.com"
+	settings.WebSearch.Token = ""
+	cfg := settings.EffectiveWebSearch()
+	if cfg.Backend != WebSearchBackendYuanbao {
+		t.Fatalf("backend = %q, want yuanbao", cfg.Backend)
+	}
+	if cfg.BaseURL != DefaultYuanbaoWebSearchBaseURL {
+		t.Fatalf("base URL = %q, want Yuanbao default", cfg.BaseURL)
+	}
+	if cfg.Token != "wsa-key" {
+		t.Fatalf("token = %q, want Tencent WSA key", cfg.Token)
+	}
+
+	settings.WebSearch.Backend = WebSearchBackendDeepSeek
+	settings.WebSearch.BaseURL = DefaultYuanbaoWebSearchBaseURL
+	cfg = settings.EffectiveWebSearch()
+	if cfg.Backend != WebSearchBackendDeepSeek || cfg.BaseURL != DefaultDeepSeekWebSearchBaseURL {
+		t.Fatalf("deepseek effective = %#v, want DeepSeek endpoint", cfg)
 	}
 }

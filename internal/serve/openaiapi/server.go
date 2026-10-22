@@ -102,9 +102,9 @@ type Server struct {
 	esmCoordinator      *esmCoordinator
 }
 
-// IsWebSearchAvailable reports whether hosted web search is available for sessions.
-// It is true when either the serve config enables web search or the app-level
-// settings.json has webSearch enabled with a configured provider.
+// IsWebSearchAvailable reports whether the local DeepSeek web search tools are
+// available for sessions. It is true when either the serve config enables web
+// search or the app-level settings.json has webSearch enabled.
 func (s *Server) IsWebSearchAvailable() bool {
 	if s == nil {
 		return false

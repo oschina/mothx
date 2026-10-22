@@ -499,11 +499,19 @@ func (a *Agent) buildFrozenPrompt() {
 		return
 	}
 	toolDefs := a.registry.ModeTools(a.config.Mode)
-	if t, ok := configuredWebSearchToolDefinition(a.config.Settings); ok {
-		toolDefs = append(toolDefs, t)
-	}
-	if t, ok := openAIResponsesWebSearchToolDefinition(a.config.Provider); ok {
-		toolDefs = append(toolDefs, t)
+	hostedSearch, hasHostedSearch := nativeWebSearchToolDefinition(a.config.Provider)
+	if hasHostedSearch {
+		// Provider-native search takes precedence: omit the local DeepSeek
+		// web_search function so the model receives one search capability while
+		// retaining web_fetch for full-page retrieval.
+		filtered := make([]provider.ToolDefinition, 0, len(toolDefs)+1)
+		for _, def := range toolDefs {
+			if def.Kind != "hosted" && def.Name == "web_search" {
+				continue
+			}
+			filtered = append(filtered, def)
+		}
+		toolDefs = append(filtered, hostedSearch)
 	}
 	toolNames := make([]string, 0, len(toolDefs))
 	for _, t := range toolDefs {
@@ -586,53 +594,7 @@ func imageGenerationToolDefinition(settings *config.Settings, providerName strin
 	}, true
 }
 
-func configuredWebSearchToolDefinition(settings *config.Settings) (provider.ToolDefinition, bool) {
-	if settings == nil || !settings.IsWebSearchEnabled() {
-		return provider.ToolDefinition{}, false
-	}
-	cfg := settings.WebSearch
-	providerName := cfg.Provider
-	if providerName == "" {
-		providerName = settings.DefaultProvider
-	}
-	if providerName == "" {
-		providerName = "openai"
-	}
-
-	resolved := provider.AdapterConfig{}
-	if pc := settings.GetProviderConfig(providerName); pc != nil {
-		resolved = provider.ResolveAdapterConfig(pc)
-	} else {
-		resolved = provider.ResolveAdapterConfig(&config.ProviderConfig{API: "openai-chat"})
-		switch providerName {
-		case "anthropic":
-			resolved.API = "anthropic-messages"
-		case "openai":
-			resolved.API = "openai-responses"
-		}
-	}
-
-	providerType := cfg.ProviderType
-	if providerType == "" {
-		providerType = resolved.API
-	}
-	switch providerType {
-	case "responses":
-		providerType = "openai-responses"
-	case "messages":
-		providerType = "anthropic-messages"
-	}
-
-	return provider.ToolDefinition{
-		Name:         provider.HostedToolWebSearch,
-		Kind:         "hosted",
-		Provider:     providerName,
-		ProviderType: providerType,
-		Model:        cfg.Model,
-	}, true
-}
-
-func openAIResponsesWebSearchToolDefinition(p provider.Provider) (provider.ToolDefinition, bool) {
+func nativeWebSearchToolDefinition(p provider.Provider) (provider.ToolDefinition, bool) {
 	if p == nil || (p.API() != "responses" && p.API() != "openai-responses") {
 		return provider.ToolDefinition{}, false
 	}
@@ -2964,7 +2926,7 @@ func (a *Agent) claimToolExecutionWithRecovery(localTurnID string, tc provider.T
 
 func isReadOnlyToolName(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "read", "grep", "find", "ls", "jobs", "skill_ref", "question", "plan":
+	case "read", "grep", "find", "ls", "jobs", "skill_ref", "question", "plan", "web_search", "web_fetch":
 		return true
 	default:
 		return false

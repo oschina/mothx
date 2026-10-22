@@ -169,7 +169,7 @@ MothX 使用两个配置文件:
 | `retry` | object | *(见下文)* | API 调用重试设置 |
 | `approval` | object | *(见下文)* | Bash 命令审批设置 |
 | `maintenance` | object | *(见下文)* | Runtime 自有后台维护（附件存储回收） |
-| `webSearch` | object | *(见下文)* | Hosted web search 设置 |
+| `webSearch` | object | *(见下文)* | DeepSeek 网页搜索/抓取工具设置 |
 | `updateCheck` | bool | `true` | 启用 npm 版本更新检测通知 |
 
 ---
@@ -329,27 +329,44 @@ mothx --provider openai --model gpt-5.3-codex
 
 ### webSearch
 
-Hosted web search 设置。默认关闭。
+本地网页搜索后端设置。默认关闭。启用后，MothX 会为没有原生托管搜索的聊天 provider 注册本地 `web_search` 工具；DeepSeek 后端还会注册 `web_fetch`。OpenAI Responses 的 provider 原生托管搜索仍然自动可用，并优先于本地 `web_search` 函数。
 
 | 字段 | 类型 | 必填 | 默认值 | 描述 |
 |------|------|------|--------|------|
-| `enabled` | bool | — | `false` | 启用 hosted web search 注册 |
-| `provider` | string | — | `defaultProvider` | 用于 web search 的 provider 配置名称 |
-| `providerType` | string | — | 自动 | Hosted tool 类型，通常是 `responses` 或 `messages` |
-| `model` | string | — | `""` | 可选 metadata，用于路由、展示或未来 provider-specific 处理 |
+| `enabled` | bool | — | `false` | 启用本地 `web_search`（DeepSeek 后端同时启用 `web_fetch`） |
+| `backend` | string | — | `deepseek` | `deepseek` 或 `yuanbao`（腾讯元宝 SearchPro） |
+| `provider` | string | — | `deepseek-openai` | DeepSeek 凭证回退 provider；元宝后端忽略该字段 |
+| `baseUrl` | string | — | 后端默认值 | DeepSeek：`https://api.deepseek.com`（追加 `/v1/tools/search`、`/v1/tools/fetch`）。元宝：`https://api.wsa.cloud.tencent.com`（`/SearchPro`） |
+| `token` | string | — | 后端默认值 | DeepSeek：provider 的 `apiKey` 或 `${DEEPSEEK_API_KEY}`。元宝：`${TENCENTCLOUD_WSA_APIKEY}`。显式值优先 |
+
+DeepSeek 示例：
 
 ```json
 {
   "webSearch": {
     "enabled": true,
-    "provider": "gpt",
-    "providerType": "responses",
-    "model": "gpt-5.4"
+    "backend": "deepseek",
+    "provider": "deepseek-openai",
+    "baseUrl": "https://api.deepseek.com",
+    "token": "${DEEPSEEK_API_KEY}"
   }
 }
 ```
 
-当 `provider` 指向一个已配置的 provider 名称时，MothX 会先解析该 provider 的 `baseUrl`、`api` 和 vendor 行为，再注册 hosted search tool。OpenAI Responses provider 还会自动暴露原生 Responses `web_search` 工具；该原生能力不依赖 `webSearch.enabled`。
+腾讯元宝示例：
+
+```json
+{
+  "webSearch": {
+    "enabled": true,
+    "backend": "yuanbao",
+    "baseUrl": "https://api.wsa.cloud.tencent.com",
+    "token": "${TENCENTCLOUD_WSA_APIKEY}"
+  }
+}
+```
+
+两个后端均使用 Bearer 鉴权且为只读请求，可在 plan 模式使用。`deepseek` 后端中，`web_search` 支持 query 及可选的 `count`（1–50）、`ori_question`、`localization`、`need_content`；`web_fetch` 接受一个 HTTP/HTTPS URL 并以 Markdown 返回网页内容。`yuanbao` 后端中，`web_search` 向 `/SearchPro` 发送 `{"Query": ...}`，并把返回的 `Pages` 归一化为标题、URL、站点、时间、分数与正文摘要；元宝 API 目前只提供搜索，因此不注册 `web_fetch`。
 
 #### api 字段
 

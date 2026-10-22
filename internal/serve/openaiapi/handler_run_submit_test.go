@@ -1302,7 +1302,7 @@ func TestSubmitRunAppliesToolOptionsAndMode(t *testing.T) {
 		t.Fatalf("mode = %q, want plan (submit mode must persist)", caps.Mode)
 	}
 	if !caps.WebSearch {
-		t.Fatal("hosted webSearch setting should not be disabled by local tools array")
+		t.Fatal("webSearch should be enabled by the submitted local tool list")
 	}
 	if caps.Browser || caps.MultiAgent || caps.Workflows || caps.DelegateMode || caps.A2AMaster {
 		t.Fatalf("unlisted capabilities must be disabled: %#v", caps)
@@ -1351,13 +1351,13 @@ func TestSubmitRunAppliesSkills(t *testing.T) {
 	}
 }
 
-func TestSessionToolOptionsFromNamesDoesNotOverrideHostedTools(t *testing.T) {
+func TestSessionToolOptionsFromNamesIncludesWebSearch(t *testing.T) {
 	options, err := sessionToolOptionsFromNames([]string{"webSearch", "browser"})
 	if err != nil {
 		t.Fatalf("sessionToolOptionsFromNames: %v", err)
 	}
-	if options == nil || options.WebSearch != nil {
-		t.Fatalf("hosted webSearch option = %#v, want nil", options)
+	if options == nil || options.WebSearch == nil || !*options.WebSearch {
+		t.Fatalf("webSearch option = %#v, want enabled", options)
 	}
 	if options.Browser == nil || !*options.Browser {
 		t.Fatalf("browser option = %#v, want enabled", options.Browser)

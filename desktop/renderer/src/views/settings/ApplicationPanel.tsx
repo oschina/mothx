@@ -35,9 +35,12 @@ interface ApplicationForm {
   tokenizerModel: string;
   compactionTemplate: string;
   webSearchEnabled: boolean;
+  webSearchBackend: string;
   webSearchProvider: string;
-  webSearchType: string;
-  webSearchModel: string;
+  webSearchBaseURL: string;
+  webSearchToken: string;
+  webSearchTokenConfigured: boolean;
+  clearWebSearchToken: boolean;
   toolMode: string;
   toolConcurrency: string;
   imageEnabled: boolean;
@@ -99,9 +102,12 @@ function fromView(view: ApplicationSettingsView): ApplicationForm {
     tokenizerModel: compaction.tokenizerModel || '',
     compactionTemplate: compaction.template || '',
     webSearchEnabled: webSearch.enabled === true,
+    webSearchBackend: webSearch.backend || 'deepseek',
     webSearchProvider: webSearch.provider || '',
-    webSearchType: webSearch.providerType || '',
-    webSearchModel: webSearch.model || '',
+    webSearchBaseURL: webSearch.baseUrl || '',
+    webSearchToken: '',
+    webSearchTokenConfigured: webSearch.tokenConfigured === true,
+    clearWebSearchToken: false,
     toolMode: tools.mode || 'parallel',
     toolConcurrency: String(tools.maxConcurrency ?? 1),
     imageEnabled: image.enabled === true,
@@ -159,9 +165,10 @@ function toPatch(form: ApplicationForm): Record<string, unknown> {
     toolExecution: { mode: form.toolMode, maxConcurrency: integerOr(form.toolConcurrency, 1) },
     webSearch: {
       enabled: form.webSearchEnabled,
+      backend: form.webSearchBackend,
       provider: form.webSearchProvider.trim(),
-      providerType: form.webSearchType.trim(),
-      model: form.webSearchModel.trim(),
+      baseUrl: form.webSearchBaseURL.trim(),
+      ...(form.clearWebSearchToken ? { token: '' } : form.webSearchToken.trim() ? { token: form.webSearchToken.trim() } : {}),
     },
     imageGeneration: {
       enabled: form.imageEnabled,
@@ -295,15 +302,37 @@ export function ApplicationPanel() {
       <ManageCard title={t('settings.applicationTools')} desc={t('settings.applicationToolsDesc')}>
         <FieldGrid>
           <ToggleField label={t('settings.applicationWebSearch')} checked={form.webSearchEnabled} onChange={(value) => set('webSearchEnabled', value)} />
+          <Field label={t('settings.applicationWebSearchBackend')}>
+            <OptionSelect
+              value={form.webSearchBackend || 'deepseek'}
+              options={['deepseek', 'yuanbao']}
+              onChange={(value) => {
+                set('webSearchBackend', value);
+                set('webSearchBaseURL', '');
+                set('webSearchToken', '');
+                set('clearWebSearchToken', false);
+              }}
+            />
+          </Field>
           <Field label={t('settings.applicationWebSearchProvider')}>
             <Input value={form.webSearchProvider} onChange={(event) => set('webSearchProvider', event.target.value)} />
           </Field>
-          <Field label={t('settings.applicationWebSearchType')}>
-            <Input value={form.webSearchType} onChange={(event) => set('webSearchType', event.target.value)} />
+          <Field label={t('settings.applicationWebSearchBaseUrl')}>
+            <Input
+              value={form.webSearchBaseURL}
+              placeholder={form.webSearchBackend === 'yuanbao' ? 'https://api.wsa.cloud.tencent.com' : 'https://api.deepseek.com'}
+              onChange={(event) => set('webSearchBaseURL', event.target.value)}
+            />
           </Field>
-          <Field label={t('settings.applicationWebSearchModel')}>
-            <Input value={form.webSearchModel} onChange={(event) => set('webSearchModel', event.target.value)} />
+          <Field label={t('settings.applicationWebSearchToken')}>
+            <Input
+              type="password"
+              value={form.webSearchToken}
+              placeholder={form.webSearchTokenConfigured ? t('settings.applicationWebSearchTokenConfigured') : (form.webSearchBackend === 'yuanbao' ? '${TENCENTCLOUD_WSA_APIKEY}' : '${DEEPSEEK_API_KEY}')}
+              onChange={(event) => set('webSearchToken', event.target.value)}
+            />
           </Field>
+          <ToggleField label={t('settings.applicationWebSearchClearToken')} checked={form.clearWebSearchToken} onChange={(value) => set('clearWebSearchToken', value)} />
           <Field label={t('settings.applicationToolExecutionMode')}>
             <OptionSelect value={form.toolMode} options={['parallel', 'sequential']} onChange={(value) => set('toolMode', value)} />
           </Field>

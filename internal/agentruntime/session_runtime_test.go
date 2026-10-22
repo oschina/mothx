@@ -70,13 +70,25 @@ func TestSessionRuntimeSynchronizeCoreTools(t *testing.T) {
 	}
 	defer runtime.Close()
 
-	runtime.SynchronizeCoreTools(true)
+	runtime.SynchronizeCoreTools(true, true)
 	if _, ok := runtime.Registry.Get("browser"); !ok {
 		t.Fatal("browser tool was not registered")
 	}
-	runtime.SynchronizeCoreTools(false)
+	if _, ok := runtime.Registry.Get("web_search"); !ok {
+		t.Fatal("web_search tool was not registered")
+	}
+	if _, ok := runtime.Registry.Get("web_fetch"); !ok {
+		t.Fatal("web_fetch tool was not registered")
+	}
+	runtime.SynchronizeCoreTools(false, false)
 	if _, ok := runtime.Registry.Get("browser"); ok {
 		t.Fatal("browser tool was not removed")
+	}
+	if _, ok := runtime.Registry.Get("web_search"); ok {
+		t.Fatal("web_search tool was not removed")
+	}
+	if _, ok := runtime.Registry.Get("web_fetch"); ok {
+		t.Fatal("web_fetch tool was not removed")
 	}
 }
 
