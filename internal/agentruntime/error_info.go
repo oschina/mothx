@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/provider"
 )
 
@@ -167,6 +168,12 @@ func ClassifyError(err error, opts ErrorClassificationOptions) ErrorInfo {
 		// content before reaching this classification; when it still surfaces, the
 		// user must change the content (or accept that it cannot be sent).
 		return applyErrorDefaults(info, "content_rejected", "content_error", FailurePolicy, RetryUser, false, "run.error.contentRejected")
+	case errors.Is(err, agent.ErrAgentStuck):
+		// The Agent loop guard stopped a silent tool-call loop. Keep the reason
+		// distinct from generic incompletes so operators and adapters can see why
+		// the run ended.
+		info.Phase = PhaseTool
+		return applyErrorDefaults(info, "run_stuck", "incomplete_error", FailureIncomplete, retryModeForSafety(info), false, "run.error.stuck")
 	case provider.IsRetryable(err, opts.HTTPStatus):
 		code, key := retryableErrorCode(err, opts.HTTPStatus)
 		return applyErrorDefaults(info, code, "provider_error", FailureTransient, retryModeForSafety(info), true, key)

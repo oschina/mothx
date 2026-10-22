@@ -288,7 +288,16 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 			}
 			a.isThinking = false
 			a.finishRequestTimer()
-			a.addMessage(warningStyle.Render(a.translator.Text(i18n.MsgSessionEndedPrefix)) + "incomplete")
+			message := warningStyle.Render(a.translator.Text(i18n.MsgSessionEndedPrefix)) + "incomplete"
+			// Preserve the terminal reason when the Agent supplied one (for example
+			// the silent-loop guard's "stuck" error) instead of rendering a bare
+			// "incomplete" that hides why the run ended.
+			if event.Error != nil {
+				if detail := strings.TrimSpace(a.formatAgentError(event, observedError)); detail != "" {
+					message += ": " + detail
+				}
+			}
+			a.addMessage(message)
 			a.pendingAbortReason = ""
 			a.currentAssistantIdx = -1
 			a.currentThinkIdx = -1

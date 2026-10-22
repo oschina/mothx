@@ -259,8 +259,8 @@ type AgentLoopConfig struct {
 	// disables renewal and keeps the fixed MaxIterations behavior.
 	IterationBudget IterationBudgetPolicy
 
-	// MaxConsecutiveNoText is the max tool-only turns before a stuck-detection warning.
-	// 0 means default (95).
+	// MaxConsecutiveNoText is the max silent tool-only turns (no text or
+	// reasoning output) before a stuck-detection warning. 0 means default (95).
 	MaxConsecutiveNoText int
 }
 
@@ -1409,13 +1409,15 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 		}
 	}()
 
-	// Track consecutive iterations without text output for loop detection
-	consecutiveNoText := 0
-	maxConsecutiveNoText := a.config.MaxConsecutiveNoText
-	if maxConsecutiveNoText <= 0 {
-		maxConsecutiveNoText = 95 // default threshold
+	// Track consecutive silent iterations for loop detection. Thinking/reasoning
+	// output counts as progress: a reasoning model that keeps making tool calls
+	// without a user-facing text block is still working, not stuck.
+	consecutiveSilentTurns := 0
+	maxConsecutiveSilentTurns := a.config.MaxConsecutiveNoText
+	if maxConsecutiveSilentTurns <= 0 {
+		maxConsecutiveSilentTurns = 95 // default threshold
 	}
-	const maxConsecutiveNoTextAfterWarning = 5 // After warning, allow 5 more turns before stopping
+	const maxConsecutiveSilentTurnsAfterWarning = 5 // After warning, allow 5 more turns before stopping
 	warningIssued := false
 
 	// Pressure tracking — fire events once per threshold crossing
@@ -1922,9 +1924,11 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 
 		// Track progress for loop detection. Tool-only warnings are injected
 		// after tool results are recorded so provider message ordering stays valid.
-		if textContent != "" {
-			consecutiveNoText = 0
-			warningIssued = false // AI responded with text, reset warning state
+		// Either user-facing text or reasoning output is progress; only turns with
+		// neither count toward the silent-loop guard.
+		if strings.TrimSpace(textContent) != "" || strings.TrimSpace(thinkContent) != "" {
+			consecutiveSilentTurns = 0
+			warningIssued = false // AI produced output, reset warning state
 		}
 
 		// If no tool calls, the turn would end the run. Adapters may still have
@@ -2016,16 +2020,16 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 			toolArgumentRecoveryNotices = nil
 		}
 
-		if textContent == "" {
-			consecutiveNoText++
-			threshold := maxConsecutiveNoText
+		if strings.TrimSpace(textContent) == "" && strings.TrimSpace(thinkContent) == "" {
+			consecutiveSilentTurns++
+			threshold := maxConsecutiveSilentTurns
 			if warningIssued {
-				threshold = maxConsecutiveNoTextAfterWarning
+				threshold = maxConsecutiveSilentTurnsAfterWarning
 			}
-			if consecutiveNoText >= threshold {
+			if consecutiveSilentTurns >= threshold {
 				if !warningIssued {
 					// Inject a warning message to let the AI explain itself.
-					warningMsg := provider.NewUserMessage("[System] You have been making tool calls for " + fmt.Sprintf("%d", consecutiveNoText) + " consecutive turns without any text response. Please explain what you are doing and whether you are stuck. If you are making progress, briefly describe your current task and continue. If you are truly stuck, please stop and explain the issue.")
+					warningMsg := provider.NewUserMessage("[System] You have been making tool calls for " + fmt.Sprintf("%d", consecutiveSilentTurns) + " consecutive turns without any text or reasoning output. Please explain what you are doing and whether you are stuck. If you are making progress, briefly describe your current task and continue. If you are truly stuck, please stop and explain the issue.")
 					a.sendEvent(ch, Event{Type: EventMessageStart, Message: warningMsg})
 					a.sendEvent(ch, Event{Type: EventMessageEnd, Message: warningMsg})
 					a.mu.Lock()

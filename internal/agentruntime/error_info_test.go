@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/oschina/mothx/internal/agent"
 )
 
 func TestClassifyErrorRetrySafety(t *testing.T) {
@@ -22,6 +25,23 @@ func TestClassifyErrorRetrySafety(t *testing.T) {
 	})
 	if unsafe.RetryMode != RetryDecisionRequired || !unsafe.Retryable {
 		t.Fatalf("unsafe classification = %#v", unsafe)
+	}
+}
+
+func TestClassifyAgentStuckPreservesReason(t *testing.T) {
+	err := fmt.Errorf("%w: 5 consecutive turns without text or reasoning output after warning", agent.ErrAgentStuck)
+	info := ClassifyError(err, ErrorClassificationOptions{Phase: PhaseTool, SideEffectState: SideEffectUnknown})
+	if info.Code != "run_stuck" || info.Type != "incomplete_error" || info.FailureClass != FailureIncomplete {
+		t.Fatalf("classification = %#v, want run_stuck/incomplete_error/incomplete", info)
+	}
+	if info.MessageKey != "run.error.stuck" || info.Phase != PhaseTool {
+		t.Fatalf("classification = %#v, want run.error.stuck in phase tool", info)
+	}
+	if !strings.Contains(info.Message, "agent appears stuck") || !strings.Contains(info.Detail, "without text or reasoning output") {
+		t.Fatalf("diagnostic = %#v, want the stuck reason preserved", info)
+	}
+	if info.RetryMode != RetryDecisionRequired || !info.Retryable {
+		t.Fatalf("retry safety = %#v, want decision_required", info)
 	}
 }
 

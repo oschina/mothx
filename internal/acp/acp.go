@@ -4451,7 +4451,7 @@ func (s *server) handleAgentEvent(sessionID string, ev agentpkg.Event) {
 			classified := acpFailureInfo(ev.Error, nil, agentruntime.PhaseModel)
 			if ev.Status == agentpkg.TaskCanceled {
 				classified = agentruntime.ClassifyError(context.Canceled, agentruntime.ErrorClassificationOptions{Phase: agentruntime.PhaseModel})
-			} else if ev.Status == agentpkg.TaskIncomplete {
+			} else if ev.Status == agentpkg.TaskIncomplete && ev.Error == nil {
 				classified.Code = "run_incomplete"
 				classified.Type = "incomplete_error"
 				classified.FailureClass = agentruntime.FailureIncomplete
