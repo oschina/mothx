@@ -1859,6 +1859,55 @@ func TestAgentPrefersHostedSearchOverLocalSearch(t *testing.T) {
 	}
 }
 
+func TestAgentPrefersAnthropicHostedSearchWhenWebSearchEnabled(t *testing.T) {
+	p := provider.NewMockProvider("anthropic", nil, nil)
+	p.SetAPI("anthropic-messages")
+	settings := config.DefaultSettings()
+	settings.WebSearch.Enabled = config.BoolPtr(true)
+	settings.WebSearch.Token = "test-key"
+	registry := tools.NewRegistry(".", sandbox.NewNoneSandbox())
+	registry.Register(tools.NewWebSearchTool(settings))
+	registry.Register(tools.NewWebFetchTool(settings))
+
+	a := New(Config{Provider: p, Mode: "agent", Settings: settings}, registry)
+	var hosted, localSearch, localFetch bool
+	for _, def := range a.context.Tools {
+		switch {
+		case def.Kind == "hosted" && def.Name == provider.HostedToolWebSearch:
+			hosted = def.ProviderType == "anthropic-messages"
+		case def.Kind != "hosted" && def.Name == "web_search":
+			localSearch = true
+		case def.Kind != "hosted" && def.Name == "web_fetch":
+			localFetch = true
+		}
+	}
+	if !hosted {
+		t.Fatal("expected Anthropic hosted web search when local web search is enabled")
+	}
+	if localSearch {
+		t.Fatal("local web_search must not duplicate Anthropic hosted search")
+	}
+	if !localFetch {
+		t.Fatal("local web_fetch should remain available")
+	}
+}
+
+func TestAgentOmitsAnthropicHostedSearchWhenWebSearchDisabled(t *testing.T) {
+	p := provider.NewMockProvider("anthropic", nil, nil)
+	p.SetAPI("anthropic-messages")
+	settings := config.DefaultSettings()
+	settings.WebSearch.Enabled = config.BoolPtr(false)
+	registry := tools.NewRegistry(".", sandbox.NewNoneSandbox())
+	registry.Register(tools.NewWebSearchTool(settings))
+
+	a := New(Config{Provider: p, Mode: "agent", Settings: settings}, registry)
+	for _, def := range a.context.Tools {
+		if def.Kind == "hosted" {
+			t.Fatalf("unexpected hosted tool while web search is disabled: %#v", def)
+		}
+	}
+}
+
 func TestAgentUsesLocalWebSearchWhenProviderHasNoHostedSearch(t *testing.T) {
 	p := provider.NewMockProvider("chat", nil, nil)
 	p.SetAPI("openai-chat")

@@ -114,16 +114,22 @@ func (a *App) authSettingsTopLevelOptions(v authView) []authOption {
 		opts = []authOption{
 			{Title: tr(i18n.MsgAuthLabelEnabled), Description: a.boolPtrSummary(s.WebSearch.Enabled, false), Value: "webSearch.enabled"},
 			{Title: tr(i18n.MsgSettingsFieldWebSearchBackend), Description: valueOrDefault(s.WebSearch.Backend, config.WebSearchBackendDeepSeek), Value: "webSearch.backend"},
-			{Title: tr(i18n.MsgSettingsFieldProvider), Description: valueOrDefault(s.WebSearch.Provider, "deepseek-openai"), Value: "webSearch.provider"},
-			{Title: tr(i18n.MsgSettingsFieldWebSearchBaseURL), Description: a.shortSettingValue(webSearchBaseURLDefault(s.WebSearch)), Value: "webSearch.baseUrl"},
-			{Title: tr(i18n.MsgSettingsFieldWebSearchToken), Description: tr(i18n.MsgAuthValueHidden), Value: "webSearch.token"},
-			{Title: tr(i18n.MsgSettingsFieldImageEnabled), Description: a.boolPtrSummary(s.ImageGeneration.Enabled, false), Value: "imageGeneration.enabled"},
-			{Title: tr(i18n.MsgSettingsFieldImageProvider), Description: valueOrDefault(s.ImageGeneration.Provider, "openai"), Value: "imageGeneration.provider"},
-			{Title: tr(i18n.MsgSettingsFieldImageAPIType), Description: valueOrDefault(s.ImageGeneration.APIType, "openai-images"), Value: "imageGeneration.apiType"},
-			{Title: tr(i18n.MsgSettingsFieldImageBaseURL), Description: a.shortSettingValue(s.ImageGeneration.BaseURL), Value: "imageGeneration.baseUrl"},
-			{Title: tr(i18n.MsgSettingsFieldImageToken), Description: tr(i18n.MsgAuthValueHidden), Value: "imageGeneration.token"},
-			{Title: tr(i18n.MsgSettingsFieldImageModel), Description: valueOrDefault(s.ImageGeneration.Model, "gpt-image-1"), Value: "imageGeneration.model"},
 		}
+		// The Yuanbao backend ignores the DeepSeek credential provider; hide it
+		// instead of offering a field that has no effect.
+		if config.NormalizeWebSearchBackend(s.WebSearch.Backend) != config.WebSearchBackendYuanbao {
+			opts = append(opts, authOption{Title: tr(i18n.MsgSettingsFieldProvider), Description: valueOrDefault(s.WebSearch.Provider, "deepseek-openai"), Value: "webSearch.provider"})
+		}
+		opts = append(opts,
+			authOption{Title: tr(i18n.MsgSettingsFieldWebSearchBaseURL), Description: a.shortSettingValue(webSearchBaseURLDefault(s.WebSearch)), Value: "webSearch.baseUrl"},
+			authOption{Title: tr(i18n.MsgSettingsFieldWebSearchToken), Description: tr(i18n.MsgAuthValueHidden), Value: "webSearch.token"},
+			authOption{Title: tr(i18n.MsgSettingsFieldImageEnabled), Description: a.boolPtrSummary(s.ImageGeneration.Enabled, false), Value: "imageGeneration.enabled"},
+			authOption{Title: tr(i18n.MsgSettingsFieldImageProvider), Description: valueOrDefault(s.ImageGeneration.Provider, "openai"), Value: "imageGeneration.provider"},
+			authOption{Title: tr(i18n.MsgSettingsFieldImageAPIType), Description: valueOrDefault(s.ImageGeneration.APIType, "openai-images"), Value: "imageGeneration.apiType"},
+			authOption{Title: tr(i18n.MsgSettingsFieldImageBaseURL), Description: a.shortSettingValue(s.ImageGeneration.BaseURL), Value: "imageGeneration.baseUrl"},
+			authOption{Title: tr(i18n.MsgSettingsFieldImageToken), Description: tr(i18n.MsgAuthValueHidden), Value: "imageGeneration.token"},
+			authOption{Title: tr(i18n.MsgSettingsFieldImageModel), Description: valueOrDefault(s.ImageGeneration.Model, "gpt-image-1"), Value: "imageGeneration.model"},
+		)
 	case authViewSettingsContextFiles:
 		opts = []authOption{
 			{Title: tr(i18n.MsgAuthLabelEnabled), Description: a.boolYesNo(s.ContextFiles.Enabled), Value: "contextFiles.enabled"},
@@ -338,7 +344,7 @@ func (a *App) saveTUILangForScope(value, scope string) error {
 }
 
 func webSearchBaseURLDefault(cfg config.WebSearchSettings) string {
-	if cfg.Backend == config.WebSearchBackendYuanbao {
+	if config.NormalizeWebSearchBackend(cfg.Backend) == config.WebSearchBackendYuanbao {
 		return valueOrDefault(cfg.BaseURL, config.DefaultYuanbaoWebSearchBaseURL)
 	}
 	return valueOrDefault(cfg.BaseURL, config.DefaultDeepSeekWebSearchBaseURL)
@@ -700,6 +706,10 @@ func (a *App) applyRuntimeSettingsAfterSave(label string, effective *config.Sett
 	}
 	if label == "enableArtifact" && effective != nil && a.runtime != nil {
 		_ = a.runtime.SetArtifactEnabled(effective.IsArtifactEnabled())
+	}
+	if strings.HasPrefix(label, "webSearch.") && effective != nil && a.runtime != nil {
+		a.runtime.RefreshResourceSettings(effective)
+		a.runtime.SynchronizeCoreTools(a.browserEnabled, effective.IsWebSearchEnabled())
 	}
 	if strings.HasPrefix(label, "statusLine.") {
 		a.invalidateStatusLineRequests()

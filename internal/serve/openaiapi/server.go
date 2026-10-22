@@ -102,19 +102,27 @@ type Server struct {
 	esmCoordinator      *esmCoordinator
 }
 
-// IsWebSearchAvailable reports whether the local DeepSeek web search tools are
-// available for sessions. It is true when either the serve config enables web
-// search or the app-level settings.json has webSearch enabled.
+// IsWebSearchAvailable reports whether the local web search tools can actually
+// be used by sessions. Enabling the feature is not enough: without a resolved
+// backend token every call would fail, so the WebUI must not advertise a toggle
+// (or default new sessions to on) in that state.
 func (s *Server) IsWebSearchAvailable() bool {
 	if s == nil {
 		return false
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.cfg != nil && s.cfg.EnableWebSearch {
-		return true
+	configEnabled := s.cfg != nil && s.cfg.EnableWebSearch
+	settings := s.settings
+	s.mu.RUnlock()
+	if settings == nil {
+		return false
 	}
-	return s.settings != nil && s.settings.IsWebSearchEnabled()
+	if !configEnabled && !settings.IsWebSearchEnabled() {
+		return false
+	}
+	// Resolution may consult environment/shell references, so never hold the
+	// server lock while computing it.
+	return settings.ResolveWebSearchToken() != ""
 }
 
 // SettingsSkillHub returns a copy of marketplace settings for runtime adapters.

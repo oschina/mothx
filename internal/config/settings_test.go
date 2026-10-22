@@ -1805,6 +1805,52 @@ func TestEffectiveWebSearchDoesNotReuseLegacyOpenAIEndpoint(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsMigratesLegacyWebSearchProvider(t *testing.T) {
+	tests := []struct {
+		name string
+		web  string
+		want string
+	}{
+		{name: "legacy openai provider", web: `{"enabled":true,"provider":"openai"}`, want: "deepseek-openai"},
+		{name: "legacy provider with explicit base URL", web: `{"enabled":true,"provider":"openai","baseUrl":"https://proxy.test/v1"}`, want: "openai"},
+		{name: "already deepseek", web: `{"enabled":true,"provider":"deepseek-openai"}`, want: "deepseek-openai"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("MOTHX_DIR", t.TempDir())
+			path := GlobalSettingsPath()
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(`{"webSearch":`+test.web+`}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			settings, err := LoadSettings()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settings.WebSearch.Provider != test.want {
+				t.Fatalf("webSearch.provider = %q, want %q", settings.WebSearch.Provider, test.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeWebSearchBackendFallsBackToDeepSeek(t *testing.T) {
+	for input, want := range map[string]string{
+		"":           WebSearchBackendDeepSeek,
+		"DeepSeek":   WebSearchBackendDeepSeek,
+		"yuanbao":    WebSearchBackendYuanbao,
+		"tencent":    WebSearchBackendYuanbao,
+		"searchpro":  WebSearchBackendYuanbao,
+		"unknown-bk": WebSearchBackendDeepSeek,
+	} {
+		if got := NormalizeWebSearchBackend(input); got != want {
+			t.Fatalf("NormalizeWebSearchBackend(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestEffectiveWebSearchYuanbaoBackend(t *testing.T) {
 	t.Setenv("TENCENTCLOUD_WSA_APIKEY", "wsa-key")
 	settings := DefaultSettings()

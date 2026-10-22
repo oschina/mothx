@@ -46,7 +46,7 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | [`ls`](#ls---列出目录内容) | 代码探索 | 列出目录下的文件和子目录 | 允许只读访问 | 所有模式 |
 | [`find`](#find---文件搜索) | 代码探索 | 根据通配符匹配搜索文件 | 允许只读访问 | 所有模式 |
 | [`grep`](#grep---文本内容搜索) | 代码探索 | 正则表达式搜索文件内容 | 允许只读访问 | 所有模式 |
-| [`web_search`](#web_search---deepseek-或元宝网页搜索) | 网页 | 通过 DeepSeek Search 或腾讯元宝 SearchPro 搜索实时网页 | 只读网络访问 | 没有原生托管搜索的 provider |
+| [`web_search`](#web_search---deepseek-或元宝网页搜索) | 网页 | 通过 DeepSeek Search 或腾讯元宝 SearchPro 搜索实时网页 | 只读网络访问 | 没有原生托管搜索的 provider（OpenAI Responses 与 Anthropic Messages 使用 provider 原生搜索） |
 | [`web_fetch`](#web_fetch---deepseek-网页抓取) | 网页 | 通过 DeepSeek Fetch API 将网页抓取为 Markdown | 只读网络访问 | 由 `webSearch` 启用 |
 | [`bash`](#bash---命令执行) | 进程执行 | 执行 Shell 命令（支持同步与异步） | 受沙箱级别限制 | CLI, ACP, Serve, Channels |
 | [`jobs`](#jobs---后台任务管理) | 进程执行 | 列出或检查后台运行任务的状态 | 允许只读访问 | 所有模式 |

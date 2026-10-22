@@ -71,6 +71,9 @@ func TestSessionRuntimeSynchronizeCoreTools(t *testing.T) {
 	defer runtime.Close()
 
 	runtime.SynchronizeCoreTools(true, true)
+	if _, browserEnabled, webSearchEnabled := runtime.CapabilitySnapshot(); !browserEnabled || !webSearchEnabled {
+		t.Fatalf("capability snapshot = (%v, %v), want (true, true)", browserEnabled, webSearchEnabled)
+	}
 	if _, ok := runtime.Registry.Get("browser"); !ok {
 		t.Fatal("browser tool was not registered")
 	}
@@ -81,6 +84,9 @@ func TestSessionRuntimeSynchronizeCoreTools(t *testing.T) {
 		t.Fatal("web_fetch tool was not registered")
 	}
 	runtime.SynchronizeCoreTools(false, false)
+	if _, browserEnabled, webSearchEnabled := runtime.CapabilitySnapshot(); browserEnabled || webSearchEnabled {
+		t.Fatalf("capability snapshot = (%v, %v), want (false, false)", browserEnabled, webSearchEnabled)
+	}
 	if _, ok := runtime.Registry.Get("browser"); ok {
 		t.Fatal("browser tool was not removed")
 	}
@@ -89,6 +95,38 @@ func TestSessionRuntimeSynchronizeCoreTools(t *testing.T) {
 	}
 	if _, ok := runtime.Registry.Get("web_fetch"); ok {
 		t.Fatal("web_fetch tool was not removed")
+	}
+}
+
+func TestSessionRuntimeRefreshResourceSettingsUpdatesCoreTools(t *testing.T) {
+	workDir := t.TempDir()
+	settings := config.DefaultSettings()
+	settings.ContextFiles.Enabled = false
+	runtime, err := (Builder{Settings: settings, SandboxLevel: sandbox.LevelNone}).Build(context.Background(), BuildOptions{WorkDir: workDir})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer runtime.Close()
+
+	if err := runtime.ConfigureCapabilities(false, false, true); err != nil {
+		t.Fatalf("ConfigureCapabilities: %v", err)
+	}
+	if _, ok := runtime.Registry.Get("web_fetch"); !ok {
+		t.Fatal("web_fetch was not registered for the DeepSeek backend")
+	}
+
+	// A settings refresh must rebuild settings-backed tools: Yuanbao is
+	// search-only, so web_fetch has to disappear without rebuilding the
+	// session or touching its capability toggles.
+	next := *settings
+	next.WebSearch.Enabled = config.BoolPtr(true)
+	next.WebSearch.Backend = config.WebSearchBackendYuanbao
+	runtime.RefreshResourceSettings(&next)
+	if _, ok := runtime.Registry.Get("web_search"); !ok {
+		t.Fatal("web_search was not registered after settings refresh")
+	}
+	if _, ok := runtime.Registry.Get("web_fetch"); ok {
+		t.Fatal("web_fetch must be removed after switching to the Yuanbao backend")
 	}
 }
 

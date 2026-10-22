@@ -46,7 +46,7 @@ Calls report their start in the order the model emitted them, so a later call's 
 | [`ls`](#ls---directory-listing) | Exploration | List directory contents | Read-only access allowed | All modes |
 | [`find`](#find---file-search) | Exploration | Search for files by pattern | Read-only access allowed | All modes |
 | [`grep`](#grep---text-content-search) | Exploration | Regex search within files | Read-only access allowed | All modes |
-| [`web_search`](#web-search---deepseek-or-yuanbao-web-search) | Web | Search the live web via DeepSeek Search or Tencent Yuanbao SearchPro | Read-only network access | Providers without native hosted search |
+| [`web_search`](#web-search---deepseek-or-yuanbao-web-search) | Web | Search the live web via DeepSeek Search or Tencent Yuanbao SearchPro | Read-only network access | Providers without native hosted search (OpenAI Responses and Anthropic Messages use provider-native search) |
 | [`web_fetch`](#web-fetch---deepseek-web-fetch) | Web | Fetch one page as Markdown via the DeepSeek Fetch API | Read-only network access | Enabled by `webSearch` |
 | [`bash`](#bash---command-execution) | Execution | Run shell commands (supports sync & async) | Subject to Sandbox Level | CLI, ACP, Serve, Channels |
 | [`jobs`](#jobs---background-job-management) | Execution | List or check status of background jobs | Read-only access allowed | All modes |
@@ -300,7 +300,7 @@ Perform fast regex-based searches across codebase files. This tool runs the pure
 
 ### web_search - DeepSeek or Yuanbao Web Search
 
-Searches the live web through the selected local backend. With `webSearch.backend = "deepseek"` it calls DeepSeek's official Search API (`POST /v1/tools/search`) using `webSearch.baseUrl`/`token` or the selected provider credential. With `backend = "yuanbao"` it calls Tencent Yuanbao SearchPro (`POST /SearchPro`) with `{"Query": ...}` and an API key from `webSearch.token` or `${TENCENTCLOUD_WSA_APIKEY}`. Results are returned as ranked titles, URLs, snippets, long summaries, optional page content, site metadata, dates, and authority scores. When the chat provider has native hosted search (OpenAI Responses), MothX uses that hosted search instead and omits this local tool.
+Searches the live web through the selected local backend. With `webSearch.backend = "deepseek"` it calls DeepSeek's official Search API (`POST /v1/tools/search`) using `webSearch.baseUrl`/`token` or the selected provider credential. With `backend = "yuanbao"` it calls Tencent Yuanbao SearchPro (`POST /SearchPro`) with `{"Query": ...}` and an API key from `webSearch.token` or `${TENCENTCLOUD_WSA_APIKEY}`. Results are returned as ranked titles, URLs, snippets, long summaries, optional page content, site metadata, dates, and authority scores. When the chat provider has native hosted search (OpenAI Responses, or Anthropic Messages while `webSearch` is enabled), MothX uses that hosted search instead and omits this local tool.
 
 #### Parameters:
 

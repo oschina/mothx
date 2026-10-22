@@ -148,14 +148,15 @@ type server struct {
 	ruleContent   string
 	contextFiles  string
 
-	multiAgent       bool
-	delegate         bool
-	workflows        bool
-	browser          bool
-	artifact         bool
-	artifactOverride bool
-	runtime          *agentruntime.SessionRuntime
-	agentMgr         *agent.AgentManager
+	multiAgent        bool
+	delegate          bool
+	workflows         bool
+	browser           bool
+	artifact          bool
+	artifactOverride  bool
+	webSearchOverride bool
+	runtime           *agentruntime.SessionRuntime
+	agentMgr          *agent.AgentManager
 
 	sessions map[string]*sessionRuntime
 	pending  map[string]chan json.RawMessage
@@ -297,6 +298,68 @@ func (s *server) artifactEnabled() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.artifact
+}
+
+// applyApplicationSettings publishes freshly saved application settings and
+// re-projects them into every live session runtime. Without this step a
+// Desktop/WebUI settings save would only affect a later process start while
+// the ACP configuration plane kept the startup snapshot.
+func (s *server) applyApplicationSettings(settings *config.Settings) {
+	if s == nil || settings == nil {
+		return
+	}
+	updated := *settings
+	// A CLI web-search flag is a process-lifetime policy override, matching the
+	// artifact override below; an application-settings save must not disable it.
+	if s.webSearchOverride {
+		updated.WebSearch.Enabled = config.BoolPtr(true)
+	}
+	s.publishSettings(&updated)
+	updatedPointer := &updated
+	type liveRuntime struct {
+		id      string
+		runtime *agentruntime.SessionRuntime
+	}
+	s.mu.Lock()
+	runtimes := make([]liveRuntime, 0, len(s.sessions)+1)
+	if s.runtime != nil {
+		runtimes = append(runtimes, liveRuntime{runtime: s.runtime})
+	}
+	for _, session := range s.sessions {
+		if session == nil || session.runtime == nil {
+			continue
+		}
+		// Never swap a tool set under a live run. A running prompt re-reads
+		// settings at its next admission (see handlePromptContext), so deferring
+		// is safe and avoids losing tools mid-turn.
+		session.cancelMu.Lock()
+		running := session.promptID != ""
+		session.cancelMu.Unlock()
+		if running {
+			continue
+		}
+		runtimes = append(runtimes, liveRuntime{id: session.id, runtime: session.runtime})
+	}
+	s.mu.Unlock()
+	for _, item := range runtimes {
+		item.runtime.RefreshResourceSettings(updatedPointer)
+		// Re-resolve capability defaults so an application-settings save also
+		// reaches sessions opened before the change. ConfigureCapabilities
+		// still honors persisted per-session overrides, so explicit session
+		// toggles are never downgraded to the global default.
+		if err := item.runtime.ConfigureCapabilities(updated.Sandbox.Enabled, s.browser, updated.IsWebSearchEnabled()); err != nil {
+			log.Printf("[acp] refresh session capabilities: %v", err)
+		}
+	}
+	// Desktop renders capability toggles from the session config catalog. Push
+	// the refreshed projection so enabling search in Settings is visible in an
+	// already-open composer without a session reload.
+	for _, item := range runtimes {
+		if item.id == "" {
+			continue
+		}
+		s.notify(item.id, sessionUpdate{SessionUpdate: "config_option_update", ConfigOptions: s.sessionConfigOptions(item.id)})
+	}
 }
 
 // applyACPArtifactSetting updates the ACP/Desktop policy for subsequent runs
@@ -1084,24 +1147,25 @@ func Run(opts RunOptions) (runErr error) {
 	}
 
 	srv = &server{
-		settings:         settings,
-		allow:            config.LoadAllow(),
-		cwd:              cwd,
-		version:          runVersion,
-		multiAgent:       opts.MultiAgent,
-		delegate:         opts.Delegate,
-		workflows:        opts.Workflows,
-		browser:          opts.Browser,
-		artifact:         opts.Artifact || settings.IsACPArtifactEnabled(),
-		artifactOverride: opts.Artifact,
-		sessions:         make(map[string]*sessionRuntime),
-		pending:          make(map[string]chan json.RawMessage),
-		inflight:         make(map[string]*promptInflight),
-		ops:              newSessionOpLanes(),
-		toolTitles:       make(map[string]string),
-		mcpNotify:        make(map[string]bool),
-		r:                bufio.NewReader(os.Stdin),
-		w:                os.Stdout,
+		settings:          settings,
+		allow:             config.LoadAllow(),
+		cwd:               cwd,
+		version:           runVersion,
+		multiAgent:        opts.MultiAgent,
+		delegate:          opts.Delegate,
+		workflows:         opts.Workflows,
+		browser:           opts.Browser,
+		artifact:          opts.Artifact || settings.IsACPArtifactEnabled(),
+		artifactOverride:  opts.Artifact,
+		webSearchOverride: opts.WebSearch,
+		sessions:          make(map[string]*sessionRuntime),
+		pending:           make(map[string]chan json.RawMessage),
+		inflight:          make(map[string]*promptInflight),
+		ops:               newSessionOpLanes(),
+		toolTitles:        make(map[string]string),
+		mcpNotify:         make(map[string]bool),
+		r:                 bufio.NewReader(os.Stdin),
+		w:                 os.Stdout,
 
 		permissionTimeout: opts.PermissionTimeout,
 		questionTimeout:   opts.QuestionTimeout,
@@ -1593,6 +1657,41 @@ func (s *server) refreshProviderCatalog() {
 		next.providerStartup = startup
 	}
 	s.publishCatalog(next)
+	// A session's next run uses the provider instance bound to its runtime, not
+	// the server-level catalog. Rebind open sessions so a provider key, endpoint,
+	// or model edit is visible without restarting ACP.
+	s.refreshLiveSessionProviderCatalogs()
+}
+
+// refreshLiveSessionProviderCatalogs re-projects the current provider catalog
+// into every open session runtime. A running turn's Agent has already captured
+// its provider; refreshing only changes the objects used by future builds,
+// provider/model switches, and derived executions.
+func (s *server) refreshLiveSessionProviderCatalogs() {
+	if s == nil {
+		return
+	}
+	snapshot := s.catalogSnapshot()
+	if snapshot.settings == nil {
+		return
+	}
+	catalog := agentruntime.ProviderCatalog(snapshot.providers)
+	s.mu.Lock()
+	runtimes := make([]*agentruntime.SessionRuntime, 0, len(s.sessions)+1)
+	if s.runtime != nil {
+		runtimes = append(runtimes, s.runtime)
+	}
+	for _, session := range s.sessions {
+		if session != nil && session.runtime != nil {
+			runtimes = append(runtimes, session.runtime)
+		}
+	}
+	s.mu.Unlock()
+	for _, runtime := range runtimes {
+		if err := runtime.RefreshProviderCatalog(catalog); err != nil {
+			log.Printf("[acp] refresh session provider catalog: %v", err)
+		}
+	}
 }
 
 func (s *server) providerFor(name, modelID string) (provider.Provider, *provider.Model, error) {
@@ -1882,7 +1981,22 @@ func (s *server) sessionConfigOptions(sessionID string) []agentruntime.SessionCo
 	if rt == nil || rt.runtime == nil {
 		return nil
 	}
-	return rt.runtime.ConfigOptions()
+	options := rt.runtime.ConfigOptions()
+	// Do not advertise a web-search toggle that cannot work: the shared
+	// Runtime always lists the option, while ACP owns the settings-based
+	// availability projection for Desktop. An existing session keeps its
+	// persisted toggle state and can still be read; only enablement is hidden.
+	settings := s.currentSettings()
+	if settings == nil || !settings.WebSearchUsable() {
+		filtered := make([]agentruntime.SessionConfigOption, 0, len(options))
+		for _, option := range options {
+			if option.ID != agentruntime.ConfigOptionWebSearch {
+				filtered = append(filtered, option)
+			}
+		}
+		return filtered
+	}
+	return options
 }
 
 func (s *server) handleInitialize(req rpcRequest) {
@@ -2782,6 +2896,12 @@ func (s *server) handleSetConfigOption(req rpcRequest) {
 			s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "boolean config value is required"})
 			return
 		}
+		if configID == agentruntime.ConfigOptionWebSearch && enabled {
+			if settings := s.currentSettings(); settings == nil || !settings.WebSearchUsable() {
+				s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "web search is not configured: enable it and set webSearch.token"})
+				return
+			}
+		}
 		mutationErr = s.withSessionMutationLease(in.SessionID, func() error {
 			return rt.runtime.SetCapabilityOption(configID, enabled)
 		})
@@ -3161,6 +3281,15 @@ func (s *server) handlePromptContext(admissionCtx context.Context, req rpcReques
 		rt.execution = &agentruntime.ExecutionRuntime{}
 		rt.execution.SetRunStore(agentruntime.RunStore{SessionDir: s.currentSettings().GetSessionDir()})
 		rt.execution.SetEventSink(agentruntime.SessionRunEventSink{SessionDir: s.currentSettings().GetSessionDir()})
+	}
+	// A settings save may have skipped this session because its previous prompt
+	// was still running. Re-project the latest snapshot before this run snapshots
+	// capabilities, so provider/token/backend edits apply to the next turn.
+	if settingsSnapshot := s.currentSettings(); settingsSnapshot != nil {
+		rt.runtime.RefreshResourceSettings(settingsSnapshot)
+		if err := rt.runtime.ConfigureCapabilities(settingsSnapshot.Sandbox.Enabled, s.browser, settingsSnapshot.IsWebSearchEnabled()); err != nil {
+			log.Printf("[acp] refresh session capabilities before prompt: %v", err)
+		}
 	}
 	startedAt := time.Now()
 	sandboxEnabled, browserEnabled, webSearchEnabled := rt.runtime.CapabilitySnapshot()

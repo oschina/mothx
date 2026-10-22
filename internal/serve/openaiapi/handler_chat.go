@@ -1663,6 +1663,13 @@ func (s *Server) syncSessionTools(sess *APISession, refreshContext bool) error {
 	}
 
 	if sess.Runtime != nil {
+		// Settings are process-wide and may have changed since this session was
+		// built (for example a new web-search token). Re-project the current
+		// snapshot before reconciling capability-driven tools so an open session
+		// never keeps using credentials from a stale settings file.
+		if settings := s.settingsForSession(sess); settings != nil {
+			sess.Runtime.RefreshResourceSettings(settings)
+		}
 		sess.Runtime.SynchronizeCoreTools(sess.Browser, sess.WebSearch)
 	}
 
@@ -1750,10 +1757,18 @@ func (s *Server) refreshSessionContext(sess *APISession) error {
 }
 
 func (s *Server) settingsForSession(sess *APISession) *config.Settings {
-	if s.settings == nil || sess == nil {
-		return s.settings
+	if s == nil || sess == nil {
+		return nil
 	}
-	runtimeSettings := *s.settings
+	// ApplySettings replaces the process settings pointer under s.mu; copy the
+	// pointer under the read lock before deriving the per-session snapshot.
+	s.mu.RLock()
+	base := s.settings
+	s.mu.RUnlock()
+	if base == nil {
+		return nil
+	}
+	runtimeSettings := *base
 	runtimeSettings.WebSearch.Enabled = config.BoolPtr(sess.WebSearch)
 	return &runtimeSettings
 }

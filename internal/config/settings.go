@@ -1434,6 +1434,7 @@ func LoadSettingsFor(cwd string) (*Settings, error) {
 	if v := os.Getenv("VIBECODING_THINKING"); v != "" {
 		s.DefaultThinkingLevel = v
 	}
+	normalizeLegacyWebSearchProvider(s)
 	return s, nil
 }
 
@@ -1518,6 +1519,12 @@ func LoadSettingsWithMeta() (*Settings, LoadMeta, error) {
 	if v := os.Getenv("VIBECODING_THINKING"); v != "" {
 		s.DefaultThinkingLevel = v
 	}
+	// Legacy settings used webSearch.provider to select a provider-backed hosted
+	// search tool. The local DeepSeek backend only uses that provider as a
+	// credential source, and ignores non-DeepSeek endpoints unless webSearch
+	// .baseUrl is explicit. Project the truthful credential source so every
+	// adapter shows what will actually be used.
+	normalizeLegacyWebSearchProvider(s)
 
 	return s, meta, nil
 }
@@ -1581,7 +1588,30 @@ func LoadGlobalSettingsOrDefault() (*Settings, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read global settings %s: %w", globalPath, err)
 	}
+	normalizeLegacyWebSearchProvider(s)
 	return s, nil
+}
+
+// normalizeLegacyWebSearchProvider migrates the pre-local-search credential
+// source when it cannot actually authenticate the DeepSeek backend. An explicit
+// webSearch.baseUrl keeps the configured provider, because that combination may
+// intentionally point at a DeepSeek-compatible proxy.
+func normalizeLegacyWebSearchProvider(s *Settings) {
+	if s == nil || s.WebSearchBackend() != WebSearchBackendDeepSeek {
+		return
+	}
+	if strings.TrimSpace(s.WebSearch.BaseURL) != "" {
+		return
+	}
+	provider := strings.TrimSpace(s.WebSearch.Provider)
+	if provider == "" {
+		s.WebSearch.Provider = "deepseek-openai"
+		return
+	}
+	if pc := ResolveProviderConfig(provider, s); pc != nil && isDeepSeekWebHost(pc.BaseURL) {
+		return
+	}
+	s.WebSearch.Provider = "deepseek-openai"
 }
 
 // LoadGlobalSettingsSparse loads only fields explicitly present in the global
@@ -2146,6 +2176,16 @@ func (s *Settings) IsWebSearchEnabled() bool {
 	return *s.WebSearch.Enabled
 }
 
+// WebSearchUsable reports whether local web search is enabled and can resolve a
+// backend token. Adapters use it to decide whether a session capability toggle
+// is actionable; enabled-but-unconfigured would only fail on the first call.
+func (s *Settings) WebSearchUsable() bool {
+	if s == nil || !s.IsWebSearchEnabled() {
+		return false
+	}
+	return s.ResolveWebSearchToken() != ""
+}
+
 // EffectiveWebSearch returns the normalized local search-backend
 // configuration, filling omitted endpoint/token fields from the selected
 // backend. An unresolved ${ENV_VAR} reference is reported as an empty token so
@@ -2280,35 +2320,23 @@ func (s *Settings) ResolveImageGenerationToken() string {
 	return s.EffectiveImageGeneration().Token
 }
 
-func mergeWebSearchSettings(base, override WebSearchSettings) WebSearchSettings {
-	if override.Enabled != nil {
-		base.Enabled = boolPtr(*override.Enabled)
+// NormalizeWebSearchBackend maps stored aliases to the canonical local search
+// backend. Unknown values fall back to DeepSeek so runtime behavior and
+// web_fetch availability match EffectiveWebSearch's DeepSeek default branch.
+func NormalizeWebSearchBackend(backend string) string {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case WebSearchBackendYuanbao, "tencent", "wsa", "searchpro", "yuanbao-search":
+		return WebSearchBackendYuanbao
+	default:
+		return WebSearchBackendDeepSeek
 	}
-	if override.Backend != "" {
-		base.Backend = override.Backend
-	}
-	if override.Provider != "" {
-		base.Provider = override.Provider
-	}
-	if override.BaseURL != "" {
-		base.BaseURL = override.BaseURL
-	}
-	if override.Token != "" {
-		base.Token = override.Token
-	}
-	return normalizeWebSearchSettings(base)
 }
 
 func normalizeWebSearchSettings(cfg WebSearchSettings) WebSearchSettings {
 	if cfg.Enabled == nil {
 		cfg.Enabled = boolPtr(false)
 	}
-	switch strings.ToLower(strings.TrimSpace(cfg.Backend)) {
-	case "", WebSearchBackendDeepSeek:
-		cfg.Backend = WebSearchBackendDeepSeek
-	case WebSearchBackendYuanbao, "tencent", "wsa", "searchpro", "yuanbao-search":
-		cfg.Backend = WebSearchBackendYuanbao
-	}
+	cfg.Backend = NormalizeWebSearchBackend(cfg.Backend)
 	if cfg.Backend == WebSearchBackendDeepSeek && cfg.Provider == "" {
 		cfg.Provider = "deepseek-openai"
 	}

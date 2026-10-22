@@ -329,7 +329,7 @@ mothx --provider openai --model gpt-5.3-codex
 
 ### webSearch
 
-Local web-search backend settings. This is disabled by default. When enabled, MothX registers the local `web_search` tool for chat providers without native hosted search. `web_fetch` is available for the DeepSeek backend. Provider-native hosted search (OpenAI Responses) remains available and takes precedence over the local `web_search` function when present.
+Local web-search backend settings. This is disabled by default. When enabled, MothX registers the local `web_search` tool for chat providers without native hosted search. `web_fetch` is available for the DeepSeek backend. Provider-native hosted search (OpenAI Responses, and Anthropic Messages while `webSearch` is enabled) remains available and takes precedence over the local `web_search` function when present.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|

@@ -168,7 +168,11 @@ function toPatch(form: ApplicationForm): Record<string, unknown> {
       backend: form.webSearchBackend,
       provider: form.webSearchProvider.trim(),
       baseUrl: form.webSearchBaseURL.trim(),
-      ...(form.clearWebSearchToken ? { token: '' } : form.webSearchToken.trim() ? { token: form.webSearchToken.trim() } : {}),
+      ...(form.webSearchToken.trim()
+        ? { token: form.webSearchToken.trim() }
+        : form.clearWebSearchToken
+          ? { token: '' }
+          : {}),
     },
     imageGeneration: {
       enabled: form.imageEnabled,
@@ -176,7 +180,11 @@ function toPatch(form: ApplicationForm): Record<string, unknown> {
       apiType: form.imageAPI.trim(),
       baseUrl: form.imageBaseURL.trim(),
       model: form.imageModel.trim(),
-      ...(form.clearImageToken ? { token: '' } : form.imageToken.trim() ? { token: form.imageToken.trim() } : {}),
+      ...(form.imageToken.trim()
+        ? { token: form.imageToken.trim() }
+        : form.clearImageToken
+          ? { token: '' }
+          : {}),
     },
     retry: {
       enabled: form.retryEnabled,
@@ -308,14 +316,21 @@ export function ApplicationPanel() {
               options={['deepseek', 'yuanbao']}
               onChange={(value) => {
                 set('webSearchBackend', value);
+                // Endpoint and credential belong to one backend. Clear the
+                // stored token too, otherwise a DeepSeek key would silently
+                // authenticate against the Yuanbao endpoint (and vice versa).
                 set('webSearchBaseURL', '');
                 set('webSearchToken', '');
-                set('clearWebSearchToken', false);
+                set('clearWebSearchToken', true);
               }}
             />
           </Field>
           <Field label={t('settings.applicationWebSearchProvider')}>
-            <Input value={form.webSearchProvider} onChange={(event) => set('webSearchProvider', event.target.value)} />
+            <Input
+              value={form.webSearchProvider}
+              disabled={form.webSearchBackend === 'yuanbao'}
+              onChange={(event) => set('webSearchProvider', event.target.value)}
+            />
           </Field>
           <Field label={t('settings.applicationWebSearchBaseUrl')}>
             <Input

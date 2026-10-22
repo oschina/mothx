@@ -120,9 +120,12 @@ func TestServeRunSubmitRetainsHistoryAcrossTurns(t *testing.T) {
 				return
 			}
 			// The previous turn's background run may still hold the short-lived
-			// session reservation; retry until it is released (mirrors a user
-			// waiting for the reply before typing again).
-			if w.Code == http.StatusConflict && strings.Contains(w.Body.String(), "session_reserved") && time.Now().Before(deadline) {
+			// session reservation (or report its active run just before the
+			// terminal bookkeeping settles); retry until released, mirroring a
+			// user waiting for the reply before typing again.
+			bodyText := w.Body.String()
+			busy := strings.Contains(bodyText, "session_reserved") || strings.Contains(bodyText, "session_run_active")
+			if w.Code == http.StatusConflict && busy && time.Now().Before(deadline) {
 				time.Sleep(20 * time.Millisecond)
 				continue
 			}

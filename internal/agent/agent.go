@@ -499,7 +499,7 @@ func (a *Agent) buildFrozenPrompt() {
 		return
 	}
 	toolDefs := a.registry.ModeTools(a.config.Mode)
-	hostedSearch, hasHostedSearch := nativeWebSearchToolDefinition(a.config.Provider)
+	hostedSearch, hasHostedSearch := nativeWebSearchToolDefinition(a.config.Settings, a.config.Provider)
 	if hasHostedSearch {
 		// Provider-native search takes precedence: omit the local DeepSeek
 		// web_search function so the model receives one search capability while
@@ -594,16 +594,34 @@ func imageGenerationToolDefinition(settings *config.Settings, providerName strin
 	}, true
 }
 
-func nativeWebSearchToolDefinition(p provider.Provider) (provider.ToolDefinition, bool) {
-	if p == nil || (p.API() != "responses" && p.API() != "openai-responses") {
+func nativeWebSearchToolDefinition(settings *config.Settings, p provider.Provider) (provider.ToolDefinition, bool) {
+	if p == nil {
 		return provider.ToolDefinition{}, false
 	}
-	return provider.ToolDefinition{
-		Name:         provider.HostedToolOpenAIResponsesWebSearch,
-		Kind:         "hosted",
-		Provider:     p.Name(),
-		ProviderType: p.API(),
-	}, true
+	switch p.API() {
+	case "responses", "openai-responses":
+		return provider.ToolDefinition{
+			Name:         provider.HostedToolOpenAIResponsesWebSearch,
+			Kind:         "hosted",
+			Provider:     p.Name(),
+			ProviderType: p.API(),
+		}, true
+	case "messages", "anthropic-messages":
+		// Anthropic exposes provider-native web search, but only opt in when
+		// local web search is enabled; otherwise the provider would bill a
+		// hosted tool the user never asked for.
+		if settings == nil || !settings.IsWebSearchEnabled() {
+			return provider.ToolDefinition{}, false
+		}
+		return provider.ToolDefinition{
+			Name:         provider.HostedToolWebSearch,
+			Kind:         "hosted",
+			Provider:     p.Name(),
+			ProviderType: "anthropic-messages",
+		}, true
+	default:
+		return provider.ToolDefinition{}, false
+	}
 }
 
 // New creates a new agent.

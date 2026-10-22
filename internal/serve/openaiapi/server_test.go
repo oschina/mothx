@@ -3487,10 +3487,18 @@ func TestIsWebSearchAvailableFromSettings(t *testing.T) {
 		t.Fatal("expected runtimeCapabilityAvailable(webSearch) = false by default")
 	}
 
-	// Enable via settings.json (app-level) without serve config flag.
+	// Enabled without a usable token is not available: every tool call would fail.
+	t.Setenv("DEEPSEEK_API_KEY", "")
 	srv.settings.WebSearch.Enabled = config.BoolPtr(true)
+	srv.settings.WebSearch.Token = ""
+	if srv.IsWebSearchAvailable() {
+		t.Fatal("expected web search unavailable without a token")
+	}
+
+	// Enable via settings.json (app-level) without serve config flag.
+	srv.settings.WebSearch.Token = "search-key"
 	if !srv.IsWebSearchAvailable() {
-		t.Fatal("expected web search available when settings.json enables it")
+		t.Fatal("expected web search available when settings.json enables it with a token")
 	}
 	if !srv.runtimeCapabilityAvailable("webSearch") {
 		t.Fatal("expected runtimeCapabilityAvailable(webSearch) = true when settings enable it")
@@ -3567,12 +3575,59 @@ func TestCapabilityOverviewReportsResponsesModelProfile(t *testing.T) {
 	}
 }
 
+func TestSyncSessionToolsRefreshesWebSearchCredentials(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.pool.Stop()
+	srv.settings.WebSearch.Enabled = config.BoolPtr(true)
+	srv.settings.WebSearch.Token = "old-key"
+	srv.settings.WebSearch.BaseURL = "http://127.0.0.1:1"
+
+	sess, err := srv.getOrCreateSession("ws-refresh-sess", t.TempDir())
+	if err != nil {
+		t.Fatalf("getOrCreateSession: %v", err)
+	}
+	sess.WebSearch = true
+
+	var gotAuth string
+	search := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	}))
+	defer search.Close()
+
+	next := *srv.settings
+	next.WebSearch.BaseURL = search.URL
+	next.WebSearch.Token = "new-key"
+	srv.mu.Lock()
+	srv.settings = &next
+	srv.mu.Unlock()
+
+	if err := srv.syncSessionTools(sess, false); err != nil {
+		t.Fatalf("syncSessionTools: %v", err)
+	}
+	tool, ok := sess.Registry.Get("web_search")
+	if !ok {
+		t.Fatal("web_search missing after settings refresh")
+	}
+	result, err := tool.Execute(context.Background(), map[string]any{"query": "x"})
+	if err != nil {
+		t.Fatalf("execute refreshed web_search: %v", err)
+	}
+	if gotAuth != "Bearer new-key" {
+		t.Fatalf("authorization = %q, want the refreshed token", gotAuth)
+	}
+	if !strings.Contains(result.Text, "No web results") {
+		t.Fatalf("result = %q", result.Text)
+	}
+}
+
 func TestGetOrCreateSessionWebSearchFromSettings(t *testing.T) {
 	srv := newTestServer(t)
 	workDir := t.TempDir()
 
 	// Enable web search via settings.json only (serve config flag off).
 	srv.settings.WebSearch.Enabled = config.BoolPtr(true)
+	srv.settings.WebSearch.Token = "search-key"
 
 	sess, err := srv.getOrCreateSession("ws-settings-sess", workDir)
 	if err != nil {

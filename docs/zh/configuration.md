@@ -329,7 +329,7 @@ mothx --provider openai --model gpt-5.3-codex
 
 ### webSearch
 
-本地网页搜索后端设置。默认关闭。启用后，MothX 会为没有原生托管搜索的聊天 provider 注册本地 `web_search` 工具；DeepSeek 后端还会注册 `web_fetch`。OpenAI Responses 的 provider 原生托管搜索仍然自动可用，并优先于本地 `web_search` 函数。
+本地网页搜索后端设置。默认关闭。启用后，MothX 会为没有原生托管搜索的聊天 provider 注册本地 `web_search` 工具；DeepSeek 后端还会注册 `web_fetch`。OpenAI Responses 的 provider 原生托管搜索仍然自动可用；Anthropic Messages 在 `webSearch` 启用时使用其 provider 原生托管搜索。两者都优先于本地 `web_search` 函数。
 
 | 字段 | 类型 | 必填 | 默认值 | 描述 |
 |------|------|------|--------|------|

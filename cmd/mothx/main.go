@@ -190,7 +190,7 @@ func registerRootFlags(fs *pflag.FlagSet, flags *cliFlags) {
 	fs.StringVar(&flags.expert, "expert", "", "Bind an expert bundle to this session (switching an existing expert requires a fork)")
 	fs.BoolVarP(&flags.print, "print", "P", false, "Print response and exit (non-interactive)")
 	fs.BoolVar(&flags.json, "json", false, "Stream print-mode output as one JSON object per line (NDJSON) to stdout (requires -P)")
-	registerSharedExecutionFlags(fs, flags, "Enable configured web search provider for this run")
+	registerSharedExecutionFlags(fs, flags, "Enable configured local web search tools for this run")
 	fs.BoolVar(&flags.initServe, "init-serve", false, "Create serve.json config template")
 	fs.BoolVar(&flags.force, "force", false, "Force overwrite existing files (used with --init-*)")
 	fs.BoolVar(&flags.cron, "cron", false, "Enable scheduled task management (cron tool)")
@@ -200,7 +200,7 @@ func registerRootFlags(fs *pflag.FlagSet, flags *cliFlags) {
 
 func registerACPFlags(fs *pflag.FlagSet, flags *cliFlags) {
 	registerSharedProviderFlags(fs, flags)
-	registerSharedExecutionFlags(fs, flags, "Enable configured web search provider for this ACP run")
+	registerSharedExecutionFlags(fs, flags, "Enable configured local web search tools for this ACP run")
 	fs.StringVar(&flags.acpPermissionTimeout, "permission-timeout", "", "Approval decision timeout for ACP session/request_permission (Go duration, e.g. 30m; env MOTHX_ACP_PERMISSION_TIMEOUT; default 5m)")
 	fs.StringVar(&flags.acpQuestionTimeout, "question-timeout", "", "Question decision timeout for ACP question requests (Go duration, e.g. 30m; env MOTHX_ACP_QUESTION_TIMEOUT; default 5m)")
 }

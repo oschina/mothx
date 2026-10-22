@@ -19,8 +19,11 @@ import (
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/cron"
 	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/provider"
+	"github.com/oschina/mothx/internal/sandbox"
 	"github.com/oschina/mothx/internal/session"
 	"github.com/oschina/mothx/internal/skills"
+	"github.com/oschina/mothx/internal/tools"
 )
 
 // Unit-level coverage of the Phase 3 management plane (mothx/manage/*). The
@@ -44,15 +47,23 @@ func callManageFixture(t *testing.T, srv *server, output *syncedBuffer, id int, 
 		raw = data
 	}
 	srv.handleManageRequest(rpcRequest{JSONRPC: "2.0", ID: json.RawMessage(strconv.Itoa(id)), Method: method, Params: raw})
-	line := strings.TrimSpace(output.String())
-	if line == "" {
+	text := strings.TrimSpace(output.String())
+	if text == "" {
 		t.Fatalf("method %s produced no response", method)
 	}
-	var message map[string]any
-	if err := json.Unmarshal([]byte(line), &message); err != nil {
-		t.Fatalf("parse response of %s: %v (%q)", method, err, line)
+	// Applied settings may emit config_option_update notifications before the
+	// response; select the line that carries the request id.
+	for _, line := range strings.Split(text, "\n") {
+		var message map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &message); err != nil {
+			continue
+		}
+		if message["id"] != nil {
+			return message
+		}
 	}
-	return message
+	t.Fatalf("parse response of %s: no JSON-RPC response in %q", method, text)
+	return nil
 }
 
 func manageFixtureResult(t *testing.T, message map[string]any) map[string]any {
@@ -409,6 +420,172 @@ func TestManageApplicationSettingsProjectionAndPatchStaySecretSafe(t *testing.T)
 	}
 }
 
+func TestManageApplicationPatchAppliesWebSearchToLiveRuntime(t *testing.T) {
+	configDir := t.TempDir()
+	writeManageSettings(t, configDir, nil)
+	output := &syncedBuffer{}
+	srv := newManageFixtureServer(output, configDir)
+	loaded, err := config.LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.publishSettings(loaded)
+
+	registry := tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox())
+	live := &agentruntime.SessionRuntime{Registry: registry}
+	srv.sessions["live"] = &sessionRuntime{id: "live", runtime: live, registry: registry}
+
+	manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/application/patch", map[string]any{
+		"patch": map[string]any{"webSearch": map[string]any{
+			"enabled": true, "backend": "deepseek", "provider": "deepseek-openai",
+			"baseUrl": "https://api.deepseek.com", "token": "web-SECRET-123",
+		}},
+	}))
+	current := srv.currentSettings()
+	if current == nil || !current.IsWebSearchEnabled() {
+		t.Fatalf("web search was not published live: %#v", current)
+	}
+	if token := current.ResolveWebSearchToken(); token != "web-SECRET-123" {
+		t.Fatalf("live web search token = %q", token)
+	}
+	if _, ok := registry.Get("web_search"); !ok {
+		t.Fatal("live session runtime did not receive web_search")
+	}
+	if _, ok := registry.Get("web_fetch"); !ok {
+		t.Fatal("live session runtime did not receive web_fetch for the DeepSeek backend")
+	}
+	if _, _, webSearchEnabled := live.CapabilitySnapshot(); !webSearchEnabled {
+		t.Fatal("application web-search default did not reach the live session capability")
+	}
+
+	// Switching backend without replacement credentials clears the old pair and
+	// drops the DeepSeek-only fetch tool from the live registry.
+	manageFixtureResult(t, callManageFixture(t, srv, output, 2, "mothx/manage/application/patch", map[string]any{
+		"patch": map[string]any{"webSearch": map[string]any{"backend": "yuanbao"}},
+	}))
+	current = srv.currentSettings()
+	if current == nil || current.WebSearchBackend() != config.WebSearchBackendYuanbao {
+		t.Fatalf("published backend = %#v, want yuanbao", current)
+	}
+	if current.WebSearch.BaseURL != "" || current.WebSearch.Token != "" {
+		t.Fatalf("backend switch kept stale endpoint/token: %#v", current.WebSearch)
+	}
+	if _, ok := registry.Get("web_fetch"); ok {
+		t.Fatal("web_fetch must be removed after switching to the Yuanbao backend")
+	}
+}
+
+func TestManageProvidersSaveRebindsLiveSessionCatalog(t *testing.T) {
+	configDir := t.TempDir()
+	settings := writeManageSettings(t, configDir, nil)
+	output := &syncedBuffer{}
+	srv := newManageFixtureServer(output, configDir)
+	oldProvider, oldModel, err := createProvider(settings, settings.DefaultProvider, settings.DefaultModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.publishCatalog(catalogState{
+		settings: settings, p: oldProvider, providerName: settings.DefaultProvider, m: oldModel,
+		providers: map[string]provider.Provider{settings.DefaultProvider: oldProvider},
+	})
+	live := &agentruntime.SessionRuntime{
+		Provider: oldProvider, ProviderName: settings.DefaultProvider, Providers: agentruntime.ProviderCatalog{settings.DefaultProvider: oldProvider},
+		Model: oldModel, Mode: agentruntime.ModeYolo, ThinkingLevel: provider.ThinkingMedium,
+	}
+	srv.sessions["live"] = &sessionRuntime{id: "live", runtime: live}
+
+	manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/providers/save", map[string]any{
+		"id":     settings.DefaultProvider,
+		"apiKey": "sk-alpha-ROTATED-555",
+		"provider": map[string]any{
+			"api":     "openai-chat",
+			"baseUrl": "https://alpha.example.com/v1",
+			"models": []map[string]any{
+				{"id": "alpha-model", "name": "Alpha Model", "input": []string{"text"}},
+				{"id": "alpha-mini", "name": "Alpha Mini", "input": []string{"text"}},
+			},
+		},
+	}))
+
+	fresh := srv.currentProviderCatalog()[settings.DefaultProvider]
+	if fresh == nil {
+		t.Fatal("rotated provider missing from the server catalog")
+	}
+	p, name, model, mode, thinking := live.ConfigSnapshot()
+	if p != fresh {
+		t.Fatal("live session kept the pre-rotation provider instance")
+	}
+	if name != settings.DefaultProvider || model == nil || model.ID != "alpha-model" {
+		t.Fatalf("live session binding = %q / %#v, want %s/alpha-model", name, model, settings.DefaultProvider)
+	}
+	if _, ok := live.Providers[settings.DefaultProvider]; !ok || live.Providers[settings.DefaultProvider] != fresh {
+		t.Fatal("live session catalog did not adopt the rotated provider instance")
+	}
+	if mode != agentruntime.ModeYolo || thinking != provider.ThinkingMedium {
+		t.Fatalf("provider refresh changed mode/thinking: %q / %q", mode, thinking)
+	}
+}
+
+func TestApplyApplicationSettingsSkipsRunningSessions(t *testing.T) {
+	srv := newPhase1FixtureServer(&syncedBuffer{})
+	registry := tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox())
+	live := &agentruntime.SessionRuntime{Registry: registry}
+	srv.sessions["live"] = &sessionRuntime{id: "live", runtime: live, promptID: "run-live"}
+
+	settings := config.DefaultSettings()
+	settings.WebSearch.Enabled = config.BoolPtr(true)
+	settings.WebSearch.Token = "search-key"
+	srv.applyApplicationSettings(settings)
+	if _, ok := registry.Get("web_search"); ok {
+		t.Fatal("a running session must not have its tool set swapped")
+	}
+
+	srv.sessions["live"].promptID = ""
+	srv.applyApplicationSettings(settings)
+	if _, ok := registry.Get("web_search"); !ok {
+		t.Fatal("an idle session must receive the refreshed tool set")
+	}
+}
+
+func TestSessionConfigOptionsHideWebSearchWhenUnusable(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	srv := newPhase1FixtureServer(&syncedBuffer{})
+	model := &provider.Model{ID: "alpha-model", Name: "Alpha Model"}
+	p := provider.NewMockProvider("manage-alpha", []*provider.Model{model}, nil)
+	rt := &agentruntime.SessionRuntime{
+		Provider: p, ProviderName: "manage-alpha", Model: model,
+		Providers: agentruntime.ProviderCatalog{"manage-alpha": p}, Mode: agentruntime.ModeYolo,
+	}
+	srv.sessions["live"] = &sessionRuntime{id: "live", runtime: rt}
+
+	settings := config.DefaultSettings()
+	srv.publishSettings(settings)
+	if hasWebSearchOption(srv.sessionConfigOptions("live")) {
+		t.Fatal("disabled web search must not be projected as a Desktop toggle")
+	}
+
+	settings.WebSearch.Enabled = config.BoolPtr(true)
+	srv.publishSettings(settings)
+	if hasWebSearchOption(srv.sessionConfigOptions("live")) {
+		t.Fatal("enabled web search without a token must not be projected")
+	}
+
+	settings.WebSearch.Token = "search-key"
+	srv.publishSettings(settings)
+	if !hasWebSearchOption(srv.sessionConfigOptions("live")) {
+		t.Fatal("usable web search must be projected as a Desktop toggle")
+	}
+}
+
+func hasWebSearchOption(options []agentruntime.SessionConfigOption) bool {
+	for _, option := range options {
+		if option.ID == agentruntime.ConfigOptionWebSearch {
+			return true
+		}
+	}
+	return false
+}
+
 func TestManageSettingsPatchWhitelistRoundTrip(t *testing.T) {
 	configDir := t.TempDir()
 	writeManageSettings(t, configDir, func(settings *config.Settings) {
@@ -431,6 +608,9 @@ func TestManageSettingsPatchWhitelistRoundTrip(t *testing.T) {
 	}
 	if result["sandboxEnabled"] != true || result["webSearchEnabled"] != true {
 		t.Fatalf("patched toggles = %#v", result)
+	}
+	if current := srv.currentSettings(); current == nil || !current.IsWebSearchEnabled() {
+		t.Fatalf("webSearchEnabled was not published live: %#v", current)
 	}
 	raw := readManageRawFile(t, config.GlobalSettingsPath())
 	var sandbox map[string]any

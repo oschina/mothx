@@ -130,6 +130,15 @@ func TestWebToolsValidateInputsAndConfiguration(t *testing.T) {
 	if _, err := NewWebSearchTool(settings).Execute(context.Background(), map[string]any{"query": "x"}); err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("error = %v, want not-configured error", err)
 	}
+
+	t.Setenv("TENCENTCLOUD_WSA_APIKEY", "")
+	yuanbao := config.DefaultSettings()
+	yuanbao.WebSearch.Enabled = config.BoolPtr(true)
+	yuanbao.WebSearch.Backend = config.WebSearchBackendYuanbao
+	yuanbao.WebSearch.Token = ""
+	if _, err := NewWebSearchTool(yuanbao).Execute(context.Background(), map[string]any{"query": "x"}); err == nil || !strings.Contains(err.Error(), "TENCENTCLOUD_WSA_APIKEY") {
+		t.Fatalf("yuanbao error = %v, want Tencent key hint", err)
+	}
 }
 
 func TestWebSearchToolSurfacesAPIError(t *testing.T) {

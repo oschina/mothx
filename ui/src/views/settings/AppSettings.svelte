@@ -285,6 +285,10 @@
     writeString(cfg, 'shellCommandPrefix', form.defaults.shellCommandPrefix);
 
     cfg.webSearch = ensureObject(cfg, 'webSearch');
+    // Retired provider-backed search fields. The local backend only uses
+    // backend/provider/baseUrl/token; keep settings.json from carrying dead keys.
+    delete cfg.webSearch.providerType;
+    delete cfg.webSearch.model;
     writeTriBool(cfg.webSearch, 'enabled', form.webSearch.enabled);
     writeString(cfg.webSearch, 'backend', form.webSearch.backend);
     writeString(cfg.webSearch, 'provider', form.webSearch.provider);

@@ -815,6 +815,12 @@ func (s *server) handleManageSettingsPatch(req rpcRequest) {
 	if providersTouched || updates["defaultProvider"] != nil || updates["defaultModel"] != nil {
 		s.refreshProviderCatalog()
 	}
+	// Settings that affect the shared Runtime (web-search credentials, sandbox,
+	// provider keys) must reach live sessions here too; otherwise this legacy
+	// management surface would only take effect after a process restart.
+	if updated, loadErr := s.manageSettings(); loadErr == nil {
+		s.applyApplicationSettings(updated)
+	}
 	view, err := s.manageSettingsView()
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "settings_unavailable", err.Error(), nil))

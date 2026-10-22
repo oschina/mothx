@@ -1301,8 +1301,106 @@ func (r *SessionRuntime) rehydrateBoundResources() error {
 	return r.RefreshResources(settings, RefreshOptions{Workflows: workflows, Browser: browserEnabled})
 }
 
+// RefreshResourceSettings replaces the settings snapshot that backs mutable
+// registry tools, then re-applies the session's current capability flags. It is
+// the settings-only counterpart to RefreshResources for adapters whose settings
+// changed without changing context, Skills, or MCP resources.
+func (r *SessionRuntime) RefreshResourceSettings(settings *config.Settings) {
+	if r == nil || settings == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	r.resourceSettings = settings
+	r.synchronizeCoreToolsLocked(r.BrowserEnabled, r.WebSearchEnabled, settings)
+	r.LastUsed = time.Now()
+}
+
+// RefreshProviderCatalog replaces the selectable provider catalog and rebinds
+// this session's current provider/model to the matching fresh catalog instance
+// when one exists. It preserves mode, thinking, and persisted selections; only
+// the constructed provider objects change. Adapters call it after a
+// process-level provider write so an already-open session does not keep using
+// credentials or endpoints from the startup snapshot until a restart.
+func (r *SessionRuntime) RefreshProviderCatalog(catalog ProviderCatalog) error {
+	if r == nil {
+		return fmt.Errorf("session runtime is required")
+	}
+	if err := r.ensureOpen(); err != nil {
+		return err
+	}
+	current, providerName, model, _, _ := r.ConfigSnapshot()
+	if strings.TrimSpace(providerName) == "" && current != nil {
+		providerName = current.Name()
+	}
+	providers := cloneProviderCatalog(catalog)
+	if providers == nil {
+		providers = ProviderCatalog{}
+	}
+	var target provider.Provider
+	resolvedName := providerName
+	for name, candidate := range providers {
+		if candidate != nil && strings.EqualFold(name, providerName) {
+			target = candidate
+			resolvedName = name
+			break
+		}
+	}
+	if target == nil {
+		// The current provider is no longer selectable (removed by an
+		// administrative write). Keep the existing binding alive for the active
+		// session, but publish the new catalog so future switches use it.
+		r.mu.Lock()
+		if !r.closed {
+			r.Providers = providers
+			r.LastUsed = time.Now()
+		}
+		r.mu.Unlock()
+		return nil
+	}
+	resolvedModel := model
+	if model != nil {
+		resolved, err := providerfactory.ResolveModel(target, resolvedName, model.ID)
+		if err != nil {
+			if current != nil {
+				r.mu.Lock()
+				if !r.closed {
+					r.Providers = providers
+					r.LastUsed = time.Now()
+				}
+				r.mu.Unlock()
+			}
+			return err
+		}
+		resolvedModel = resolved
+	} else {
+		models := target.Models()
+		if len(models) == 0 {
+			return fmt.Errorf("provider %q has no usable model", resolvedName)
+		}
+		resolvedModel = models[0]
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return fmt.Errorf("agent runtime is closed")
+	}
+	providers[resolvedName] = target
+	r.Providers = providers
+	r.Provider = target
+	r.ProviderName = resolvedName
+	r.Model = resolvedModel
+	r.LastUsed = time.Now()
+	return nil
+}
+
 // SynchronizeCoreTools applies mutable registry tools that have no adapter
-// dependency. It is safe to call when context content itself is unchanged.
+// dependency and records the capability state that produced them, so later
+// context/expert refreshes keep the same tools. It is safe to call when context
+// content itself is unchanged.
 func (r *SessionRuntime) SynchronizeCoreTools(browserEnabled, webSearchEnabled bool) {
 	if r == nil {
 		return
@@ -1312,6 +1410,11 @@ func (r *SessionRuntime) SynchronizeCoreTools(browserEnabled, webSearchEnabled b
 	if r.closed {
 		return
 	}
+	// Adapters project session capability toggles through this method. Keep the
+	// Runtime snapshot aligned; otherwise RefreshResources/SetExpert would
+	// reconcile tools against a stale flag and silently drop web search.
+	r.BrowserEnabled = browserEnabled
+	r.WebSearchEnabled = webSearchEnabled
 	r.synchronizeCoreToolsLocked(browserEnabled, webSearchEnabled, r.resourceSettings)
 }
 

@@ -313,6 +313,22 @@ func (s *server) handleManageApplicationPatch(req rpcRequest) {
 			}
 			continue
 		}
+		// Endpoint and credential belong to one search backend. When a caller
+		// switches backend without supplying replacements, clear the old pair so
+		// a DeepSeek key can never authenticate against Yuanbao (or vice versa).
+		if section == "webSearch" {
+			if rawBackend, ok := fields["backend"]; ok {
+				backend, _, decodeErr := manageDecodeOptionalString(rawBackend)
+				if decodeErr != nil || config.NormalizeWebSearchBackend(backend) != settings.WebSearchBackend() {
+					if _, present := fields["baseUrl"]; !present {
+						fields["baseUrl"] = json.RawMessage(`""`)
+					}
+					if _, present := fields["token"]; !present {
+						fields["token"] = json.RawMessage(`""`)
+					}
+				}
+			}
+		}
 		configKey := manageApplicationConfigKey[section]
 		if err := manageMergeRawObject(raw, configKey, func(target map[string]json.RawMessage) error {
 			for field, value := range fields {
@@ -335,6 +351,7 @@ func (s *server) handleManageApplicationPatch(req rpcRequest) {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "settings_unavailable", err.Error(), nil))
 		return
 	}
+	s.applyApplicationSettings(updated)
 	s.applyACPArtifactSetting(updated.IsACPArtifactEnabled())
 	s.writeResponse(req.ID, manageApplicationView(updated), nil)
 }

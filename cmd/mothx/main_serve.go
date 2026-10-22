@@ -68,7 +68,7 @@ func registerServeFlags(fs *pflag.FlagSet, flags *cliFlags) {
 	fs.BoolVar(&flags.multiAgent, "multi-agent", false, "Enable multi-agent mode (sub-agent tools)")
 	fs.BoolVar(&flags.delegate, "delegate", false, "Enable delegation mode (blocking single sub-agent tool)")
 	fs.BoolVar(&flags.workflows, "workflows", false, "Enable workflow mode (JavaScript workflow tools)")
-	fs.BoolVar(&flags.webSearch, "web-search", false, "Enable configured web search provider for serve sessions")
+	fs.BoolVar(&flags.webSearch, "web-search", false, "Enable configured local web search tools for serve sessions")
 	fs.BoolVar(&flags.browser, "browser", false, "Enable browser automation tool")
 	fs.BoolVar(&flags.artifact, "artifact", false, "Enable generated artifacts for WebUI/API sessions")
 	fs.BoolVar(&flags.enableA2AMaster, "enable-a2a-master", false, "Enable A2A master mode (dispatch tasks to remote agents)")

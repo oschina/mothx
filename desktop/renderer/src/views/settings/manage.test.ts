@@ -169,6 +169,27 @@ test('application settings remain an ACP projection and redact secret configurat
   assert.doesNotMatch(applicationPanel, /desktop\.storeSet|localStorage/i, 'application settings must not persist locally');
 });
 
+test('typing a search or image token takes precedence over a pending clear flag', () => {
+  assert.match(
+    applicationPanel,
+    /form\.webSearchToken\.trim\(\)\s*\?\s*\{ token: form\.webSearchToken\.trim\(\) \}\s*:\s*form\.clearWebSearchToken/,
+    'a typed web-search token must not be discarded by the clear toggle',
+  );
+  assert.match(
+    applicationPanel,
+    /form\.imageToken\.trim\(\)\s*\?\s*\{ token: form\.imageToken\.trim\(\) \}\s*:\s*form\.clearImageToken/,
+    'a typed image token must not be discarded by the clear toggle',
+  );
+});
+
+test('switching search backend clears the previous backend credential', () => {
+  assert.match(
+    applicationPanel,
+    /set\('webSearchBackend', value\)[\s\S]*?set\('clearWebSearchToken', true\)/,
+    'backend switches must clear the stored token instead of reusing it cross-backend',
+  );
+});
+
 test('artifact toggles default to off and are kept separate from protocol capability', () => {
   assert.match(applicationPanel, /enableArtifact: defaults\.enableArtifact === true/, 'TUI/CLI artifact toggle must default to off');
   assert.match(applicationPanel, /enableACPArtifact: defaults\.enableACPArtifact === true/, 'Desktop/ACP artifact toggle must default to off');

@@ -4,7 +4,7 @@
 
 ### 💥 Behavior Changes
 
-- **Non-hosted web search now uses DeepSeek Search/Fetch.** The old `webSearch` provider/type/model configuration that registered a provider-backed search tool was replaced by local `web_search` and `web_fetch` tools backed by DeepSeek's official `POST /v1/tools/search` and `POST /v1/tools/fetch` endpoints. Provider-native hosted search for OpenAI Responses is unchanged and takes precedence over the local `web_search` function. `webSearch` now configures `provider`, `baseUrl`, and `token` (with the provider API key as fallback); both tools are read-only and available in plan mode.
+- **Non-hosted web search now uses DeepSeek Search/Fetch.** The old `webSearch` provider/type/model configuration that registered a provider-backed search tool was replaced by local `web_search` and `web_fetch` tools backed by DeepSeek's official `POST /v1/tools/search` and `POST /v1/tools/fetch` endpoints. Provider-native hosted search for OpenAI Responses is unchanged, and Anthropic Messages uses its native hosted search while `webSearch` is enabled; both take precedence over the local `web_search` function. `webSearch` now configures `provider`, `baseUrl`, and `token` (with the provider API key as fallback); both tools are read-only and available in plan mode.
 
 - **Tencent Yuanbao search backend added.** `webSearch.backend` selects `deepseek` (official Search/Fetch APIs) or `yuanbao` (Tencent Yuanbao SearchPro at `POST /SearchPro`). The Yuanbao backend sends `{"Query": ...}`, normalizes the returned `Pages` into title/URL/site/date/score/passage results, authenticates with `webSearch.token` or `${TENCENTCLOUD_WSA_APIKEY}`, and currently provides search only, so `web_fetch` remains available only with the DeepSeek backend.
 
