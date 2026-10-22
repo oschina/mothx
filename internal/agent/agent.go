@@ -2011,12 +2011,15 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 						a.setMessageID(warningIndex, msgID)
 					}
 					warningIssued = true
-					consecutiveNoText = 0 // Reset counter for post-warning phase
+					consecutiveSilentTurns = 0 // Reset counter for post-warning phase
 				} else {
 					// Already warned, now truly stuck. Tool results have already been
-					// appended, so the saved transcript remains provider-valid.
-					a.emitRunFinished(ch, TaskIncomplete, "stuck", nil, usage, nil)
-					ch <- Event{Type: EventError, Error: fmt.Errorf("agent appears stuck: %d consecutive turns without text output after warning", consecutiveNoText), StopReason: "stuck"}
+					// appended, so the saved transcript remains provider-valid. Carry the
+					// reason in the terminal error so Runtime ErrorInfo and every adapter
+					// projection can report why the run stopped.
+					stuckErr := fmt.Errorf("%w: %d consecutive turns without text or reasoning output after warning", ErrAgentStuck, consecutiveSilentTurns)
+					a.emitRunFinished(ch, TaskIncomplete, "stuck", stuckErr, usage, nil)
+					ch <- Event{Type: EventError, Error: stuckErr, StopReason: "stuck"}
 					ch <- a.agentEndEvent()
 					return
 				}
