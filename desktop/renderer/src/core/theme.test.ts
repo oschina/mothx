@@ -16,7 +16,8 @@ test('background images use the restricted Desktop bridge instead of file URLs',
 test('app background removes the opaque canvas layer so the image is visible', () => {
   assert.match(app, /background\.app \? 'app-surface-veil' : 'app-canvas'/, 'app-scope background must not be covered by an opaque canvas layer');
   assert.doesNotMatch(app, /app-canvas.*app-surface-veil/, 'app-canvas and app-surface-veil must not both be applied at the same time');
-  assert.match(styles, /\.app-canvas \{[\s\S]*?background-image: var\(--canvas-mesh\), var\(--canvas-bg\)/, 'the default canvas must render the brand mesh and ambient glow');
+  assert.match(styles, /\.app-canvas \{[\s\S]*?background-image: var\(--canvas-bg\)/, 'the default canvas must render the ambient glow without a dot mesh');
+  assert.doesNotMatch(styles, /--canvas-mesh/, 'the dot-mesh layer must stay removed from the canvas and Home backgrounds');
   assert.match(styles, /:root \{[\s\S]*?--brand-blue: #2563eb/, 'light theme must expose the brand blue token');
   assert.match(styles, /\[data-theme="dark"\] \{[\s\S]*?--brand-blue: #3b82f6/, 'dark theme must expose the brand blue token');
 });

@@ -68,7 +68,6 @@
   --brand-gradient: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
   --brand-glow: rgba(37, 99, 235, 0.16);
   --canvas-bg: radial-gradient(circle at 50% 8%, rgba(6, 182, 212, 0.1) 0%, rgba(37, 99, 235, 0.06) 34%, rgba(248, 250, 252, 0) 72%);
-  --canvas-mesh: radial-gradient(rgba(148, 163, 184, 0.16) 1px, transparent 1px);
   --glass-card-bg: rgba(255, 255, 255, 0.82);
   --glass-card-border: #e2e8f0;
   --glass-card-hover-border: #93c5fd;
@@ -177,7 +176,6 @@
   --brand-gradient: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
   --brand-glow: rgba(59, 130, 246, 0.28);
   --canvas-bg: radial-gradient(circle at 50% 8%, rgba(6, 182, 212, 0.14) 0%, rgba(37, 99, 235, 0.09) 36%, rgba(11, 17, 32, 0) 75%);
-  --canvas-mesh: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
   --glass-card-bg: rgba(15, 23, 42, 0.72);
   --glass-card-border: rgba(255, 255, 255, 0.08);
   --glass-card-hover-border: rgba(56, 189, 248, 0.45);
@@ -438,12 +436,12 @@ html[data-window-style="win"] {
     box-shadow: 0 0 6px color-mix(in srgb, var(--green) 55%, transparent);
   }
 
-  /* ---- 主画布:青蓝氛围光 + 点阵网格 ---- */
+  /* ---- 主画布:青蓝氛围光 ---- */
   .app-canvas {
     background-color: var(--background);
-    background-image: var(--canvas-mesh), var(--canvas-bg);
-    background-size: 24px 24px, auto;
-    background-attachment: local, local;
+    background-image: var(--canvas-bg);
+    background-size: auto;
+    background-attachment: local;
   }
 
   /* ---- 鼠标跟随聚光卡片 ---- */
@@ -696,15 +694,6 @@ html[data-window-style="win"] {
       radial-gradient(760px circle at 16% -18%, var(--home-aurora-start), transparent 64%),
       radial-gradient(640px circle at 88% 2%, var(--home-aurora-end), transparent 62%),
       var(--home-bg);
-  }
-  .home-aurora::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image: var(--canvas-mesh);
-    background-size: 24px 24px;
-    opacity: 0.7;
-    pointer-events: none;
   }
   .home-aurora > * {
     position: relative;
