@@ -2,6 +2,11 @@
 
 ## v1.3.105-pre-4
 
+### ✨ New Features
+
+- **New Gitee/Moark Models: `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed`**
+  - Added `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed` to the `gitee` and `moark` providers: thinking is enabled by default with Kimi's `low`/`high`/`max` effort scale (MothX's `minimal`/`low` map to `low`, `medium`/`high` to `high`, and `xhigh`/`max` to `max`), a 1M context window, and text+image input. Both use the verified `reasoning_effort` parameter through the `kimi` thinking format.
+
 ### 💥 Behavior Changes
 
 - **Non-hosted web search now uses DeepSeek Search/Fetch.** The old `webSearch` provider/type/model configuration that registered a provider-backed search tool was replaced by local `web_search` and `web_fetch` tools backed by DeepSeek's official `POST /v1/tools/search` and `POST /v1/tools/fetch` endpoints. Provider-native hosted search for OpenAI Responses is unchanged, and Anthropic Messages uses its native hosted search while `webSearch` is enabled; both take precedence over the local `web_search` function. `webSearch` now configures `provider`, `baseUrl`, and `token` (with the provider API key as fallback); both tools are read-only and available in plan mode.

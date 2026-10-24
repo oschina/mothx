@@ -227,6 +227,8 @@ func TestMoarkModelMaxTokens(t *testing.T) {
 		"kimi-k2.6":                262144,
 		"kimi-k2.7-code":           262144,
 		"kimi-k3":                  262144,
+		"kimi-k3.1-pro":            262144,
+		"kimi-k3.1-pro-highspeed":  262144,
 		"glm-5":                    32768,
 		"qwen3.7-plus":             65536,
 		"minimax-m2.7":             131072,
@@ -411,6 +413,33 @@ func TestGiteeMoarkDeepSeekV41FlashDefaults(t *testing.T) {
 		}
 		if model.MaxTokens != 0 || model.MaxTokensWasSet() {
 			t.Fatalf("%s deepseek-v4.1-flash maxTokens = %d, explicitly set = %v; want 0, false", providerName, model.MaxTokens, model.MaxTokensWasSet())
+		}
+	}
+}
+
+func TestGiteeMoarkKimiK31ProDefaults(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"gitee", "moark"} {
+		for _, modelID := range []string{"kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"} {
+			model := s.GetModelConfig(providerName, modelID)
+			if model == nil {
+				t.Fatalf("%s missing %s", providerName, modelID)
+			}
+			if !model.Reasoning || model.ContextWindow != 1000000 || model.MaxTokens != 262144 {
+				t.Fatalf("%s %s = %#v, want reasoning model with 1M context and 262144 max tokens", providerName, modelID, model)
+			}
+			wantInput := []string{"text", "image"}
+			if len(model.Input) != len(wantInput) {
+				t.Fatalf("%s %s input = %#v, want %#v", providerName, modelID, model.Input, wantInput)
+			}
+			for i := range wantInput {
+				if model.Input[i] != wantInput[i] {
+					t.Fatalf("%s %s input = %#v, want %#v", providerName, modelID, model.Input, wantInput)
+				}
+			}
+			if model.Compat == nil || model.Compat.ThinkingFormat != "kimi" {
+				t.Fatalf("%s %s compat = %#v, want kimi thinking format", providerName, modelID, model.Compat)
+			}
 		}
 	}
 }
@@ -713,6 +742,8 @@ func TestRoutedProviderModelMaxTokensAreExplicit(t *testing.T) {
 			"glm-5.3-flash":            131072,
 			"kimi-k2.7-code":           262144,
 			"kimi-k3":                  262144,
+			"kimi-k3.1-pro":            262144,
+			"kimi-k3.1-pro-highspeed":  262144,
 			"glm-5":                    32768,
 			"qwen3.7-plus":             65536,
 			"minimax-m2.7":             131072,

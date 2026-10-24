@@ -4,6 +4,11 @@
 
 ## v1.3.105-pre-4
 
+### ✨ 新功能
+
+- **新增 Gitee/Moark 模型：`kimi-k3.1-pro` 与 `kimi-k3.1-pro-highspeed`**
+  - 为 `gitee` 与 `moark` 新增 `kimi-k3.1-pro` 与 `kimi-k3.1-pro-highspeed`：默认开启思考，使用 Kimi 的 `low`/`high`/`max` 推理强度档位（MothX 的 `minimal`/`low` 映射为 `low`，`medium`/`high` 映射为 `high`，`xhigh`/`max` 映射为 `max`），支持 1M 上下文与文本+图片输入。两者均通过 `kimi` 思考格式使用经过验证的 `reasoning_effort` 参数。
+
 ### 💥 行为变更
 
 - **非托管网页搜索改用 DeepSeek Search/Fetch。** 原先通过 `webSearch` 的 provider/type/model 配置注册的 provider 搜索工具已被替换为 DeepSeek 官方 `POST /v1/tools/search` 与 `POST /v1/tools/fetch` 支撑的本地 `web_search`、`web_fetch`。OpenAI Responses 的 provider 原生托管搜索保持不变；Anthropic Messages 在 `webSearch` 启用时使用其 provider 原生托管搜索。两者都优先于本地 `web_search`。`webSearch` 现在配置 `provider`、`baseUrl` 与 `token`（未设置 token 时回退到 provider API key）；两个工具均为只读，可在 plan 模式使用。
