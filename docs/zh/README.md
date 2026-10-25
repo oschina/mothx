@@ -48,7 +48,7 @@
 | 特性 | 对你意味着什么 |
 |------|---------------|
 | **⚙️ 工作流模式** | 动态 JavaScript 工作流，支持阶段划分、并行执行、多 Worker 协调 — 自动化复杂开发流水线 |
-| **🤖 多提供商** | DeepSeek、OpenAI、Anthropic、火山引擎/豆包、LongCat 和 25+ 厂商适配器 — 一键切换模型 |
+| **🤖 多提供商** | DeepSeek、OpenAI、Anthropic、火山引擎/豆包、LongCat 和 60+ 内置供应商预设 — 一键切换模型 |
 | **⚡ 极速响应** | SSE 流式传输、实时 token 送达、缓存命中优化 |
 | **🧠 思考模式** | 复杂问题的扩展推理（DeepSeek、o1、Claude） |
 | **🛡️ 沙箱隔离** | bwrap 进程级隔离 — 安全文件操作、网络控制、审批门控 |
@@ -57,7 +57,10 @@
 | **📊 统计面板** | 使用统计图表、按厂商/模型分类统计、CLI 模式 |
 | **🔄 工作流** | JavaScript DSL 实现多阶段、并行、多 Agent 编排 |
 | **💻 IDE 集成** | ACP 协议支持 VS Code、Zed、JetBrains — 原生编辑器集成 |
-| **🌐 网关模式** | OpenAI Chat/Responses 兼容 API、Web UI、MCP、审批与持久后台运行 |
+| **🌐 Serve 模式** | OpenAI Chat/Responses 兼容 API、Web UI、MCP、审批与持久后台运行 |
+| **🖥️ 桌面客户端** | Electron ACP 客户端，提供聊天、审批、制品、主角团与知识库，无需 Serve 进程 |
+| **📚 知识库** | 可重建的只读目录索引，通过标准 Knowledge MCP 服务器查询 |
+| **🌳 Worktree** | CLI、Desktop 与子 Agent 共享的隔离 git worktree |
 | **📱 消息平台** | 微信、飞书、WebSocket 事件流，支持持久会话与后台运行 |
 | **🤝 多 Agent** | `--multi-agent` 异步子 Agent、`--delegate` 阻塞式委托，以及 A2A Master 模式 |
 | **🎨 丰富 TUI** | Markdown 渲染、语法高亮、思考显示、工具弹窗、多行输入 |
@@ -132,19 +135,24 @@ npm uninstall -g mothx-installer
 
 ```
 mothx/
-├── cmd/mothx/        # CLI 入口
+├── agent/                 # 公共 SDK 类型（Agent、Provider、Builder）
+├── bootstrap/             # 公共 SDK 到内部实现的接线
+├── cmd/mothx/             # CLI 入口
+├── desktop/               # Electron ACP 桌面客户端
+├── ui/                    # Serve 内嵌的 Svelte Web UI
 ├── internal/
 │   ├── agent/             # 核心 Agent 循环
-│   ├── provider/          # LLM 提供商抽象（25+ 厂商）
-│   ├── tools/             # 内置工具（read, write, bash, grep, find, ...）
+│   ├── agentruntime/      # 前端中立的共享 Runtime
+│   ├── provider/          # LLM 提供商抽象（60+ 供应商预设）
+│   ├── tools/             # 内置工具（read, write, edit, insert, bash, ...）
 │   ├── sandbox/           # bwrap 沙箱实现
 │   ├── session/           # SQLite 会话存储
 │   ├── skills/            # 技能系统
-│   ├── tui/               # 终端 UI（BubbleTea + Lipgloss）
+│   ├── tui/               # 终端 UI（Bubble Tea + Lipgloss）
 │   ├── serve/             # 统一 OpenAI API、Web UI 和消息通道
 │   ├── a2a/               # A2A 协议服务器和 Master 模式
 │   └── acp/               # ACP / MCP 集成
-└── pkg/sdk/               # 公共 SDK 接口
+└── example/               # 公共 SDK 示例
 ```
 
 ---
@@ -158,6 +166,9 @@ mothx/
 
 ### ✨ 核心特性
 - [核心特性详解](features-overview.md) — 多提供商、沙箱、会话、技能等
+- [主角团](expert-teams.md) — 可复用的 lead 身份与成员团队
+- [桌面客户端](desktop.md) — Electron ACP 桌面应用
+- [知识库](knowledge-bases.md) — 索引目录并通过 MCP 搜索
 
 ### 🎯 使用场景
 - [使用场景与实战示例](use-cases.md) — 从日常开发到企业部署
@@ -171,6 +182,9 @@ mothx/
 - [技能系统](skills.md) — 可复用提示片段
 - [在线 Skill 市场](skillhub.md) — SkillHub / ClawHub 集成
 - [工作流模式](workflow.md) — JavaScript DSL 多 Agent 编排
+- [SDK 集成](sdk.md) — 在 Go 应用中嵌入 MothX Agent
+- [添加供应商](provider-guide.md) — 添加或定制 provider
+- [供应商/模型目录](../provider-model-list.md) — 全部内置供应商与模型
 
 ### 🔒 安全
 - [安全与沙箱](security.md) — 沙箱模式、权限、审批
@@ -281,7 +295,7 @@ make test
 
 ## 📄 许可证
 
-MIT — 详见 [LICENSE](../../LICENSE)。
+MIT — 详见 [LICENSE](https://github.com/oschina/mothx/blob/main/LICENSE)。
 
 ---
 

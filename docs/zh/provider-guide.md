@@ -53,15 +53,24 @@ func init() {
 
 ```json
 {
-  "providers": [
-    {
-      "name": "my-provider",
-      "base_url": "https://api.myvendor.com/v1",
-      "api_key": "sk-..."
+  "providers": {
+    "my-provider": {
+      "vendor": "my-vendor",
+      "baseUrl": "https://api.myvendor.com/v1",
+      "apiKey": "sk-...",
+      "api": "openai-chat",
+      "models": [
+        { "id": "my-model", "name": "My Model", "contextWindow": 128000 }
+      ]
     }
-  ]
+  },
+  "defaultProvider": "my-provider",
+  "defaultModel": "my-model"
 }
 ```
+
+`providers` 是以 provider ID 为键的对象；字段名是 `baseUrl`/`apiKey`，不是
+`base_url`/`api_key`。provider ID 就是传给 `--provider` 的名称。
 
 解析流程为：
 

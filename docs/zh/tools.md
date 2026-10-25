@@ -43,11 +43,15 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | [`read`](#read---文件读取) | 文件系统 | 读取文件内容（支持图像和分页） | 允许只读访问 | 所有模式 |
 | [`write`](#write---文件写入) | 文件系统 | 创建或覆盖文件 | 需要 Standard/Yolo | CLI, ACP, Serve, Channels |
 | [`edit`](#edit---精确文件修改) | 文件系统 | 原子文本替换修改 | 需要 Standard/Yolo | CLI, ACP, Serve, Channels |
+| [`insert`](#insert---结构化插入文件) | 文件系统 | 在文件的结构化位置插入内容 | 需要 Standard/Yolo | CLI, ACP, Serve, Channels |
+| [`publish_artifact`](#publish_artifact---生成制品发布) | 制品 | 将完成文件复制到 Runtime 管理的附件存储 | 读取工作目录 + 私有附件写入 | 启用制品发布的会话 |
 | [`ls`](#ls---列出目录内容) | 代码探索 | 列出目录下的文件和子目录 | 允许只读访问 | 所有模式 |
 | [`find`](#find---文件搜索) | 代码探索 | 根据通配符匹配搜索文件 | 允许只读访问 | 所有模式 |
 | [`grep`](#grep---文本内容搜索) | 代码探索 | 正则表达式搜索文件内容 | 允许只读访问 | 所有模式 |
 | [`web_search`](#web_search---deepseek-或元宝网页搜索) | 网页 | 通过 DeepSeek Search 或腾讯元宝 SearchPro 搜索实时网页 | 只读网络访问 | 没有原生托管搜索的 provider（OpenAI Responses 与 Anthropic Messages 使用 provider 原生搜索） |
 | [`web_fetch`](#web_fetch---deepseek-网页抓取) | 网页 | 通过 DeepSeek Fetch API 将网页抓取为 Markdown | 只读网络访问 | 由 `webSearch` 启用 |
+| [`browser`](#browser---浏览器自动化) | 网页 | 通过 vibe-browser 控制 Chromium 系浏览器 | 网络 + 本地进程控制 | 由 `--browser` / 浏览器能力启用 |
+| [`image_generation`](#image_generation---图像生成) | 媒体 | 根据文本提示生成图像 | Provider 请求 | 由 `imageGeneration.enabled` 启用 |
 | [`bash`](#bash---命令执行) | 进程执行 | 执行 Shell 命令（支持同步与异步） | 受沙箱级别限制 | CLI, ACP, Serve, Channels |
 | [`jobs`](#jobs---后台任务管理) | 进程执行 | 列出或检查后台运行任务的状态 | 允许只读访问 | 所有模式 |
 | [`kill`](#kill---终止后台任务) | 进程执行 | 终止正在运行的后台任务 | 需要 Standard/Yolo | CLI, ACP, Serve, Channels |
@@ -63,6 +67,7 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | [`subagent_destroy`](#subagent_---子-agent-委托) | 多 Agent | 销毁子 Agent 释放其上下文资源 | 销毁释放 | 仅多 Agent 模式 |
 | [`delegate_subagent`](#delegate_subagent---阻塞式单子-agent-委托) | 委托模式 | 同步执行一个子 Agent 任务 | 子 Agent 级权限限制 | 仅 Delegate 模式 |
 | [`workflow_run`](#workflow_run---动态-javascript-workflow) | Workflow | 执行 JavaScript workflow 并编排 worker agent | 子 Agent 级权限限制 | 仅 Workflow 模式 |
+| [`workflow_lint`](#workflow_lint---workflow-校验) | Workflow | 在不运行 worker 的情况下校验 workflow JavaScript | 只读 | 仅 Workflow 模式 |
 | [`workflow_status`](#workflow_status---workflow-运行状态) | Workflow | 查询 workflow 运行记录与结果 | 只读 | 仅 Workflow 模式 |
 | [`workflow_cancel`](#workflow_cancel---workflow-取消) | Workflow | 取消运行中的 workflow | 仅当前进程 active run | 仅 Workflow 模式 |
 | [`a2a_dispatch`](#a2a_dispatch---远程-agent-分发) | 多 Agent | 向配置的远程 A2A Agent 节点发送任务 | 发起网络请求 | 仅 A2A Master 模式 |
@@ -153,6 +158,36 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
       "newText": "func Start() {\n\tlog.Println(\"Booting microservice...\")"
     }
   ]
+}
+```
+
+---
+
+### insert - 结构化插入文件
+
+把 UTF-8 文本插入到文件的唯一结构化位置：文件头、文件尾、从 1 开始计数的第 N 行之前或之后。位置是结构性的、没有唯一文本锚点时使用它。精确文本替换、删除或按文本匹配插入请用 `edit`；创建或完整重写文件请用 `write`。
+
+#### 参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | ✓ | 要修改的文件。 |
+| `content` | string | ✓ | 要插入的 UTF-8 文本，不能为空。 |
+| `position` | object | ✓ | `{ "type": "head"\|"tail"\|"before_line"\|"after_line", "line": <从 1 开始的行号> }`；`before_line` 与 `after_line` 必须提供 `line`。 |
+| `create_if_missing` | bool | - | 文件不存在时创建，仅支持 `head` / `tail`，默认 `false`。 |
+| `ensure_newline` | bool | - | 确保插入内容以换行结尾，默认 `true`。 |
+| `dedupe` | object | - | 可选的 `{ "enabled": true, "mode": "exact"\|"trimmed"\|"line" }` 去重检查，命中时跳过插入。 |
+| `dry_run` | bool | - | 只报告 diff 不写入，默认 `false`。 |
+
+按文本匹配的参数（`match`、`match_mode`、`occurrence`）会被明确拒绝，这些语义应使用 `edit`。
+
+#### 示例 payload：
+```json
+{
+  "path": "internal/tools/registry.go",
+  "content": "\tregistry.Register(NewMyTool(registry))\n",
+  "position": { "type": "after_line", "line": 42 },
+  "dedupe": { "enabled": true, "mode": "exact" }
 }
 ```
 
@@ -339,6 +374,56 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
   "url": "https://example.com/article"
 }
 ```
+
+---
+
+### browser - 浏览器自动化
+
+基于 `vibe-browser` SDK 的可选浏览器控制能力。TUI/CLI 使用 `--browser` 启用；Serve、ACP、Desktop 通过对应的会话能力启用。该工具通过结构化 action 控制 Chromium 系浏览器，而不是执行 Shell 命令。
+
+典型流程：先 `open`/`navigate` 到 URL，再调用 `snapshot` 获得有依据的 selector/ref，然后执行 `click`、`fill`、`type`、`press`、`select`、`check`；最后用 `get_text`、`get_html` 或 `screenshot` 验证。导航或交互之后，应等待 selector/text/url 或重新 snapshot 再报告成功。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `action` | string | ✓ | 要执行的动作。常用值：`open`、`navigate`、`back`、`forward`、`reload`、`snapshot`、`click`、`fill`、`type`、`press`、`select`、`get_text`、`get_html`、`get_value`、`screenshot`、`wait_for_selector`、`wait_for_text`、`wait_for_url`、`tab_new`、`tab_close`、`close`。 |
+| `url` | string | - | `open` / `navigate` 的目标 URL。 |
+| `selector` | string | - | CSS selector，或 `snapshot` 返回的 ref。 |
+| `value` / `text` / `key` | string | - | 对应动作的输入值、目标文本或按键。 |
+| `outputPath` | string | - | `screenshot` 输出的项目相对路径。 |
+| `format` / `quality` | string / integer | - | 截图编码（`png`、`jpeg`、`webp`）与质量。 |
+| `fullPage` | bool | - | 截取完整可滚动页面。 |
+| `imageMode` / `maxLongEdge` | string / integer | - | 返回截图的处理模式与最大长边。 |
+
+返回的截图是模型可见图像，可用 `imageMode` 与 `maxLongEdge` 限制体积与分辨率。
+
+---
+
+### image_generation - 图像生成
+
+使用独立的 `imageGeneration` 配置，根据文本提示生成一张或多张图像。只有 `imageGeneration.enabled` 为 `true` 时才注册该工具。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `prompt` | string | ✓ | 图像生成提示词。 |
+| `size` | string | - | 目标尺寸，例如 `1024x1024`。 |
+| `quality` | string | - | `low`、`medium`、`high` 或 `auto`。 |
+| `n` | integer | - | 生成数量，1-4。 |
+
+端点与凭证字段会回退到所选 provider；`apiType` 可选 `openai-images`（默认）或 `openai-responses`。见[配置文档](configuration.md#imagegeneration)。
+
+---
+
+### publish_artifact - 生成制品发布
+
+Agent 声明“完成文件可作为交付制品”的唯一入口。它会先解析符号链接，拒绝目录以及任何逃逸会话工作目录的路径，成功前再把文件复制到 Runtime 管理的附件存储，因此后续写入不会改变即将交付的内容。制品发布默认关闭，并按终端（`enableArtifact`）、ACP/Desktop（`enableACPArtifact`）与 Serve/渠道会话分别配置。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | ✓ | 当前工作目录相对路径下的完成普通文件。 |
+| `filename` | string | - | 面向用户的附件文件名。 |
+| `kind` | string | - | `auto`、`image`、`file`、`audio` 或 `video`；`auto` 会根据字节内容识别图像。 |
+
+不要仅仅因为提到过文件路径就声称文件可交付。应通过该工具（或授权的 provider attachment resolver）发布，让 Runtime 拥有附件记录与投递状态。
 
 ---
 
@@ -548,6 +633,16 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 ```
 
 Delegate 模式适用于大范围代码搜索、多步调查、聚焦实现或验证任务。不适用于单步操作、需要向用户澄清的任务或强依赖完整会话历史的有状态工作。
+
+---
+
+### workflow_lint - Workflow 校验
+
+在不运行 worker agent 的情况下校验 workflow 脚本，检查 JavaScript 语法、`workflow`/`phase`/`agent` 结构、agent 选项拼写、必填 prompt，以及 `result`/`resultKey`/`resultLatest`/`results` 引用。对于非平凡的生成或修改后的 workflow，应先运行它再调用 `workflow_run`。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `source` | string | ✓ | 完整的原始 JavaScript workflow DSL 源码，不要传入 Markdown 代码围栏。 |
 
 ---
 

@@ -280,10 +280,9 @@ mothx --mode plan
 | Debugging | medium |
 
 ```bash
-# Switch thinking level
-/think          # Cycle through levels
-Tab             # Keyboard shortcut
-mothx -t high  # Specify on command line
+# Change the thinking level
+/settings       # Settings > defaults > thinking level
+mothx -t high   # Specify per run on the command line
 ```
 
 ### Q: Why doesn't thinking mode work?

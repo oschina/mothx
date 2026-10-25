@@ -1237,6 +1237,9 @@
                     { id: 'quick-start-tutorial', icon: 'flash_on', title: '5-Min Quick Start' },
                     { id: 'getting-started', icon: 'rocket_launch', title: 'Quick Start' },
                     { id: 'features-overview', icon: 'star', title: 'Features' },
+                    { id: 'expert-teams', icon: 'groups', title: 'Expert Teams' },
+                    { id: 'desktop', icon: 'computer', title: 'Desktop Client' },
+                    { id: 'knowledge-bases', icon: 'database', title: 'Knowledge Bases' },
                     { id: 'use-cases', icon: 'movie_creation', title: 'Use Cases' },
                     { id: 'scenarios', icon: 'movie_creation', title: 'Scenarios' },
                     { id: 'cli-reference', icon: 'terminal', title: 'CLI Reference' },
@@ -1253,6 +1256,8 @@
                     { id: 'sessions', icon: 'chat', title: 'Sessions' },
                     { id: 'sdk', icon: 'integration_instructions', title: 'SDK & Sub-Agents' },
                     { id: 'development', icon: 'code', title: 'Development' },
+                    { id: 'provider-guide', icon: 'menu_book', title: 'Adding a Provider' },
+                    { id: 'provider-model-list', icon: 'dataset', title: 'Provider & Model Catalog', path: 'provider-model-list.md' },
                     { id: 'faq', icon: 'help_outline', title: 'FAQ' },
                     { id: 'changelog', icon: 'history', title: 'Changelog' }
                 ],
@@ -1265,6 +1270,9 @@
                     { id: 'quick-start-tutorial', icon: 'flash_on', title: '5 分钟快速上手' },
                     { id: 'getting-started', icon: 'rocket_launch', title: '快速入门' },
                     { id: 'features-overview', icon: 'star', title: '核心特性' },
+                    { id: 'expert-teams', icon: 'groups', title: '主角团' },
+                    { id: 'desktop', icon: 'computer', title: '桌面客户端' },
+                    { id: 'knowledge-bases', icon: 'database', title: '知识库' },
                     { id: 'use-cases', icon: 'movie_creation', title: '使用场景' },
                     { id: 'scenarios', icon: 'movie_creation', title: '场景演示' },
                     { id: 'cli-reference', icon: 'terminal', title: '命令行参考' },
@@ -1281,6 +1289,8 @@
                     { id: 'sessions', icon: 'chat', title: '会话管理' },
                     { id: 'sdk', icon: 'integration_instructions', title: 'SDK 与子 Agent' },
                     { id: 'development', icon: 'code', title: '开发指南' },
+                    { id: 'provider-guide', icon: 'menu_book', title: '添加供应商' },
+                    { id: 'provider-model-list', icon: 'dataset', title: '供应商/模型目录', path: 'provider-model-list.md' },
                     { id: 'faq', icon: 'help_outline', title: '常见问题' },
                     { id: 'changelog', icon: 'history', title: '更新日志' }
                 ],
@@ -1290,6 +1300,7 @@
 
         let currentLanguage = 'en';
         let currentDoc = 'README';
+        let pendingAnchor = null;
 
         // ============================================================
         // Theme Management
@@ -1393,6 +1404,11 @@
         }
 
         function getDocPath(lang, docId) {
+            const langDocs = DOCS[lang];
+            const item = langDocs && langDocs.items.find(entry => entry.id === docId);
+            if (item && item.path) {
+                return item.path;
+            }
             return `${lang}/${docId}.md`;
         }
 
@@ -1437,8 +1453,11 @@
                 handleInternalLinks();
                 buildPrevNextNav();
 
-                // Scroll to top
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+                // Scroll to the requested anchor, or to the top of the page.
+                if (!pendingAnchor || !scrollToAnchor(pendingAnchor)) {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+                pendingAnchor = null;
                 closeDrawer();
 
                 // Trigger fade-in
@@ -1543,11 +1562,20 @@
             document.getElementById('toc').style.display = '';
             tocList.innerHTML = '';
 
+            const usedIds = new Set();
             headings.forEach((heading, index) => {
-                // Generate id if not present
+                // Generate a GitHub-style slug whenever the renderer did not
+                // attach an id, so cross-document #anchors keep working.
                 if (!heading.id) {
-                    heading.id = 'heading-' + index;
+                    const base = slugifyHeading(heading.textContent) || ('heading-' + index);
+                    let candidate = base;
+                    let suffix = 1;
+                    while (usedIds.has(candidate)) {
+                        candidate = base + '-' + suffix++;
+                    }
+                    heading.id = candidate;
                 }
+                usedIds.add(heading.id);
 
                 const li = document.createElement('li');
                 const a = document.createElement('a');
@@ -1557,7 +1585,6 @@
                 a.onclick = function(e) {
                     e.preventDefault();
                     heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    history.replaceState(null, '', '#' + heading.id);
                 };
                 li.appendChild(a);
                 tocList.appendChild(li);
@@ -1591,18 +1618,84 @@
         }
 
         // ============================================================
-        // Internal Links — handle .md links within content
+        // Internal Links — resolve relative .md links, cross-language paths
+        // and #anchors without issuing HTTP requests for missing files.
         // ============================================================
+        function slugifyHeading(text) {
+            return String(text || '')
+                .trim()
+                .toLowerCase()
+                .replace(/<[^>]*>/g, '')
+                .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+                .replace(/\s+/g, '-');
+        }
+
+        function scrollToAnchor(anchor) {
+            if (!anchor) return false;
+            let decoded = anchor;
+            try {
+                decoded = decodeURIComponent(anchor);
+            } catch (e) { /* keep the raw anchor */ }
+            let target = document.getElementById(decoded);
+            if (!target) {
+                const headings = document.querySelectorAll('.content-card h1, .content-card h2, .content-card h3, .content-card h4');
+                for (const heading of headings) {
+                    if (slugifyHeading(heading.textContent) === decoded) {
+                        target = heading;
+                        break;
+                    }
+                }
+            }
+            if (!target) return false;
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            return true;
+        }
+
+        function resolveDocHref(href) {
+            if (!href || href.startsWith('#') || /^(https?:|mailto:|tel:)/i.test(href)) {
+                return null;
+            }
+            const hashIndex = href.indexOf('#');
+            const rawPath = hashIndex >= 0 ? href.slice(0, hashIndex) : href;
+            const anchor = hashIndex >= 0 ? href.slice(hashIndex + 1) : null;
+            const cleanPath = rawPath.split('?')[0];
+            if (!cleanPath.endsWith('.md')) return null;
+
+            // Resolve the path relative to the current language directory.
+            const stack = [currentLanguage];
+            cleanPath.split('/').filter(Boolean).forEach(part => {
+                if (part === '..') {
+                    if (stack.length > 0) stack.pop();
+                } else if (part !== '.') {
+                    stack.push(part);
+                }
+            });
+            if (stack.length === 0) return null;
+
+            let lang = currentLanguage;
+            let rest = stack;
+            if (rest[0] === 'en' || rest[0] === 'zh') {
+                lang = rest[0];
+                rest = rest.slice(1);
+            }
+            if (rest.length !== 1) return null;
+
+            const file = rest[0];
+            if (file.toLowerCase() === 'readme.md') {
+                return { lang, doc: 'README', anchor };
+            }
+            return { lang, doc: file.replace(/\.md$/i, ''), anchor };
+        }
+
         function handleInternalLinks() {
             document.querySelectorAll('.content-card a').forEach(link => {
                 const href = link.getAttribute('href');
-                if (href && href.endsWith('.md') && !href.startsWith('http')) {
-                    link.addEventListener('click', (e) => {
-                        e.preventDefault();
-                        const docId = href.replace('.md', '').replace('../', '').replace('./', '');
-                        navigateTo(docId);
-                    });
-                }
+                const target = resolveDocHref(href);
+                if (!target) return;
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    navigateTo(target.doc, target.lang, target.anchor);
+                });
             });
         }
 
@@ -1649,8 +1742,22 @@
         // ============================================================
         // Navigation helpers
         // ============================================================
-        function navigateTo(docId) {
-            loadDocument(docId, true);
+        function navigateTo(docId, lang = currentLanguage, anchor = null) {
+            const targetLang = DOCS[lang] ? lang : currentLanguage;
+            const languageChanged = targetLang !== currentLanguage;
+            currentLanguage = targetLang;
+            currentDoc = docId;
+            pendingAnchor = anchor;
+            if (languageChanged) {
+                updateLanguageButtons();
+                updateNavigation();
+            }
+            const targetHash = `#/${targetLang}/${docId}`;
+            if (window.location.hash === targetHash) {
+                loadDocument(docId, false);
+            } else {
+                window.location.hash = targetHash;
+            }
         }
 
         function switchLanguage(lang) {

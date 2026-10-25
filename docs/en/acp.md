@@ -73,7 +73,13 @@ mothx acp --multi-agent
 | `--verbose` | - | false | Verbose output |
 | `--debug` | - | false | Debug logging and local pprof |
 | `--multi-agent` | - | false | Enable sub-agent tools and multi-agent workflows |
+| `--delegate` | - | false | Enable blocking single sub-agent delegation |
 | `--workflows` | - | false | Enable JavaScript workflow tools |
+| `--web-search` | - | false | Enable configured local web search tools |
+| `--browser` | - | false | Enable browser automation |
+| `--artifact` | - | false | Enable generated artifact publishing for Desktop/ACP |
+| `--permission-timeout` | - | `5m` | Approval timeout for `session/request_permission` (Go duration; env `MOTHX_ACP_PERMISSION_TIMEOUT`) |
+| `--question-timeout` | - | `5m` | Question timeout for ACP question requests (Go duration; env `MOTHX_ACP_QUESTION_TIMEOUT`) |
 
 ## Protocol Details
 
@@ -86,13 +92,38 @@ ACP uses JSON-RPC 2.0 over stdio and follows the ACP v1 schema. MothX-specific b
 | `initialize` | Handshake and capability negotiation |
 | `mothx/doctor` | Return machine-readable installation/provider diagnostics; does not require a session |
 | `session/new` | Create a new session |
-| `session/load` | Load an existing session |
+| `session/load` | Load an existing session and replay history |
 | `session/list` | List persisted sessions, optionally filtered by working directory |
 | `session/resume` | Restore a session without replaying history |
+| `session/fork` | Fork a session at its current state |
 | `session/prompt` | Send a prompt to the agent |
 | `session/cancel` | Cancel an active prompt |
 | `session/close` | Cancel active work and release session runtime resources |
 | `session/delete` | Delete an inactive session from persisted session history |
+| `session/set_mode` | Change the session run mode |
+| `session/set_config_option` | Change a session configuration option (provider, model, mode, thinking, sandbox, browser, web search) |
+| `mothx/session/history` | Page through persisted session history |
+| `mothx/session/draft-config-options` | Read the initial config options for a new-session draft |
+| `mothx/session/setTitle` | Set a session title |
+| `mothx/session/setWorkDir` | Change a session working directory |
+| `mothx/session/setMeta` | Set canonical session metadata used by Desktop/WebUI |
+| `mothx/session/listAll` | List sessions across all working directories |
+| `mothx/session/delete` | Delete a session (alias of `session/delete`) |
+| `mothx/projects/list` | List Desktop/WebUI projects |
+| `mothx/projects/create` | Create a project |
+| `mothx/projects/rename` | Rename a project |
+| `mothx/projects/delete` | Delete a project |
+| `mothx/attachment/list` | List attachments owned by a session |
+| `mothx/attachment/fetch` | Fetch attachment bytes |
+| `mothx/subagent/list` | List child agents and their state |
+| `mothx/subagent/messages` | Read a child agent's transcript |
+| `mothx/worktree/list` | List managed git worktrees |
+| `mothx/worktree/create` | Create a managed worktree |
+| `mothx/worktree/reset` | Reset a worktree to its default branch |
+| `mothx/worktree/remove` | Remove a managed worktree |
+| `mothx/worktree/status` | Read worktree status |
+| `mothx/workspace/extend` | Add a directory to the workspace without restarting ACP |
+| `mothx/manage/*` | Management projections; see [Management projections](#management-projections) |
 | `$/cancel_request` | Cancel an in-flight request by JSON-RPC request ID |
 | `session/update` | Server notification: session state changes |
 
@@ -101,10 +132,11 @@ ACP uses JSON-RPC 2.0 over stdio and follows the ACP v1 schema. MothX-specific b
 MothX advertises the following ACP capabilities during initialization:
 
 - **Load Session**: Load and continue previous sessions
-- **Prompt Capabilities**: Text and `resource_link`; image, audio, and embedded resource inputs are not advertised
-- **Session Capabilities**: Load, list, resume, close, and delete sessions
+- **Prompt Capabilities**: Text, `resource_link`, image, audio, and embedded resource/context content; the Runtime normalizes all of them through the shared input contract
+- **Session Capabilities**: Load, list, resume, fork, close, delete, and additional directories
 - **MCP Capabilities**: stdio / http / sse transport supported
-- **Multi-Agent Workflows**: Available when the ACP server is started with `--multi-agent`
+- **Multi-Agent Workflows**: Available when the ACP server is started with `--multi-agent`; delegate mode uses `--delegate`, workflows use `--workflows`
+- **MothX extensions**: Advertised through `initialize._meta["mothx.dev"].features`; clients must gate optional methods, panels, and projections on those keys
 
 ### Notifications
 
@@ -131,8 +163,25 @@ MothX keeps non-standard interactions separate from ACP. Clients use these metho
 
 | Method | Purpose |
 |------|------|
-| `_mothx/request_question` | Multiple-choice question request; clients return `{ "answer": "option text" }` |
-| `_mothx/session_event` | MothX runtime status, turn, and context-compaction events |
+| `mothx/requestQuestion` | Multiple-choice question request; clients return `{ "answer": "option text" }`. Pre-initialize replay uses the legacy `_mothx/request_question` name. |
+| `_mothx/session_event` | MothX runtime status, turn, context-compaction, retry, and artifact events |
+
+### Management projections
+
+`mothx/manage/*` is an additive, capability-gated projection of shared Runtime and Serve services. Desktop uses it instead of reading `settings.json`, the sessions database, or Serve configuration directly.
+
+| Group | Methods |
+|-------|---------|
+| Application/settings | `application/get`, `application/patch`, `settings/get`, `settings/patch`, `env/get`, `env/patch` |
+| Serve/channels | `serve/get`, `serve/patch`, `channels/get`, `channels/patch` |
+| Providers | `providers/list`, `providers/save`, `providers/delete`, `providers/test`, `providers/discover` |
+| Skills | `skills/list`, `skills/set`, `skillhub/*` |
+| MCP | `mcp/list`, `mcp/set` |
+| Automation | `cron/*`, `deliveries/list`, `deliveries/retry`, `memory/get`, `memory/put`, `stats/summary`, `stats/timeseries` |
+| Experts | `experts/list`, `experts/get`, `experts/create`, `experts/update`, `experts/delete` |
+| Knowledge bases | `knowledge-bases/*` (list, get, create, update, delete, scan, status, query, mcp/apply, runs, sources, schedule, clear) |
+
+Responses and logs mask provider keys and sensitive headers. Management calls never make Desktop the owner of session, run, credential, or scheduling state.
 
 ## MCP Server Integration
 

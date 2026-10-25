@@ -227,7 +227,7 @@ mothx --mode yolo
 /mode plan      # 切换到 Plan 模式
 /mode agent     # 切换到 Agent 模式
 /model          # 查看当前模型
-/think          # 切换思考级别
+/settings       # 配置默认值，包括思考级别
 /clear          # 清空对话
 /help           # 显示帮助
 /quit           # 退出

@@ -231,7 +231,7 @@ Organize skills by topic:
         └── SKILL.md
 
 # Windows
-%APPDATA%\vibecoding\skills\
+%APPDATA%\mothx\skills\
 ├── coding\
 │   ├── go-style\
 │   │   └── SKILL.md

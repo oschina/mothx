@@ -51,59 +51,41 @@ go test -run TestReadTool ./internal/tools/
 
 ```
 mothx/
-├── agent/                     # 公共 Agent/Provider 接口和 Builder
-├── bootstrap/                 # 嵌入式使用的 bootstrap 包
-├── cmd/mothx/            # CLI 入口点
-│   ├── main.go                # 主程序
-│   └── main_doctor.go         # `doctor` 子命令
+├── agent/                     # 公共 SDK 类型（Agent、Provider、Builder）
+├── bootstrap/                 # 将公共 SDK 接口接到内部实现
+├── cmd/mothx/                 # CLI 入口与子命令
+├── desktop/                   # Electron 桌面客户端（纯 ACP）
+├── ui/                        # 内嵌到 Serve 的 Svelte Web UI
 ├── internal/
-│   ├── a2a/                   # A2A 协议服务器和 Master 模式
-│   ├── acp/                   # ACP / MCP 集成
-│   ├── agent/                 # 核心 Agent 循环
-│   │   ├── agent.go           # Agent 主逻辑
-│   │   ├── factory.go         # AgentFactory
-│   │   ├── manager.go         # AgentManager
-│   │   ├── router.go          # EventRouter
-│   │   ├── subagent.go        # subagent_* 工具
-│   │   ├── events.go          # 事件类型定义
-│   │   ├── provider.go        # Provider 适配器
-│   │   └── system_prompt.go   # 系统提示词生成
-│   ├── config/                # 配置管理
-│   ├── context/               # 上下文管理和 token 估算
-│   ├── contextfiles/          # 上下文文件加载
-│   ├── cron/                  # 定时任务存储和调度器
-│   ├── serve/                 # 统一 OpenAI API、Web UI 和消息通道
-│   ├── mcp/                   # MCP 服务器集成
-│   ├── memory/                # 持久化记忆 (memory.md)
-│   ├── messaging/             # 消息平台抽象
-│   ├── platform/              # 跨平台兼容性
-│   ├── provider/              # LLM Provider 抽象
-│   │   ├── anthropic/         # Anthropic Messages API
-│   │   ├── google/            # Google Gemini/Vertex API
-│   │   ├── openai/            # OpenAI Chat Completions API
-│   │   ├── factory/           # 共享 provider/model 构建
-│   │   └── vendor*.go         # 厂商适配器注册表
-│   ├── sandbox/               # 沙箱抽象 (bwrap, none)
-│   ├── session/               # 会话管理 (SQLite)
-│   ├── skills/                # 技能系统
-│   ├── stats/                 # 用量统计 Web 面板
+│   ├── agent/                 # 核心 Agent 循环、事件、提示词、子 Agent 工具
+│   ├── agentruntime/          # 前端中立的共享 Runtime 与 Run 生命周期
+│   ├── acp/                   # ACP 服务器与 mothx.dev 扩展
+│   ├── a2a/                   # A2A 服务器与远程 Agent master 调度
+│   ├── architecture/          # 架构护栏测试
+│   ├── browser/               # vibe-browser 工具
+│   ├── config/                # settings.json / serve.json
+│   ├── context/, contextfiles/# Token 预算与项目上下文
+│   ├── cron/                  # 定时任务存储与调度器
+│   ├── dao/                   # 唯一 SQL/查询/行映射 owner
+│   ├── db/                    # 连接/事务/迁移生命周期
+│   ├── esm/                   # Enable Supervisor Mode
+│   ├── expert/                # 主角团包发现与校验
+│   ├── imageproc/             # 图像归一化
+│   ├── mcp/                   # MCP 集成
+│   ├── memory/, messaging/    # 通道记忆与平台抽象
+│   ├── platform/              # 跨平台辅助与资源
+│   ├── provider/              # 协议 provider、vendor 适配器、factory
+│   ├── sandbox/               # 沙箱抽象
+│   ├── serve/                 # OpenAI API、Web UI、channels、hooks、cron
+│   ├── session/               # 会话领域、迁移、事件存储
+│   ├── skills/, skillhub/     # 技能与市场
+│   ├── stats/                 # 用量统计
 │   ├── systeminit/            # AGENTS.md 生成
-│   ├── tools/                 # 工具实现
-│   │   ├── bash.go            # Bash 命令执行
-│   │   ├── read.go            # 文件读取
-│   │   ├── write.go           # 文件写入
-│   │   ├── edit.go            # 文件编辑
-│   │   ├── grep.go            # 内容搜索（纯 Go ripgrep）
-│   │   ├── find.go            # 文件查找（纯 Go fd）
-│   │   ├── ls.go              # 目录列表
-│   │   ├── plan.go            # 任务计划
-│   │   ├── question.go        # 用户问题澄清
-│   │   ├── skill_ref.go       # 技能引用加载
-│   │   └── a2a_dispatch.go    # A2A 远程 Agent 分发
-│   ├── tui/                   # 终端 UI (BubbleTea)
-│   └── workflow/              # 工作流运行时 (JavaScript DSL)
-├── example/                   # SDK 示例
-└── pkg/sdk/                   # 公共 SDK 接口
+│   ├── tools/                 # 内置工具
+│   ├── tui/                   # Bubble Tea TUI
+│   └── workflow/              # JavaScript workflow 运行时
+├── example/                   # 公共 SDK 示例
+└── docs/                      # 双语文档、生成索引与站点
 ```
 
 ## 核心接口
@@ -125,10 +107,29 @@ type Provider interface {
 type Tool interface {
     Name() string
     Description() string
+    PromptSnippet() string
+    PromptGuidelines() []string
     Parameters() json.RawMessage
-    Execute(ctx context.Context, params json.RawMessage) (string, error)
+    Execute(ctx context.Context, params map[string]any) (ToolResult, error)
 }
 ```
+
+## Agent Runtime 规则
+
+生产代码的 Agent 构造与执行遵循共享 Runtime 边界：
+
+- 只能通过 `SessionRuntime.BuildAgent`、`BuildTransientAgent` 或
+  `agentruntime.NewAgentManager` 创建 Agent；不要在适配器中拼装完整
+  `agent.Config`，也不要直接调用 `agent.New`/`agent.NewWithLoopConfig`。
+- 通过 `ResolveSource`/`ResolvePolicy` 统一解析一次 source、模式、能力、工具、
+  沙箱、审批、MCP 与运行策略；适配器只投影结果。
+- 持久化 Run 使用 `ExecutionRuntime`/`RunStore`，并且只产生一个规范终态事件；
+  不要实现第二套 Run 状态机。
+- 审批与提问使用 `DecisionService`/`DecisionRecord`。
+- 所有 SQL 放在 `internal/dao`；`internal/db` 只负责连接、事务与迁移生命周期。
+- 保持入口层轻薄：TUI、CLI、WebUI/API、Desktop/ACP、channels、Cron、ESM 与
+  A2A 可以解码协议和渲染事件，但不能拥有会话、Run 生命周期、附件、制品或策略。
+- 移动生产构造或持久化调用点后，运行 `go test ./internal/architecture`。
 
 ## 添加新工具
 
@@ -159,6 +160,14 @@ func (t *MyTool) Description() string {
     return "Description of my tool"
 }
 
+func (t *MyTool) PromptSnippet() string {
+    return "系统提示词中的一行简短描述"
+}
+
+func (t *MyTool) PromptGuidelines() []string {
+    return []string{"当……时使用该工具"}
+}
+
 func (t *MyTool) Parameters() json.RawMessage {
     return json.RawMessage(`{
         "type": "object",
@@ -172,38 +181,27 @@ func (t *MyTool) Parameters() json.RawMessage {
     }`)
 }
 
-func (t *MyTool) Execute(ctx context.Context, params json.RawMessage) (string, error) {
-    var p struct {
-        Param1 string `json:"param1"`
+func (t *MyTool) Execute(ctx context.Context, params map[string]any) (ToolResult, error) {
+    param1, _ := params["param1"].(string)
+    if param1 == "" {
+        return ToolResult{}, fmt.Errorf("param1 is required")
     }
-    if err := json.Unmarshal(params, &p); err != nil {
-        return "", err
-    }
-    // 实现工具逻辑
-    return "result", nil
+    return NewTextToolResult("result"), nil
 }
 ```
 
 ### 步骤 2: 注册工具
 
-在 `internal/tools/tool.go` 的 `RegisterDefaults()` 方法中添加:
+在 `internal/tools/tool.go` 的 `builtinToolOrder` 中加入规范名称，并在
+`builtinToolFactories()` 中注册构造函数。`RegisterDefaults`、
+`RegisterDefaultsWithPlanTool` 与 `RegisterFiltered` 都从这两个列表派生，
+因此注册会保持一致。
 
-```go
-func (r *Registry) RegisterDefaults() {
-    r.Register(&ReadTool{workdir: r.workdir})
-    r.Register(&WriteTool{workdir: r.workdir})
-    r.Register(&EditTool{workdir: r.workdir})
-    r.Register(&BashTool{workdir: r.workdir, sandbox: r.sandbox})
-    r.Register(&GrepTool{workdir: r.workdir})
-    r.Register(&FindTool{workdir: r.workdir})
-    r.Register(&LsTool{workdir: r.workdir})
-    r.Register(&MyTool{workdir: r.workdir}) // 添加新工具
-}
-```
+### 步骤 3: 为系统提示词提供描述
 
-### 步骤 3: 更新系统提示词
-
-在 `internal/agent/system_prompt.go` 中添加工具描述。
+从工具返回简洁的 `PromptSnippet` 与有针对性的 `PromptGuidelines`。共享 Runtime
+会用这些方法构建 Available tools 与 Guidelines 段落；不要在各适配器中重复添加
+提示词文本。
 
 ### 步骤 4: 编写测试
 
@@ -218,15 +216,12 @@ import (
 
 func TestMyTool_Execute(t *testing.T) {
     tool := NewMyTool("/tmp")
-    params := `{"param1": "value"}`
-    
-    result, err := tool.Execute(context.Background(), json.RawMessage(params))
+    result, err := tool.Execute(context.Background(), map[string]any{"param1": "value"})
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
-    
-    if result != "expected" {
-        t.Errorf("expected 'expected', got '%s'", result)
+    if result.Text != "expected" {
+        t.Errorf("expected 'expected', got %q", result.Text)
     }
 }
 ```
@@ -255,7 +250,7 @@ func init() {
 }
 ```
 
-CLI 和 ACP 的 provider 创建统一走 `internal/provider/factory`，不要在 `cmd/mothx/main.go` 或 `internal/acp/acp.go` 中添加厂商专用创建逻辑。
+CLI、ACP、WebUI/Serve 与 Desktop 的 provider 创建统一走 `internal/provider/factory`；Agent 构造统一走 `agentruntime`。不要在适配器中添加厂商专用创建逻辑，也不要在共享 Runtime 之外拼装完整 `agent.Config`。
 
 ### 添加新的协议 Provider
 
@@ -273,6 +268,7 @@ CLI 和 ACP 的 provider 创建统一走 `internal/provider/factory`，不要在
 
 ```bash
 make test
+make test-desktop     # Electron main/preload/renderer 测试
 ```
 
 ### 运行特定包的测试

@@ -43,11 +43,15 @@ Calls report their start in the order the model emitted them, so a later call's 
 | [`read`](#read---file-reading) | File System | Read file content (supports images and pagination) | Read-only access allowed | All modes |
 | [`write`](#write---file-writing) | File System | Create or overwrite files | Requires Standard/Yolo | CLI, ACP, Serve, Channels |
 | [`edit`](#edit---precise-file-modification) | File System | Atomic text replacements | Requires Standard/Yolo | CLI, ACP, Serve, Channels |
+| [`insert`](#insert---structural-file-insertion) | File System | Insert content at a structural file position | Requires Standard/Yolo | CLI, ACP, Serve, Channels |
+| [`publish_artifact`](#publish_artifact---generated-artifact-publishing) | Artifact | Copy a completed file into Runtime-owned attachment storage | Read workdir + private attachment write | Artifact-enabled sessions |
 | [`ls`](#ls---directory-listing) | Exploration | List directory contents | Read-only access allowed | All modes |
 | [`find`](#find---file-search) | Exploration | Search for files by pattern | Read-only access allowed | All modes |
 | [`grep`](#grep---text-content-search) | Exploration | Regex search within files | Read-only access allowed | All modes |
 | [`web_search`](#web-search---deepseek-or-yuanbao-web-search) | Web | Search the live web via DeepSeek Search or Tencent Yuanbao SearchPro | Read-only network access | Providers without native hosted search (OpenAI Responses and Anthropic Messages use provider-native search) |
 | [`web_fetch`](#web-fetch---deepseek-web-fetch) | Web | Fetch one page as Markdown via the DeepSeek Fetch API | Read-only network access | Enabled by `webSearch` |
+| [`browser`](#browser---browser-automation) | Web | Control a Chromium-family browser through vibe-browser | Network + local process control | Enabled by `--browser` / browser capability |
+| [`image_generation`](#image_generation---image-generation) | Media | Generate images from a text prompt | Provider request | Enabled by `imageGeneration.enabled` |
 | [`bash`](#bash---command-execution) | Execution | Run shell commands (supports sync & async) | Subject to Sandbox Level | CLI, ACP, Serve, Channels |
 | [`jobs`](#jobs---background-job-management) | Execution | List or check status of background jobs | Read-only access allowed | All modes |
 | [`kill`](#kill---stop-background-job) | Execution | Stop a running background job | Requires Standard/Yolo | CLI, ACP, Serve, Channels |
@@ -63,6 +67,7 @@ Calls report their start in the order the model emitted them, so a later call's 
 | [`subagent_destroy`](#subagent_---delegated-work) | Multi-Agent | Remove sub-agents & clean up | Destroy | Multi-Agent Mode |
 | [`delegate_subagent`](#delegate_subagent---blocking-single-sub-agent-delegation) | Delegate | Run one synchronous sub-agent task | Sub-agent scoped limits | Delegate Mode |
 | [`workflow_run`](#workflow_run---dynamic-javascript-workflows) | Workflow | Run a JavaScript workflow with worker agents | Worker-agent scoped limits | Workflow Mode |
+| [`workflow_lint`](#workflow_lint---workflow-validation) | Workflow | Validate workflow JavaScript without running workers | Read-only | Workflow Mode |
 | [`workflow_status`](#workflow_status---workflow-run-status) | Workflow | Inspect workflow runs and results | Read-only | Workflow Mode |
 | [`workflow_cancel`](#workflow_cancel---workflow-cancellation) | Workflow | Cancel an active workflow run | In-process active run only | Workflow Mode |
 | [`a2a_dispatch`](#a2a_dispatch---remote-agent-dispatch) | Multi-Agent | Dispatch tasks to a remote A2A agent | Network request | A2A Master Mode |
@@ -153,6 +158,36 @@ The `edit` tool performs highly precise, **atomic multi-replacement operations**
       "newText": "func Start() {\n\tlog.Println(\"Booting microservice...\")"
     }
   ]
+}
+```
+
+---
+
+### insert - Structural File Insertion
+
+Inserts UTF-8 text into an existing file at exactly one structural position: the file head, the file tail, before a 1-based line, or after a 1-based line. It is the right tool when the location is structural and no unique text anchor exists. Use `edit` for exact text replacement, deletion, or text-matched insertion, and `write` to create or completely rewrite a file.
+
+#### Parameters:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | ✓ | File to modify. |
+| `content` | string | ✓ | UTF-8 text to insert. Must not be empty. |
+| `position` | object | ✓ | `{ "type": "head"\|"tail"\|"before_line"\|"after_line", "line": <1-based integer> }`. `line` is required for `before_line` and `after_line`. |
+| `create_if_missing` | bool | - | Create a missing file. Only valid with `head` or `tail`; default `false`. |
+| `ensure_newline` | bool | - | Ensure the inserted content ends with a newline; default `true`. |
+| `dedupe` | object | - | Optional `{ "enabled": true, "mode": "exact"\|"trimmed"\|"line" }` check that skips a byte-identical insertion. |
+| `dry_run` | bool | - | Report the diff without writing; default `false`. |
+
+Text-match parameters (`match`, `match_mode`, `occurrence`) are rejected on purpose; use `edit` for those semantics.
+
+#### Example Payload:
+```json
+{
+  "path": "internal/tools/registry.go",
+  "content": "\tregistry.Register(NewMyTool(registry))\n",
+  "position": { "type": "after_line", "line": 42 },
+  "dedupe": { "enabled": true, "mode": "exact" }
 }
 ```
 
@@ -339,6 +374,56 @@ Fetches one page through DeepSeek's official Fetch API (`POST /v1/tools/fetch`) 
   "url": "https://example.com/article"
 }
 ```
+
+---
+
+### browser - Browser Automation
+
+Opt-in browser control backed by the `vibe-browser` SDK. Enable it with `--browser` for TUI/CLI or the corresponding session capability in Serve, ACP, and Desktop. The tool drives a Chromium-family browser through actions rather than shell commands.
+
+Typical flow: `open` or `navigate` to a URL, call `snapshot` to obtain grounded selectors/refs, then `click`, `fill`, `type`, `press`, `select`, or `check`; finish with `get_text`, `get_html`, or `screenshot` for verification. After navigation or an interaction, wait for a selector/text/URL or take another snapshot before reporting success.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | ✓ | Action to perform. Common values: `open`, `navigate`, `back`, `forward`, `reload`, `snapshot`, `click`, `fill`, `type`, `press`, `select`, `get_text`, `get_html`, `get_value`, `screenshot`, `wait_for_selector`, `wait_for_text`, `wait_for_url`, `tab_new`, `tab_close`, `close`. |
+| `url` | string | - | Target URL for `open`/`navigate`. |
+| `selector` | string | - | CSS selector, or a ref returned by `snapshot`. |
+| `value` / `text` / `key` | string | - | Input value, text target, or keyboard key for the matching actions. |
+| `outputPath` | string | - | Project-relative path for `screenshot` output. |
+| `format` / `quality` | string / integer | - | Screenshot encoding (`png`, `jpeg`, `webp`) and quality. |
+| `fullPage` | bool | - | Capture the full scrollable page. |
+| `imageMode` / `maxLongEdge` | string / integer | - | Returned screenshot processing mode and maximum long edge. |
+
+Returned screenshots are model-visible images; large results can be bounded with `imageMode` and `maxLongEdge`.
+
+---
+
+### image_generation - Image Generation
+
+Generates one or more images from a text prompt using the standalone `imageGeneration` configuration. The tool is registered only when `imageGeneration.enabled` is `true`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `prompt` | string | ✓ | Image generation prompt. |
+| `size` | string | - | Requested size, for example `1024x1024`. |
+| `quality` | string | - | `low`, `medium`, `high`, or `auto`. |
+| `n` | integer | - | Number of images, 1-4. |
+
+Endpoint and credential fields fall back to the configured provider; `apiType` selects `openai-images` (default) or `openai-responses`. See [configuration](configuration.md#imagegeneration).
+
+---
+
+### publish_artifact - Generated Artifact Publishing
+
+The only Agent-facing way to declare a completed file as a deliverable artifact. It resolves symlinks, rejects directories and any path that escapes the session work directory, then copies the file into Runtime-owned attachment storage before reporting success, so later writes cannot mutate what is delivered. Artifact publishing is opt-in and configured independently for terminal (`enableArtifact`), ACP/Desktop (`enableACPArtifact`), and Serve/channel sessions.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | ✓ | Completed regular file, relative to the current working directory. |
+| `filename` | string | - | User-facing attachment filename. |
+| `kind` | string | - | `auto`, `image`, `file`, `audio`, or `video`; `auto` detects images from bytes. |
+
+Do not claim a file is deliverable merely because its path was mentioned. Publish it with this tool (or an authorized provider attachment resolver) so the Runtime owns the attachment record and delivery state.
 
 ---
 
@@ -548,6 +633,16 @@ Result shape:
 ```
 
 Use delegate mode for broad searches, multi-step investigations, focused implementation, or verification tasks. Avoid it for one-tool operations, tasks needing user clarification, or highly stateful work that depends on the full conversation.
+
+---
+
+### workflow_lint - Workflow Validation
+
+Validates a workflow script without invoking worker agents. It checks JavaScript syntax, `workflow`/`phase`/`agent` structure, agent option spelling, required prompts, and `result`/`resultKey`/`resultLatest`/`results` references. Run it before `workflow_run` for non-trivial generated or edited workflows.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `source` | string | ✓ | Complete raw JavaScript workflow DSL source. Do not pass Markdown fences. |
 
 ---
 

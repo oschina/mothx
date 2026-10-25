@@ -2,70 +2,51 @@
 
 ![MothX 架构总览](assets/image/architecture-zh.webp)
 
-> 入口层（TUI/CLI/ACP/Serve/消息通道）统一汇入核心 Agent 循环，向下复用 Provider 抽象与 SQLite 会话、沙箱、技能、MCP、统计、记忆、工作流等基础设施。
+> 入口层（TUI、CLI、WebUI/Serve、Desktop/ACP 与消息通道）统一汇入前端中立的 Agent Runtime，由它拥有会话、运行、决策、输入内容、附件/制品、MCP、技能与策略解析，并向下复用唯一的核心 Agent 循环、Provider 抽象、SQLite 会话、沙箱、统计、记忆与工作流基础设施。
 
 
 ## 项目结构
 
 ```
 mothx/
-├── agent/                       # 公共 Agent/Provider 接口与 Builder
-├── cmd/mothx/              # CLI 入口点
-│   ├── main.go                  # 主程序
-│   └── main_doctor.go           # `doctor` 子命令（环境诊断）
+├── agent/                       # 公共 SDK 类型（Agent、Provider、Builder）
+├── bootstrap/                   # 将公共 SDK 接口接到内部实现
+├── cmd/mothx/                   # CLI 入口与子命令
+├── desktop/                     # Electron 桌面客户端（纯 ACP 投影）
+├── ui/                          # 内嵌到 Serve 的 Svelte Web UI
 ├── internal/
-│   ├── a2a/                     # A2A 协议服务器与 Master 模式
-│   │   ├── config.go            # A2A 配置与初始化
-│   │   ├── handler.go           # JSON-RPC 2.0 handler + SSE
-│   │   ├── client.go            # A2A 客户端
-│   │   ├── server.go            # HTTP 服务器
-│   │   ├── executor.go          # Task → Agent loop 执行器
-│   │   ├── agent_card.go        # Agent Card 生成
-│   │   ├── task.go              # Task 生命周期管理
-│   │   └── master.go            # A2A Master 模式（远程 agent 调度）
-│   ├── acp/                     # ACP / MCP 集成
-│   ├── agent/                   # 核心 Agent 循环
-│   │   ├── agent.go             # Agent 主逻辑
-│   │   ├── factory.go           # AgentFactory，统一每个 Agent 的创建
-│   │   ├── manager.go           # AgentManager 生命周期管理
-│   │   ├── router.go            # EventRouter
-│   │   ├── subagent.go          # subagent_* 工具
-│   │   ├── events.go            # 事件类型定义
-│   │   ├── provider.go          # Provider 接口适配
-│   │   └── system_prompt.go     # 系统提示词生成
-│   ├── config/                  # 配置管理
-│   ├── context/                 # 上下文管理和 token 估算
-│   ├── contextfiles/            # 上下文文件加载
-│   ├── cron/                    # 定时任务存储和调度器
-│   ├── serve/                   # 统一 OpenAI API、Web UI 和消息通道
-│   ├── mcp/                     # MCP 服务器集成
-│   ├── memory/                  # 持久化记忆 (memory.md)
-│   ├── messaging/               # 消息平台抽象
-│   ├── platform/                # 跨平台兼容工具
-│   ├── provider/                # LLM Provider 抽象
-│   │   ├── anthropic/           # Anthropic Messages API
-│   │   ├── google/              # Google Gemini/Vertex API
-│   │   ├── openai/              # OpenAI Chat Completions API
-│   │   ├── factory/             # 共享 provider/model 创建逻辑
-│   │   ├── http_client.go       # 共享 HTTP 客户端，支持代理和自定义 header
-│   │   └── vendor*.go           # 厂商适配注册和默认值
-│   ├── sandbox/                 # 沙箱抽象 (bwrap, none)
-│   ├── session/                 # 会话管理 (SQLite)
-│   ├── skills/                  # 技能系统
-│   ├── tools/                   # 工具实现
-│   │   ├── bash.go              # Bash 命令执行
-│   │   ├── read.go              # 文件读取
-│   │   ├── write.go             # 文件写入
-│   │   ├── edit.go              # 文件编辑
-│   │   ├── grep.go              # 内容搜索
-│   │   ├── find.go              # 文件查找
-│   │   ├── ls.go                # 目录列表
-│   │   ├── plan.go              # 任务规划
-│   │   ├── question.go          # 用户提问澄清（Plan 模式，仅 TUI）
-│   │   ├── skill_ref.go         # 技能引用加载
-│   │   └── a2a_dispatch.go      # A2A 远程 agent 调度
-│   ├── tui/                     # 终端 UI (BubbleTea)
-└── pkg/sdk/                     # 公共 SDK 接口
+│   ├── agent/                   # 核心 Agent 循环、事件、提示词、子 Agent 工具
+│   ├── agentruntime/            # 前端中立的共享 Runtime：SessionRuntime、
+│   │                            # ExecutionRuntime、决策、制品、MCP、
+│   │                            # 知识库、主角团、worktree
+│   ├── acp/                     # ACP v1 服务器 + mothx.dev 扩展
+│   ├── a2a/                     # A2A 服务器与远程 Agent master 调度
+│   ├── architecture/            # 静态架构护栏测试
+│   ├── browser/                 # vibe-browser 自动化工具
+│   ├── config/                  # settings.json / serve.json schema 与默认值
+│   ├── context/, contextfiles/  # Token 预算与 AGENTS.md/CLAUDE.md 加载
+│   ├── cron/                    # 定时任务存储与调度器
+│   ├── dao/                     # 唯一 SQL/查询构造/行映射 owner
+│   ├── db/                      # 连接、事务与迁移生命周期
+│   ├── esm/                     # Enable Supervisor Mode 目标循环
+│   ├── expert/                  # 主角团包发现与校验
+│   ├── imageproc/               # 图像归一化与缩放
+│   ├── mcp/                     # MCP 客户端/服务器集成
+│   ├── memory/                  # 消息通道使用的 memory.md 工具
+│   ├── messaging/               # 微信/飞书平台抽象
+│   ├── platform/                # 跨平台辅助与内嵌资源
+│   ├── provider/                # 协议 provider、vendor 适配器、factory
+│   ├── sandbox/                 # 沙箱抽象（bwrap、none）
+│   ├── serve/                   # OpenAI API、Web UI、channels、hooks、cron、memory
+│   ├── session/                 # 会话领域、迁移、事件存储、附件、知识库存储
+│   ├── skills/, skillhub/       # 技能与在线市场
+│   ├── stats/                   # 用量统计仪表盘与查询
+│   ├── systeminit/              # AGENTS.md 生成
+│   ├── tools/                   # 内置工具实现
+│   ├── tui/                     # Bubble Tea 终端 UI
+│   └── workflow/                # JavaScript workflow 运行时
+├── example/                     # 公共 SDK 示例
+└── docs/                        # 双语文档、生成索引与站点
 ```
 
 ## 运行模式
@@ -93,6 +74,27 @@ MothX 支持 6 种运行模式，共享同一套 Agent、Provider、Tools、Sess
 ```
 
 ## 核心组件
+
+### 0. 共享 Agent Runtime
+
+Agent Runtime 是入口层与 Agent Core 之间的唯一边界。TUI、CLI、WebUI/API、
+Desktop/ACP、微信/飞书、Cron、ESM 与 A2A 适配器只解码各自协议并投影事件，
+不拥有执行语义。
+
+- **构造**：生产代码只能通过 `SessionRuntime.BuildAgent`、`BuildTransientAgent`
+  与 `agentruntime.NewAgentManager` 创建 Agent。
+- **策略**：source、有效模式、能力、工具、沙箱、审批、MCP、技能、推理与运行策略
+  由 `ResolveSource`/`ResolvePolicy` 统一解析一次。产品默认模式为 `yolo`。
+- **执行**：`ExecutionRuntime` + `RunStore` 拥有持久化 Run 的 begin、reattach、
+  update、cancel、finish、recovery 以及唯一的规范终态事件。
+- **决策**：`DecisionService`/`DecisionRecord` 拥有审批与提问的身份、截止时间、
+  首个响应生效、重放与过期。
+- **输入与制品**：所有文本/图像/音频/文件输入都归一化到 Runtime 输入契约；
+  附件与生成制品由 Runtime 拥有，并由 `internal/session` 持久化。
+- **资源**：上下文/技能/规则、主角团、MCP 客户端、知识库服务、worktree 与统一
+  关闭由 Runtime 拥有。
+- **准入**：每个会话唯一的提交协调器与带 fencing 的执行租约决定新 Run 是否
+  可以开始；适配器只能投影该状态。
 
 ### 1. Provider 系统
 
@@ -198,7 +200,7 @@ manager 状态。
 ```
 Main Agent
     │
-    ├── AgentManager 创建子 Agent
+    ├── agentruntime.NewAgentManager 创建子 Agent
     ├── EventRouter 按 AgentID 路由事件
     └── subagent_* 工具管理异步子任务
 ```
@@ -500,7 +502,7 @@ A2A Master 模式通过 `--enable-a2a-master` 启用，加载 `a2a-list.json`
 ### 完整请求流程
 
 ```
-1. 用户输入 (来自 TUI / HTTP / Messaging / A2A / ACP stdio)
+1. 用户输入 (来自 TUI / CLI / HTTP / Messaging / A2A / ACP stdio / Desktop)
    │
    ▼
 2. 输入层捕获
@@ -567,10 +569,11 @@ A2A Master 模式通过 `--enable-a2a-master` 启用，加载 `a2a-list.json`
 ### 6. 公共 SDK 包
 
 `agent/` 包暴露公共 Go 类型（`Agent`、`Provider`、`Builder`），外部应用可以
-在不依赖 internal 包的情况下嵌入 Agent。
-详见 [SDK 集成指南](sdk.md)。
+在不依赖 internal 包的情况下嵌入 Agent；`bootstrap/` 负责把这些公共接口接到
+内部 Runtime。详见 [SDK 集成指南](sdk.md)。
 
-### 7. 复用 Agent 循环
+### 7. 共享 Agent Runtime 与 Agent 循环
 
-所有运行模式（TUI、Serve、Channels、A2A、ACP）复用同一个 Agent 循环，
-区别仅在于输入来源和输出目标。这保证了行为一致性，避免了逻辑分叉。
+所有运行模式（TUI、CLI、WebUI/Serve、Channels、A2A、ACP、Desktop）复用同一个
+Agent Runtime 与 Agent 循环。适配器的差异只在于协议解码与事件投影；资源所有权、
+运行生命周期、决策与策略都在 Runtime 中，因此不同入口的行为不会漂移。

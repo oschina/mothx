@@ -15,11 +15,15 @@ mothx [flags] [message...]
 | `--provider` | `-p` | 配置文件中的默认值 | LLM 提供商 (deepseek-openai, deepseek-anthropic 或自定义名称) |
 | `--model` | `-m` | 配置文件中的默认值 | 模型 ID |
 | `--mode` | `-M` | `yolo` | 运行模式 (plan, agent, yolo, os)；未指定时回退到 `settings.json` 的 `defaultMode` |
-| `--thinking` | `-t` | `off` | 思考级别 (off, minimal, low, medium, high, xhigh) |
+| `--thinking` | `-t` | `off` | 思考级别 (off, minimal, low, medium, high, xhigh, max) |
 | `--multi-agent` | - | `false` | 启用多 Agent 工具和命令 |
 | `--delegate` | - | `false` | 启用 Delegate 模式（阻塞式单子 Agent 工具） |
 | `--workflows` | - | `false` | 启用 JavaScript workflow 工具和 `/workflows` 命令 |
 | `--artifact` | - | `false` | 为当前 TUI/CLI 进程启用生成制品发布 |
+| `--expert` | - | - | 为当前会话绑定主角包；替换已绑定主角会创建会话分叉 |
+| `--web-search` | - | `false` | 为本次运行启用已配置的本地 Web 搜索工具 |
+| `--browser` | - | `false` | 启用浏览器自动化工具 |
+| `--cron` | - | `false` | 启用定时任务工具 |
 
 ### 会话管理
 
@@ -28,6 +32,9 @@ mothx [flags] [message...]
 | `--continue` | `-c` | 继续最近的会话 |
 | `--resume` | `-r` | 通过 ID 或路径恢复会话 |
 | `--session` | - | 使用特定 session ID 或 `.db` 句柄文件 |
+| `--list-sessions` | - | 列出所有工作目录下的最近会话 |
+| `--list-sessions-limit` | - | `--list-sessions` 输出的会话数量（默认 20） |
+| `--list-sessions-cwd` | - | 只列出指定工作目录的会话 |
 
 ### 输出控制
 
@@ -80,7 +87,11 @@ mothx acp [flags]
 | `--multi-agent` | - | false | 为 ACP 会话启用多 Agent 工具 |
 | `--delegate` | - | false | 为 ACP 会话启用 Delegate 模式 |
 | `--workflows` | - | false | 为 ACP 会话启用 JavaScript workflow 工具 |
+| `--web-search` | - | false | 为本次 ACP 运行启用已配置的本地 Web 搜索工具 |
+| `--browser` | - | false | 为 ACP 会话启用浏览器自动化 |
 | `--artifact` | - | false | 为当前 ACP/Desktop 进程启用生成制品发布 |
+| `--permission-timeout` | - | `5m` | `session/request_permission` 审批超时（Go duration；环境变量 `MOTHX_ACP_PERMISSION_TIMEOUT`） |
+| `--question-timeout` | - | `5m` | ACP 提问请求超时（Go duration；环境变量 `MOTHX_ACP_QUESTION_TIMEOUT`） |
 
 详见 [ACP 协议](acp.md) 文档了解 IDE 集成细节。
 
@@ -102,6 +113,8 @@ mothx a2a [command]
 | `discover <url>` | 发现远程 Agent Card |
 | `--init-a2a-config` | 生成 `a2a.json` 配置模板 |
 | `--force` | 覆盖已存在的配置文件 |
+
+`mothx a2a send` 还支持 `--target <url>`（默认 `http://localhost:8093`）与 `--auth-token <token>`。
 
 详见 [A2A 协议](a2a.md) 文档。
 
@@ -136,7 +149,7 @@ mothx serve [flags]
 
 | 子命令 | 描述 |
 |--------|------|
-| `init-config [global|project]` | 生成 `serve.json` 配置模板 |
+| `init-config [global\|project]` | 生成 `serve.json` 配置模板 |
 | `--force` | 覆盖已存在的配置文件 |
 
 详见 [Serve 模式](serve.md) 文档。
@@ -197,13 +210,91 @@ mothx pure --prune-unreferenced
 
 描述附件的数据库记录被归档后，其存储字节就再也无法寻址；删除会话、或内容已写完但记录写入失败，也会造成同样的残留。因此回收并不依赖重置：Runtime 在接受新附件时会顺手清扫私有存储（每进程每小时至多一次），并由自己的 cron 维护任务每日再执行一次，且只删除同时满足两个条件的目录——没有任何记录引用它，并且它最后一次写入已早于附件保留期外加 24 小时缓冲（默认保留 7 天，即共 8 天）。正是这个时间下限保证了回收不可能删掉“恢复归档后仍可用”的数据。`--prune-unreferenced` 会立即执行同一次清扫，并报告已回收与因太新而保留的数量；`channels/` 与 `knowledge-bases/` 永不受它影响。定时清扫由 `settings.json` 的可选 `maintenance` 字段控制（`reclaimAttachmentStorage`、`storageReconcileSchedule`），见[配置文档](configuration.md#maintenance后台维护)。
 
+### `worktree` - 隔离 Git Worktree
+
+创建、列出、重置与删除由共享 Runtime 管理的隔离 git worktree。默认位于 `<data-dir>/worktrees`，注册在 sessions 数据库中，并由 TUI/CLI、ACP/Desktop 与子 Agent 共享。是否允许创建由 `settings.json` 的 `worktree.enabled` 控制；关闭创建后仍可列出、重置与删除已有 worktree。
+
+```
+mothx worktree <list|create|remove|reset> [flags]
+```
+
+| 子命令 | 描述 |
+|--------|------|
+| `list` | 列出受管理的 worktree |
+| `create` | 创建 worktree |
+| `remove <id\|directory>` | 删除受管理的 worktree |
+| `reset <id\|directory>` | 将 worktree 重置到默认分支 |
+
+| 标志 | 子命令 | 描述 |
+|------|--------|------|
+| `--repo <dir>` | list, create | 仓库目录（默认当前目录） |
+| `--project <id>` | list, create | 按项目 ID 过滤，或关联到项目 ID |
+| `--name <name>` | create | worktree 名称（默认由仓库名推导） |
+| `--detach` | create | 创建 detached worktree 而不是分支 |
+| `--start <command>` | create | 记录到 worktree 的启动命令 |
+| `--root <dir>` | 全部 | 覆盖 worktree 根目录 |
+| `--json` | list, create | 输出机器可读 JSON |
+
+示例：
+```bash
+mothx worktree list
+mothx worktree create --repo ~/projects/app --name feature-auth
+mothx worktree reset feature-auth
+mothx worktree remove /path/to/worktree
+```
+
+### `knowledge-mcp` - 知识库 MCP 服务器
+
+通过 stdio 将一个或多个受管理知识库暴露为 MCP 工具。服务器注册普通的 `search_knowledge_base` 工具；允许列表就是授权边界。
+
+```
+mothx knowledge-mcp serve --knowledge-base <id> [--knowledge-base <id>...] [--session-dir <dir>]
+```
+
+| 标志 | 描述 |
+|------|------|
+| `--knowledge-base <id>` | 为该服务器启用的知识库 ID；可重复指定多个 |
+| `--session-dir <dir>` | 会话存储目录（默认读取 `settings.json`） |
+
+知识库在 Desktop 或 WebUI 中创建和索引。见[知识库](knowledge-bases.md)。
+
+### `speedtest` - Provider 基准测试
+
+使用纯文本流式请求测试已配置的 provider/model。成功运行会取平均值，并按输出 token/秒排序。
+
+```
+mothx speedtest [flags]
+```
+
+| 标志 | 简写 | 默认值 | 描述 |
+|------|------|--------|------|
+| `--provider` | `-p` | 全部已配置 | 只测试指定 provider 的模型 |
+| `--vendor` | - | - | `--provider` 的别名 |
+| `--model` | `-m` | 全部已配置 | 只测试指定模型 ID |
+| `--prompt` | - | 内置文本 prompt | 每次测试使用的 prompt |
+| `--max-tokens` | - | `256` | 每次请求的最大输出 token |
+| `--timeout` | - | `2m` | 单模型超时 |
+| `--concurrency` | - | `1` | 并行测试的模型数量 |
+| `--runs` | - | `3` | 每个模型的运行次数；成功运行取平均 |
+| `--thinking` | `-t` | `off` | 思考级别（`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`） |
+
+```bash
+mothx speedtest
+mothx speedtest -p deepseek-openai -m deepseek-v4-flash
+mothx speedtest --concurrency 4 --runs 2
+```
+
 ### `doctor` - 环境诊断
 
 诊断你的 MothX 环境：系统信息、配置文件、Provider、模型、沙箱、MCP 等。
 
 ```
-mothx doctor
+mothx doctor [--json]
 ```
+
+| 标志 | 默认值 | 描述 |
+|------|--------|------|
+| `--json` | `false` | 只在 stdout 输出一份机器可读 JSON 诊断（`{ ok, version, summary, checks }`） |
 
 检查项目：
 - **环境**: OS/架构、Go 版本、Shell、Home/工作目录
@@ -390,6 +481,9 @@ mothx -t medium
 
 # 最高级别
 mothx --thinking xhigh
+
+# provider 支持的最高级别（例如 DeepSeek V4.1）
+mothx --thinking max
 ```
 
 ### 会话管理
@@ -461,26 +555,31 @@ mothx acp --sandbox --mode agent
 
 在交互会话中可用的命令:
 
-### 模式与模型
+### 模式与配置
 
 | 命令 | 描述 |
 |------|------|
-| `/mode [plan\|agent\|yolo]` | 切换或显示当前模式 |
+| `/mode [plan\|agent\|yolo\|os]` | 切换或显示当前模式 |
 | `/model [model_id]` | 切换或显示当前模型 |
-| `/think` | 循环切换思考级别 |
+| `/defaultModel [project\|global]` | 修改持久化的默认模型 |
+| `/auth` | 配置 provider 凭证与端点 |
+| `/settings` | 配置 settings.json 各组，包括 providers、defaults、behavior、审批等 |
+| `/tuilang [global\|project] [auto\|zh\|en]` | 切换 TUI 语言 |
+| `/env [list\|set KEY VALUE\|unset KEY\|clear]` | 查看或修改当前进程的环境变量 |
+| `/esm [objective\|edit\|pause\|resume\|clear\|guide]` | 管理 ESM 目标与进度面板 |
 | `/compact` | 触发上下文压缩 |
 | `/delegate [on\|off\|status]` | 切换或查看 Delegate 模式 |
+| `/browser [on\|off\|status]` | 切换或查看浏览器工具 |
+| `/statusline [status\|on\|off\|command\|refresh] ...` | 配置外部状态行 |
+| `/btw <问题>` | 不中断主任务提问旁路问题 |
+| `/rule [force\|--force]` | 刷新项目规则 |
 | `/systeminit [guidance]` | 生成或刷新项目 `AGENTS.md` |
 | `/reload` | 以新 session 重启（TUI） |
-| `/btw <问题>` | 不中断主任务提问旁路问题 |
-| `/settings` | 配置 settings.json 各组，包括 providers、defaults、behavior、审批等 |
 | `/alloweditpath [add <glob>\|remove <glob>\|clear]` | 管理可编辑路径白名单 |
 | `/allowautoedit [on\|off] [global]` | 切换 Agent 模式全自动编辑 |
-| `/agent list` | 在多 Agent 模式下列出子 Agent |
-| `/agent switch <id>` | 切换活跃子 Agent |
-| `/agent destroy <id>` | 销毁子 Agent |
+| `/agent list\|switch <id>\|destroy <id>` | 在多 Agent 模式下列出、切换或销毁子 Agent |
 
-### 会话管理
+### 会话与编排
 
 | 命令 | 描述 |
 |------|------|
@@ -490,21 +589,30 @@ mothx acp --sandbox --mode agent
 | `/sessions clear` | 开始新的空白会话；实际 session 会在下一条消息发送时创建 |
 | `/sessions del <id>` | 通过 ID 前缀删除会话 |
 | `/clear` | 清空对话 |
+| `/expert [list\|show <id>\|bind <id>\|unbind\|switch <id>]` | 管理会话的主角团绑定 |
+| `/cron add\|list\|enable\|disable\|remove\|run` | 管理定时任务 |
+| `/workflows [list\|show <id>\|cancel <id>]` | 管理 workflow 运行 |
 
 `/sessions` 选择框支持方向键上下选择、回车切换、`n` 开始新会话、`d` 删除选中会话、Esc 关闭。
 
-### 技能
+### 技能与 MCP
 
 | 命令 | 描述 |
 |------|------|
 | `/skills` | 列出可用技能 |
 | `/skill <name>` | 激活指定技能 |
 | `/skill:<name>` | 激活技能（替代语法） |
+| `/skillhub [search <q>]` | 打开在线技能市场或搜索 |
+| `/skillmgr` | 打开已安装技能管理器 |
+| `/init_mcp [project\|global] [basic\|full] [--force]` | 创建 MCP 配置模板 |
+| `/mcps` | 列出已配置的 MCP 服务器 |
+| `/paste-image` | 从剪贴板附加图像（平台支持时） |
 
 ### 通用
 
 | 命令 | 描述 |
 |------|------|
+| `/stats server\|stop-server\|tui` | 打开、停止或打印用量统计 |
 | `/help` | 显示帮助 |
 | `/quit` | 退出 |
 
@@ -536,6 +644,12 @@ mothx acp --sandbox --mode agent
 | `VIBECODING_MODE` | 覆盖默认模式 |
 | `VIBECODING_THINKING` | 覆盖默认思考级别 |
 | `VIBECODING_USER_AGENT` | 自定义 User-Agent 字符串 |
+| `VIBECODING_ALLOW_SHELL_CONFIG` | 允许 `!command` 凭证/header 解析 |
+| `VIBECODING_DEBUG` | 启用 provider 请求/响应调试输出 |
+| `VIBECODING_NO_UPDATE_CHECK` | 禁用更新检查 |
+| `MOTHX_ACP_PERMISSION_TIMEOUT` | ACP 审批默认超时（Go duration） |
+| `MOTHX_ACP_QUESTION_TIMEOUT` | ACP 提问默认超时（Go duration） |
+| `MOTHX_WIN_OUTPUT_ENCODING` | 覆盖 Windows 捕获输出的解码方式（`utf-8` 或代码页数字） |
 
 ## 退出码
 

@@ -67,7 +67,7 @@ subagent_wait(timeout_ms: 30000)
 <project>/.mothx/experts/<bundle-name>/
 ```
 
-同名时，项目包覆盖全局包，全局包覆盖内置包。一个主角包包含 `expert.json` 与 `agents/` 下的一个或多个 persona 文件；无效包会显示为不可用，且不能被绑定。包格式和架构设计请参阅[主角团实施方案](../proposal/expert-team-mothx-proposal.md)。
+同名时，项目包覆盖全局包，全局包覆盖内置包。一个主角包包含 `expert.json` 与 `agents/` 下的一个或多个 persona 文件；无效包会显示为不可用，且不能被绑定。包格式和架构设计请参阅[主角团实施方案](https://github.com/oschina/mothx/blob/main/docs/proposal/expert-team-mothx-proposal.md)。
 
 ## 用内置 Skill 创建并安装主角团
 

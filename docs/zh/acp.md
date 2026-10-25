@@ -73,7 +73,13 @@ mothx acp --multi-agent
 | `--verbose` | - | false | 详细输出 |
 | `--debug` | - | false | 调试日志和本地 pprof |
 | `--multi-agent` | - | false | 启用子 Agent 工具和多 Agent 工作流 |
+| `--delegate` | - | false | 启用阻塞式单子 Agent 委托 |
 | `--workflows` | - | false | 启用 JavaScript workflow 工具 |
+| `--web-search` | - | false | 启用已配置的本地 Web 搜索工具 |
+| `--browser` | - | false | 启用浏览器自动化 |
+| `--artifact` | - | false | 为 Desktop/ACP 启用生成制品发布 |
+| `--permission-timeout` | - | `5m` | `session/request_permission` 审批超时（Go duration；环境变量 `MOTHX_ACP_PERMISSION_TIMEOUT`） |
+| `--question-timeout` | - | `5m` | ACP 提问请求超时（Go duration；环境变量 `MOTHX_ACP_QUESTION_TIMEOUT`） |
 
 ## 协议细节
 
@@ -86,13 +92,38 @@ ACP 使用 JSON-RPC 2.0 通过 stdio 进行通信，并遵循 ACP v1 schema。Mo
 | `initialize` | 握手和能力协商 |
 | `mothx/doctor` | 返回机器可读的安装/提供商诊断；无需会话 |
 | `session/new` | 创建新会话 |
-| `session/load` | 加载已有会话 |
+| `session/load` | 加载已有会话并重放历史 |
 | `session/list` | 列出持久化会话，支持按工作目录筛选和游标分页 |
 | `session/resume` | 恢复已有会话而不重放历史 |
+| `session/fork` | 在当前状态分叉会话 |
 | `session/prompt` | 向代理发送提示 |
 | `session/cancel` | 取消活动的提示 |
 | `session/close` | 取消活动工作并释放该会话的 MCP 等运行时资源 |
 | `session/delete` | 从持久化会话列表中删除非活动会话 |
+| `session/set_mode` | 切换会话运行模式 |
+| `session/set_config_option` | 修改会话配置项（provider、model、mode、thinking、sandbox、browser、web search） |
+| `mothx/session/history` | 分页读取持久化会话历史 |
+| `mothx/session/draft-config-options` | 读取新会话草稿的初始配置项 |
+| `mothx/session/setTitle` | 设置会话标题 |
+| `mothx/session/setWorkDir` | 修改会话工作目录 |
+| `mothx/session/setMeta` | 设置 Desktop/WebUI 使用的权威会话元数据 |
+| `mothx/session/listAll` | 列出所有工作目录的会话 |
+| `mothx/session/delete` | 删除会话（`session/delete` 的别名） |
+| `mothx/projects/list` | 列出 Desktop/WebUI 项目 |
+| `mothx/projects/create` | 创建项目 |
+| `mothx/projects/rename` | 重命名项目 |
+| `mothx/projects/delete` | 删除项目 |
+| `mothx/attachment/list` | 列出会话拥有的附件 |
+| `mothx/attachment/fetch` | 获取附件字节 |
+| `mothx/subagent/list` | 列出子 Agent 及其状态 |
+| `mothx/subagent/messages` | 读取子 Agent 的执行记录 |
+| `mothx/worktree/list` | 列出受管理的 git worktree |
+| `mothx/worktree/create` | 创建受管理的 worktree |
+| `mothx/worktree/reset` | 将 worktree 重置到默认分支 |
+| `mothx/worktree/remove` | 删除受管理的 worktree |
+| `mothx/worktree/status` | 读取 worktree 状态 |
+| `mothx/workspace/extend` | 无需重启 ACP 即可扩展工作区目录 |
+| `mothx/manage/*` | 管理投影；见[管理投影](#管理投影) |
 | `$/cancel_request` | 按 JSON-RPC 请求 ID 取消进行中的请求 |
 | `session/update` | 服务器通知：会话状态变更 |
 
@@ -101,10 +132,11 @@ ACP 使用 JSON-RPC 2.0 通过 stdio 进行通信，并遵循 ACP v1 schema。Mo
 MothX 在初始化时声明以下 ACP 能力：
 
 - **加载会话**: 加载和继续之前的会话
-- **提示能力**: 文本和 `resource_link`；不声明图像、音频或嵌入资源输入能力
-- **会话能力**: 支持加载、列出、恢复、关闭和删除会话
+- **提示能力**: 文本、`resource_link`、图像、音频以及嵌入资源/上下文内容；Runtime 会把它们统一归一化到共享输入契约
+- **会话能力**: 支持加载、列出、恢复、分叉、关闭、删除会话以及 additional directories
 - **MCP 能力**: 支持 stdio / http / sse 传输
-- **多 Agent 工作流**: 使用 `--multi-agent` 启动 ACP 服务器后可用
+- **多 Agent 工作流**: 使用 `--multi-agent` 启动 ACP 服务器后可用；Delegate 模式使用 `--delegate`，workflow 使用 `--workflows`
+- **MothX 扩展**: 通过 `initialize._meta["mothx.dev"].features` 声明；客户端必须按这些键 gate 可选方法、面板和投影
 
 ### 通知
 
@@ -131,8 +163,25 @@ MothX 将非 ACP 标准的交互隔离为扩展。客户端仅在 `initialize` �
 
 | 方法 | 用途 |
 |------|------|
-| `_mothx/request_question` | 多选问题请求；客户端响应 `{ "answer": "选项文本" }` |
-| `_mothx/session_event` | 状态、回合和上下文压缩等 MothX 运行时事件 |
+| `mothx/requestQuestion` | 多选问题请求；客户端响应 `{ "answer": "选项文本" }`。initialize 之前的重放使用旧名 `_mothx/request_question`。 |
+| `_mothx/session_event` | 状态、回合、上下文压缩、重试与制品等 MothX 运行时事件 |
+
+### 管理投影
+
+`mothx/manage/*` 是共享 Runtime 与 Serve 服务的附加、按能力 gate 的投影。Desktop 使用它，而不是直接读取 `settings.json`、sessions 数据库或 Serve 配置。
+
+| 分组 | 方法 |
+|------|------|
+| 应用/设置 | `application/get`、`application/patch`、`settings/get`、`settings/patch`、`env/get`、`env/patch` |
+| Serve/渠道 | `serve/get`、`serve/patch`、`channels/get`、`channels/patch` |
+| Provider | `providers/list`、`providers/save`、`providers/delete`、`providers/test`、`providers/discover` |
+| 技能 | `skills/list`、`skills/set`、`skillhub/*` |
+| MCP | `mcp/list`、`mcp/set` |
+| 自动化 | `cron/*`、`deliveries/list`、`deliveries/retry`、`memory/get`、`memory/put`、`stats/summary`、`stats/timeseries` |
+| 主角 | `experts/list`、`experts/get`、`experts/create`、`experts/update`、`experts/delete` |
+| 知识库 | `knowledge-bases/*`（list、get、create、update、delete、scan、status、query、mcp/apply、runs、sources、schedule、clear） |
+
+响应与日志会掩码 provider key 和敏感 header。管理调用不会让 Desktop 成为会话、运行、凭证或调度状态的 owner。
 
 ## MCP 服务器集成
 

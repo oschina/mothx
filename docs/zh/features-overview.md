@@ -31,12 +31,12 @@ mothx --provider anthropic --model claude-3-5-sonnet-20241022
 
 ### 厂商适配器
 
-MothX 支持 25+ 厂商适配器，包括：
+MothX 内置 60+ 供应商预设，包括：
 
 - **国内**：小米、火山引擎/豆包、Kimi、MiniMax、Seed、Qianfan、Bailian、Gitee、阶跃星辰、Z.AI、LongCat、AMD Radeon
 - **国际**：Google Gemini、Google Vertex、OpenRouter、Together、Groq、Fireworks、Mistral、GitHub Copilot、Cloudflare AI Gateway、Cloudflare Workers AI、Amazon Bedrock
 
-无需额外配置，只需设置 API 密钥即可使用。
+无需额外配置，只需设置 API 密钥即可使用。完整的内置供应商与模型列表见[供应商/模型目录](../provider-model-list.md)。
 
 ---
 
@@ -568,6 +568,9 @@ MothX 会通过 npm registry 检测是否有新版本，并在有可用更新时
 以下能力已集成到当前运行时，使用时请以配置和模型能力为准：
 
 - **OpenAI Responses**：支持原生 response item 回放、reasoning、结构化输出、hosted tools、prompt cache，以及可选的 `responses.background` 持久后台运行。后台任务可查询、取消、重连、放弃，并在 Serve 重启后恢复。
+- **桌面客户端**：独立的 Electron ACP 应用，提供聊天、工具/diff 卡片、审批、提问、制品、主角团、知识库、worktree 与管理面板；它启动内置 `mothx acp` 运行时，不会启动 `mothx serve`。
+- **知识库**：由 Desktop/WebUI 管理、可重建的只读目录索引。索引使用共享 Runtime 的规范 Run，快照原子发布，会话通过标准 Knowledge MCP 服务器查询证据。
+- **附件与制品**：由 Runtime 统一负责接收、存储、重放、provider 转换与投递；`publish_artifact` 是唯一能把完成文件变成可交付制品的路径。
 - **Web UI 管理**：提供会话搜索与分页、运行状态与取消、审批中心、工具结果、技能启用、MCP 配置、Provider/Serve 设置和 `/stats` 统计页面。
 - **MCP**：支持 stdio、streamable HTTP 和 legacy SSE
 - **并行工具执行**：单个 agent 回合内的多个本地函数/自定义工具调用通过有界并行工作池执行。调用的启动按模型声明的顺序上报，且不阻塞执行，因此调用之间仍然并发重叠，只有完成顺序不受限制。`toolExecution` 设置控制 `mode`（`parallel`/`sequential`）和 `maxConcurrency`（默认 `10`）。TUI、WebUI、Serve、channels、ACP 及子 Agent 统一使用。
@@ -583,7 +586,7 @@ MothX 会通过 npm registry 检测是否有新版本，并在有可用更新时
 MothX 是一个**全能终端 AI 编程助手**，具有以下核心优势：
 
 1. **一个二进制文件搞定一切**：无需安装多个工具
-2. **多提供商支持**：25+ 厂商适配器，一键切换
+2. **多提供商支持**：60+ 内置供应商预设，一键切换
 3. **安全可控**：沙箱隔离、审批门控、项目级自动审批规则
 4. **丰富的功能**：会话管理、技能系统、统计面板、工作流编排、IDE 集成
 5. **高性能**：SSE 流式传输、缓存命中优化

@@ -48,7 +48,7 @@ npm uninstall -g mothx-installer
 
 The online installers ultimately run `npm install -g mothx-installer`.
 
-### Method 4: Docker (GHCR)
+### Method 2: Docker (GHCR)
 
 ```bash
 # Default Ubuntu image, runs as root
@@ -68,13 +68,13 @@ Published architectures: `linux/amd64`, `linux/arm64`
 
 The container runs as `root` by default and includes `bash`, `git`, `curl`, `ca-certificates`, and `openssh-client`.
 
-### Method 5: Go Install
+### Method 3: Go Install
 
 ```bash
 go install github.com/oschina/mothx/cmd/mothx@latest
 ```
 
-### Method 6: Build from Source
+### Method 4: Build from Source
 
 ```bash
 # Clone repository
@@ -87,7 +87,7 @@ make build
 # Binary is located at bin/mothx
 ```
 
-### Method 7: Install to System
+### Method 5: Install to System
 
 ```bash
 # After building from source
@@ -233,7 +233,7 @@ mothx --mode yolo
 /mode plan      # Switch to Plan mode
 /mode agent     # Switch to Agent mode
 /model          # View current model
-/think          # Toggle thinking level
+/settings       # Configure defaults, including thinking level
 /clear          # Clear conversation
 /help           # Show help
 /quit           # Exit

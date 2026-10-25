@@ -56,7 +56,7 @@ Source: https://mothx.net/zh/README.md
 | 特性 | 对你意味着什么 |
 |------|---------------|
 | **⚙️ 工作流模式** | 动态 JavaScript 工作流，支持阶段划分、并行执行、多 Worker 协调 — 自动化复杂开发流水线 |
-| **🤖 多提供商** | DeepSeek、OpenAI、Anthropic、火山引擎/豆包、LongCat 和 25+ 厂商适配器 — 一键切换模型 |
+| **🤖 多提供商** | DeepSeek、OpenAI、Anthropic、火山引擎/豆包、LongCat 和 60+ 内置供应商预设 — 一键切换模型 |
 | **⚡ 极速响应** | SSE 流式传输、实时 token 送达、缓存命中优化 |
 | **🧠 思考模式** | 复杂问题的扩展推理（DeepSeek、o1、Claude） |
 | **🛡️ 沙箱隔离** | bwrap 进程级隔离 — 安全文件操作、网络控制、审批门控 |
@@ -65,7 +65,10 @@ Source: https://mothx.net/zh/README.md
 | **📊 统计面板** | 使用统计图表、按厂商/模型分类统计、CLI 模式 |
 | **🔄 工作流** | JavaScript DSL 实现多阶段、并行、多 Agent 编排 |
 | **💻 IDE 集成** | ACP 协议支持 VS Code、Zed、JetBrains — 原生编辑器集成 |
-| **🌐 网关模式** | OpenAI Chat/Responses 兼容 API、Web UI、MCP、审批与持久后台运行 |
+| **🌐 Serve 模式** | OpenAI Chat/Responses 兼容 API、Web UI、MCP、审批与持久后台运行 |
+| **🖥️ 桌面客户端** | Electron ACP 客户端，提供聊天、审批、制品、主角团与知识库，无需 Serve 进程 |
+| **📚 知识库** | 可重建的只读目录索引，通过标准 Knowledge MCP 服务器查询 |
+| **🌳 Worktree** | CLI、Desktop 与子 Agent 共享的隔离 git worktree |
 | **📱 消息平台** | 微信、飞书、WebSocket 事件流，支持持久会话与后台运行 |
 | **🤝 多 Agent** | `--multi-agent` 异步子 Agent、`--delegate` 阻塞式委托，以及 A2A Master 模式 |
 | **🎨 丰富 TUI** | Markdown 渲染、语法高亮、思考显示、工具弹窗、多行输入 |
@@ -140,19 +143,24 @@ npm uninstall -g mothx-installer
 
 ```
 mothx/
-├── cmd/mothx/        # CLI 入口
+├── agent/                 # 公共 SDK 类型（Agent、Provider、Builder）
+├── bootstrap/             # 公共 SDK 到内部实现的接线
+├── cmd/mothx/             # CLI 入口
+├── desktop/               # Electron ACP 桌面客户端
+├── ui/                    # Serve 内嵌的 Svelte Web UI
 ├── internal/
 │   ├── agent/             # 核心 Agent 循环
-│   ├── provider/          # LLM 提供商抽象（25+ 厂商）
-│   ├── tools/             # 内置工具（read, write, bash, grep, find, ...）
+│   ├── agentruntime/      # 前端中立的共享 Runtime
+│   ├── provider/          # LLM 提供商抽象（60+ 供应商预设）
+│   ├── tools/             # 内置工具（read, write, edit, insert, bash, ...）
 │   ├── sandbox/           # bwrap 沙箱实现
 │   ├── session/           # SQLite 会话存储
 │   ├── skills/            # 技能系统
-│   ├── tui/               # 终端 UI（BubbleTea + Lipgloss）
+│   ├── tui/               # 终端 UI（Bubble Tea + Lipgloss）
 │   ├── serve/             # 统一 OpenAI API、Web UI 和消息通道
 │   ├── a2a/               # A2A 协议服务器和 Master 模式
 │   └── acp/               # ACP / MCP 集成
-└── pkg/sdk/               # 公共 SDK 接口
+└── example/               # 公共 SDK 示例
 ```
 
 ---
@@ -166,6 +174,9 @@ mothx/
 
 ### ✨ 核心特性
 - [核心特性详解](features-overview.md) — 多提供商、沙箱、会话、技能等
+- [主角团](expert-teams.md) — 可复用的 lead 身份与成员团队
+- [桌面客户端](desktop.md) — Electron ACP 桌面应用
+- [知识库](knowledge-bases.md) — 索引目录并通过 MCP 搜索
 
 ### 🎯 使用场景
 - [使用场景与实战示例](use-cases.md) — 从日常开发到企业部署
@@ -179,6 +190,9 @@ mothx/
 - [技能系统](skills.md) — 可复用提示片段
 - [在线 Skill 市场](skillhub.md) — SkillHub / ClawHub 集成
 - [工作流模式](workflow.md) — JavaScript DSL 多 Agent 编排
+- [SDK 集成](sdk.md) — 在 Go 应用中嵌入 MothX Agent
+- [添加供应商](provider-guide.md) — 添加或定制 provider
+- [供应商/模型目录](../provider-model-list.md) — 全部内置供应商与模型
 
 ### 🔒 安全
 - [安全与沙箱](security.md) — 沙箱模式、权限、审批
@@ -289,7 +303,7 @@ make test
 
 ## 📄 许可证
 
-MIT — 详见 [LICENSE](../../LICENSE)。
+MIT — 详见 [LICENSE](https://github.com/oschina/mothx/blob/main/LICENSE)。
 
 ---
 
@@ -738,7 +752,13 @@ mothx acp --multi-agent
 | `--verbose` | - | false | 详细输出 |
 | `--debug` | - | false | 调试日志和本地 pprof |
 | `--multi-agent` | - | false | 启用子 Agent 工具和多 Agent 工作流 |
+| `--delegate` | - | false | 启用阻塞式单子 Agent 委托 |
 | `--workflows` | - | false | 启用 JavaScript workflow 工具 |
+| `--web-search` | - | false | 启用已配置的本地 Web 搜索工具 |
+| `--browser` | - | false | 启用浏览器自动化 |
+| `--artifact` | - | false | 为 Desktop/ACP 启用生成制品发布 |
+| `--permission-timeout` | - | `5m` | `session/request_permission` 审批超时（Go duration；环境变量 `MOTHX_ACP_PERMISSION_TIMEOUT`） |
+| `--question-timeout` | - | `5m` | ACP 提问请求超时（Go duration；环境变量 `MOTHX_ACP_QUESTION_TIMEOUT`） |
 
 ## 协议细节
 
@@ -751,13 +771,38 @@ ACP 使用 JSON-RPC 2.0 通过 stdio 进行通信，并遵循 ACP v1 schema。Mo
 | `initialize` | 握手和能力协商 |
 | `mothx/doctor` | 返回机器可读的安装/提供商诊断；无需会话 |
 | `session/new` | 创建新会话 |
-| `session/load` | 加载已有会话 |
+| `session/load` | 加载已有会话并重放历史 |
 | `session/list` | 列出持久化会话，支持按工作目录筛选和游标分页 |
 | `session/resume` | 恢复已有会话而不重放历史 |
+| `session/fork` | 在当前状态分叉会话 |
 | `session/prompt` | 向代理发送提示 |
 | `session/cancel` | 取消活动的提示 |
 | `session/close` | 取消活动工作并释放该会话的 MCP 等运行时资源 |
 | `session/delete` | 从持久化会话列表中删除非活动会话 |
+| `session/set_mode` | 切换会话运行模式 |
+| `session/set_config_option` | 修改会话配置项（provider、model、mode、thinking、sandbox、browser、web search） |
+| `mothx/session/history` | 分页读取持久化会话历史 |
+| `mothx/session/draft-config-options` | 读取新会话草稿的初始配置项 |
+| `mothx/session/setTitle` | 设置会话标题 |
+| `mothx/session/setWorkDir` | 修改会话工作目录 |
+| `mothx/session/setMeta` | 设置 Desktop/WebUI 使用的权威会话元数据 |
+| `mothx/session/listAll` | 列出所有工作目录的会话 |
+| `mothx/session/delete` | 删除会话（`session/delete` 的别名） |
+| `mothx/projects/list` | 列出 Desktop/WebUI 项目 |
+| `mothx/projects/create` | 创建项目 |
+| `mothx/projects/rename` | 重命名项目 |
+| `mothx/projects/delete` | 删除项目 |
+| `mothx/attachment/list` | 列出会话拥有的附件 |
+| `mothx/attachment/fetch` | 获取附件字节 |
+| `mothx/subagent/list` | 列出子 Agent 及其状态 |
+| `mothx/subagent/messages` | 读取子 Agent 的执行记录 |
+| `mothx/worktree/list` | 列出受管理的 git worktree |
+| `mothx/worktree/create` | 创建受管理的 worktree |
+| `mothx/worktree/reset` | 将 worktree 重置到默认分支 |
+| `mothx/worktree/remove` | 删除受管理的 worktree |
+| `mothx/worktree/status` | 读取 worktree 状态 |
+| `mothx/workspace/extend` | 无需重启 ACP 即可扩展工作区目录 |
+| `mothx/manage/*` | 管理投影；见[管理投影](#管理投影) |
 | `$/cancel_request` | 按 JSON-RPC 请求 ID 取消进行中的请求 |
 | `session/update` | 服务器通知：会话状态变更 |
 
@@ -766,10 +811,11 @@ ACP 使用 JSON-RPC 2.0 通过 stdio 进行通信，并遵循 ACP v1 schema。Mo
 MothX 在初始化时声明以下 ACP 能力：
 
 - **加载会话**: 加载和继续之前的会话
-- **提示能力**: 文本和 `resource_link`；不声明图像、音频或嵌入资源输入能力
-- **会话能力**: 支持加载、列出、恢复、关闭和删除会话
+- **提示能力**: 文本、`resource_link`、图像、音频以及嵌入资源/上下文内容；Runtime 会把它们统一归一化到共享输入契约
+- **会话能力**: 支持加载、列出、恢复、分叉、关闭、删除会话以及 additional directories
 - **MCP 能力**: 支持 stdio / http / sse 传输
-- **多 Agent 工作流**: 使用 `--multi-agent` 启动 ACP 服务器后可用
+- **多 Agent 工作流**: 使用 `--multi-agent` 启动 ACP 服务器后可用；Delegate 模式使用 `--delegate`，workflow 使用 `--workflows`
+- **MothX 扩展**: 通过 `initialize._meta["mothx.dev"].features` 声明；客户端必须按这些键 gate 可选方法、面板和投影
 
 ### 通知
 
@@ -796,8 +842,25 @@ MothX 将非 ACP 标准的交互隔离为扩展。客户端仅在 `initialize` �
 
 | 方法 | 用途 |
 |------|------|
-| `_mothx/request_question` | 多选问题请求；客户端响应 `{ "answer": "选项文本" }` |
-| `_mothx/session_event` | 状态、回合和上下文压缩等 MothX 运行时事件 |
+| `mothx/requestQuestion` | 多选问题请求；客户端响应 `{ "answer": "选项文本" }`。initialize 之前的重放使用旧名 `_mothx/request_question`。 |
+| `_mothx/session_event` | 状态、回合、上下文压缩、重试与制品等 MothX 运行时事件 |
+
+### 管理投影
+
+`mothx/manage/*` 是共享 Runtime 与 Serve 服务的附加、按能力 gate 的投影。Desktop 使用它，而不是直接读取 `settings.json`、sessions 数据库或 Serve 配置。
+
+| 分组 | 方法 |
+|------|------|
+| 应用/设置 | `application/get`、`application/patch`、`settings/get`、`settings/patch`、`env/get`、`env/patch` |
+| Serve/渠道 | `serve/get`、`serve/patch`、`channels/get`、`channels/patch` |
+| Provider | `providers/list`、`providers/save`、`providers/delete`、`providers/test`、`providers/discover` |
+| 技能 | `skills/list`、`skills/set`、`skillhub/*` |
+| MCP | `mcp/list`、`mcp/set` |
+| 自动化 | `cron/*`、`deliveries/list`、`deliveries/retry`、`memory/get`、`memory/put`、`stats/summary`、`stats/timeseries` |
+| 主角 | `experts/list`、`experts/get`、`experts/create`、`experts/update`、`experts/delete` |
+| 知识库 | `knowledge-bases/*`（list、get、create、update、delete、scan、status、query、mcp/apply、runs、sources、schedule、clear） |
+
+响应与日志会掩码 provider key 和敏感 header。管理调用不会让 Desktop 成为会话、运行、凭证或调度状态的 owner。
 
 ## MCP 服务器集成
 
@@ -955,70 +1018,51 @@ Source: https://mothx.net/zh/architecture.md
 
 ![MothX 架构总览](assets/image/architecture-zh.webp)
 
-> 入口层（TUI/CLI/ACP/Serve/消息通道）统一汇入核心 Agent 循环，向下复用 Provider 抽象与 SQLite 会话、沙箱、技能、MCP、统计、记忆、工作流等基础设施。
+> 入口层（TUI、CLI、WebUI/Serve、Desktop/ACP 与消息通道）统一汇入前端中立的 Agent Runtime，由它拥有会话、运行、决策、输入内容、附件/制品、MCP、技能与策略解析，并向下复用唯一的核心 Agent 循环、Provider 抽象、SQLite 会话、沙箱、统计、记忆与工作流基础设施。
 
 
 ## 项目结构
 
 ```
 mothx/
-├── agent/                       # 公共 Agent/Provider 接口与 Builder
-├── cmd/mothx/              # CLI 入口点
-│   ├── main.go                  # 主程序
-│   └── main_doctor.go           # `doctor` 子命令（环境诊断）
+├── agent/                       # 公共 SDK 类型（Agent、Provider、Builder）
+├── bootstrap/                   # 将公共 SDK 接口接到内部实现
+├── cmd/mothx/                   # CLI 入口与子命令
+├── desktop/                     # Electron 桌面客户端（纯 ACP 投影）
+├── ui/                          # 内嵌到 Serve 的 Svelte Web UI
 ├── internal/
-│   ├── a2a/                     # A2A 协议服务器与 Master 模式
-│   │   ├── config.go            # A2A 配置与初始化
-│   │   ├── handler.go           # JSON-RPC 2.0 handler + SSE
-│   │   ├── client.go            # A2A 客户端
-│   │   ├── server.go            # HTTP 服务器
-│   │   ├── executor.go          # Task → Agent loop 执行器
-│   │   ├── agent_card.go        # Agent Card 生成
-│   │   ├── task.go              # Task 生命周期管理
-│   │   └── master.go            # A2A Master 模式（远程 agent 调度）
-│   ├── acp/                     # ACP / MCP 集成
-│   ├── agent/                   # 核心 Agent 循环
-│   │   ├── agent.go             # Agent 主逻辑
-│   │   ├── factory.go           # AgentFactory，统一每个 Agent 的创建
-│   │   ├── manager.go           # AgentManager 生命周期管理
-│   │   ├── router.go            # EventRouter
-│   │   ├── subagent.go          # subagent_* 工具
-│   │   ├── events.go            # 事件类型定义
-│   │   ├── provider.go          # Provider 接口适配
-│   │   └── system_prompt.go     # 系统提示词生成
-│   ├── config/                  # 配置管理
-│   ├── context/                 # 上下文管理和 token 估算
-│   ├── contextfiles/            # 上下文文件加载
-│   ├── cron/                    # 定时任务存储和调度器
-│   ├── serve/                   # 统一 OpenAI API、Web UI 和消息通道
-│   ├── mcp/                     # MCP 服务器集成
-│   ├── memory/                  # 持久化记忆 (memory.md)
-│   ├── messaging/               # 消息平台抽象
-│   ├── platform/                # 跨平台兼容工具
-│   ├── provider/                # LLM Provider 抽象
-│   │   ├── anthropic/           # Anthropic Messages API
-│   │   ├── google/              # Google Gemini/Vertex API
-│   │   ├── openai/              # OpenAI Chat Completions API
-│   │   ├── factory/             # 共享 provider/model 创建逻辑
-│   │   ├── http_client.go       # 共享 HTTP 客户端，支持代理和自定义 header
-│   │   └── vendor*.go           # 厂商适配注册和默认值
-│   ├── sandbox/                 # 沙箱抽象 (bwrap, none)
-│   ├── session/                 # 会话管理 (SQLite)
-│   ├── skills/                  # 技能系统
-│   ├── tools/                   # 工具实现
-│   │   ├── bash.go              # Bash 命令执行
-│   │   ├── read.go              # 文件读取
-│   │   ├── write.go             # 文件写入
-│   │   ├── edit.go              # 文件编辑
-│   │   ├── grep.go              # 内容搜索
-│   │   ├── find.go              # 文件查找
-│   │   ├── ls.go                # 目录列表
-│   │   ├── plan.go              # 任务规划
-│   │   ├── question.go          # 用户提问澄清（Plan 模式，仅 TUI）
-│   │   ├── skill_ref.go         # 技能引用加载
-│   │   └── a2a_dispatch.go      # A2A 远程 agent 调度
-│   ├── tui/                     # 终端 UI (BubbleTea)
-└── pkg/sdk/                     # 公共 SDK 接口
+│   ├── agent/                   # 核心 Agent 循环、事件、提示词、子 Agent 工具
+│   ├── agentruntime/            # 前端中立的共享 Runtime：SessionRuntime、
+│   │                            # ExecutionRuntime、决策、制品、MCP、
+│   │                            # 知识库、主角团、worktree
+│   ├── acp/                     # ACP v1 服务器 + mothx.dev 扩展
+│   ├── a2a/                     # A2A 服务器与远程 Agent master 调度
+│   ├── architecture/            # 静态架构护栏测试
+│   ├── browser/                 # vibe-browser 自动化工具
+│   ├── config/                  # settings.json / serve.json schema 与默认值
+│   ├── context/, contextfiles/  # Token 预算与 AGENTS.md/CLAUDE.md 加载
+│   ├── cron/                    # 定时任务存储与调度器
+│   ├── dao/                     # 唯一 SQL/查询构造/行映射 owner
+│   ├── db/                      # 连接、事务与迁移生命周期
+│   ├── esm/                     # Enable Supervisor Mode 目标循环
+│   ├── expert/                  # 主角团包发现与校验
+│   ├── imageproc/               # 图像归一化与缩放
+│   ├── mcp/                     # MCP 客户端/服务器集成
+│   ├── memory/                  # 消息通道使用的 memory.md 工具
+│   ├── messaging/               # 微信/飞书平台抽象
+│   ├── platform/                # 跨平台辅助与内嵌资源
+│   ├── provider/                # 协议 provider、vendor 适配器、factory
+│   ├── sandbox/                 # 沙箱抽象（bwrap、none）
+│   ├── serve/                   # OpenAI API、Web UI、channels、hooks、cron、memory
+│   ├── session/                 # 会话领域、迁移、事件存储、附件、知识库存储
+│   ├── skills/, skillhub/       # 技能与在线市场
+│   ├── stats/                   # 用量统计仪表盘与查询
+│   ├── systeminit/              # AGENTS.md 生成
+│   ├── tools/                   # 内置工具实现
+│   ├── tui/                     # Bubble Tea 终端 UI
+│   └── workflow/                # JavaScript workflow 运行时
+├── example/                     # 公共 SDK 示例
+└── docs/                        # 双语文档、生成索引与站点
 ```
 
 ## 运行模式
@@ -1046,6 +1090,27 @@ MothX 支持 6 种运行模式，共享同一套 Agent、Provider、Tools、Sess
 ```
 
 ## 核心组件
+
+### 0. 共享 Agent Runtime
+
+Agent Runtime 是入口层与 Agent Core 之间的唯一边界。TUI、CLI、WebUI/API、
+Desktop/ACP、微信/飞书、Cron、ESM 与 A2A 适配器只解码各自协议并投影事件，
+不拥有执行语义。
+
+- **构造**：生产代码只能通过 `SessionRuntime.BuildAgent`、`BuildTransientAgent`
+  与 `agentruntime.NewAgentManager` 创建 Agent。
+- **策略**：source、有效模式、能力、工具、沙箱、审批、MCP、技能、推理与运行策略
+  由 `ResolveSource`/`ResolvePolicy` 统一解析一次。产品默认模式为 `yolo`。
+- **执行**：`ExecutionRuntime` + `RunStore` 拥有持久化 Run 的 begin、reattach、
+  update、cancel、finish、recovery 以及唯一的规范终态事件。
+- **决策**：`DecisionService`/`DecisionRecord` 拥有审批与提问的身份、截止时间、
+  首个响应生效、重放与过期。
+- **输入与制品**：所有文本/图像/音频/文件输入都归一化到 Runtime 输入契约；
+  附件与生成制品由 Runtime 拥有，并由 `internal/session` 持久化。
+- **资源**：上下文/技能/规则、主角团、MCP 客户端、知识库服务、worktree 与统一
+  关闭由 Runtime 拥有。
+- **准入**：每个会话唯一的提交协调器与带 fencing 的执行租约决定新 Run 是否
+  可以开始；适配器只能投影该状态。
 
 ### 1. Provider 系统
 
@@ -1151,7 +1216,7 @@ manager 状态。
 ```
 Main Agent
     │
-    ├── AgentManager 创建子 Agent
+    ├── agentruntime.NewAgentManager 创建子 Agent
     ├── EventRouter 按 AgentID 路由事件
     └── subagent_* 工具管理异步子任务
 ```
@@ -1453,7 +1518,7 @@ A2A Master 模式通过 `--enable-a2a-master` 启用，加载 `a2a-list.json`
 ### 完整请求流程
 
 ```
-1. 用户输入 (来自 TUI / HTTP / Messaging / A2A / ACP stdio)
+1. 用户输入 (来自 TUI / CLI / HTTP / Messaging / A2A / ACP stdio / Desktop)
    │
    ▼
 2. 输入层捕获
@@ -1520,13 +1585,14 @@ A2A Master 模式通过 `--enable-a2a-master` 启用，加载 `a2a-list.json`
 ### 6. 公共 SDK 包
 
 `agent/` 包暴露公共 Go 类型（`Agent`、`Provider`、`Builder`），外部应用可以
-在不依赖 internal 包的情况下嵌入 Agent。
-详见 [SDK 集成指南](sdk.md)。
+在不依赖 internal 包的情况下嵌入 Agent；`bootstrap/` 负责把这些公共接口接到
+内部 Runtime。详见 [SDK 集成指南](sdk.md)。
 
-### 7. 复用 Agent 循环
+### 7. 共享 Agent Runtime 与 Agent 循环
 
-所有运行模式（TUI、Serve、Channels、A2A、ACP）复用同一个 Agent 循环，
-区别仅在于输入来源和输出目标。这保证了行为一致性，避免了逻辑分叉。
+所有运行模式（TUI、CLI、WebUI/Serve、Channels、A2A、ACP、Desktop）复用同一个
+Agent Runtime 与 Agent 循环。适配器的差异只在于协议解码与事件投影；资源所有权、
+运行生命周期、决策与策略都在 Runtime 中，因此不同入口的行为不会漂移。
 
 ---
 
@@ -1535,6 +1601,86 @@ A2A Master 模式通过 `--enable-a2a-master` 启用，加载 `a2a-list.json`
 Source: https://mothx.net/zh/changelog.md
 
 # 更新日志
+
+## v1.3.105-pre-4
+
+### ✨ 新功能
+
+- **新增 Gitee/Moark 模型：`kimi-k3.1-pro` 与 `kimi-k3.1-pro-highspeed`**
+  - 为 `gitee` 与 `moark` 新增 `kimi-k3.1-pro` 与 `kimi-k3.1-pro-highspeed`：默认开启思考，使用 Kimi 的 `low`/`high`/`max` 推理强度档位（MothX 的 `minimal`/`low` 映射为 `low`，`medium`/`high` 映射为 `high`，`xhigh`/`max` 映射为 `max`），支持 1M 上下文与文本+图片输入。两者均通过 `kimi` 思考格式使用经过验证的 `reasoning_effort` 参数。
+
+### 💥 行为变更
+
+- **非托管网页搜索改用 DeepSeek Search/Fetch。** 原先通过 `webSearch` 的 provider/type/model 配置注册的 provider 搜索工具已被替换为 DeepSeek 官方 `POST /v1/tools/search` 与 `POST /v1/tools/fetch` 支撑的本地 `web_search`、`web_fetch`。OpenAI Responses 的 provider 原生托管搜索保持不变；Anthropic Messages 在 `webSearch` 启用时使用其 provider 原生托管搜索。两者都优先于本地 `web_search`。`webSearch` 现在配置 `provider`、`baseUrl` 与 `token`（未设置 token 时回退到 provider API key）；两个工具均为只读，可在 plan 模式使用。
+
+- **新增腾讯元宝搜索后端。** `webSearch.backend` 现在可选择 `deepseek`（官方 Search/Fetch API）或 `yuanbao`（腾讯元宝 SearchPro，`POST /SearchPro`）。元宝后端发送 `{"Query": ...}`，把返回的 `Pages` 归一化为标题、URL、站点、时间、分数与正文摘要，并使用 `webSearch.token` 或 `${TENCENTCLOUD_WSA_APIKEY}` 鉴权；元宝目前只提供搜索，因此 `web_fetch` 仅在 DeepSeek 后端可用。
+
+- **内置的 Windows BusyBox 现在要求 Windows 10 及以上。** `busybox-windows-x86.exe` 与 `busybox-windows-x86_64.exe` 改用该 fork 的 UTF-8 配置重新构建（x86_64 用 `mingw64u_defconfig`，x86 用 `mingw32w_defconfig`），带有 UTF-8 应用程序清单（`activeCodePage=UTF-8`）以及 `FEATURE_UTF8_INPUT`、`FEATURE_UTF8_CONSOLE`、`FEATURE_UTF8_AUTODETECT`、`FEATURE_UTF8_CHILD_ENV` 与 `UNICODE_SUPPORT`。非 ASCII 的 `sh -c` 命令文本现在以 UTF-8 传入 argv，不再被降级为系统 ANSI 代码页（简体中文 Windows 上为 GBK），子进程也保持 UTF-8 环境基线。由于构建时设置了 `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`，在 Windows 7/8 上 BusyBox 会拒绝启动；此时 `bash` 工具会像「BusyBox 不可用」一样自动回退到 PowerShell，命令仍可执行（只是没有 UTF-8 基线）。MothX 的支持范围仍标注为 Windows 10/11。
+
+### 🐛 问题修复
+
+- **Windows 捕获输出在捕获边界统一归一化。** 子进程各自决定管道编码——Python、Java、C 运行库与 shell 内建命令常用 ANSI 代码页（简体中文 Windows 上为 GBK），而 Go、Rust、Node.js 及多数 CLI 写 UTF-8，同一条命令还可能混用两者。现在不再注入针对单一运行时的环境变量，而是由 `bash` 工具通过 `platform.DecodeProcessOutput` 归一化捕获到的 stdout/stderr：非合法 UTF-8 的字节用当前代码页解码，合法 UTF-8 直接信任，混合输出则按「最大非 ASCII 连续段」分别判定。`MOTHX_WIN_OUTPUT_ENCODING=utf-8` 可强制 UTF-8，设为数字（如 `936`）可强制该代码页。
+
+- **真正的 UTF-8 文本不再被误当作 GBK 重解码。** 两种编码在双字节序列上存在重叠，此前的「整块」启发式会对整段捕获只做一次判断，把真正的 UTF-8 文本重解码成无关的汉字（`Привет` → `袩褉懈胁械褌`，混有中文的行则变成 `涓枃`）。现在改为按非 ASCII 连续段分别判定，且仅当整条流没有更强的 UTF-8 证据时才可能翻转：只要 UTF-8 读法中存在 CJK 字符或任何 3/4 字节序列，就绝不再二次猜测；只有短的双字节片段才有资格翻转。字节本身与旧编码一致的情形（例如单个 GBK `写`）仍然照旧解码。
+
+- **内置资产变化时会刷新已解压的 Windows BusyBox。** 已解压的副本会按 SHA-256 与内置资产比对，不同则以原子方式替换，因此升级后的 MothX 不会继续运行旧 shell。若正在运行的 BusyBox 锁住可执行映像，则本次运行继续使用旧副本，并在下次启动时重试刷新。
+
+- **停止路径在 TUI/ACP 统一为共享 Runtime 决策，并修复竞态与后台终态。** ACP 的 `session/cancel` 现在在 `cancelMu` 下快照 Run ID，避免与 prompt 安装身份竞争；共享停止投影受有界 context 约束，不再阻塞 JSON-RPC 读循环。TUI 的中止/重置把 canonical stop 与终态写入移出 Bubble Tea 更新循环（退出时等待完成），避免 UI 卡顿。已被其他 owner 终态化的 canonical Run 会被本地执行收养（即使终态不同），并走完整终态广播，不再让会话永久 busy。恢复中的 Responses 后台任务被用户停止时现在记为 `cancelled` 而不是 `failed`。
+
+- **Desktop 显示并查看子代理。** 会话头部现在显示当前会话的子代理数量与运行状态；点击可打开只读面板，列出全部子代理及其状态，并使用聊天窗口同一套消息、工具卡与思考块样式查看单个子代理的转录。ACP 新增 `mothx/subagent/list` 与 `mothx/subagent/messages` 只读投影及 `subagentPanel` 能力键，Desktop 不再只能依赖零散的 started/terminal 卡片。
+
+## v1.3.105-pre-1
+
+### ✨ 新功能
+
+- **Gitee/Moark 新增模型：`deepseek-v4.1-flash-1017`**
+  - `gitee` 和 `moark` 两个提供商均新增 `deepseek-v4.1-flash-1017`，紧随 `deepseek-v4.1-flash` 之后且参数完全一致：1M 上下文窗口、支持思考、文本/图片输入；默认不发送 max_tokens。
+
+- **MiniMax 新增模型：`MiniMax-M3.1-Flash`**
+  - `minimax` 提供商新增 `MiniMax-M3.1-Flash`：支持思考，并经 Anthropic 兼容协议的 `output_config.effort`（adaptive thinking 格式；`minimal` 与 `low` 映射为 `low`，其余档位一一映射为 `medium`/`high`/`xhigh`/`max`）支持思考强度；1M 上下文窗口，文本/图片/视频输入。预设声明 1M 的输出上限（即整个上下文窗口），请求仍使用 MothX 常规输出 token 默认值，除非用户显式调高。
+
+- **火山引擎下线模型移除。** 火山引擎已下线 `kimi-k2.7-code`、`doubao-seed-2.1-turbo` 与 `minimax-m3`，`volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 预设不再列出这些模型（含标准版的 `doubao-seed-2-1-turbo-260628` 快照）。同名模型在 Gitee/Moark 等其他 provider 仍可使用。由于预设顺序也是未配置默认模型时的回退顺序，未配置的标准版 `volcengine` 会话现在默认使用 `doubao-seed-evolving`，而非已下线的快照模型。
+
+- **DeepSeek V4.1 思考强度。** Gitee/Moark 与火山引擎预设中的 DeepSeek V4.1 模型现改用已经验证的 `reasoning_effort` 参数，不再只发送思考开关。MothX 的 `minimal`、`low`、`medium`、`high`、`xhigh`、`max` 与网关刻度一一对应；`off` 会发送 `none`，关闭这些网关默认开启的思考。Gitee/Moark 与火山引擎 Agent Plan 已对完整合法枚举进行实测。所有 DeepSeek V4.1 模型 ID 默认使用该格式（包括第三方网关）；仅接受旧思考开关的部署可将 `thinkingFormat` 设为 `thinking-only` 退回。
+
+- **不支持的 `reasoning_effort` 自动降级。** 当 OpenAI 兼容端点拒绝 `reasoning_effort` 时，MothX 会立即去掉该参数重试（保留 DeepSeek V4.1 的思考开关），在重试提示中说明原因，并把该模型的兼容配置记录为 `thinkingFormat: "thinking-only"` 与 `supportsReasoningEffort: false`，后续运行不再发送该参数。此降级不消耗重试次数。
+
+- **会话更早拒绝不可用的工作目录。** `internal/session` 成为工作目录校验的唯一 owner，Runtime API 仅做委托。创建、重开、重绑定会话，ACP `mothx/session/setWorkDir` 与消息通道解析会话时，都必须先确认目标是存在的绝对目录，才会持久化或组装沙箱及工具资源。ACP 对同目录请求不再因目录已消失而拆掉可用 Runtime；通道运行也会校验已绑定会话持久化的 cwd，而不是平台默认目录。
+- **Desktop 使用显式的草稿目录模型。** 移除了遗留的 workspace 默认回退及其设置面板。Quick Start 草稿获得一个进程内 `mkdtemp` 临时目录；New Task 草稿保持未设置，直到原生目录选择器或 worktree 操作提供目录。选择历史只为下一次对话框定位便利；草稿状态携带 generation，迟到的 quick-start、picker 或 ACP 回调不会覆盖更新的 New Task。
+- **Runtime 统一协调本地会话提交。** `SessionRuntime` 为每个 `(database identity, session ID)` 持有一个 FIFO `SubmissionCoordinator`，`ExecutionRuntime.Completion` 成为权威完成屏障。TUI 排队输入、ACP prompt admission、Channel/Cron/ESM/Knowledge 的准入交接、关闭、取消以及本地/外部忙碌的结构化分类共享同一生命周期，不再轮询 lease 错误或以 Agent 结束事件启动后继提交。
+
+### 🐛 问题修复
+
+- **会话 transcript 已具备 EventStore 迁移路径。** Runtime 绑定的会话可以把消息、工具、压缩、turn 和终态 payload 保存在按会话隔离的 append-only EventStore 中，同时由 SQLite 保留 fenced Run/lease/decision/turn 控制状态及可重建的 metadata projection。该路径包含 intent 对账、有界 fsync batch、EventStore 分页/fork/recovery 支持和损坏时 fail-closed；旧会话仍通过明确命名的兼容桥读取。读取与修复被严格分开：只有持有 lease 的追加路径才有资格截断不完整尾部或落盘可重建的 manifest，而观测型读取（`EventStore.Inspect`，因而也是会话 load、对账与各入口读取）分类损坏的方式完全相同却不会写目录 —— 打开一个会话不再可能改动其存储字节、与并发 owner 的 fsync 竞争，也不会在退出时残留目录。
+
+- **迁移后的会话仍然保有可用的 turn 边界。** legacy `entries.seq` 是数据库全局 AUTOINCREMENT，会与共享 `sessions.db` 的所有会话交错，因而可能数值上落入另一个存储的区间却不代表任何归属。migration 现在依据持久化的 parent 链重建 transcript 顺序，并在同一个 fenced commit 事务内把每个 `conversation_turns` 区间翻译为 EventStore 位置，使 fork resolution 与 open-turn recovery 仍指向真实存在的 marker。projection 的 `turn_id`/`run_id` 改为由解码后的 marker payload 自身推导（migration 导出的 marker 其批量信封为空，此前每个迁移过的 marker 都丢失 turn 身份，静默破坏 turn 状态读取的 COALESCE 回退与 `ListOpenTurns`）。对账不再是 bind 的副作用：它作为 `ConvergeEventStore` 下沉到共享 load 路径，因此仅仅打开会话的各个入口——serve/chat、后台运行协调器、Channel、ESM、ACP 与 TUI 恢复路径——都会自行清理残留的 legacy payload 副本并修复控制行，而不再回放一份已由 EventStore 拥有的 transcript。`MigrateToEventStore` 据此拆为「对账」与唯一不可逆的 export 步骤（`exportLegacyTranscript`），`Manager.Reload()` 也改由持锁体重新载入，使采纳他路径翻转的动作不会在非可重入的 manager 互斥锁上自死锁。由更早构建翻转的会话因而在下一次 open 而非 bind 自愈；无法回放的 entry 类型（`custom`/`custom_message`）则让整个 export fail closed，而不是把它从 transcript 中静默抹掉。
+
+- **服务端关闭不再与它承诺要 drain 的运行竞争。** 后台运行此前是先做 durable admit、然后才把活儿交给 goroutine，于是夹在这两步之间的 `Shutdown` 会留下一个没有任何人 drain 的活跃 Run，而进程此时已经开始关闭自己的 session 数据库。`SessionPool` 现在把「占用 drain 槽位」与「启动工作」分开：`ReserveBackground` 在 durable admit 之前占住槽位，`LaunchBackground` 把这份所有权搬到 executor goroutine 上，因此槽位从准入起连续持有到 executor 返回，而 `Shutdown` 会等待调用方要么启动、要么归还。释放被拆成两层——`runtimeRelease`（runtime pin 加并发槽）与 `handOffRelease`（drain 交接）——每个 executor 都把 `handOffRelease` 注册为第一个 defer，使它成为最外层因而最后执行的那个，于是 artifact collector 关闭、run context 取消、兜底终态写入与 `FinalizeRun` 全部落在 drain 之内。经 reattach 恢复的孤儿 Responses 运行也遵循同一屏障。`LaunchBackground` 刻意不像 `GoCtx` 那样从停止信号派生可取消上下文：durable Run 持有 fenced execution lease，必须走到自己的终态转换，在此取消只会把它变成孤儿。`Shutdown` 的 drain 等待现在受调用方 context 约束，超时时返回 `ctx.Err()` 而不是无限阻塞——一个永不返回的任务（等不到审批的 agent、无视 context 的 provider 流）是可用性问题，不是让进程变得杀不掉的理由；归属仍由 fenced lease 决定，提前返回绝不会把一个活跃 Run 终态化。这条顺序不变量既无法用类型表达，也无法端到端固定——审批阻塞型 fixture 可以证明永远到不了 executor 的延迟尾部，而能快速终态的 fixture 又让断言变得空洞——因此由 `internal/architecture/drain_release_guard_test.go` 静态守住：它遍历每一处 `LaunchBackground`，沿「wrapper 转发 → executor 执行」的委托链前进，检查 drain 参数是否落在由**被调方签名自身推导**的位置上，以及 executor 是否把它作为第一个 defer；四种变异证明该守卫并非空洞。
+
+- **损坏的会话数据库现在会显示恢复指引。** TUI 不再把 SQLite 完整的 b-tree 错误作为难以理解的创建会话失败直接输出，而是指出数据库路径，明确原文件未被修改，并在停止其他进程后给出 `mothx pure --force` 归档恢复路径。
+
+- **轮换已绑定频道会话时保留其持久目录。** 轮换继承既有会话记录的 cwd，而非平台默认目录；fenced CAS 比较规范化后的路径，因此末尾分隔符等等价存储形式仍可成功轮换，真实并发变更仍会被检测并拒绝。
+- **飞书工具图片清理具备并发安全性。** 每次投递都在唯一的私有临时目录下物化图片，并在所有退出路径清理整个目录，避免并行运行互相收集文件，也不会把图片字节残留在工作目录。
+- **会话事件存储迁移入口统一。** 旧会话迁移此前只在 `SessionRuntime.BindSession` 触发，因此 ACP/Desktop、Channel、ESM、后台运行等直接装配会话的入口会把老会话留在 legacy SQLite transcript 上，新建会话也停在 `sqlite` 内容存储。现在 `BindSession`、`AttachSessionResources` 与 `Builder.Build` 三条装配路径调用同一个迁移入口 `Manager.MigrateToEventStore`，不再各自新增包装方法或特殊处理：老会话被导出到按会话隔离的 EventStore、新会话被翻转到 EventStore，入口之间不再产生内容归属分歧。该入口现在可无条件调用——当会话正被其他 owner 运行时它是成功的 no-op（不阻塞 attach，legacy store 继续自洽服务，稍后空闲的 attach 再完成迁移），只有损坏或不可回放的老数据才 fail closed。
+- **运行处于 terminalizing 时终止会话不再失败。** 当 durable Run 已进入已提交的 `terminalizing` 窗口后一次终态写入失败，它会把 run 行留在只有终态转换才能推进的状态，而 Web UI 的停止路径仍试图强制 `terminalizing` -> `cancelling`——该转换会被 run store 拒绝，于是请求返回 `persist run cancellation: invalid session run transition "terminalizing" -> "cancelling"`，且该 run 看起来永远无法取消。现在 `ExecutionRuntime.CancelDurable` 与关闭时的取消路径会识别已准备好的 terminalizing 终态事务，跳过非法的 cancelling 写入，接受取消请求（仍会取消 loop），并在其重试已停止时重启已准备好的终态写入，使被中断的运行仍能到达终态。
+- **向会话 EventStore 追加不再随 transcript 大小平方增长。** EventStore 追加此前每个 batch 都要多次重读整段日志——一次健康检查、一次幂等扫描、一次 next-seq 扫描，以及一次 commit 期有效性扫描——于是追加成本随会话累计内容增长（512 entries：每 batch 3.8ms → 178ms，累计 5.7s），而 legacy SQLite 路径保持恒定。现在健康门在进程内 append-state 缓存对当前物理 revision 新鲜时直接信任它，只需确认每个 SQLite intent 均已 committed；`NextSequence` 读取缓存的 cursor；幂等探测走 projection 索引，只有真正重试时才读全量 committed transcript；`CommitEventIntent` 接收刚 fsync 过的 batch 而不再重扫。追加成本现为 transcript 大小的常数级（同探针：每 batch 约 3ms，累计 0.30s，约 19×），而 intent/lease 协议、围栏与恢复校验保持不变。一个确定性回归测试固定「向已暖机会话追加不做整段扫描」。
+- **新建 Web UI 会话不再报 `session_not_found`。** 服务端分配的 Web UI 会话要到首次运行开始才会落盘，但 run event、capability event 与 sub-agent 三个查询会对这个尚未落盘的 id 返回 `session_not_found`，于是新建会话时界面弹出错误。现在这三个查询对已分配的 id 投影空结果——与 trajectory、capabilities、runtime、messages 一致——而任意未知 id 仍然被拒绝。
+- **EventStore 迁移有界且可自愈。** 旧会话 transcript 的一次性导出现在按 64 条一批写入，而不是单个无界 batch，因此无论 transcript 多大，单次 fsync 与单个 SQLite projection 事务都有界。导出也不再被残留或中断的状态卡死：在翻转之前内容存储仍是 SQLite，所以上一次中断导出留下的 EventStore 字节与 intent 会被丢弃并重新导出完整 transcript，而不是拒绝迁移、让 attach 失败。
+
+## v1.3.104
+
+### ✨ 新功能
+
+- **新增 StepFun Step 5 Preview 模型。** StepFun provider 目录现已支持 `step-5-preview`。
+- **飞书可投递工具生成图片。** 绑定到飞书的运行中产生的受支持 PNG、JPEG、GIF、WebP 图片会经 Runtime artifact 管线物化，并与文本回复一起以图片消息发送。
+
+### 🐛 问题修复
+
+- **ACP 会话恢复历史记录。** ACP 每次 prompt 都构建新 Agent，此前却遗漏共享的历史注入步骤，导致同一会话的追问被当作全新对话。现在 prompt 处理会重载 session manager 并把规范 replay state 注入新 Agent，同时保留 Runtime-owned 的当前用户 entry，既不再失忆也不会重复写 transcript。回归测试通过真实 stdio 进程边界驱动两次 ACP prompt，并同时守护 serve chat 与 WebUI run-submit 路径。
+- **存活会话属主可熬过短暂数据库停滞。** 当同步租约总线报告另一存活属主的新鲜公告时，恢复流程即使看到已过期的 SQLite 租约行也会暂缓接管；本进程中仍存活但续期失败的租约会返回 busy，而不是被回收。因此数据库不可用或墙钟过期本身只是可用性故障，不再是所有权丢失的证据；只有 fenced CAS 接管或显式释放能取代存活属主。
+- **长时间运行的供应商轮次保留重试预算。** 流式传输与超时恢复计数器在每次成功轮次后重置，跨轮累积的独立瞬态故障不会再耗尽整次运行的续写预算；每轮仍有小上限，以约束反复卡住单轮的上下文增长。
+- **ACP 最后注册窗口的取消能够生效。** Run 已注册但取消句柄尚未安装的窄窗口中，admission context 会被重新检查，及时到达的取消会终止 prompt，而不会启动客户端已经放弃的 Run。
+- **新建 WebUI 会话不再误报 not found。** 服务端已分配但首次运行尚未持久化的 deferred session ID，现在会从 `/api/sessions/{id}/runtime`、`/capabilities`、`/trajectory` 投影默认能力与空 trajectory。未知、拼错或已删除的 ID 仍返回 404，不会被伪装成空白新会话。
 
 ## v1.3.103
 
@@ -1578,6 +1724,10 @@ Source: https://mothx.net/zh/changelog.md
   - **运行时二进制设置。** 桌面设置（运行时 → MothX 运行时二进制）可在内置 `mothx` 可执行文件（默认）与自定义 `mothx` 二进制路径之间切换。选择与校验都在特权的 Electron 主进程完成，切换后自动重启 ACP 运行时；自定义路径不可用时回退到内置运行时并给出可见提示，自定义二进制无法启动时回滚选择，保证客户端始终可用。`MOTHX_BINARY` 环境变量仍是优先级最高的开发覆盖项。
 
 ### 🐛 问题修复
+
+- **交互式 TUI 启动时不再因缓慢的 MCP 服务器而卡死**
+  - 已配置的 MCP 服务器此前在 TUI 起来之前串行且严格地连接：一个不健康或缓慢的服务器（例如首次运行需要下载的 `npx` 服务器，或不可达的远端主机）会各按其 15s 握手超时阻塞首屏，且任一失败都会让整个启动中止。`/reload` 会重新 exec 进程，因此又付一次同样的代价。
+  - 现在连接并发执行，一组缓慢的服务器只付出最慢那个的代价而非累加，并可用整体超时兜底——该超时只约束连接建立（握手），不会在连上之后杀掉存活的服务器进程。交互式 TUI 现在完全延迟 MCP：运行时立即就绪，TUI 在程序启动后在后台连接已配置服务器，容忍单个失败（以告警呈现而非中止启动），并重建后续 Agent 以纳入新连上的服务器工具。非交互式 `--print` 保持严格、同步的行为。
 
 - **ACP 在会话加载期间保持取消可达，并让级联关闭与子会话 prompt 串行**
   - ACP 的会话作用域请求运行在按会话串行的异步 lane 上，因此缓慢的 `session/new`/`load`/`fork` 不再头阻塞 JSON-RPC 读循环，`$/cancel_request`/`session/cancel` 保持可达。`session/prompt` 现在也走该 lane；由于它可能在 Run 注册取消句柄之前阻塞在执行 admission（含同进程 draining 等待），其 admission 上下文会在派发前同步登记且可取消，因此「尚未 admit 或正在 admit」时到达的取消会中止该 prompt，而不是启动一个客户端已经取消的 Run。
@@ -5568,11 +5718,15 @@ mothx [flags] [message...]
 | `--provider` | `-p` | 配置文件中的默认值 | LLM 提供商 (deepseek-openai, deepseek-anthropic 或自定义名称) |
 | `--model` | `-m` | 配置文件中的默认值 | 模型 ID |
 | `--mode` | `-M` | `yolo` | 运行模式 (plan, agent, yolo, os)；未指定时回退到 `settings.json` 的 `defaultMode` |
-| `--thinking` | `-t` | `off` | 思考级别 (off, minimal, low, medium, high, xhigh) |
+| `--thinking` | `-t` | `off` | 思考级别 (off, minimal, low, medium, high, xhigh, max) |
 | `--multi-agent` | - | `false` | 启用多 Agent 工具和命令 |
 | `--delegate` | - | `false` | 启用 Delegate 模式（阻塞式单子 Agent 工具） |
 | `--workflows` | - | `false` | 启用 JavaScript workflow 工具和 `/workflows` 命令 |
 | `--artifact` | - | `false` | 为当前 TUI/CLI 进程启用生成制品发布 |
+| `--expert` | - | - | 为当前会话绑定主角包；替换已绑定主角会创建会话分叉 |
+| `--web-search` | - | `false` | 为本次运行启用已配置的本地 Web 搜索工具 |
+| `--browser` | - | `false` | 启用浏览器自动化工具 |
+| `--cron` | - | `false` | 启用定时任务工具 |
 
 ### 会话管理
 
@@ -5581,6 +5735,9 @@ mothx [flags] [message...]
 | `--continue` | `-c` | 继续最近的会话 |
 | `--resume` | `-r` | 通过 ID 或路径恢复会话 |
 | `--session` | - | 使用特定 session ID 或 `.db` 句柄文件 |
+| `--list-sessions` | - | 列出所有工作目录下的最近会话 |
+| `--list-sessions-limit` | - | `--list-sessions` 输出的会话数量（默认 20） |
+| `--list-sessions-cwd` | - | 只列出指定工作目录的会话 |
 
 ### 输出控制
 
@@ -5633,7 +5790,11 @@ mothx acp [flags]
 | `--multi-agent` | - | false | 为 ACP 会话启用多 Agent 工具 |
 | `--delegate` | - | false | 为 ACP 会话启用 Delegate 模式 |
 | `--workflows` | - | false | 为 ACP 会话启用 JavaScript workflow 工具 |
+| `--web-search` | - | false | 为本次 ACP 运行启用已配置的本地 Web 搜索工具 |
+| `--browser` | - | false | 为 ACP 会话启用浏览器自动化 |
 | `--artifact` | - | false | 为当前 ACP/Desktop 进程启用生成制品发布 |
+| `--permission-timeout` | - | `5m` | `session/request_permission` 审批超时（Go duration；环境变量 `MOTHX_ACP_PERMISSION_TIMEOUT`） |
+| `--question-timeout` | - | `5m` | ACP 提问请求超时（Go duration；环境变量 `MOTHX_ACP_QUESTION_TIMEOUT`） |
 
 详见 [ACP 协议](acp.md) 文档了解 IDE 集成细节。
 
@@ -5655,6 +5816,8 @@ mothx a2a [command]
 | `discover <url>` | 发现远程 Agent Card |
 | `--init-a2a-config` | 生成 `a2a.json` 配置模板 |
 | `--force` | 覆盖已存在的配置文件 |
+
+`mothx a2a send` 还支持 `--target <url>`（默认 `http://localhost:8093`）与 `--auth-token <token>`。
 
 详见 [A2A 协议](a2a.md) 文档。
 
@@ -5689,7 +5852,7 @@ mothx serve [flags]
 
 | 子命令 | 描述 |
 |--------|------|
-| `init-config [global|project]` | 生成 `serve.json` 配置模板 |
+| `init-config [global\|project]` | 生成 `serve.json` 配置模板 |
 | `--force` | 覆盖已存在的配置文件 |
 
 详见 [Serve 模式](serve.md) 文档。
@@ -5750,13 +5913,91 @@ mothx pure --prune-unreferenced
 
 描述附件的数据库记录被归档后，其存储字节就再也无法寻址；删除会话、或内容已写完但记录写入失败，也会造成同样的残留。因此回收并不依赖重置：Runtime 在接受新附件时会顺手清扫私有存储（每进程每小时至多一次），并由自己的 cron 维护任务每日再执行一次，且只删除同时满足两个条件的目录——没有任何记录引用它，并且它最后一次写入已早于附件保留期外加 24 小时缓冲（默认保留 7 天，即共 8 天）。正是这个时间下限保证了回收不可能删掉“恢复归档后仍可用”的数据。`--prune-unreferenced` 会立即执行同一次清扫，并报告已回收与因太新而保留的数量；`channels/` 与 `knowledge-bases/` 永不受它影响。定时清扫由 `settings.json` 的可选 `maintenance` 字段控制（`reclaimAttachmentStorage`、`storageReconcileSchedule`），见[配置文档](configuration.md#maintenance后台维护)。
 
+### `worktree` - 隔离 Git Worktree
+
+创建、列出、重置与删除由共享 Runtime 管理的隔离 git worktree。默认位于 `<data-dir>/worktrees`，注册在 sessions 数据库中，并由 TUI/CLI、ACP/Desktop 与子 Agent 共享。是否允许创建由 `settings.json` 的 `worktree.enabled` 控制；关闭创建后仍可列出、重置与删除已有 worktree。
+
+```
+mothx worktree <list|create|remove|reset> [flags]
+```
+
+| 子命令 | 描述 |
+|--------|------|
+| `list` | 列出受管理的 worktree |
+| `create` | 创建 worktree |
+| `remove <id\|directory>` | 删除受管理的 worktree |
+| `reset <id\|directory>` | 将 worktree 重置到默认分支 |
+
+| 标志 | 子命令 | 描述 |
+|------|--------|------|
+| `--repo <dir>` | list, create | 仓库目录（默认当前目录） |
+| `--project <id>` | list, create | 按项目 ID 过滤，或关联到项目 ID |
+| `--name <name>` | create | worktree 名称（默认由仓库名推导） |
+| `--detach` | create | 创建 detached worktree 而不是分支 |
+| `--start <command>` | create | 记录到 worktree 的启动命令 |
+| `--root <dir>` | 全部 | 覆盖 worktree 根目录 |
+| `--json` | list, create | 输出机器可读 JSON |
+
+示例：
+```bash
+mothx worktree list
+mothx worktree create --repo ~/projects/app --name feature-auth
+mothx worktree reset feature-auth
+mothx worktree remove /path/to/worktree
+```
+
+### `knowledge-mcp` - 知识库 MCP 服务器
+
+通过 stdio 将一个或多个受管理知识库暴露为 MCP 工具。服务器注册普通的 `search_knowledge_base` 工具；允许列表就是授权边界。
+
+```
+mothx knowledge-mcp serve --knowledge-base <id> [--knowledge-base <id>...] [--session-dir <dir>]
+```
+
+| 标志 | 描述 |
+|------|------|
+| `--knowledge-base <id>` | 为该服务器启用的知识库 ID；可重复指定多个 |
+| `--session-dir <dir>` | 会话存储目录（默认读取 `settings.json`） |
+
+知识库在 Desktop 或 WebUI 中创建和索引。见[知识库](knowledge-bases.md)。
+
+### `speedtest` - Provider 基准测试
+
+使用纯文本流式请求测试已配置的 provider/model。成功运行会取平均值，并按输出 token/秒排序。
+
+```
+mothx speedtest [flags]
+```
+
+| 标志 | 简写 | 默认值 | 描述 |
+|------|------|--------|------|
+| `--provider` | `-p` | 全部已配置 | 只测试指定 provider 的模型 |
+| `--vendor` | - | - | `--provider` 的别名 |
+| `--model` | `-m` | 全部已配置 | 只测试指定模型 ID |
+| `--prompt` | - | 内置文本 prompt | 每次测试使用的 prompt |
+| `--max-tokens` | - | `256` | 每次请求的最大输出 token |
+| `--timeout` | - | `2m` | 单模型超时 |
+| `--concurrency` | - | `1` | 并行测试的模型数量 |
+| `--runs` | - | `3` | 每个模型的运行次数；成功运行取平均 |
+| `--thinking` | `-t` | `off` | 思考级别（`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`） |
+
+```bash
+mothx speedtest
+mothx speedtest -p deepseek-openai -m deepseek-v4-flash
+mothx speedtest --concurrency 4 --runs 2
+```
+
 ### `doctor` - 环境诊断
 
 诊断你的 MothX 环境：系统信息、配置文件、Provider、模型、沙箱、MCP 等。
 
 ```
-mothx doctor
+mothx doctor [--json]
 ```
+
+| 标志 | 默认值 | 描述 |
+|------|--------|------|
+| `--json` | `false` | 只在 stdout 输出一份机器可读 JSON 诊断（`{ ok, version, summary, checks }`） |
 
 检查项目：
 - **环境**: OS/架构、Go 版本、Shell、Home/工作目录
@@ -5943,6 +6184,9 @@ mothx -t medium
 
 # 最高级别
 mothx --thinking xhigh
+
+# provider 支持的最高级别（例如 DeepSeek V4.1）
+mothx --thinking max
 ```
 
 ### 会话管理
@@ -6014,26 +6258,31 @@ mothx acp --sandbox --mode agent
 
 在交互会话中可用的命令:
 
-### 模式与模型
+### 模式与配置
 
 | 命令 | 描述 |
 |------|------|
-| `/mode [plan\|agent\|yolo]` | 切换或显示当前模式 |
+| `/mode [plan\|agent\|yolo\|os]` | 切换或显示当前模式 |
 | `/model [model_id]` | 切换或显示当前模型 |
-| `/think` | 循环切换思考级别 |
+| `/defaultModel [project\|global]` | 修改持久化的默认模型 |
+| `/auth` | 配置 provider 凭证与端点 |
+| `/settings` | 配置 settings.json 各组，包括 providers、defaults、behavior、审批等 |
+| `/tuilang [global\|project] [auto\|zh\|en]` | 切换 TUI 语言 |
+| `/env [list\|set KEY VALUE\|unset KEY\|clear]` | 查看或修改当前进程的环境变量 |
+| `/esm [objective\|edit\|pause\|resume\|clear\|guide]` | 管理 ESM 目标与进度面板 |
 | `/compact` | 触发上下文压缩 |
 | `/delegate [on\|off\|status]` | 切换或查看 Delegate 模式 |
+| `/browser [on\|off\|status]` | 切换或查看浏览器工具 |
+| `/statusline [status\|on\|off\|command\|refresh] ...` | 配置外部状态行 |
+| `/btw <问题>` | 不中断主任务提问旁路问题 |
+| `/rule [force\|--force]` | 刷新项目规则 |
 | `/systeminit [guidance]` | 生成或刷新项目 `AGENTS.md` |
 | `/reload` | 以新 session 重启（TUI） |
-| `/btw <问题>` | 不中断主任务提问旁路问题 |
-| `/settings` | 配置 settings.json 各组，包括 providers、defaults、behavior、审批等 |
 | `/alloweditpath [add <glob>\|remove <glob>\|clear]` | 管理可编辑路径白名单 |
 | `/allowautoedit [on\|off] [global]` | 切换 Agent 模式全自动编辑 |
-| `/agent list` | 在多 Agent 模式下列出子 Agent |
-| `/agent switch <id>` | 切换活跃子 Agent |
-| `/agent destroy <id>` | 销毁子 Agent |
+| `/agent list\|switch <id>\|destroy <id>` | 在多 Agent 模式下列出、切换或销毁子 Agent |
 
-### 会话管理
+### 会话与编排
 
 | 命令 | 描述 |
 |------|------|
@@ -6043,21 +6292,30 @@ mothx acp --sandbox --mode agent
 | `/sessions clear` | 开始新的空白会话；实际 session 会在下一条消息发送时创建 |
 | `/sessions del <id>` | 通过 ID 前缀删除会话 |
 | `/clear` | 清空对话 |
+| `/expert [list\|show <id>\|bind <id>\|unbind\|switch <id>]` | 管理会话的主角团绑定 |
+| `/cron add\|list\|enable\|disable\|remove\|run` | 管理定时任务 |
+| `/workflows [list\|show <id>\|cancel <id>]` | 管理 workflow 运行 |
 
 `/sessions` 选择框支持方向键上下选择、回车切换、`n` 开始新会话、`d` 删除选中会话、Esc 关闭。
 
-### 技能
+### 技能与 MCP
 
 | 命令 | 描述 |
 |------|------|
 | `/skills` | 列出可用技能 |
 | `/skill <name>` | 激活指定技能 |
 | `/skill:<name>` | 激活技能（替代语法） |
+| `/skillhub [search <q>]` | 打开在线技能市场或搜索 |
+| `/skillmgr` | 打开已安装技能管理器 |
+| `/init_mcp [project\|global] [basic\|full] [--force]` | 创建 MCP 配置模板 |
+| `/mcps` | 列出已配置的 MCP 服务器 |
+| `/paste-image` | 从剪贴板附加图像（平台支持时） |
 
 ### 通用
 
 | 命令 | 描述 |
 |------|------|
+| `/stats server\|stop-server\|tui` | 打开、停止或打印用量统计 |
 | `/help` | 显示帮助 |
 | `/quit` | 退出 |
 
@@ -6089,6 +6347,12 @@ mothx acp --sandbox --mode agent
 | `VIBECODING_MODE` | 覆盖默认模式 |
 | `VIBECODING_THINKING` | 覆盖默认思考级别 |
 | `VIBECODING_USER_AGENT` | 自定义 User-Agent 字符串 |
+| `VIBECODING_ALLOW_SHELL_CONFIG` | 允许 `!command` 凭证/header 解析 |
+| `VIBECODING_DEBUG` | 启用 provider 请求/响应调试输出 |
+| `VIBECODING_NO_UPDATE_CHECK` | 禁用更新检查 |
+| `MOTHX_ACP_PERMISSION_TIMEOUT` | ACP 审批默认超时（Go duration） |
+| `MOTHX_ACP_QUESTION_TIMEOUT` | ACP 提问默认超时（Go duration） |
+| `MOTHX_WIN_OUTPUT_ENCODING` | 覆盖 Windows 捕获输出的解码方式（`utf-8` 或代码页数字） |
 
 ## 退出码
 
@@ -6263,9 +6527,12 @@ MothX 使用两个配置文件:
 | `enablePlanTool` | bool | `true` | 是否注册内置 `plan` 工具 |
 | `enableArtifact` | bool | `false` | 是否允许 TUI/CLI 会话发布生成制品 |
 | `enableACPArtifact` | bool | `false` | 是否允许 Desktop/ACP 会话发布生成制品 |
+| `imageGeneration` | object | *(默认关闭)* | 独立图像生成工具设置 |
 | `maxContextTokens` | int | `0` (自动) | 覆盖最大上下文 token 数 |
 | `contextFiles` | object | *(见下文)* | 上下文文件加载设置 |
 | `skillsDir` | string | `"~/.mothx/skills"` | 全局技能目录路径 |
+| `skills` | object | *(空)* | 技能加载覆盖（目前为禁用列表） |
+| `skillHub` | object | 内置默认值 | 在线技能市场设置 |
 | `compaction` | object | *(见下文)* | 上下文压缩设置 |
 | `sandbox` | object | *(见下文)* | 沙箱执行设置 |
 | `sessionDir` | string | `"~/.mothx/sessions"` | SQLite 会话存储目录 |
@@ -6275,8 +6542,9 @@ MothX 使用两个配置文件:
 | `tuilang` | string | `"auto"` | TUI 语言: `"auto"`、`"zh"` 或 `"en"` |
 | `retry` | object | *(见下文)* | API 调用重试设置 |
 | `approval` | object | *(见下文)* | Bash 命令审批设置 |
+| `worktree` | object | *(见下文)* | 隔离 git worktree 设置 |
 | `maintenance` | object | *(见下文)* | Runtime 自有后台维护（附件存储回收） |
-| `webSearch` | object | *(见下文)* | Hosted web search 设置 |
+| `webSearch` | object | *(见下文)* | DeepSeek 网页搜索/抓取工具设置 |
 | `updateCheck` | bool | `true` | 启用 npm 版本更新检测通知 |
 
 ---
@@ -6384,7 +6652,6 @@ TUI 专用状态行命令配置。启用后，MothX 会在交互式 TUI 中把�
       "apiKey": "${VOLCENGINE_API_KEY}",
       "api": "openai-chat",
       "models": [
-        { "id": "doubao-seed-2-1-turbo-260628", "name": "Doubao Seed 2.1 Turbo", "contextWindow": 262144, "maxTokens": 262144, "input": ["text"] },
         { "id": "doubao-seed-evolving", "name": "Doubao Seed Evolving", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] },
         { "id": "doubao-seed-2-1-pro-260628", "name": "Doubao Seed 2.1 Pro", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] }
       ]
@@ -6437,27 +6704,44 @@ mothx --provider openai --model gpt-5.3-codex
 
 ### webSearch
 
-Hosted web search 设置。默认关闭。
+本地网页搜索后端设置。默认关闭。启用后，MothX 会为没有原生托管搜索的聊天 provider 注册本地 `web_search` 工具；DeepSeek 后端还会注册 `web_fetch`。OpenAI Responses 的 provider 原生托管搜索仍然自动可用；Anthropic Messages 在 `webSearch` 启用时使用其 provider 原生托管搜索。两者都优先于本地 `web_search` 函数。
 
 | 字段 | 类型 | 必填 | 默认值 | 描述 |
 |------|------|------|--------|------|
-| `enabled` | bool | — | `false` | 启用 hosted web search 注册 |
-| `provider` | string | — | `defaultProvider` | 用于 web search 的 provider 配置名称 |
-| `providerType` | string | — | 自动 | Hosted tool 类型，通常是 `responses` 或 `messages` |
-| `model` | string | — | `""` | 可选 metadata，用于路由、展示或未来 provider-specific 处理 |
+| `enabled` | bool | — | `false` | 启用本地 `web_search`（DeepSeek 后端同时启用 `web_fetch`） |
+| `backend` | string | — | `deepseek` | `deepseek` 或 `yuanbao`（腾讯元宝 SearchPro） |
+| `provider` | string | — | `deepseek-openai` | DeepSeek 凭证回退 provider；元宝后端忽略该字段 |
+| `baseUrl` | string | — | 后端默认值 | DeepSeek：`https://api.deepseek.com`（追加 `/v1/tools/search`、`/v1/tools/fetch`）。元宝：`https://api.wsa.cloud.tencent.com`（`/SearchPro`） |
+| `token` | string | — | 后端默认值 | DeepSeek：provider 的 `apiKey` 或 `${DEEPSEEK_API_KEY}`。元宝：`${TENCENTCLOUD_WSA_APIKEY}`。显式值优先 |
+
+DeepSeek 示例：
 
 ```json
 {
   "webSearch": {
     "enabled": true,
-    "provider": "gpt",
-    "providerType": "responses",
-    "model": "gpt-5.4"
+    "backend": "deepseek",
+    "provider": "deepseek-openai",
+    "baseUrl": "https://api.deepseek.com",
+    "token": "${DEEPSEEK_API_KEY}"
   }
 }
 ```
 
-当 `provider` 指向一个已配置的 provider 名称时，MothX 会先解析该 provider 的 `baseUrl`、`api` 和 vendor 行为，再注册 hosted search tool。OpenAI Responses provider 还会自动暴露原生 Responses `web_search` 工具；该原生能力不依赖 `webSearch.enabled`。
+腾讯元宝示例：
+
+```json
+{
+  "webSearch": {
+    "enabled": true,
+    "backend": "yuanbao",
+    "baseUrl": "https://api.wsa.cloud.tencent.com",
+    "token": "${TENCENTCLOUD_WSA_APIKEY}"
+  }
+}
+```
+
+两个后端均使用 Bearer 鉴权且为只读请求，可在 plan 模式使用。`deepseek` 后端中，`web_search` 支持 query 及可选的 `count`（1–50）、`ori_question`、`localization`、`need_content`；`web_fetch` 接受一个 HTTP/HTTPS URL 并以 Markdown 返回网页内容。`yuanbao` 后端中，`web_search` 向 `/SearchPro` 发送 `{"Query": ...}`，并把返回的 `Pages` 归一化为标题、URL、站点、时间、分数与正文摘要；元宝 API 目前只提供搜索，因此不注册 `web_fetch`。
 
 #### api 字段
 
@@ -6562,12 +6846,19 @@ Google 原生 provider 可以直接配置：
 | `"anthropic"` | 使用 Anthropic `thinking` 带 `budget_tokens` |
 | `"deepseek"` | 使用 DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort` (OpenAI) 或 `output_config.effort` (Anthropic) |
 | `"xiaomi"` | 旧的 thinking-only 格式: `thinking: {type: "enabled"}` |
+| `"thinking-only"` | 只发送思考开关，不发送强度字段；用于让不兼容的 DeepSeek V4.1 部署退出 `reasoning_effort` |
+| `"deepseek-v4.1"` | DeepSeek V4.1 `reasoning_effort`: `none`（不思考）、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` |
 | `"doubao-seed"` | 豆包 Seed 2.1 / Evolving `reasoning_effort`: `minimal`（不思考）、`low`、`medium`、`high`（默认） |
 
 未设置时自动检测：
 - URL 包含 `deepseek` → `"deepseek"`
 - URL 包含 `xiaomimimo` → `"xiaomi"`
 - 模型 ID 匹配 `doubao-seed-2.1*` 或 `doubao-seed-evolving` → `"doubao-seed"`
+- 模型 ID 包含 `deepseek-v4.1` 或 `deepseek-v4-1` → `"deepseek-v4.1"`
+
+显式的 provider `thinkingFormat`（或模型的 `compat.thinkingFormat`）始终优先于上述自动检测。仅接受旧思考开关的部署可将 `thinkingFormat` 设为 `thinking-only`，退回不使用 `reasoning_effort`。
+
+MothX 也会在运行时学习该能力：当 OpenAI 兼容网关拒绝 `reasoning_effort` 时，会立即去掉该参数重试，在重试提示中说明原因，并把该模型的 `thinkingFormat` 记录为 `thinking-only`、`supportsReasoningEffort` 记录为 `false`，后续运行不再发送该参数。
 
 ```json
 {
@@ -6676,6 +6967,33 @@ Google 原生 provider 可以直接配置：
 
 ---
 
+### imageGeneration
+
+用于 `image_generation` 工具的独立图像生成配置。只有 `enabled` 为 `true` 时才注册该工具。省略的端点字段会回退到所选 provider，因此通常只需配置 `enabled` 与 `provider`。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `enabled` | bool | `false` | 是否注册 `image_generation` 工具 |
+| `provider` | string | `openai` | 用于填充省略的 `apiType`、`baseUrl` 与 `token` 的 provider |
+| `apiType` | string | `openai-images` | `openai-images`（Images API）或 `openai-responses`（Responses 原生图像生成） |
+| `baseUrl` | string | provider `baseUrl`，再回退 `https://api.openai.com/v1` | 图像 API 端点 |
+| `token` | string | provider `apiKey` | 凭证；支持 `${ENV_VAR}` 与需显式开启的 `!command` 解析 |
+| `model` | string | `gpt-image-1` | 图像模型 ID |
+
+```json
+{
+  "imageGeneration": {
+    "enabled": true,
+    "provider": "openai",
+    "model": "gpt-image-1"
+  }
+}
+```
+
+工具参数见 [`image_generation`](tools.md#image_generation---图像生成)。
+
+---
+
 ### toolExecution
 
 该设置只控制本地执行。`sequential` 只会限制响应到达后的 MothX 本地 worker，不会要求模型一次只生成一个 tool call；provider 仍可能在一次响应中返回多个 tool call。`parallel` 批次按模型声明的顺序上报每个调用的启动，该顺序不阻塞执行：调用之间仍然并发运行，各自独立等待审批与持久化执行记录，只有完成顺序不受限制。TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 都使用同一配置。它不控制 OpenAI Responses `web_search` 等 provider 托管工具内部的并发；托管工具仍由 provider 自己的编排和配额规则负责。
@@ -6741,6 +7059,7 @@ WebUI 在“设置 > Tools”中提供这两个字段，TUI 在 `/settings` > Be
 | `medium` | 中等级别 (默认) |
 | `high` | 高级别 |
 | `xhigh` | 最高级别 |
+| `max` | provider/模型支持的最高级别（例如 DeepSeek V4.1 的 `reasoning_effort`） |
 
 ```json
 { "defaultThinkingLevel": "medium" }
@@ -6830,6 +7149,46 @@ MothX 会自动搜索并加载以下文件:
 技能加载位置：
 - **全局技能**: `<skillsDir>/<name>/SKILL.md`
 - **项目技能**: `.skills/<name>/SKILL.md` (覆盖全局)
+
+### skills
+
+按名称禁用技能，而无需删除目录。被禁用的技能不会加载到系统提示词，也不能在当前会话中激活。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `disabled` | string array | `[]` | 要排除的技能名称 |
+
+```json
+{
+  "skills": {
+    "disabled": ["legacy-release-checklist"]
+  }
+}
+```
+
+目录优先级与激活命令见[技能系统](skills.md)。
+
+### skillHub
+
+`/skillhub` 以及 Desktop/WebUI 技能浏览器使用的在线技能市场设置。省略 `markets` 时使用内置市场定义。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `defaultMarket` | string | `"skillhub.cn"` | 打开市场时默认选择的市场 |
+| `defaultInstallScope` | string | `"project"` | 默认安装位置：`project` 或 `global` |
+| `officialHandles` | string array | 内置官方 handle | 视为官方发布者的市场 handle |
+| `markets` | object array | 内置市场 | 自定义市场定义：`{ id, name, siteURL, apiURL, enabled, apiToken }` |
+
+```json
+{
+  "skillHub": {
+    "defaultMarket": "skillhub.cn",
+    "defaultInstallScope": "project"
+  }
+}
+```
+
+命令与市场行为见[在线 Skill 市场](skillhub.md)。
 
 ---
 
@@ -7143,6 +7502,30 @@ Agent 模式下：
   }
 }
 ```
+
+### worktree
+
+由共享 Runtime（`agentruntime.WorktreeManager`）管理的隔离 git worktree。默认位于 `<data-dir>/worktrees`，并注册在 sessions 数据库中，因此 TUI/CLI、ACP/Desktop 与子 Agent 共享同一份注册表。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `enabled` | bool | `true` | 是否允许创建新 worktree；`false` 仍保留 `list`、`remove`、`reset` |
+| `branchPrefix` | string | `"mothx"` | 创建 worktree 的分支名前缀 |
+| `startCommand` | string | `""` | 创建/重置后执行的默认启动命令 |
+| `perChildSubagents` | bool | `false` | 每个子 Agent 使用独立 worktree |
+| `esm` | bool | `false` | ESM worker/critic/audit 角色为每个目标共享一个 worktree |
+
+```json
+{
+  "worktree": {
+    "enabled": true,
+    "branchPrefix": "mothx",
+    "perChildSubagents": false
+  }
+}
+```
+
+使用 [`mothx worktree`](cli-reference.md#worktree---隔离-git-worktree) 或对应的 ACP/Desktop 控件创建、列出、重置与删除 worktree。
 
 ### maintenance（后台维护）
 
@@ -7546,6 +7929,116 @@ settings.json.bak_20260715-143000
 
 ---
 
+## MothX 桌面客户端
+
+Source: https://mothx.net/zh/desktop.md
+
+# MothX 桌面客户端
+
+MothX Desktop 是 MothX 的图形客户端，也是一个**纯 ACP（Agent Client
+Protocol）客户端**：Electron 主进程启动内置的 `mothx acp` 运行时，通过 stdio
+上的 newline-delimited JSON-RPC 通信。它不会启动 `mothx serve`，不会嵌入
+Svelte Web UI，也不提供 HTTP 或 token 隧道。
+
+## 它是什么
+
+- **唯一的 ACP client。** `desktop/main/acp-client.ts` 负责请求关联、通知、
+  反向审批/提问请求、重启/退避与生命周期。渲染进程只通过 preload IPC 桥访问
+  `window.mothx`。
+- **独立前端。** 渲染层位于 `desktop/renderer/`，使用 React 19 + shadcn/ui +
+  Tailwind CSS，与 `ui/` 中的 Svelte Web UI 完全分离。
+- **轻量投影。** 会话、运行、消息、工具、审批、提问、附件、制品、主角团、
+  知识库、worktree、provider、MCP 配置与调度都是权威的 ACP/Runtime 状态；
+  Desktop 只通过 ACP 方法渲染和管理这些状态。
+- **只保存展示状态。** 主题、语言与新会话目录历史保存在
+  `desktop-store.json`。运行时二进制选择（内置或用户指定路径）属于 Electron
+  主进程的客户端启动状态，不是工作区或安全边界。
+
+## 功能
+
+- 流式文本、推理、工具卡片、diff、计划卡片以及 usage/缓存投影。
+- 基于共享 Runtime 决策模型的审批与提问对话框。
+- 会话列表、历史分页、分叉、恢复、重命名/元数据、项目分组、置顶与删除。
+- 附件与生成制品，包括制品卡片与预览。
+- 主角团：为会话绑定主角或团队；替换已绑定主角会创建会话分叉。
+- 知识库：创建、扫描、查看运行记录/来源、查询、调度与清除索引。
+- 与 CLI 和 Runtime 共享的隔离 git worktree。
+- provider/model、模式、思考级别、沙箱、浏览器与 Web 搜索设置。
+- 技能与在线 Skill Hub、MCP 服务器、记忆、定时任务与用量统计。
+- 子 Agent 状态与只读子 Agent 执行记录面板。
+
+可选控件由 `initialize._meta["mothx.dev"].features` 中声明的能力键 gate。
+如果缺少某个键，对应面板或操作应不可用，而不是被静默模拟。
+
+## 构建与运行
+
+在仓库根目录：
+
+```bash
+make desktop-vendor    # npm ci + 构建并 vendor 当前平台运行时
+make desktop-build     # 将 main/preload 与 renderer 打包到 desktop/dist
+make desktop-dev       # renderer watch + Electron + DevTools/CDP
+```
+
+在 `desktop/` 目录：
+
+```bash
+npm run build          # 构建 main/preload/renderer
+npm run typecheck      # TypeScript 边界检查
+npm test               # main/preload/renderer 与协议测试
+npm run e2e            # 可选的 Electron ACP 冒烟测试
+npm start              # version:set + ensure:electron + build + 启动
+```
+
+`make desktop-dev` 会先准备运行时，并使用 `desktop/.dev-user-data/`，避免开发实例
+与已安装应用争夺单实例锁。Linux 需要可用的显示服务器；请使用真实桌面会话、
+`ssh -X` 或 Xvfb。没有 `DISPLAY` 时 Electron 会在 Chromium 启动阶段退出。
+
+开发包：
+
+```bash
+make desktop-dist-dev-linux
+make desktop-dist-dev-mac
+make desktop-dist-dev-win
+```
+
+打包应用会内置源码构建的 `mothx` 运行时。Electron 主进程按以下顺序解析：
+`MOTHX_BINARY`（开发覆盖）→ Desktop 设置中选择的自定义二进制 → 内置 vendor
+目录 → 仓库 `bin/` 目录。自定义二进制不可用时回退到内置运行时。
+
+## 运行时与协议
+
+Desktop 使用 [ACP 协议](acp.md) 中记录的 ACP v1 接口以及 `mothx.dev` 扩展。
+主进程启动一个共享 ACP 子进程，并通过它路由多个会话。它不会直接读取
+`settings.json`、sessions 数据库或 Serve 配置；管理操作使用 `mothx/manage/*`
+并按能力键 gate。
+
+常见方法分组：
+
+- 生命周期：`initialize`、`mothx/doctor`
+- 会话：`session/new`、`session/load`、`session/resume`、`session/fork`、
+  `session/list`、`session/close`、`session/delete`
+- 运行：`session/prompt`、`session/cancel`、`$/cancel_request`
+- 配置：`session/set_config_option`、`session/set_mode`
+- 通知：`session/update`、`_mothx/session_event`
+- 反向请求：`session/request_permission`、`mothx/requestQuestion`
+- 附件/制品：`mothx/attachment/list|fetch`
+- 管理：`mothx/manage/*`
+
+## 故障排查
+
+- **Linux 白屏或崩溃**：确认 `DISPLAY` 指向可用的 X 服务器，或在 Xvfb 下运行。
+- **自定义运行时无法启动**：确认路径可执行，并且 `mothx --version` 输出兼容版本；
+  Desktop 会回退到内置运行时。
+- **可选面板缺失**：运行时没有声明对应能力键。请同时更新内置运行时与 Desktop
+  版本。
+- **审批或提问一直不结束**：检查 ACP 决策超时（`--permission-timeout`、
+  `--question-timeout`，或 `MOTHX_ACP_PERMISSION_TIMEOUT` /
+  `MOTHX_ACP_QUESTION_TIMEOUT`）。Runtime 会把无法恢复的 pending decision
+  终止化。
+
+---
+
 ## 开发指南
 
 Source: https://mothx.net/zh/development.md
@@ -7603,59 +8096,41 @@ go test -run TestReadTool ./internal/tools/
 
 ```
 mothx/
-├── agent/                     # 公共 Agent/Provider 接口和 Builder
-├── bootstrap/                 # 嵌入式使用的 bootstrap 包
-├── cmd/mothx/            # CLI 入口点
-│   ├── main.go                # 主程序
-│   └── main_doctor.go         # `doctor` 子命令
+├── agent/                     # 公共 SDK 类型（Agent、Provider、Builder）
+├── bootstrap/                 # 将公共 SDK 接口接到内部实现
+├── cmd/mothx/                 # CLI 入口与子命令
+├── desktop/                   # Electron 桌面客户端（纯 ACP）
+├── ui/                        # 内嵌到 Serve 的 Svelte Web UI
 ├── internal/
-│   ├── a2a/                   # A2A 协议服务器和 Master 模式
-│   ├── acp/                   # ACP / MCP 集成
-│   ├── agent/                 # 核心 Agent 循环
-│   │   ├── agent.go           # Agent 主逻辑
-│   │   ├── factory.go         # AgentFactory
-│   │   ├── manager.go         # AgentManager
-│   │   ├── router.go          # EventRouter
-│   │   ├── subagent.go        # subagent_* 工具
-│   │   ├── events.go          # 事件类型定义
-│   │   ├── provider.go        # Provider 适配器
-│   │   └── system_prompt.go   # 系统提示词生成
-│   ├── config/                # 配置管理
-│   ├── context/               # 上下文管理和 token 估算
-│   ├── contextfiles/          # 上下文文件加载
-│   ├── cron/                  # 定时任务存储和调度器
-│   ├── serve/                 # 统一 OpenAI API、Web UI 和消息通道
-│   ├── mcp/                   # MCP 服务器集成
-│   ├── memory/                # 持久化记忆 (memory.md)
-│   ├── messaging/             # 消息平台抽象
-│   ├── platform/              # 跨平台兼容性
-│   ├── provider/              # LLM Provider 抽象
-│   │   ├── anthropic/         # Anthropic Messages API
-│   │   ├── google/            # Google Gemini/Vertex API
-│   │   ├── openai/            # OpenAI Chat Completions API
-│   │   ├── factory/           # 共享 provider/model 构建
-│   │   └── vendor*.go         # 厂商适配器注册表
-│   ├── sandbox/               # 沙箱抽象 (bwrap, none)
-│   ├── session/               # 会话管理 (SQLite)
-│   ├── skills/                # 技能系统
-│   ├── stats/                 # 用量统计 Web 面板
+│   ├── agent/                 # 核心 Agent 循环、事件、提示词、子 Agent 工具
+│   ├── agentruntime/          # 前端中立的共享 Runtime 与 Run 生命周期
+│   ├── acp/                   # ACP 服务器与 mothx.dev 扩展
+│   ├── a2a/                   # A2A 服务器与远程 Agent master 调度
+│   ├── architecture/          # 架构护栏测试
+│   ├── browser/               # vibe-browser 工具
+│   ├── config/                # settings.json / serve.json
+│   ├── context/, contextfiles/# Token 预算与项目上下文
+│   ├── cron/                  # 定时任务存储与调度器
+│   ├── dao/                   # 唯一 SQL/查询/行映射 owner
+│   ├── db/                    # 连接/事务/迁移生命周期
+│   ├── esm/                   # Enable Supervisor Mode
+│   ├── expert/                # 主角团包发现与校验
+│   ├── imageproc/             # 图像归一化
+│   ├── mcp/                   # MCP 集成
+│   ├── memory/, messaging/    # 通道记忆与平台抽象
+│   ├── platform/              # 跨平台辅助与资源
+│   ├── provider/              # 协议 provider、vendor 适配器、factory
+│   ├── sandbox/               # 沙箱抽象
+│   ├── serve/                 # OpenAI API、Web UI、channels、hooks、cron
+│   ├── session/               # 会话领域、迁移、事件存储
+│   ├── skills/, skillhub/     # 技能与市场
+│   ├── stats/                 # 用量统计
 │   ├── systeminit/            # AGENTS.md 生成
-│   ├── tools/                 # 工具实现
-│   │   ├── bash.go            # Bash 命令执行
-│   │   ├── read.go            # 文件读取
-│   │   ├── write.go           # 文件写入
-│   │   ├── edit.go            # 文件编辑
-│   │   ├── grep.go            # 内容搜索（纯 Go ripgrep）
-│   │   ├── find.go            # 文件查找（纯 Go fd）
-│   │   ├── ls.go              # 目录列表
-│   │   ├── plan.go            # 任务计划
-│   │   ├── question.go        # 用户问题澄清
-│   │   ├── skill_ref.go       # 技能引用加载
-│   │   └── a2a_dispatch.go    # A2A 远程 Agent 分发
-│   ├── tui/                   # 终端 UI (BubbleTea)
-│   └── workflow/              # 工作流运行时 (JavaScript DSL)
-├── example/                   # SDK 示例
-└── pkg/sdk/                   # 公共 SDK 接口
+│   ├── tools/                 # 内置工具
+│   ├── tui/                   # Bubble Tea TUI
+│   └── workflow/              # JavaScript workflow 运行时
+├── example/                   # 公共 SDK 示例
+└── docs/                      # 双语文档、生成索引与站点
 ```
 
 ## 核心接口
@@ -7677,10 +8152,29 @@ type Provider interface {
 type Tool interface {
     Name() string
     Description() string
+    PromptSnippet() string
+    PromptGuidelines() []string
     Parameters() json.RawMessage
-    Execute(ctx context.Context, params json.RawMessage) (string, error)
+    Execute(ctx context.Context, params map[string]any) (ToolResult, error)
 }
 ```
+
+## Agent Runtime 规则
+
+生产代码的 Agent 构造与执行遵循共享 Runtime 边界：
+
+- 只能通过 `SessionRuntime.BuildAgent`、`BuildTransientAgent` 或
+  `agentruntime.NewAgentManager` 创建 Agent；不要在适配器中拼装完整
+  `agent.Config`，也不要直接调用 `agent.New`/`agent.NewWithLoopConfig`。
+- 通过 `ResolveSource`/`ResolvePolicy` 统一解析一次 source、模式、能力、工具、
+  沙箱、审批、MCP 与运行策略；适配器只投影结果。
+- 持久化 Run 使用 `ExecutionRuntime`/`RunStore`，并且只产生一个规范终态事件；
+  不要实现第二套 Run 状态机。
+- 审批与提问使用 `DecisionService`/`DecisionRecord`。
+- 所有 SQL 放在 `internal/dao`；`internal/db` 只负责连接、事务与迁移生命周期。
+- 保持入口层轻薄：TUI、CLI、WebUI/API、Desktop/ACP、channels、Cron、ESM 与
+  A2A 可以解码协议和渲染事件，但不能拥有会话、Run 生命周期、附件、制品或策略。
+- 移动生产构造或持久化调用点后，运行 `go test ./internal/architecture`。
 
 ## 添加新工具
 
@@ -7711,6 +8205,14 @@ func (t *MyTool) Description() string {
     return "Description of my tool"
 }
 
+func (t *MyTool) PromptSnippet() string {
+    return "系统提示词中的一行简短描述"
+}
+
+func (t *MyTool) PromptGuidelines() []string {
+    return []string{"当……时使用该工具"}
+}
+
 func (t *MyTool) Parameters() json.RawMessage {
     return json.RawMessage(`{
         "type": "object",
@@ -7724,38 +8226,27 @@ func (t *MyTool) Parameters() json.RawMessage {
     }`)
 }
 
-func (t *MyTool) Execute(ctx context.Context, params json.RawMessage) (string, error) {
-    var p struct {
-        Param1 string `json:"param1"`
+func (t *MyTool) Execute(ctx context.Context, params map[string]any) (ToolResult, error) {
+    param1, _ := params["param1"].(string)
+    if param1 == "" {
+        return ToolResult{}, fmt.Errorf("param1 is required")
     }
-    if err := json.Unmarshal(params, &p); err != nil {
-        return "", err
-    }
-    // 实现工具逻辑
-    return "result", nil
+    return NewTextToolResult("result"), nil
 }
 ```
 
 ### 步骤 2: 注册工具
 
-在 `internal/tools/tool.go` 的 `RegisterDefaults()` 方法中添加:
+在 `internal/tools/tool.go` 的 `builtinToolOrder` 中加入规范名称，并在
+`builtinToolFactories()` 中注册构造函数。`RegisterDefaults`、
+`RegisterDefaultsWithPlanTool` 与 `RegisterFiltered` 都从这两个列表派生，
+因此注册会保持一致。
 
-```go
-func (r *Registry) RegisterDefaults() {
-    r.Register(&ReadTool{workdir: r.workdir})
-    r.Register(&WriteTool{workdir: r.workdir})
-    r.Register(&EditTool{workdir: r.workdir})
-    r.Register(&BashTool{workdir: r.workdir, sandbox: r.sandbox})
-    r.Register(&GrepTool{workdir: r.workdir})
-    r.Register(&FindTool{workdir: r.workdir})
-    r.Register(&LsTool{workdir: r.workdir})
-    r.Register(&MyTool{workdir: r.workdir}) // 添加新工具
-}
-```
+### 步骤 3: 为系统提示词提供描述
 
-### 步骤 3: 更新系统提示词
-
-在 `internal/agent/system_prompt.go` 中添加工具描述。
+从工具返回简洁的 `PromptSnippet` 与有针对性的 `PromptGuidelines`。共享 Runtime
+会用这些方法构建 Available tools 与 Guidelines 段落；不要在各适配器中重复添加
+提示词文本。
 
 ### 步骤 4: 编写测试
 
@@ -7770,15 +8261,12 @@ import (
 
 func TestMyTool_Execute(t *testing.T) {
     tool := NewMyTool("/tmp")
-    params := `{"param1": "value"}`
-    
-    result, err := tool.Execute(context.Background(), json.RawMessage(params))
+    result, err := tool.Execute(context.Background(), map[string]any{"param1": "value"})
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
-    
-    if result != "expected" {
-        t.Errorf("expected 'expected', got '%s'", result)
+    if result.Text != "expected" {
+        t.Errorf("expected 'expected', got %q", result.Text)
     }
 }
 ```
@@ -7807,7 +8295,7 @@ func init() {
 }
 ```
 
-CLI 和 ACP 的 provider 创建统一走 `internal/provider/factory`，不要在 `cmd/mothx/main.go` 或 `internal/acp/acp.go` 中添加厂商专用创建逻辑。
+CLI、ACP、WebUI/Serve 与 Desktop 的 provider 创建统一走 `internal/provider/factory`；Agent 构造统一走 `agentruntime`。不要在适配器中添加厂商专用创建逻辑，也不要在共享 Runtime 之外拼装完整 `agent.Config`。
 
 ### 添加新的协议 Provider
 
@@ -7825,6 +8313,7 @@ CLI 和 ACP 的 provider 创建统一走 `internal/provider/factory`，不要在
 
 ```bash
 make test
+make test-desktop     # Electron main/preload/renderer 测试
 ```
 
 ### 运行特定包的测试
@@ -8098,7 +8587,7 @@ subagent_wait(timeout_ms: 30000)
 <project>/.mothx/experts/<bundle-name>/
 ```
 
-同名时，项目包覆盖全局包，全局包覆盖内置包。一个主角包包含 `expert.json` 与 `agents/` 下的一个或多个 persona 文件；无效包会显示为不可用，且不能被绑定。包格式和架构设计请参阅[主角团实施方案](../proposal/expert-team-mothx-proposal.md)。
+同名时，项目包覆盖全局包，全局包覆盖内置包。一个主角包包含 `expert.json` 与 `agents/` 下的一个或多个 persona 文件；无效包会显示为不可用，且不能被绑定。包格式和架构设计请参阅[主角团实施方案](https://github.com/oschina/mothx/blob/main/docs/proposal/expert-team-mothx-proposal.md)。
 
 ## 用内置 Skill 创建并安装主角团
 
@@ -8399,10 +8888,9 @@ mothx --mode plan
 | 调试 bug | medium |
 
 ```bash
-# 切换思考级别
-/think          # 循环切换
-Tab             # 快捷键
-mothx -t high  # 命令行指定
+# 修改思考级别
+/settings       # 设置 > 默认值 > 思考级别
+mothx -t high   # 在命令行按次指定
 ```
 
 ### Q: 思考模式为什么没有效果？
@@ -8871,12 +9359,12 @@ mothx --provider anthropic --model claude-3-5-sonnet-20241022
 
 ### 厂商适配器
 
-MothX 支持 25+ 厂商适配器，包括：
+MothX 内置 60+ 供应商预设，包括：
 
 - **国内**：小米、火山引擎/豆包、Kimi、MiniMax、Seed、Qianfan、Bailian、Gitee、阶跃星辰、Z.AI、LongCat、AMD Radeon
 - **国际**：Google Gemini、Google Vertex、OpenRouter、Together、Groq、Fireworks、Mistral、GitHub Copilot、Cloudflare AI Gateway、Cloudflare Workers AI、Amazon Bedrock
 
-无需额外配置，只需设置 API 密钥即可使用。
+无需额外配置，只需设置 API 密钥即可使用。完整的内置供应商与模型列表见[供应商/模型目录](../provider-model-list.md)。
 
 ---
 
@@ -9408,6 +9896,9 @@ MothX 会通过 npm registry 检测是否有新版本，并在有可用更新时
 以下能力已集成到当前运行时，使用时请以配置和模型能力为准：
 
 - **OpenAI Responses**：支持原生 response item 回放、reasoning、结构化输出、hosted tools、prompt cache，以及可选的 `responses.background` 持久后台运行。后台任务可查询、取消、重连、放弃，并在 Serve 重启后恢复。
+- **桌面客户端**：独立的 Electron ACP 应用，提供聊天、工具/diff 卡片、审批、提问、制品、主角团、知识库、worktree 与管理面板；它启动内置 `mothx acp` 运行时，不会启动 `mothx serve`。
+- **知识库**：由 Desktop/WebUI 管理、可重建的只读目录索引。索引使用共享 Runtime 的规范 Run，快照原子发布，会话通过标准 Knowledge MCP 服务器查询证据。
+- **附件与制品**：由 Runtime 统一负责接收、存储、重放、provider 转换与投递；`publish_artifact` 是唯一能把完成文件变成可交付制品的路径。
 - **Web UI 管理**：提供会话搜索与分页、运行状态与取消、审批中心、工具结果、技能启用、MCP 配置、Provider/Serve 设置和 `/stats` 统计页面。
 - **MCP**：支持 stdio、streamable HTTP 和 legacy SSE
 - **并行工具执行**：单个 agent 回合内的多个本地函数/自定义工具调用通过有界并行工作池执行。调用的启动按模型声明的顺序上报，且不阻塞执行，因此调用之间仍然并发重叠，只有完成顺序不受限制。`toolExecution` 设置控制 `mode`（`parallel`/`sequential`）和 `maxConcurrency`（默认 `10`）。TUI、WebUI、Serve、channels、ACP 及子 Agent 统一使用。
@@ -9423,7 +9914,7 @@ MothX 会通过 npm registry 检测是否有新版本，并在有可用更新时
 MothX 是一个**全能终端 AI 编程助手**，具有以下核心优势：
 
 1. **一个二进制文件搞定一切**：无需安装多个工具
-2. **多提供商支持**：25+ 厂商适配器，一键切换
+2. **多提供商支持**：60+ 内置供应商预设，一键切换
 3. **安全可控**：沙箱隔离、审批门控、项目级自动审批规则
 4. **丰富的功能**：会话管理、技能系统、统计面板、工作流编排、IDE 集成
 5. **高性能**：SSE 流式传输、缓存命中优化
@@ -9665,7 +10156,7 @@ mothx --mode yolo
 /mode plan      # 切换到 Plan 模式
 /mode agent     # 切换到 Agent 模式
 /model          # 查看当前模型
-/think          # 切换思考级别
+/settings       # 配置默认值，包括思考级别
 /clear          # 清空对话
 /help           # 显示帮助
 /quit           # 退出
@@ -9786,6 +10277,131 @@ mothx doctor
 
 ---
 
+## 知识库
+
+Source: https://mothx.net/zh/knowledge-bases.md
+
+# 知识库
+
+知识库是由 Desktop/WebUI 管理的、可重建的目录索引。它不是聊天附件仓库，不是
+通用 RAG 路径，也不是特殊的 Agent 模式。源目录是**只读**的：MothX 不会写入源
+目录，删除知识库也绝不会删除源目录。
+
+它适合“针对这个仓库、文档树或笔记目录提问”，同时保持普通 Agent Runtime 与
+工具链不变。
+
+## 创建知识库
+
+在 Desktop 或 WebUI 中选择 **新建知识库**，并设置：
+
+| 字段 | 说明 |
+|------|------|
+| `name` | 显示名称 |
+| `rootDir` | 源目录绝对路径（只读） |
+| `preprocessProfile` | `documents`、`code`、`notes` 或 `mixed` |
+| `provider` / `model` | 扫描时受限 indexer Agent 使用的模型 |
+| `mode` | indexer 运行模式；无人值守扫描会解析为安全的无人值守模式 |
+| `thinkingLevel` | indexer 可选的思考级别 |
+| `schedule` | 仅 Desktop：`manual`、`hourly`、`daily`、`weekly`、`monthly` 或 5 段 cron 表达式 |
+| `enabled` | 暂停调度但不删除知识库 |
+| `ignoreGlobs` | 可选的、相对于源目录根部的 glob 规则 |
+
+各 profile 覆盖的文件：
+
+- `documents`：Markdown、MDX、文本、reStructuredText、AsciiDoc、HTML
+- `code`：源码与配置文件（Go、TS/JS、Python、Java、Rust、C/C++、C#、Ruby、
+  PHP、Swift、Kotlin、SQL、JSON、YAML、TOML、XML、GraphQL、shell）以及 Markdown
+- `notes`：Markdown 与文本
+- `mixed`：文档与代码集合
+
+首版不会对 PDF/Office 做确定性正文提取。它们会在发现诊断中标记为
+skipped/unsupported；Agent 仍可用普通只读工具从源目录读取。二进制、超大或不可读
+文件会被跳过，而不是交给模型。
+
+忽略规则由固定目录列表（`.git`、`.hg`、`.svn`、`.mothx`、`node_modules`、
+`vendor`、`dist`、`build`、`coverage`、`.next`、`.vite`）、`ignoreGlobs`，以及
+源目录根部 `.gitignore` / `.mothxignore` 的建议规则共同组成。发现阶段会报告
+`discovered`、`ignored`、`skipped`，不会静默排除文件。
+
+## 索引
+
+扫描是一次普通的 Runtime Agent 执行，拥有规范的持久化 Run。它会：
+
+1. 发现并校验源目录内的文件。
+2. 应用忽略规则并记录诊断。
+3. 提取确定性文本 chunk，构建图/FTS 快照。
+4. 可选地运行受限 indexer Agent 丰富图数据。
+5. 原子发布完成的快照并切换为 active。
+
+如果重建失败或被取消，之前的 active 快照仍然可用。手动与定时扫描共享同一套
+后台任务机制，并会合并触发：扫描期间到达的触发会合并为恰好一次后续扫描。定时
+扫描使用共享 Cron 存储；对应 Cron job 带命名空间，不会作为用户自动化任务暴露。
+
+可在 **索引运行记录** 中查看状态、计数、差异摘要与失败码。`clear` 会删除 active
+索引，但保留知识库配置与源目录。
+
+## 在会话中查询
+
+主会话只能通过配置好的标准 Knowledge MCP 服务器访问知识库：
+
+```bash
+mothx knowledge-mcp serve --knowledge-base <id>
+```
+
+把该命令注册为会话的普通 MCP 服务器。服务器暴露 `search_knowledge_base`；MCP
+允许列表就是授权边界。结果是带文件/chunk 引用与不确定性元数据的有界参考数据；
+它们是不可信的工具输出，而不是指令。
+
+不存在知识库专用的 Agent 模式、提示词注入、渲染层预查询或独立查询模型。Agent
+像调用其他工具一样调用该 MCP 工具，并基于返回证据推理。
+
+```bash
+mothx knowledge-mcp serve \
+  --knowledge-base kb_123 \
+  --knowledge-base kb_456
+```
+
+`--session-dir` 可覆盖会话存储目录（默认读取 `settings.json`）。见
+[`knowledge-mcp`](cli-reference.md#knowledge-mcp---知识库-mcp-服务器)。
+
+## 管理
+
+Desktop 使用下列按能力 gate 的 ACP 投影进行管理；WebUI 则使用
+`/api/knowledge-bases` 下对应的 Serve REST 接口：
+
+- `mothx/manage/knowledge-bases/list|get|create|update|delete`
+- `.../scan`、`.../status`、`.../query`、`.../mcp/apply`
+- `.../runs/list`、`.../runs/get`、`.../sources/list`
+- `.../schedule`、`.../clear`
+
+`knowledgeRuns` 与 `knowledgeSources` 能力键分别 gate 运行历史与文件级来源浏览。
+删除知识库只会移除它自己的数据库与注册信息，绝不会删除或修改源目录。
+
+## 存储
+
+每个知识库拥有一个私有 SQLite 数据库：
+
+```text
+<sessionDir>/knowledge-bases/<id>.db
+```
+
+配置行、快照、文件、chunk、图节点/边、FTS 索引与证据都在该文件中。规范 Run 与
+审计记录仍保存在共享的 `sessions.db`。
+
+该文件是可重建索引，不是事实来源。请备份源目录；索引可以随时重建。
+
+## 安全说明
+
+- 源目录在索引与查询期间都是只读的。
+- Knowledge MCP 允许列表决定会话可以查询哪些知识库。
+- 查询结果有大小上限，必须作为不可信参考数据对待。
+- Indexer/Librarian Agent 只能在源目录内使用普通只读工具；`yolo` 不会把索引变成
+  写、删除、网络或委派权限。
+- `mothx pure` 会归档共享 sessions 数据库，但保留
+  `knowledge-bases/<id>.db` 文件。
+
+---
+
 ## 添加新的 Provider
 
 Source: https://mothx.net/zh/provider-guide.md
@@ -9845,15 +10461,24 @@ func init() {
 
 ```json
 {
-  "providers": [
-    {
-      "name": "my-provider",
-      "base_url": "https://api.myvendor.com/v1",
-      "api_key": "sk-..."
+  "providers": {
+    "my-provider": {
+      "vendor": "my-vendor",
+      "baseUrl": "https://api.myvendor.com/v1",
+      "apiKey": "sk-...",
+      "api": "openai-chat",
+      "models": [
+        { "id": "my-model", "name": "My Model", "contextWindow": 128000 }
+      ]
     }
-  ]
+  },
+  "defaultProvider": "my-provider",
+  "defaultModel": "my-model"
 }
 ```
+
+`providers` 是以 provider ID 为键的对象；字段名是 `baseUrl`/`apiKey`，不是
+`base_url`/`api_key`。provider ID 就是传给 `--provider` 的名称。
 
 解析流程为：
 
@@ -10116,7 +10741,7 @@ mothx -P "生成 API 文档"
 /mode agent     # 切换到 Agent 模式
 /mode yolo      # 切换到 YOLO 模式
 /model          # 查看当前模型
-/think          # 切换思考级别
+/settings       # 配置默认值，包括思考级别
 /clear          # 清空对话
 /help           # 显示帮助
 /quit           # 退出
@@ -11072,6 +11697,9 @@ func truncate(s string, n int) string {
 | `WithSessionDir(dir)` | `~/.mothx/sessions` | 会话持久化目录 |
 | `WithCompaction(enabled, reserve)` | `true, 16384` | 上下文压缩设置 |
 | `WithMultiAgent(bool)` | `false` | 启用子 Agent 工具 |
+| `WithDelegateMode(bool)` | `false` | 启用阻塞式单子 Agent 委托 |
+| `WithExternalTools(tools...)` | 无 | 注册宿主提供的自定义工具 |
+| `WithoutBuiltinTools()` | false | 禁用全部内置编码工具（通常与 `WithExternalTools` 配合） |
 | `WithApprovalHandler(fn)` | nil | 自定义工具审批回调 |
 
 ---
@@ -12136,7 +12764,7 @@ mothx serve init-config project  # 生成 .mothx/serve.json
 - **会话管理**：分页浏览，键盘快捷键，历史会话，运行时快照，能力开关及可安全重连恢复的审批状态。历史会话按最后使用时间倒序排列，最新回复的会话位于最上方；会话管理页面会显示最后回复时间。页面刷新后，活动 run 直到进入终态前仍会保持会话忙碌。
 - **Responses 后台运行**：当 `openai-responses` provider 启用 `responses.background` 时，Serve 会将支持的请求提交为远程后台任务，持久化 response lineage 与归档输出，轮询直到完成，在重启后恢复可恢复任务，并执行本地 function/custom tool 调用。经认证的 run API 支持 `GET /api/responses/runs/{localRunID}?session_id={sessionID}` 以及 `cancel`、`reconnect`、`abandon` 操作；详见[配置](configuration.md#responses-字段)。
 - **设置编辑**：Provider/Model 配置、Defaults、Web 搜索、MCP、上下文文件、压缩、沙箱、重试、审批、Provider 配置。保存 provider、app 或 Serve 配置后，相关状态与工具可用性会立即刷新，无需重启服务。MCP 设置用于编辑全局 `mcp.json`；聊天工具栏可为当前会话编辑项目级 MCP 配置。
-- **原生 Responses Web Search**：OpenAI Responses provider 会自动暴露上游 hosted `web_search` 能力；独立的 Web 搜索设置仅控制 MothX 本地搜索。
+- **DeepSeek Web Search 回退**：启用后，共享 Runtime 会为没有原生托管搜索的 provider 注册本地 `web_search` 工具，后端可通过 `webSearch.backend` 选择 DeepSeek 官方 Search API 或腾讯元宝 SearchPro；DeepSeek 后端还会注册 `web_fetch`。OpenAI Responses 继续保持 provider 原生托管搜索；Anthropic Messages 在 `webSearch` 启用时使用其 provider 原生托管搜索。两者都优先于本地 `web_search` 函数。
 - **通道管理**：微信 QR 登录、飞书配置
 - **WebSocket 流**：`/ws/runs` 和 `/ws/logs` 是 Web UI 使用的 Serve 事件流，不是一个可单独配置的消息通道
 - **设置**：除 provider 和 agent 设置外，还可管理 Memory、WorkDir、Logs、SkillHub、环境变量和 MCP
@@ -13051,7 +13679,7 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | `mode` | string | `"parallel"` | `"parallel"` 使用有界本地 worker 并行执行；`"sequential"` 在本地逐个执行已返回的调用（不影响 provider 侧并行出参） |
 | `maxConcurrency` | int | `10` | 每轮 agent 允许的最大并发工具调用数（设为 `1` 则为串行） |
 
-调用按模型给出的顺序上报启动，后面的调用的启动绝不会早于前面的调用可见。该顺序只约束启动上报，不阻塞执行：调用之间仍然并发运行，各自独立等待审批与写入执行记录，完成顺序不受限制；因此工具完成事件可能乱序输出，但 provider 的后续消息会按原始调用顺序还原。该设置由 TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 统一使用。`sequential` 只改变响应到达后的本地执行顺序；provider 仍可能在一条响应中返回多个 tool call。它不控制 provider 托管工具（如 OpenAI Responses `web_search`）内部的并发；这些调用仍由 provider 自身的编排负责。
+调用按模型给出的顺序上报启动，后面的调用的启动绝不会早于前面的调用可见。该顺序只约束启动上报，不阻塞执行：调用之间仍然并发运行，各自独立等待审批与写入执行记录，完成顺序不受限制；因此工具完成事件可能乱序输出，但 provider 的后续消息会按原始调用顺序还原。该设置由 TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 统一使用。`sequential` 只改变响应到达后的本地执行顺序；provider 仍可能在一条响应中返回多个 tool call。它不控制 provider 设置中直接配置的托管工具（如 Responses Code Interpreter）内部的并发；这些调用仍由 provider 自身的编排负责。
 
 
 ---
@@ -13063,9 +13691,15 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | [`read`](#read---文件读取) | 文件系统 | 读取文件内容（支持图像和分页） | 允许只读访问 | 所有模式 |
 | [`write`](#write---文件写入) | 文件系统 | 创建或覆盖文件 | 需要 Standard/Yolo | CLI, ACP, Serve, Channels |
 | [`edit`](#edit---精确文件修改) | 文件系统 | 原子文本替换修改 | 需要 Standard/Yolo | CLI, ACP, Serve, Channels |
+| [`insert`](#insert---结构化插入文件) | 文件系统 | 在文件的结构化位置插入内容 | 需要 Standard/Yolo | CLI, ACP, Serve, Channels |
+| [`publish_artifact`](#publish_artifact---生成制品发布) | 制品 | 将完成文件复制到 Runtime 管理的附件存储 | 读取工作目录 + 私有附件写入 | 启用制品发布的会话 |
 | [`ls`](#ls---列出目录内容) | 代码探索 | 列出目录下的文件和子目录 | 允许只读访问 | 所有模式 |
 | [`find`](#find---文件搜索) | 代码探索 | 根据通配符匹配搜索文件 | 允许只读访问 | 所有模式 |
 | [`grep`](#grep---文本内容搜索) | 代码探索 | 正则表达式搜索文件内容 | 允许只读访问 | 所有模式 |
+| [`web_search`](#web_search---deepseek-或元宝网页搜索) | 网页 | 通过 DeepSeek Search 或腾讯元宝 SearchPro 搜索实时网页 | 只读网络访问 | 没有原生托管搜索的 provider（OpenAI Responses 与 Anthropic Messages 使用 provider 原生搜索） |
+| [`web_fetch`](#web_fetch---deepseek-网页抓取) | 网页 | 通过 DeepSeek Fetch API 将网页抓取为 Markdown | 只读网络访问 | 由 `webSearch` 启用 |
+| [`browser`](#browser---浏览器自动化) | 网页 | 通过 vibe-browser 控制 Chromium 系浏览器 | 网络 + 本地进程控制 | 由 `--browser` / 浏览器能力启用 |
+| [`image_generation`](#image_generation---图像生成) | 媒体 | 根据文本提示生成图像 | Provider 请求 | 由 `imageGeneration.enabled` 启用 |
 | [`bash`](#bash---命令执行) | 进程执行 | 执行 Shell 命令（支持同步与异步） | 受沙箱级别限制 | CLI, ACP, Serve, Channels |
 | [`jobs`](#jobs---后台任务管理) | 进程执行 | 列出或检查后台运行任务的状态 | 允许只读访问 | 所有模式 |
 | [`kill`](#kill---终止后台任务) | 进程执行 | 终止正在运行的后台任务 | 需要 Standard/Yolo | CLI, ACP, Serve, Channels |
@@ -13081,6 +13715,7 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | [`subagent_destroy`](#subagent_---子-agent-委托) | 多 Agent | 销毁子 Agent 释放其上下文资源 | 销毁释放 | 仅多 Agent 模式 |
 | [`delegate_subagent`](#delegate_subagent---阻塞式单子-agent-委托) | 委托模式 | 同步执行一个子 Agent 任务 | 子 Agent 级权限限制 | 仅 Delegate 模式 |
 | [`workflow_run`](#workflow_run---动态-javascript-workflow) | Workflow | 执行 JavaScript workflow 并编排 worker agent | 子 Agent 级权限限制 | 仅 Workflow 模式 |
+| [`workflow_lint`](#workflow_lint---workflow-校验) | Workflow | 在不运行 worker 的情况下校验 workflow JavaScript | 只读 | 仅 Workflow 模式 |
 | [`workflow_status`](#workflow_status---workflow-运行状态) | Workflow | 查询 workflow 运行记录与结果 | 只读 | 仅 Workflow 模式 |
 | [`workflow_cancel`](#workflow_cancel---workflow-取消) | Workflow | 取消运行中的 workflow | 仅当前进程 active run | 仅 Workflow 模式 |
 | [`a2a_dispatch`](#a2a_dispatch---远程-agent-分发) | 多 Agent | 向配置的远程 A2A Agent 节点发送任务 | 发起网络请求 | 仅 A2A Master 模式 |
@@ -13171,6 +13806,36 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
       "newText": "func Start() {\n\tlog.Println(\"Booting microservice...\")"
     }
   ]
+}
+```
+
+---
+
+### insert - 结构化插入文件
+
+把 UTF-8 文本插入到文件的唯一结构化位置：文件头、文件尾、从 1 开始计数的第 N 行之前或之后。位置是结构性的、没有唯一文本锚点时使用它。精确文本替换、删除或按文本匹配插入请用 `edit`；创建或完整重写文件请用 `write`。
+
+#### 参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | ✓ | 要修改的文件。 |
+| `content` | string | ✓ | 要插入的 UTF-8 文本，不能为空。 |
+| `position` | object | ✓ | `{ "type": "head"\|"tail"\|"before_line"\|"after_line", "line": <从 1 开始的行号> }`；`before_line` 与 `after_line` 必须提供 `line`。 |
+| `create_if_missing` | bool | - | 文件不存在时创建，仅支持 `head` / `tail`，默认 `false`。 |
+| `ensure_newline` | bool | - | 确保插入内容以换行结尾，默认 `true`。 |
+| `dedupe` | object | - | 可选的 `{ "enabled": true, "mode": "exact"\|"trimmed"\|"line" }` 去重检查，命中时跳过插入。 |
+| `dry_run` | bool | - | 只报告 diff 不写入，默认 `false`。 |
+
+按文本匹配的参数（`match`、`match_mode`、`occurrence`）会被明确拒绝，这些语义应使用 `edit`。
+
+#### 示例 payload：
+```json
+{
+  "path": "internal/tools/registry.go",
+  "content": "\tregistry.Register(NewMyTool(registry))\n",
+  "position": { "type": "after_line", "line": 42 },
+  "dedupe": { "enabled": true, "mode": "exact" }
 }
 ```
 
@@ -13313,6 +13978,100 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
   "include": "*.go"
 }
 ```
+
+---
+
+### web_search - DeepSeek 或元宝网页搜索
+
+通过所选本地后端搜索实时网页。`webSearch.backend = "deepseek"` 时调用 DeepSeek 官方 Search API（`POST /v1/tools/search`），使用 `webSearch.baseUrl`/`token` 或所选 provider 凭证；`backend = "yuanbao"` 时调用腾讯元宝 SearchPro（`POST /SearchPro`），发送 `{"Query": ...}`，密钥来自 `webSearch.token` 或 `${TENCENTCLOUD_WSA_APIKEY}`。结果包含排序分数、标题、URL、短摘要、长摘要、可选正文、站点信息、发布时间与权威性。当聊天 provider 具备原生托管搜索（OpenAI Responses）时，MothX 会优先使用托管搜索并省略该本地工具。
+
+#### 参数：
+
+| 参数名 | 类型 | 必填 | 描述 |
+|--------|------|------|------|
+| `query` | string | 是 | 搜索词（1–128 字符），支持 `site:`、`-site:`、`lang:`、`after:`、`before:`、`-词` 与精确短语。 |
+| `count` | integer | 否 | 返回条数，1–50，默认 10。 |
+| `ori_question` | string | 否 | 触发搜索的用户原始问题，有助于理解搜索意图。 |
+| `localization` | string | 否 | 用于优先返回本地化结果的 IP 地址。 |
+| `need_content` | boolean | 否 | 是否在 `content` 中返回网页正文。 |
+
+#### 示例载荷：
+```json
+{
+  "query": "DeepSeek V4 site:github.com OR site:huggingface.co lang:zh after:2025",
+  "count": 5,
+  "need_content": true
+}
+```
+
+---
+
+### web_fetch - DeepSeek 网页抓取
+
+通过 DeepSeek 官方 Fetch API（`POST /v1/tools/fetch`）抓取单个网页并返回 Markdown 正文。目标必须是带 host 且不含用户名/密码的 HTTP/HTTPS URL。
+
+#### 参数：
+
+| 参数名 | 类型 | 必填 | 描述 |
+|--------|------|------|------|
+| `url` | string | 是 | 网页 URL（最长 8192 字符）。 |
+
+#### 示例载荷：
+```json
+{
+  "url": "https://example.com/article"
+}
+```
+
+---
+
+### browser - 浏览器自动化
+
+基于 `vibe-browser` SDK 的可选浏览器控制能力。TUI/CLI 使用 `--browser` 启用；Serve、ACP、Desktop 通过对应的会话能力启用。该工具通过结构化 action 控制 Chromium 系浏览器，而不是执行 Shell 命令。
+
+典型流程：先 `open`/`navigate` 到 URL，再调用 `snapshot` 获得有依据的 selector/ref，然后执行 `click`、`fill`、`type`、`press`、`select`、`check`；最后用 `get_text`、`get_html` 或 `screenshot` 验证。导航或交互之后，应等待 selector/text/url 或重新 snapshot 再报告成功。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `action` | string | ✓ | 要执行的动作。常用值：`open`、`navigate`、`back`、`forward`、`reload`、`snapshot`、`click`、`fill`、`type`、`press`、`select`、`get_text`、`get_html`、`get_value`、`screenshot`、`wait_for_selector`、`wait_for_text`、`wait_for_url`、`tab_new`、`tab_close`、`close`。 |
+| `url` | string | - | `open` / `navigate` 的目标 URL。 |
+| `selector` | string | - | CSS selector，或 `snapshot` 返回的 ref。 |
+| `value` / `text` / `key` | string | - | 对应动作的输入值、目标文本或按键。 |
+| `outputPath` | string | - | `screenshot` 输出的项目相对路径。 |
+| `format` / `quality` | string / integer | - | 截图编码（`png`、`jpeg`、`webp`）与质量。 |
+| `fullPage` | bool | - | 截取完整可滚动页面。 |
+| `imageMode` / `maxLongEdge` | string / integer | - | 返回截图的处理模式与最大长边。 |
+
+返回的截图是模型可见图像，可用 `imageMode` 与 `maxLongEdge` 限制体积与分辨率。
+
+---
+
+### image_generation - 图像生成
+
+使用独立的 `imageGeneration` 配置，根据文本提示生成一张或多张图像。只有 `imageGeneration.enabled` 为 `true` 时才注册该工具。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `prompt` | string | ✓ | 图像生成提示词。 |
+| `size` | string | - | 目标尺寸，例如 `1024x1024`。 |
+| `quality` | string | - | `low`、`medium`、`high` 或 `auto`。 |
+| `n` | integer | - | 生成数量，1-4。 |
+
+端点与凭证字段会回退到所选 provider；`apiType` 可选 `openai-images`（默认）或 `openai-responses`。见[配置文档](configuration.md#imagegeneration)。
+
+---
+
+### publish_artifact - 生成制品发布
+
+Agent 声明“完成文件可作为交付制品”的唯一入口。它会先解析符号链接，拒绝目录以及任何逃逸会话工作目录的路径，成功前再把文件复制到 Runtime 管理的附件存储，因此后续写入不会改变即将交付的内容。制品发布默认关闭，并按终端（`enableArtifact`）、ACP/Desktop（`enableACPArtifact`）与 Serve/渠道会话分别配置。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | ✓ | 当前工作目录相对路径下的完成普通文件。 |
+| `filename` | string | - | 面向用户的附件文件名。 |
+| `kind` | string | - | `auto`、`image`、`file`、`audio` 或 `video`；`auto` 会根据字节内容识别图像。 |
+
+不要仅仅因为提到过文件路径就声称文件可交付。应通过该工具（或授权的 provider attachment resolver）发布，让 Runtime 拥有附件记录与投递状态。
 
 ---
 
@@ -13522,6 +14281,16 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 ```
 
 Delegate 模式适用于大范围代码搜索、多步调查、聚焦实现或验证任务。不适用于单步操作、需要向用户澄清的任务或强依赖完整会话历史的有状态工作。
+
+---
+
+### workflow_lint - Workflow 校验
+
+在不运行 worker agent 的情况下校验 workflow 脚本，检查 JavaScript 语法、`workflow`/`phase`/`agent` 结构、agent 选项拼写、必填 prompt，以及 `result`/`resultKey`/`resultLatest`/`results` 引用。对于非平凡的生成或修改后的 workflow，应先运行它再调用 `workflow_run`。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `source` | string | ✓ | 完整的原始 JavaScript workflow DSL 源码，不要传入 Markdown 代码围栏。 |
 
 ---
 
@@ -13811,13 +14580,13 @@ print(response.json())
 # docker-compose.yml
 version: '3'
 services:
-  vibecoding-1:
+  mothx-1:
     image: mothx
     command: serve
     ports:
       - "8081:8080"
   
-  vibecoding-2:
+  mothx-2:
     image: mothx
     command: serve
     ports:

@@ -110,7 +110,7 @@ configuration directory's `experts/` folder, and the project folder:
 Project bundles override global bundles with the same name, which override
 built-in bundles. A bundle contains `expert.json` and one or more persona
 files under `agents/`; invalid bundles are shown as unavailable and cannot be
-bound. See [the expert-team implementation proposal](../proposal/expert-team-mothx-proposal.md)
+bound. See [the expert-team implementation proposal](https://github.com/oschina/mothx/blob/main/docs/proposal/expert-team-mothx-proposal.md)
 for the bundle schema and architecture rationale.
 
 ## Create and install a team with the built-in Skill

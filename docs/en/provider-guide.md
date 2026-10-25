@@ -53,15 +53,24 @@ When a user configures a provider in `settings.json`:
 
 ```json
 {
-  "providers": [
-    {
-      "name": "my-provider",
-      "base_url": "https://api.myvendor.com/v1",
-      "api_key": "sk-..."
+  "providers": {
+    "my-provider": {
+      "vendor": "my-vendor",
+      "baseUrl": "https://api.myvendor.com/v1",
+      "apiKey": "sk-...",
+      "api": "openai-chat",
+      "models": [
+        { "id": "my-model", "name": "My Model", "contextWindow": 128000 }
+      ]
     }
-  ]
+  },
+  "defaultProvider": "my-provider",
+  "defaultModel": "my-model"
 }
 ```
+
+`providers` is an object keyed by provider ID; use `baseUrl`/`apiKey`, not
+`base_url`/`api_key`. A provider ID is the name you pass to `--provider`.
 
 The resolution flow is:
 

@@ -46,7 +46,7 @@ Welcome to the MothX Documentation Center!
 
 | Feature | What It Means for You |
 |---------|----------------------|
-| **🤖 Multi-Provider** | DeepSeek, OpenAI, Anthropic, Volcengine/Doubao, LongCat, and 25+ vendor adapters — switch models instantly |
+| **🤖 Multi-Provider** | DeepSeek, OpenAI, Anthropic, Volcengine/Doubao, LongCat, and 60+ built-in provider presets — switch models instantly |
 | **⚡ Lightning Fast** | SSE streaming, real-time token delivery, cache hit optimization |
 | **🧠 Think Mode** | Extended reasoning for complex problems (DeepSeek, o1, Claude) |
 | **🛡️ Sandboxed** | bwrap process isolation — safe file ops, network control, approval gates |
@@ -56,6 +56,9 @@ Welcome to the MothX Documentation Center!
 | **🔄 Workflows** | JavaScript DSL for multi-phase, parallel, multi-agent orchestration |
 | **💻 IDE Ready** | ACP protocol for VS Code, Zed, JetBrains — native editor integration |
 | **🌐 Serve** | OpenAI Chat/Responses APIs, Web UI, MCP, approvals, and durable background runs |
+| **🖥️ Desktop** | Electron ACP client with chat, approvals, artifacts, Expert Teams, and knowledge bases — no Serve process |
+| **📚 Knowledge Bases** | Rebuildable, read-only directory indexes queried through a standard Knowledge MCP server |
+| **🌳 Worktrees** | Isolated git worktrees shared by the CLI, Desktop, and sub-agents |
 | **📱 Messaging** | WeChat, Feishu, and WebSocket event streams with durable sessions |
 | **🤝 Multi-Agent** | Async sub-agents with `--multi-agent`, blocking delegation with `--delegate`, and A2A master mode |
 | **🎨 Rich TUI** | Markdown rendering, syntax highlighting, thinking display, tool modals, multiline input |
@@ -72,6 +75,9 @@ Welcome to the MothX Documentation Center!
 
 ### ✨ Core Features
 - [Features Overview](features-overview.md) — Multi-provider, sandbox, sessions, skills, and more
+- [Expert Teams](expert-teams.md) — Reusable lead identities and member teams
+- [Desktop Client](desktop.md) — Electron ACP desktop app
+- [Knowledge Bases](knowledge-bases.md) — Index a directory and search it through MCP
 
 ### 🎯 Use Cases
 - [Use Cases & Real-World Examples](use-cases.md) — From daily development to enterprise deployment
@@ -87,6 +93,8 @@ Welcome to the MothX Documentation Center!
 - [Session Management](sessions.md) — Session storage and management
 - [Workflow Mode](workflow.md) — JavaScript DSL for multi-agent orchestration
 - [SDK Integration](sdk.md) — Embed MothX agent in your Go applications
+- [Adding a Provider](provider-guide.md) — Add or customise a provider
+- [Provider & Model Catalog](../provider-model-list.md) — Every built-in provider and model
 
 ### 🔒 Security
 - [Security & Sandbox](security.md) — Sandbox modes, permissions, approval

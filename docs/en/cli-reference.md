@@ -15,11 +15,15 @@ mothx [flags] [message...]
 | `--provider` | `-p` | Default from config file | LLM provider (deepseek-openai, deepseek-anthropic or custom name) |
 | `--model` | `-m` | Default from config file | Model ID |
 | `--mode` | `-M` | `yolo` | Run mode (plan, agent, yolo, os); falls back to `settings.json` `defaultMode` |
-| `--thinking` | `-t` | `off` | Thinking level (off, minimal, low, medium, high, xhigh) |
+| `--thinking` | `-t` | `off` | Thinking level (off, minimal, low, medium, high, xhigh, max) |
 | `--multi-agent` | - | `false` | Enable multi-agent tools and commands |
 | `--delegate` | - | `false` | Enable delegation mode (blocking single sub-agent tool) |
 | `--workflows` | - | `false` | Enable JavaScript workflow tools and `/workflows` commands |
 | `--artifact` | - | `false` | Enable generated artifact publishing for this TUI/CLI process |
+| `--expert` | - | - | Bind an expert bundle to this session; switching an existing expert forks the session |
+| `--web-search` | - | `false` | Enable configured local web search tools for this run |
+| `--browser` | - | `false` | Enable the browser automation tool |
+| `--cron` | - | `false` | Enable the cron tool for scheduled tasks |
 
 ### Session Management
 
@@ -28,6 +32,9 @@ mothx [flags] [message...]
 | `--continue` | `-c` | Continue most recent session |
 | `--resume` | `-r` | Resume session by ID or path |
 | `--session` | - | Use specific session ID or `.db` handle file |
+| `--list-sessions` | - | List recent sessions across all working directories |
+| `--list-sessions-limit` | - | How many sessions `--list-sessions` prints (default 20) |
+| `--list-sessions-cwd` | - | Only list sessions for this working directory |
 
 ### Output Control
 
@@ -80,7 +87,11 @@ Supports VS Code, JetBrains IDEs, and any ACP-compatible editor.
 | `--multi-agent` | - | false | Enable multi-agent tools for ACP sessions |
 | `--delegate` | - | false | Enable delegation mode for ACP sessions |
 | `--workflows` | - | false | Enable JavaScript workflow tools for ACP sessions |
+| `--web-search` | - | false | Enable configured local web search tools for this ACP run |
+| `--browser` | - | false | Enable browser automation for ACP sessions |
 | `--artifact` | - | false | Enable generated artifact publishing for this ACP/Desktop process |
+| `--permission-timeout` | - | `5m` | Approval decision timeout for `session/request_permission` (Go duration; env `MOTHX_ACP_PERMISSION_TIMEOUT`) |
+| `--question-timeout` | - | `5m` | Question decision timeout for ACP question requests (Go duration; env `MOTHX_ACP_QUESTION_TIMEOUT`) |
 
 See the [ACP Protocol](acp.md) documentation for IDE integration details.
 
@@ -102,6 +113,8 @@ mothx a2a [command]
 | `discover <url>` | Discover remote Agent Card |
 | `--init-a2a-config` | Create `a2a.json` config template |
 | `--force` | Force overwrite existing config file |
+
+`mothx a2a send` also accepts `--target <url>` (default `http://localhost:8093`) and `--auth-token <token>`.
 
 See [A2A Protocol](a2a.md) documentation for details.
 
@@ -136,7 +149,7 @@ mothx serve [flags]
 
 | Subcommand | Description |
 |------------|-------------|
-| `init-config [global|project]` | Create `serve.json` config template |
+| `init-config [global\|project]` | Create `serve.json` config template |
 | `--force` | Force overwrite existing config file |
 
 See [Serve Mode](serve.md) documentation for details.
@@ -197,13 +210,91 @@ The command refuses to start while a session run is active in that directory, na
 
 Attachment storage becomes unreachable once the rows that described it are archived, and the same happens when a session is deleted or an intake fails after its content was written. Reclamation never relies on a reset: the Runtime sweeps the private store while accepting new attachments (at most once an hour per process) and once a day through its own cron maintenance job, and removes only directories that no row references **and** that were last written before the attachment retention window plus a 24-hour grace period - eight days by default with the 7-day retention. That floor is why reclamation can never destroy something a restored archive could still serve. `--prune-unreferenced` runs the same pass immediately and reports what it reclaimed and what it kept as too young; `channels/` and `knowledge-bases/` are never touched by it. The scheduled pass is configured by the optional `maintenance` section of `settings.json` (`reclaimAttachmentStorage`, `storageReconcileSchedule`); see [configuration](configuration.md#maintenance).
 
+### `worktree` - Isolated Git Worktrees
+
+Create, list, reset, and remove isolated git worktrees managed by the shared Runtime. Worktrees default to `<data-dir>/worktrees`, are registered in the sessions database, and are shared by TUI/CLI, ACP/Desktop, and sub-agents. Creation is controlled by `settings.json` `worktree.enabled`; disabling creation still allows listing, resetting, and removing existing worktrees.
+
+```
+mothx worktree <list|create|remove|reset> [flags]
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List managed worktrees |
+| `create` | Create a worktree |
+| `remove <id\|directory>` | Remove a managed worktree |
+| `reset <id\|directory>` | Reset a worktree to its default branch |
+
+| Flag | Subcommand | Description |
+|------|------------|-------------|
+| `--repo <dir>` | list, create | Repository directory (default: current directory) |
+| `--project <id>` | list, create | Filter by, or associate with, a project ID |
+| `--name <name>` | create | Worktree name (default: derived from the repository) |
+| `--detach` | create | Create a detached worktree instead of a branch |
+| `--start <command>` | create | Startup command stored for the worktree |
+| `--root <dir>` | all | Override the worktree root directory |
+| `--json` | list, create | Print machine-readable JSON |
+
+Examples:
+```bash
+mothx worktree list
+mothx worktree create --repo ~/projects/app --name feature-auth
+mothx worktree reset feature-auth
+mothx worktree remove /path/to/worktree
+```
+
+### `knowledge-mcp` - Knowledge Base MCP Server
+
+Expose one or more managed knowledge bases as MCP tools over stdio. The server registers the ordinary `search_knowledge_base` tool; the allowlist is the authorization boundary.
+
+```
+mothx knowledge-mcp serve --knowledge-base <id> [--knowledge-base <id>...] [--session-dir <dir>]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--knowledge-base <id>` | Knowledge base ID enabled for this server; repeat for multiple bases |
+| `--session-dir <dir>` | Session storage directory (default: `settings.json`) |
+
+Knowledge bases are created and indexed from Desktop or the WebUI. See [Knowledge Bases](knowledge-bases.md).
+
+### `speedtest` - Provider Benchmark
+
+Benchmark configured providers/models with a text-only streaming request. Successful runs are averaged and sorted by output tokens per second.
+
+```
+mothx speedtest [flags]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--provider` | `-p` | all configured | Only test models from one provider |
+| `--vendor` | - | - | Alias for `--provider` |
+| `--model` | `-m` | all configured | Only test one model ID |
+| `--prompt` | - | built-in text prompt | Prompt used for every test |
+| `--max-tokens` | - | `256` | Maximum output tokens per request |
+| `--timeout` | - | `2m` | Per-model timeout |
+| `--concurrency` | - | `1` | Number of models tested in parallel |
+| `--runs` | - | `3` | Runs per model; successful runs are averaged |
+| `--thinking` | `-t` | `off` | Thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) |
+
+```bash
+mothx speedtest
+mothx speedtest -p deepseek-openai -m deepseek-v4-flash
+mothx speedtest --concurrency 4 --runs 2
+```
+
 ### `doctor` - Environment Diagnostics
 
 Diagnose your MothX environment: OS info, config files, providers, models, sandbox, MCP, and more.
 
 ```
-mothx doctor
+mothx doctor [--json]
 ```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | `false` | Print one machine-readable JSON diagnosis (`{ ok, version, summary, checks }`) and nothing else on stdout |
 
 The command checks your installation, configuration, provider connectivity, and sandbox availability.
 
@@ -381,6 +472,9 @@ mothx -t medium
 
 # Highest level
 mothx --thinking xhigh
+
+# Provider maximum (where supported, for example DeepSeek V4.1)
+mothx --thinking max
 ```
 
 ### Session Management
@@ -437,26 +531,31 @@ mothx acp --sandbox --mode agent
 
 Commands available during interactive sessions:
 
-### Mode & Model
+### Mode & Configuration
 
 | Command | Description |
 |---------|-------------|
-| `/mode [plan\|agent\|yolo]` | Switch or show current mode |
-| `/model [model_id]` | Switch or show current model |
-| `/think` | Cycle thinking level |
+| `/mode [plan\|agent\|yolo\|os]` | Switch or show the current mode |
+| `/model [model_id]` | Switch or show the current model |
+| `/defaultModel [project\|global]` | Change the persisted default model |
+| `/auth` | Configure provider credentials and endpoints |
+| `/settings` | Configure settings.json groups, including providers, defaults, behavior, and approval |
+| `/tuilang [global\|project] [auto\|zh\|en]` | Change the TUI language |
+| `/env [list\|set KEY VALUE\|unset KEY\|clear]` | Inspect or edit environment variables for the process |
+| `/esm [objective\|edit\|pause\|resume\|clear\|guide]` | Manage the ESM objective and progress panel |
 | `/compact` | Trigger context compaction |
 | `/delegate [on\|off\|status]` | Toggle or show delegate mode |
+| `/browser [on\|off\|status]` | Toggle or show the browser tool |
+| `/statusline [status\|on\|off\|command\|refresh] ...` | Configure the external status line |
+| `/btw <question>` | Ask a side question without interrupting the main task |
+| `/rule [force\|--force]` | Refresh project rules |
 | `/systeminit [guidance]` | Generate or refresh project `AGENTS.md` |
 | `/reload` | Restart with a fresh session (TUI) |
-| `/btw <question>` | Ask a side question without interrupting main task |
-| `/settings` | Configure settings.json groups, including providers, defaults, behavior, and approval |
-| `/alloweditpath [add <glob>\|remove <glob>\|clear]` | Manage auto-edit path whitelist |
+| `/alloweditpath [add <glob>\|remove <glob>\|clear]` | Manage the auto-edit path whitelist |
 | `/allowautoedit [on\|off] [global]` | Toggle full auto-edit in agent mode |
-| `/agent list` | List sub-agents in multi-agent mode |
-| `/agent switch <id>` | Switch the active sub-agent |
-| `/agent destroy <id>` | Destroy a sub-agent |
+| `/agent list\|switch <id>\|destroy <id>` | List, switch, or destroy sub-agents in multi-agent mode |
 
-### Session Management
+### Session & Orchestration
 
 | Command | Description |
 |---------|-------------|
@@ -466,21 +565,30 @@ Commands available during interactive sessions:
 | `/sessions clear` | Start fresh; the new session is created on the next message |
 | `/sessions del <id>` | Delete a session by ID prefix |
 | `/clear` | Clear conversation |
+| `/expert [list\|show <id>\|bind <id>\|unbind\|switch <id>]` | Manage the session Expert Team binding |
+| `/cron add\|list\|enable\|disable\|remove\|run` | Manage scheduled tasks |
+| `/workflows [list\|show <id>\|cancel <id>]` | Manage workflow runs |
 
 The `/sessions` picker supports Up/Down to select, Enter to switch, `n` to start fresh, `d` to delete the selected session, and Esc to close.
 
-### Skills
+### Skills & MCP
 
 | Command | Description |
 |---------|-------------|
 | `/skills` | List available skills |
 | `/skill <name>` | Activate a skill by name |
 | `/skill:<name>` | Activate a skill (alternative syntax) |
+| `/skillhub [search <q>]` | Open the online skill marketplace or search it |
+| `/skillmgr` | Open the installed-skill manager |
+| `/init_mcp [project\|global] [basic\|full] [--force]` | Create an MCP configuration template |
+| `/mcps` | List configured MCP servers |
+| `/paste-image` | Attach an image from the clipboard (where supported) |
 
 ### General
 
 | Command | Description |
 |---------|-------------|
+| `/stats server\|stop-server\|tui` | Open, stop, or print usage statistics |
 | `/help` | Show help |
 | `/quit` | Exit |
 
@@ -512,6 +620,12 @@ Default settings can be overridden via environment variables:
 | `VIBECODING_MODE` | Override default mode |
 | `VIBECODING_THINKING` | Override default thinking level |
 | `VIBECODING_USER_AGENT` | Custom User-Agent string |
+| `VIBECODING_ALLOW_SHELL_CONFIG` | Allow `!command` credential/header resolution |
+| `VIBECODING_DEBUG` | Enable provider request/response debug output |
+| `VIBECODING_NO_UPDATE_CHECK` | Disable update checks |
+| `MOTHX_ACP_PERMISSION_TIMEOUT` | Default ACP approval timeout (Go duration) |
+| `MOTHX_ACP_QUESTION_TIMEOUT` | Default ACP question timeout (Go duration) |
+| `MOTHX_WIN_OUTPUT_ENCODING` | Override captured Windows output decoding (`utf-8` or a code page number) |
 
 ## Exit Codes
 

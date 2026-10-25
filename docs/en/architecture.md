@@ -2,70 +2,52 @@
 
 ![MothX Architecture Overview](assets/image/architecture-en.webp)
 
-> All entry points (TUI/CLI/ACP/Serve/messaging channels) feed a single core Agent loop, which reuses the provider abstraction plus SQLite sessions, sandbox, skills, MCP, stats, memory, and workflow infrastructure.
+> All entry points (TUI, CLI, WebUI/Serve, Desktop/ACP, and messaging channels) feed one front-end-neutral Agent Runtime, which owns sessions, runs, decisions, input/content, attachments/artifacts, MCP, skills, and policy resolution, and reuses one core Agent loop plus the provider abstraction, SQLite sessions, sandbox, stats, memory, and workflow infrastructure.
 
 
 ## Project Structure
 
 ```
 mothx/
-├── agent/                       # Public Agent/Provider interfaces and Builder
-├── cmd/mothx/              # CLI entry point
-│   ├── main.go                  # Main program
-│   └── main_doctor.go           # `doctor` subcommand (env diagnostics)
+├── agent/                       # Public SDK types (Agent, Provider, Builder)
+├── bootstrap/                   # Public SDK wiring into internal implementations
+├── cmd/mothx/                   # CLI entry point and subcommands
+├── desktop/                     # Electron desktop client (pure ACP projection)
+├── ui/                          # Svelte Web UI embedded into Serve
 ├── internal/
-│   ├── a2a/                     # A2A protocol server and master mode
-│   │   ├── config.go            # A2A configuration and initialization
-│   │   ├── handler.go           # JSON-RPC 2.0 handler + SSE
-│   │   ├── client.go            # A2A client
-│   │   ├── server.go            # HTTP server
-│   │   ├── executor.go          # Task → Agent loop executor
-│   │   ├── agent_card.go        # Agent Card generation
-│   │   ├── task.go              # Task lifecycle management
-│   │   └── master.go            # A2A Master mode (remote agent dispatch)
-│   ├── acp/                     # ACP / MCP integration
-│   ├── agent/                   # Core Agent loop
-│   │   ├── agent.go             # Agent main logic
-│   │   ├── factory.go           # AgentFactory for per-agent construction
-│   │   ├── manager.go           # AgentManager lifecycle management
-│   │   ├── router.go            # EventRouter
-│   │   ├── subagent.go          # subagent_* tools
-│   │   ├── events.go            # Event type definitions
-│   │   ├── provider.go          # Provider interface adapter
-│   │   └── system_prompt.go     # System prompt generation
-│   ├── config/                  # Configuration management
-│   ├── context/                 # Context management and token estimation
-│   ├── contextfiles/            # Context file loading
+│   ├── agent/                   # Core Agent loop, events, prompts, sub-agent tools
+│   ├── agentruntime/            # Shared front-end-neutral Runtime: SessionRuntime,
+│   │                            # ExecutionRuntime, decisions, artifacts, MCP,
+│   │                            # knowledge bases, experts, worktrees
+│   ├── acp/                     # ACP v1 server + mothx.dev extensions
+│   ├── a2a/                     # A2A server and remote-agent master dispatch
+│   ├── architecture/            # Static architecture guard tests
+│   ├── browser/                 # vibe-browser automation tool
+│   ├── config/                  # settings.json / serve.json schemas and defaults
+│   ├── context/, contextfiles/  # Token budget and AGENTS.md/CLAUDE.md loading
 │   ├── cron/                    # Scheduled task store and scheduler
-│   ├── serve/                   # Unified OpenAI API, Web UI, and messaging channels
-│   ├── mcp/                     # MCP server integration
-│   ├── memory/                  # Persistent memory (memory.md)
-│   ├── messaging/               # Messaging platform abstraction
-│   ├── platform/                # Cross-platform compatibility utilities
-│   ├── provider/                # LLM Provider abstraction
-│   │   ├── anthropic/           # Anthropic Messages API
-│   │   ├── google/              # Google Gemini/Vertex API
-│   │   ├── openai/              # OpenAI Chat Completions API
-│   │   ├── factory/             # Shared provider/model construction
-│   │   ├── http_client.go       # Shared HTTP client with proxy/headers support
-│   │   └── vendor*.go           # Vendor adapter registry and defaults
+│   ├── dao/                     # Sole owner of SQL/query builders/row mapping
+│   ├── db/                      # Connection, transaction, and migration lifecycle
+│   ├── esm/                     # Enable Supervisor Mode objective loop
+│   ├── expert/                  # Expert Team bundle discovery and validation
+│   ├── imageproc/               # Image normalization and resizing
+│   ├── mcp/                     # MCP client/server integration
+│   ├── memory/                  # memory.md tool for messaging channels
+│   ├── messaging/               # WeChat/Feishu platform abstraction
+│   ├── platform/                # Cross-platform helpers and embedded assets
+│   ├── provider/                # Protocol providers, vendor adapters, factory
 │   ├── sandbox/                 # Sandbox abstraction (bwrap, none)
-│   ├── session/                 # Session management (SQLite)
-│   ├── skills/                  # Skills system
-│   ├── tools/                   # Tool implementations
-│   │   ├── bash.go              # Bash command execution
-│   │   ├── read.go              # File reading
-│   │   ├── write.go             # File writing
-│   │   ├── edit.go              # File editing
-│   │   ├── grep.go              # Content search
-│   │   ├── find.go              # File finding
-│   │   ├── ls.go                # Directory listing
-│   │   ├── plan.go              # Task planning
-│   │   ├── question.go          # User clarification (plan mode, TUI only)
-│   │   ├── skill_ref.go         # Skill reference loading
-│   │   └── a2a_dispatch.go      # A2A remote agent dispatch
-│   ├── tui/                     # Terminal UI (BubbleTea)
-└── pkg/sdk/                     # Public SDK interface
+│   ├── serve/                   # OpenAI API, Web UI, channels, hooks, cron, memory
+│   ├── session/                 # Session domain, migrations, event store,
+│   │                            # attachments, knowledge store
+│   ├── skills/, skillhub/       # Skills and online marketplace
+│   ├── stats/                   # Usage statistics dashboard and queries
+│   ├── systeminit/              # AGENTS.md generation
+│   ├── tools/                   # Built-in tool implementations
+│   ├── tui/                     # Bubble Tea terminal UI
+│   └── workflow/                # JavaScript workflow runtime
+├── example/                     # Public SDK examples
+└── docs/                        # Bilingual docs, generated indexes, site
 ```
 
 ## Running Modes
@@ -94,6 +76,29 @@ and Session infrastructure:
 ```
 
 ## Core Components
+
+### 0. Shared Agent Runtime
+
+The Agent Runtime is the single boundary between front ends and the Agent Core.
+TUI, CLI, WebUI/API, Desktop/ACP, WeChat/Feishu, Cron, ESM, and A2A adapters decode
+their own protocol and project events; they do not own execution semantics.
+
+- **Construction:** `SessionRuntime.BuildAgent`, `BuildTransientAgent`, and
+  `agentruntime.NewAgentManager` are the only production Agent construction paths.
+- **Policy:** source, effective mode, capabilities, tools, sandbox, approval,
+  MCP, skills, reasoning, and run policy are resolved once through
+  `ResolveSource`/`ResolvePolicy`. Product default mode is `yolo`.
+- **Execution:** `ExecutionRuntime` + `RunStore` own durable run begin, reattach,
+  update, cancel, finish, recovery, and the single canonical terminal event.
+- **Decisions:** `DecisionService`/`DecisionRecord` own approval and question
+  identity, deadlines, first-response-wins, replay, and expiry.
+- **Input and artifacts:** all text/image/audio/file input normalizes into the
+  Runtime input contract; attachments and generated artifacts are Runtime-owned
+  and backed by `internal/session`.
+- **Resources:** context/skills/rules, Expert Teams, MCP clients, knowledge
+  services, worktrees, and coordinated shutdown are owned by the Runtime.
+- **Admission:** one per-session submission coordinator and fenced execution
+  lease decide whether a new run may start; adapters may only project that state.
 
 ### 1. Provider System
 
@@ -162,7 +167,7 @@ HTTP, messaging, A2A, stdio) and output target.
 #### Execution Flow
 
 ```
-User Input (TUI / HTTP / Messaging / A2A / ACP stdio)
+User Input (TUI / CLI / HTTP / Messaging / A2A / ACP stdio / Desktop)
     │
     ▼
 ┌───────────────┐
@@ -201,7 +206,7 @@ registry, and job manager state.
 ```
 Main Agent
     │
-    ├── AgentManager creates child agents
+    ├── agentruntime.NewAgentManager creates child agents
     ├── EventRouter routes events by AgentID
     └── subagent_* tools manage async child work
 ```
@@ -577,11 +582,13 @@ Implement process-level isolation through bubblewrap, protecting system security
 ### 6. Public SDK Package
 
 The `agent/` package exposes public Go types (`Agent`, `Provider`, `Builder`) so
-external applications can embed the agent without depending on internal packages.
-See [SDK Integration Guide](sdk.md) for usage details.
+external applications can embed an Agent without depending on internal packages.
+`bootstrap/` wires those public interfaces to the internal Runtime. See
+[SDK Integration Guide](sdk.md) for usage details.
 
-### 7. Shared Agent Loop
+### 7. Shared Agent Runtime and Agent Loop
 
-All running modes (TUI, Serve, Channels, A2A, ACP) reuse the same Agent loop.
-The only difference is the input source and output target. This ensures behavioral
-consistency and avoids logic divergence.
+All running modes (TUI, CLI, WebUI/Serve, Channels, A2A, ACP, Desktop) reuse the
+same Agent Runtime and Agent loop. Adapters differ only in protocol decoding and
+event projection. Resource ownership, run lifecycle, decisions, and policy live
+in the Runtime so behavior cannot drift between entry points.

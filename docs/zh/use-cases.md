@@ -189,13 +189,13 @@ print(response.json())
 # docker-compose.yml
 version: '3'
 services:
-  vibecoding-1:
+  mothx-1:
     image: mothx
     command: serve
     ports:
       - "8081:8080"
   
-  vibecoding-2:
+  mothx-2:
     image: mothx
     command: serve
     ports:

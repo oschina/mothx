@@ -282,6 +282,9 @@ func truncate(s string, n int) string {
 | `WithSessionDir(dir)` | `~/.mothx/sessions` | Session persistence |
 | `WithCompaction(enabled, reserve)` | `true, 16384` | Context compaction settings |
 | `WithMultiAgent(bool)` | `false` | Enable sub-agent tools |
+| `WithDelegateMode(bool)` | `false` | Enable blocking single sub-agent delegation |
+| `WithExternalTools(tools...)` | none | Register host-provided custom tools |
+| `WithoutBuiltinTools()` | false | Disable all built-in coding tools (pair with `WithExternalTools`) |
 | `WithApprovalHandler(fn)` | nil | Custom tool approval callback |
 
 ---

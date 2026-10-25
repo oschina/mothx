@@ -156,9 +156,12 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `enablePlanTool` | bool | `true` | Register the built-in `plan` tool |
 | `enableArtifact` | bool | `false` | Allow TUI/CLI sessions to publish generated artifacts |
 | `enableACPArtifact` | bool | `false` | Allow Desktop/ACP sessions to publish generated artifacts |
+| `imageGeneration` | object | *(disabled)* | Standalone image-generation tool settings |
 | `maxContextTokens` | int | `0` (auto) | Override maximum context token count |
 | `contextFiles` | object | *(see below)* | Context file loading settings |
 | `skillsDir` | string | `"~/.mothx/skills"` | Global skills directory path |
+| `skills` | object | *(empty)* | Skill loading overrides (currently a disable list) |
+| `skillHub` | object | built-in defaults | Online skill marketplace settings |
 | `compaction` | object | *(see below)* | Context compaction settings |
 | `sandbox` | object | *(see below)* | Sandbox execution settings |
 | `sessionDir` | string | `"~/.mothx/sessions"` | SQLite session storage directory |
@@ -168,6 +171,7 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `tuilang` | string | `"auto"` | TUI language: `"auto"`, `"zh"`, or `"en"` |
 | `retry` | object | *(see below)* | API call retry settings |
 | `approval` | object | *(see below)* | Bash command approval settings |
+| `worktree` | object | *(see below)* | Isolated git worktree settings |
 | `maintenance` | object | *(see below)* | Runtime-owned background housekeeping (attachment storage reclamation) |
 | `webSearch` | object | *(see below)* | DeepSeek web search/fetch tool settings |
 | `updateCheck` | bool | `true` | Enable npm-based update notifications |
@@ -592,6 +596,33 @@ The `compat` object is optional and should only be set when a model needs protoc
 
 ---
 
+### imageGeneration
+
+Standalone image-generation configuration for the `image_generation` tool. The tool is registered only when `enabled` is `true`. Omitted endpoint fields fall back to the selected provider, so a normal OpenAI provider configuration usually needs only `enabled` and `provider`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Register the `image_generation` tool |
+| `provider` | string | `openai` | Provider used to fill omitted `apiType`, `baseUrl`, and `token` fields |
+| `apiType` | string | `openai-images` | `openai-images` (Images API) or `openai-responses` (Responses native image generation) |
+| `baseUrl` | string | provider `baseUrl`, then `https://api.openai.com/v1` | Image API endpoint |
+| `token` | string | provider `apiKey` | Credential; supports `${ENV_VAR}` and opt-in `!command` resolution |
+| `model` | string | `gpt-image-1` | Image model ID |
+
+```json
+{
+  "imageGeneration": {
+    "enabled": true,
+    "provider": "openai",
+    "model": "gpt-image-1"
+  }
+}
+```
+
+See [`image_generation`](tools.md#image_generation---image-generation) for the tool parameters.
+
+---
+
 ### toolExecution
 
 This is a local execution setting only. `sequential` limits MothX's local workers after a response arrives; it does not ask the model to emit one tool call at a time, so providers may still return multiple tool calls in a single response. A `parallel` batch reports each call's start in the model's declared order, and that ordering never blocks execution: calls still run concurrently, each waits for its own approvals and durable execution record, and only the completion order is unrestricted. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. It does not control concurrency inside provider-hosted tools such as OpenAI Responses `web_search`; those calls remain under the provider's own orchestration and quota rules.
@@ -657,6 +688,7 @@ Default thinking level for reasoning models:
 | `medium` | Medium level (default) |
 | `high` | High level |
 | `xhigh` | Highest level |
+| `max` | Maximum level where the provider/model supports it (for example DeepSeek V4.1 `reasoning_effort`) |
 
 ```json
 { "defaultThinkingLevel": "medium" }
@@ -746,6 +778,46 @@ Path to the global skills directory. Supports `~` expansion.
 Skills are loaded from:
 - **Global skills**: `<skillsDir>/<name>/SKILL.md`
 - **Project skills**: `.skills/<name>/SKILL.md` (override global)
+
+### skills
+
+Disable specific skills by name without deleting their directories. Disabled skills are not loaded into the system prompt and cannot be activated for the session.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `disabled` | string array | `[]` | Skill names to exclude |
+
+```json
+{
+  "skills": {
+    "disabled": ["legacy-release-checklist"]
+  }
+}
+```
+
+See [Skills System](skills.md) for directory precedence and activation commands.
+
+### skillHub
+
+Online skill marketplace settings used by `/skillhub` and the Desktop/WebUI skill browser. Built-in market definitions are used when `markets` is omitted.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `defaultMarket` | string | `"skillhub.cn"` | Market selected when opening the marketplace |
+| `defaultInstallScope` | string | `"project"` | Default install target: `project` or `global` |
+| `officialHandles` | string array | built-in official handle | Marketplace handles treated as official publishers |
+| `markets` | object array | built-in markets | Custom market definitions: `{ id, name, siteURL, apiURL, enabled, apiToken }` |
+
+```json
+{
+  "skillHub": {
+    "defaultMarket": "skillhub.cn",
+    "defaultInstallScope": "project"
+  }
+}
+```
+
+See [Online Skill Marketplace](skillhub.md) for commands and market behavior.
 
 ---
 
@@ -1059,6 +1131,30 @@ In --print mode:
   }
 }
 ```
+
+### worktree
+
+Isolated git worktrees managed by the shared Runtime (`agentruntime.WorktreeManager`). Worktrees live under `<data-dir>/worktrees` by default and are registered in the sessions database, so TUI/CLI, ACP/Desktop, and sub-agents share the same registry.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Allow creating new worktrees; `false` keeps `list`, `remove`, and `reset` available |
+| `branchPrefix` | string | `"mothx"` | Branch name prefix for created worktrees |
+| `startCommand` | string | `""` | Default command stored for a worktree and run after create/reset |
+| `perChildSubagents` | bool | `false` | Run every sub-agent in its own isolated worktree |
+| `esm` | bool | `false` | ESM worker/critic/audit roles share one worktree per objective |
+
+```json
+{
+  "worktree": {
+    "enabled": true,
+    "branchPrefix": "mothx",
+    "perChildSubagents": false
+  }
+}
+```
+
+Create, list, reset, and remove worktrees with [`mothx worktree`](cli-reference.md#worktree---isolated-git-worktrees), or the equivalent ACP/Desktop controls.
 
 ### maintenance
 

@@ -54,7 +54,7 @@ Welcome to the MothX Documentation Center!
 
 | Feature | What It Means for You |
 |---------|----------------------|
-| **🤖 Multi-Provider** | DeepSeek, OpenAI, Anthropic, Volcengine/Doubao, LongCat, and 25+ vendor adapters — switch models instantly |
+| **🤖 Multi-Provider** | DeepSeek, OpenAI, Anthropic, Volcengine/Doubao, LongCat, and 60+ built-in provider presets — switch models instantly |
 | **⚡ Lightning Fast** | SSE streaming, real-time token delivery, cache hit optimization |
 | **🧠 Think Mode** | Extended reasoning for complex problems (DeepSeek, o1, Claude) |
 | **🛡️ Sandboxed** | bwrap process isolation — safe file ops, network control, approval gates |
@@ -64,6 +64,9 @@ Welcome to the MothX Documentation Center!
 | **🔄 Workflows** | JavaScript DSL for multi-phase, parallel, multi-agent orchestration |
 | **💻 IDE Ready** | ACP protocol for VS Code, Zed, JetBrains — native editor integration |
 | **🌐 Serve** | OpenAI Chat/Responses APIs, Web UI, MCP, approvals, and durable background runs |
+| **🖥️ Desktop** | Electron ACP client with chat, approvals, artifacts, Expert Teams, and knowledge bases — no Serve process |
+| **📚 Knowledge Bases** | Rebuildable, read-only directory indexes queried through a standard Knowledge MCP server |
+| **🌳 Worktrees** | Isolated git worktrees shared by the CLI, Desktop, and sub-agents |
 | **📱 Messaging** | WeChat, Feishu, and WebSocket event streams with durable sessions |
 | **🤝 Multi-Agent** | Async sub-agents with `--multi-agent`, blocking delegation with `--delegate`, and A2A master mode |
 | **🎨 Rich TUI** | Markdown rendering, syntax highlighting, thinking display, tool modals, multiline input |
@@ -80,6 +83,9 @@ Welcome to the MothX Documentation Center!
 
 ### ✨ Core Features
 - [Features Overview](features-overview.md) — Multi-provider, sandbox, sessions, skills, and more
+- [Expert Teams](expert-teams.md) — Reusable lead identities and member teams
+- [Desktop Client](desktop.md) — Electron ACP desktop app
+- [Knowledge Bases](knowledge-bases.md) — Index a directory and search it through MCP
 
 ### 🎯 Use Cases
 - [Use Cases & Real-World Examples](use-cases.md) — From daily development to enterprise deployment
@@ -95,6 +101,8 @@ Welcome to the MothX Documentation Center!
 - [Session Management](sessions.md) — Session storage and management
 - [Workflow Mode](workflow.md) — JavaScript DSL for multi-agent orchestration
 - [SDK Integration](sdk.md) — Embed MothX agent in your Go applications
+- [Adding a Provider](provider-guide.md) — Add or customise a provider
+- [Provider & Model Catalog](../provider-model-list.md) — Every built-in provider and model
 
 ### 🔒 Security
 - [Security & Sandbox](security.md) — Sandbox modes, permissions, approval
@@ -672,7 +680,13 @@ mothx acp --multi-agent
 | `--verbose` | - | false | Verbose output |
 | `--debug` | - | false | Debug logging and local pprof |
 | `--multi-agent` | - | false | Enable sub-agent tools and multi-agent workflows |
+| `--delegate` | - | false | Enable blocking single sub-agent delegation |
 | `--workflows` | - | false | Enable JavaScript workflow tools |
+| `--web-search` | - | false | Enable configured local web search tools |
+| `--browser` | - | false | Enable browser automation |
+| `--artifact` | - | false | Enable generated artifact publishing for Desktop/ACP |
+| `--permission-timeout` | - | `5m` | Approval timeout for `session/request_permission` (Go duration; env `MOTHX_ACP_PERMISSION_TIMEOUT`) |
+| `--question-timeout` | - | `5m` | Question timeout for ACP question requests (Go duration; env `MOTHX_ACP_QUESTION_TIMEOUT`) |
 
 ## Protocol Details
 
@@ -685,13 +699,38 @@ ACP uses JSON-RPC 2.0 over stdio and follows the ACP v1 schema. MothX-specific b
 | `initialize` | Handshake and capability negotiation |
 | `mothx/doctor` | Return machine-readable installation/provider diagnostics; does not require a session |
 | `session/new` | Create a new session |
-| `session/load` | Load an existing session |
+| `session/load` | Load an existing session and replay history |
 | `session/list` | List persisted sessions, optionally filtered by working directory |
 | `session/resume` | Restore a session without replaying history |
+| `session/fork` | Fork a session at its current state |
 | `session/prompt` | Send a prompt to the agent |
 | `session/cancel` | Cancel an active prompt |
 | `session/close` | Cancel active work and release session runtime resources |
 | `session/delete` | Delete an inactive session from persisted session history |
+| `session/set_mode` | Change the session run mode |
+| `session/set_config_option` | Change a session configuration option (provider, model, mode, thinking, sandbox, browser, web search) |
+| `mothx/session/history` | Page through persisted session history |
+| `mothx/session/draft-config-options` | Read the initial config options for a new-session draft |
+| `mothx/session/setTitle` | Set a session title |
+| `mothx/session/setWorkDir` | Change a session working directory |
+| `mothx/session/setMeta` | Set canonical session metadata used by Desktop/WebUI |
+| `mothx/session/listAll` | List sessions across all working directories |
+| `mothx/session/delete` | Delete a session (alias of `session/delete`) |
+| `mothx/projects/list` | List Desktop/WebUI projects |
+| `mothx/projects/create` | Create a project |
+| `mothx/projects/rename` | Rename a project |
+| `mothx/projects/delete` | Delete a project |
+| `mothx/attachment/list` | List attachments owned by a session |
+| `mothx/attachment/fetch` | Fetch attachment bytes |
+| `mothx/subagent/list` | List child agents and their state |
+| `mothx/subagent/messages` | Read a child agent's transcript |
+| `mothx/worktree/list` | List managed git worktrees |
+| `mothx/worktree/create` | Create a managed worktree |
+| `mothx/worktree/reset` | Reset a worktree to its default branch |
+| `mothx/worktree/remove` | Remove a managed worktree |
+| `mothx/worktree/status` | Read worktree status |
+| `mothx/workspace/extend` | Add a directory to the workspace without restarting ACP |
+| `mothx/manage/*` | Management projections; see [Management projections](#management-projections) |
 | `$/cancel_request` | Cancel an in-flight request by JSON-RPC request ID |
 | `session/update` | Server notification: session state changes |
 
@@ -700,10 +739,11 @@ ACP uses JSON-RPC 2.0 over stdio and follows the ACP v1 schema. MothX-specific b
 MothX advertises the following ACP capabilities during initialization:
 
 - **Load Session**: Load and continue previous sessions
-- **Prompt Capabilities**: Text and `resource_link`; image, audio, and embedded resource inputs are not advertised
-- **Session Capabilities**: Load, list, resume, close, and delete sessions
+- **Prompt Capabilities**: Text, `resource_link`, image, audio, and embedded resource/context content; the Runtime normalizes all of them through the shared input contract
+- **Session Capabilities**: Load, list, resume, fork, close, delete, and additional directories
 - **MCP Capabilities**: stdio / http / sse transport supported
-- **Multi-Agent Workflows**: Available when the ACP server is started with `--multi-agent`
+- **Multi-Agent Workflows**: Available when the ACP server is started with `--multi-agent`; delegate mode uses `--delegate`, workflows use `--workflows`
+- **MothX extensions**: Advertised through `initialize._meta["mothx.dev"].features`; clients must gate optional methods, panels, and projections on those keys
 
 ### Notifications
 
@@ -730,8 +770,25 @@ MothX keeps non-standard interactions separate from ACP. Clients use these metho
 
 | Method | Purpose |
 |------|------|
-| `_mothx/request_question` | Multiple-choice question request; clients return `{ "answer": "option text" }` |
-| `_mothx/session_event` | MothX runtime status, turn, and context-compaction events |
+| `mothx/requestQuestion` | Multiple-choice question request; clients return `{ "answer": "option text" }`. Pre-initialize replay uses the legacy `_mothx/request_question` name. |
+| `_mothx/session_event` | MothX runtime status, turn, context-compaction, retry, and artifact events |
+
+### Management projections
+
+`mothx/manage/*` is an additive, capability-gated projection of shared Runtime and Serve services. Desktop uses it instead of reading `settings.json`, the sessions database, or Serve configuration directly.
+
+| Group | Methods |
+|-------|---------|
+| Application/settings | `application/get`, `application/patch`, `settings/get`, `settings/patch`, `env/get`, `env/patch` |
+| Serve/channels | `serve/get`, `serve/patch`, `channels/get`, `channels/patch` |
+| Providers | `providers/list`, `providers/save`, `providers/delete`, `providers/test`, `providers/discover` |
+| Skills | `skills/list`, `skills/set`, `skillhub/*` |
+| MCP | `mcp/list`, `mcp/set` |
+| Automation | `cron/*`, `deliveries/list`, `deliveries/retry`, `memory/get`, `memory/put`, `stats/summary`, `stats/timeseries` |
+| Experts | `experts/list`, `experts/get`, `experts/create`, `experts/update`, `experts/delete` |
+| Knowledge bases | `knowledge-bases/*` (list, get, create, update, delete, scan, status, query, mcp/apply, runs, sources, schedule, clear) |
+
+Responses and logs mask provider keys and sensitive headers. Management calls never make Desktop the owner of session, run, credential, or scheduling state.
 
 ## MCP Server Integration
 
@@ -889,70 +946,52 @@ Source: https://mothx.net/en/architecture.md
 
 ![MothX Architecture Overview](assets/image/architecture-en.webp)
 
-> All entry points (TUI/CLI/ACP/Serve/messaging channels) feed a single core Agent loop, which reuses the provider abstraction plus SQLite sessions, sandbox, skills, MCP, stats, memory, and workflow infrastructure.
+> All entry points (TUI, CLI, WebUI/Serve, Desktop/ACP, and messaging channels) feed one front-end-neutral Agent Runtime, which owns sessions, runs, decisions, input/content, attachments/artifacts, MCP, skills, and policy resolution, and reuses one core Agent loop plus the provider abstraction, SQLite sessions, sandbox, stats, memory, and workflow infrastructure.
 
 
 ## Project Structure
 
 ```
 mothx/
-├── agent/                       # Public Agent/Provider interfaces and Builder
-├── cmd/mothx/              # CLI entry point
-│   ├── main.go                  # Main program
-│   └── main_doctor.go           # `doctor` subcommand (env diagnostics)
+├── agent/                       # Public SDK types (Agent, Provider, Builder)
+├── bootstrap/                   # Public SDK wiring into internal implementations
+├── cmd/mothx/                   # CLI entry point and subcommands
+├── desktop/                     # Electron desktop client (pure ACP projection)
+├── ui/                          # Svelte Web UI embedded into Serve
 ├── internal/
-│   ├── a2a/                     # A2A protocol server and master mode
-│   │   ├── config.go            # A2A configuration and initialization
-│   │   ├── handler.go           # JSON-RPC 2.0 handler + SSE
-│   │   ├── client.go            # A2A client
-│   │   ├── server.go            # HTTP server
-│   │   ├── executor.go          # Task → Agent loop executor
-│   │   ├── agent_card.go        # Agent Card generation
-│   │   ├── task.go              # Task lifecycle management
-│   │   └── master.go            # A2A Master mode (remote agent dispatch)
-│   ├── acp/                     # ACP / MCP integration
-│   ├── agent/                   # Core Agent loop
-│   │   ├── agent.go             # Agent main logic
-│   │   ├── factory.go           # AgentFactory for per-agent construction
-│   │   ├── manager.go           # AgentManager lifecycle management
-│   │   ├── router.go            # EventRouter
-│   │   ├── subagent.go          # subagent_* tools
-│   │   ├── events.go            # Event type definitions
-│   │   ├── provider.go          # Provider interface adapter
-│   │   └── system_prompt.go     # System prompt generation
-│   ├── config/                  # Configuration management
-│   ├── context/                 # Context management and token estimation
-│   ├── contextfiles/            # Context file loading
+│   ├── agent/                   # Core Agent loop, events, prompts, sub-agent tools
+│   ├── agentruntime/            # Shared front-end-neutral Runtime: SessionRuntime,
+│   │                            # ExecutionRuntime, decisions, artifacts, MCP,
+│   │                            # knowledge bases, experts, worktrees
+│   ├── acp/                     # ACP v1 server + mothx.dev extensions
+│   ├── a2a/                     # A2A server and remote-agent master dispatch
+│   ├── architecture/            # Static architecture guard tests
+│   ├── browser/                 # vibe-browser automation tool
+│   ├── config/                  # settings.json / serve.json schemas and defaults
+│   ├── context/, contextfiles/  # Token budget and AGENTS.md/CLAUDE.md loading
 │   ├── cron/                    # Scheduled task store and scheduler
-│   ├── serve/                   # Unified OpenAI API, Web UI, and messaging channels
-│   ├── mcp/                     # MCP server integration
-│   ├── memory/                  # Persistent memory (memory.md)
-│   ├── messaging/               # Messaging platform abstraction
-│   ├── platform/                # Cross-platform compatibility utilities
-│   ├── provider/                # LLM Provider abstraction
-│   │   ├── anthropic/           # Anthropic Messages API
-│   │   ├── google/              # Google Gemini/Vertex API
-│   │   ├── openai/              # OpenAI Chat Completions API
-│   │   ├── factory/             # Shared provider/model construction
-│   │   ├── http_client.go       # Shared HTTP client with proxy/headers support
-│   │   └── vendor*.go           # Vendor adapter registry and defaults
+│   ├── dao/                     # Sole owner of SQL/query builders/row mapping
+│   ├── db/                      # Connection, transaction, and migration lifecycle
+│   ├── esm/                     # Enable Supervisor Mode objective loop
+│   ├── expert/                  # Expert Team bundle discovery and validation
+│   ├── imageproc/               # Image normalization and resizing
+│   ├── mcp/                     # MCP client/server integration
+│   ├── memory/                  # memory.md tool for messaging channels
+│   ├── messaging/               # WeChat/Feishu platform abstraction
+│   ├── platform/                # Cross-platform helpers and embedded assets
+│   ├── provider/                # Protocol providers, vendor adapters, factory
 │   ├── sandbox/                 # Sandbox abstraction (bwrap, none)
-│   ├── session/                 # Session management (SQLite)
-│   ├── skills/                  # Skills system
-│   ├── tools/                   # Tool implementations
-│   │   ├── bash.go              # Bash command execution
-│   │   ├── read.go              # File reading
-│   │   ├── write.go             # File writing
-│   │   ├── edit.go              # File editing
-│   │   ├── grep.go              # Content search
-│   │   ├── find.go              # File finding
-│   │   ├── ls.go                # Directory listing
-│   │   ├── plan.go              # Task planning
-│   │   ├── question.go          # User clarification (plan mode, TUI only)
-│   │   ├── skill_ref.go         # Skill reference loading
-│   │   └── a2a_dispatch.go      # A2A remote agent dispatch
-│   ├── tui/                     # Terminal UI (BubbleTea)
-└── pkg/sdk/                     # Public SDK interface
+│   ├── serve/                   # OpenAI API, Web UI, channels, hooks, cron, memory
+│   ├── session/                 # Session domain, migrations, event store,
+│   │                            # attachments, knowledge store
+│   ├── skills/, skillhub/       # Skills and online marketplace
+│   ├── stats/                   # Usage statistics dashboard and queries
+│   ├── systeminit/              # AGENTS.md generation
+│   ├── tools/                   # Built-in tool implementations
+│   ├── tui/                     # Bubble Tea terminal UI
+│   └── workflow/                # JavaScript workflow runtime
+├── example/                     # Public SDK examples
+└── docs/                        # Bilingual docs, generated indexes, site
 ```
 
 ## Running Modes
@@ -981,6 +1020,29 @@ and Session infrastructure:
 ```
 
 ## Core Components
+
+### 0. Shared Agent Runtime
+
+The Agent Runtime is the single boundary between front ends and the Agent Core.
+TUI, CLI, WebUI/API, Desktop/ACP, WeChat/Feishu, Cron, ESM, and A2A adapters decode
+their own protocol and project events; they do not own execution semantics.
+
+- **Construction:** `SessionRuntime.BuildAgent`, `BuildTransientAgent`, and
+  `agentruntime.NewAgentManager` are the only production Agent construction paths.
+- **Policy:** source, effective mode, capabilities, tools, sandbox, approval,
+  MCP, skills, reasoning, and run policy are resolved once through
+  `ResolveSource`/`ResolvePolicy`. Product default mode is `yolo`.
+- **Execution:** `ExecutionRuntime` + `RunStore` own durable run begin, reattach,
+  update, cancel, finish, recovery, and the single canonical terminal event.
+- **Decisions:** `DecisionService`/`DecisionRecord` own approval and question
+  identity, deadlines, first-response-wins, replay, and expiry.
+- **Input and artifacts:** all text/image/audio/file input normalizes into the
+  Runtime input contract; attachments and generated artifacts are Runtime-owned
+  and backed by `internal/session`.
+- **Resources:** context/skills/rules, Expert Teams, MCP clients, knowledge
+  services, worktrees, and coordinated shutdown are owned by the Runtime.
+- **Admission:** one per-session submission coordinator and fenced execution
+  lease decide whether a new run may start; adapters may only project that state.
 
 ### 1. Provider System
 
@@ -1049,7 +1111,7 @@ HTTP, messaging, A2A, stdio) and output target.
 #### Execution Flow
 
 ```
-User Input (TUI / HTTP / Messaging / A2A / ACP stdio)
+User Input (TUI / CLI / HTTP / Messaging / A2A / ACP stdio / Desktop)
     │
     ▼
 ┌───────────────┐
@@ -1088,7 +1150,7 @@ registry, and job manager state.
 ```
 Main Agent
     │
-    ├── AgentManager creates child agents
+    ├── agentruntime.NewAgentManager creates child agents
     ├── EventRouter routes events by AgentID
     └── subagent_* tools manage async child work
 ```
@@ -1464,14 +1526,16 @@ Implement process-level isolation through bubblewrap, protecting system security
 ### 6. Public SDK Package
 
 The `agent/` package exposes public Go types (`Agent`, `Provider`, `Builder`) so
-external applications can embed the agent without depending on internal packages.
-See [SDK Integration Guide](sdk.md) for usage details.
+external applications can embed an Agent without depending on internal packages.
+`bootstrap/` wires those public interfaces to the internal Runtime. See
+[SDK Integration Guide](sdk.md) for usage details.
 
-### 7. Shared Agent Loop
+### 7. Shared Agent Runtime and Agent Loop
 
-All running modes (TUI, Serve, Channels, A2A, ACP) reuse the same Agent loop.
-The only difference is the input source and output target. This ensures behavioral
-consistency and avoids logic divergence.
+All running modes (TUI, CLI, WebUI/Serve, Channels, A2A, ACP, Desktop) reuse the
+same Agent Runtime and Agent loop. Adapters differ only in protocol decoding and
+event projection. Resource ownership, run lifecycle, decisions, and policy live
+in the Runtime so behavior cannot drift between entry points.
 
 ---
 
@@ -1480,6 +1544,86 @@ consistency and avoids logic divergence.
 Source: https://mothx.net/en/changelog.md
 
 # Changelog
+
+## v1.3.105-pre-4
+
+### ✨ New Features
+
+- **New Gitee/Moark Models: `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed`**
+  - Added `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed` to the `gitee` and `moark` providers: thinking is enabled by default with Kimi's `low`/`high`/`max` effort scale (MothX's `minimal`/`low` map to `low`, `medium`/`high` to `high`, and `xhigh`/`max` to `max`), a 1M context window, and text+image input. Both use the verified `reasoning_effort` parameter through the `kimi` thinking format.
+
+### 💥 Behavior Changes
+
+- **Non-hosted web search now uses DeepSeek Search/Fetch.** The old `webSearch` provider/type/model configuration that registered a provider-backed search tool was replaced by local `web_search` and `web_fetch` tools backed by DeepSeek's official `POST /v1/tools/search` and `POST /v1/tools/fetch` endpoints. Provider-native hosted search for OpenAI Responses is unchanged, and Anthropic Messages uses its native hosted search while `webSearch` is enabled; both take precedence over the local `web_search` function. `webSearch` now configures `provider`, `baseUrl`, and `token` (with the provider API key as fallback); both tools are read-only and available in plan mode.
+
+- **Tencent Yuanbao search backend added.** `webSearch.backend` selects `deepseek` (official Search/Fetch APIs) or `yuanbao` (Tencent Yuanbao SearchPro at `POST /SearchPro`). The Yuanbao backend sends `{"Query": ...}`, normalizes the returned `Pages` into title/URL/site/date/score/passage results, authenticates with `webSearch.token` or `${TENCENTCLOUD_WSA_APIKEY}`, and currently provides search only, so `web_fetch` remains available only with the DeepSeek backend.
+
+- **The embedded Windows BusyBox now requires Windows 10 or later.** `busybox-windows-x86.exe` and `busybox-windows-x86_64.exe` are rebuilt from the fork's UTF-8 configs (`mingw64u_defconfig` for x86_64, `mingw32w_defconfig` for x86) and carry a UTF-8 application manifest (`activeCodePage=UTF-8`) together with `FEATURE_UTF8_INPUT`, `FEATURE_UTF8_CONSOLE`, `FEATURE_UTF8_AUTODETECT`, `FEATURE_UTF8_CHILD_ENV` and `UNICODE_SUPPORT`. Non-ASCII `sh -c` command text now reaches argv as UTF-8 instead of being down-converted to the system ANSI code page (GBK on zh-CN Windows), and the child environment keeps the UTF-8 baseline. The build sets `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`, so on Windows 7/8 BusyBox refuses to start; the `bash` tool then falls back to PowerShell exactly as it does whenever BusyBox is unavailable, so commands keep working (without the UTF-8 baseline). MothX continues to document Windows 10/11 as its supported Windows floor.
+
+### 🐛 Bug Fixes
+
+- **Captured Windows output is normalized at the capture boundary.** Child processes choose their pipe encoding independently — Python, Java, the C runtime and shell builtins often use the ANSI code page (GBK on zh-CN Windows) while Go, Rust, Node.js and most CLIs write UTF-8, and a single command can mix both. Rather than injecting a per-runtime environment variable, the `bash` tool now normalizes captured stdout/stderr through `platform.DecodeProcessOutput`: bytes that are not valid UTF-8 are decoded with the active code page, valid UTF-8 is trusted, and mixed output is resolved per maximal non-ASCII run. `MOTHX_WIN_OUTPUT_ENCODING=utf-8` forces UTF-8, and a numeric value such as `936` forces that code page.
+
+- **Genuine UTF-8 text is no longer re-read as GBK.** The two encodings overlap on two-byte sequences, and the previous whole-block heuristic could decide once for an entire capture, re-decoding real UTF-8 text into unrelated Han characters (`Привет` → `袩褉懈胁械褌`, and a mixed line into `涓枃`). Ambiguity is now resolved per non-ASCII run and only when the stream carries no stronger UTF-8 signal: a stream whose UTF-8 reading contains CJK characters or any 3- or 4-byte sequence is never second-guessed, and only short runs of two-byte pairs are eligible. Byte-identical legacy fragments (for example a lone GBK `写`) still decode as before.
+
+- **The extracted Windows BusyBox is refreshed when the embedded asset changes.** A previously extracted copy is compared with the embedded asset by SHA-256 and replaced atomically when they differ, so an upgraded MothX never keeps running an old shell. If a running BusyBox holds the executable image locked, the old copy is kept for that run and the refresh is retried on the next startup.
+
+- **Stop handling now projects one Runtime decision across TUI and ACP, with race and recovery fixes.** ACP `session/cancel` snapshots the Run ID under `cancelMu` instead of racing the prompt handler, and the shared stop projection is bounded so it cannot stall the JSON-RPC read loop. TUI abort/reset moves the canonical stop and terminal write off the Bubble Tea update loop (quit waits for completion), so the UI no longer freezes; a canonical Run terminalized by another owner is adopted locally even when the terminal state differs, with the full terminal broadcast, instead of leaving the session permanently busy. A stopped recovered Responses background task now terminalizes as `cancelled` rather than `failed`.
+
+- **Desktop shows and inspects sub-agents.** The chat header now reports how many sub-agents the session has and whether they are running; opening it shows a read-only panel listing every child with its status and renders one child's transcript with the ordinary chat message, tool-card, and reasoning styles. ACP adds the read-only `mothx/subagent/list` and `mothx/subagent/messages` projections plus the `subagentPanel` capability key, so Desktop no longer relies on isolated started/terminal cards.
+
+## v1.3.105-pre-1
+
+### ✨ New Features
+
+- **New Gitee/Moark Model: `deepseek-v4.1-flash-1017`**
+  - Added `deepseek-v4.1-flash-1017` to the `gitee` and `moark` providers, directly after `deepseek-v4.1-flash` and with identical parameters: a 1M context window, reasoning support, and text+image input; no default max_tokens is sent.
+
+- **New MiniMax Model: `MiniMax-M3.1-Flash`**
+  - Added `MiniMax-M3.1-Flash` to the `minimax` provider: reasoning support with thinking intensity via the Anthropic-compatible `output_config.effort` scale (adaptive thinking format; `minimal` and `low` map to `low`, the rest map one-to-one to `medium`/`high`/`xhigh`/`max`), a 1M context window, and text+image+video input. The preset declares a 1M output ceiling (the full context window), while requests still use MothX's normal output-token default unless you raise it explicitly.
+
+- **Volcengine Retired Models Removed.** Volcengine has taken `kimi-k2.7-code`, `doubao-seed-2.1-turbo`, and `minimax-m3` offline, so the `volcengine`, `volcengine-agentplan`, and `volcengine-codingplan` presets no longer list them (including the standard channel's `doubao-seed-2-1-turbo-260628` snapshot). The same IDs remain available on other providers such as Gitee/Moark. Because preset order is also the fallback when no default model is configured, an unconfigured standard `volcengine` session now defaults to `doubao-seed-evolving` instead of the retired snapshot.
+
+- **DeepSeek V4.1 Thinking Intensity.** DeepSeek V4.1 models in the Gitee/Moark and Volcengine presets now use the verified `reasoning_effort` parameter instead of only a thinking switch. MothX's `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` levels map one-to-one to the gateway scale, while `off` sends `none` to disable these gateways' think-by-default behavior. Gitee/Moark and Volcengine Agent Plan were validated live across the complete accepted enum. All DeepSeek V4.1 model IDs default to this format, including third-party gateways; a deployment that only accepts the older thinking switch can opt out with `thinkingFormat: "thinking-only"`.
+
+- **Unsupported `reasoning_effort` falls back automatically.** If an OpenAI-compatible endpoint rejects `reasoning_effort`, MothX retries immediately without the field (keeping the DeepSeek V4.1 thinking switch), shows the reason in the retry notice, and records `thinkingFormat: "thinking-only"` plus `supportsReasoningEffort: false` for that model so later runs omit it. The fallback does not consume a retry attempt.
+
+- **Sessions reject unusable working directories early.** `internal/session` is the single owner of working-directory validation, with the Runtime API delegating to it. Session creation, reopening, rebinding, ACP `mothx/session/setWorkDir`, and channel session resolution now require an existing absolute directory before persisting or assembling sandbox and tool resources. An ACP same-directory request no longer detaches a usable runtime when its directory has disappeared, and a channel run validates the bound session's persisted cwd rather than the platform default.
+- **Desktop uses an explicit draft-directory model.** The legacy workspace-default fallback and settings panel were removed. Quick-start drafts receive one process-local `mkdtemp` scratch directory, while a New Task draft remains unset until its native picker or worktree action supplies a directory. Picker history is only a convenience for the next dialog; draft state carries a generation so a stale quick-start, picker, or ACP completion cannot overwrite a newer New Task.
+- **Runtime coordinates local session submissions.** `SessionRuntime` owns one `(database identity, session ID)` FIFO `SubmissionCoordinator`, and `ExecutionRuntime.Completion` is the authoritative completion barrier. TUI queued input, ACP prompt admission, Channel/Cron/ESM/Knowledge admission handoffs, shutdown, cancellation, and structured local/external busy classification now share that lifecycle instead of polling lease errors or starting a successor from an Agent finish event.
+
+### 🐛 Bug Fixes
+
+- **Session transcript storage now has an EventStore migration path.** Runtime-bound sessions can keep canonical message, tool, compaction, turn, and terminal payloads in a session-scoped append-only EventStore while SQLite retains fenced Run/lease/decision/turn control state and rebuildable metadata projections. The path includes intent reconciliation, bounded/fsynced batches, EventStore paging/fork/recovery support, and fail-closed corruption handling; legacy sessions remain readable through the named compatibility bridge. Reading the store is kept strictly separate from repairing it: only the lease-holding append path may truncate an incomplete tail or materialise the rebuildable manifest, while observation (`EventStore.Inspect`, and therefore session load, reconciliation, and every adapter read) classifies corruption identically but never writes to the directory — so opening a session can no longer mutate its stored bytes, race a concurrent owner's fsync, or leave directories behind on teardown.
+
+- **Migrated sessions keep their turn boundaries addressable.** Legacy `entries.seq` is a database-global AUTOINCREMENT that interleaves every session sharing `sessions.db`, so it can numerically land inside another store's range and prove nothing about where a row lives. Migration now rebuilds transcript order from the persisted parent chain and translates each `conversation_turns` interval into EventStore positions inside the same fenced commit transaction, so fork resolution and open-turn recovery still point at real markers. Projection `turn_id`/`run_id` are derived from the decoded marker payload instead of the batch envelope (migration exports markers with an empty envelope, which previously left every migrated marker without turn identity and silently broke the COALESCE fallback in turn state reads and `ListOpenTurns`). Reconciliation is no longer a side effect of binding a session: it moved into the shared load path as `ConvergeEventStore`, so every entry point that merely opens a session — serve/chat, the background run coordinator, channels, ESM, ACP and the TUI resume path — now retires a leftover legacy payload duplicate and heals control rows on its own instead of replaying a transcript the EventStore already owns. `MigrateToEventStore` split accordingly into convergence plus the one irreversible export step (`exportLegacyTranscript`), and `Manager.Reload()` reloads through the locked body so adopting another path's flip cannot self-deadlock on the non-reentrant manager mutex. Sessions flipped by an earlier build therefore heal on their next open rather than their next bind, and an entry type the store cannot replay (`custom`/`custom_message`) fails the export closed rather than dropping it from the transcript.
+
+- **Server shutdown no longer races a run it promised to drain.** A background run used to be admitted durably and only then handed to a goroutine, so a `Shutdown` landing between those two steps left an active Run that nothing drained while the process was already closing its session databases. `SessionPool` now separates reserving a drain slot from starting work: `ReserveBackground` claims the slot before the durable admit and `LaunchBackground` moves that ownership onto the executor goroutine, so the slot is held continuously from admission until the executor returns, and `Shutdown` waits for the caller either to launch or to give it back. The release is split in two layers — `runtimeRelease` (runtime pin plus concurrency slot) and `handOffRelease` (the drain hand-off) — and each executor registers `handOffRelease` first, making it the outermost defer so the artifact collector close, run-context cancel, fallback terminal write and `FinalizeRun` all finish inside the drain. Orphaned Responses runs recovered by reattach follow the same barrier. `LaunchBackground` deliberately does not derive a cancellable context from the stop signal the way `GoCtx` does: a durable Run owns a fenced execution lease and must reach its own terminal transition, so cancelling here would orphan it instead. `Shutdown`'s drain wait is now bounded by the caller's context and reports `ctx.Err()` rather than blocking forever, because a task that never returns (an agent awaiting an approval nobody will answer, a provider stream ignoring its context) is an availability problem, not a reason to make the process unkillable; ownership still lives in the fenced lease, so returning early never terminalizes a live run. The ordering invariant cannot be expressed in types and cannot be pinned end-to-end — an approval-blocking fixture provably never reaches the executor's deferred tail, while a fast-terminalizing fixture makes the assertion vacuous — so `internal/architecture/drain_release_guard_test.go` holds it statically, walking every `LaunchBackground` site through its wrapper-to-executor delegation chain and checking that the drain parameter sits at the position derived from the callee's own signature and that the executor defers it first; four mutations confirm the guard is not vacuous.
+
+- **Corrupted session databases now show recovery guidance.** The TUI no longer dumps SQLite's full b-tree error as an unexplained session-creation failure. It identifies the database, confirms that it was left untouched, and points to the archival `mothx pure --force` recovery path after other processes have been stopped.
+
+- **Rotating a bound channel session preserves its durable directory.** Rotation inherits the existing session's persisted cwd instead of falling back to the platform default, and its fenced compare-and-set compares canonical paths so an equivalent stored form such as a trailing separator still succeeds while a real concurrent change is rejected.
+- **Feishu tool-image cleanup is concurrency-safe.** Each delivery materializes images beneath a unique private temporary directory and removes the whole directory on every exit path, preventing parallel runs from collecting one another's files and leaving no image bytes behind in the work directory.
+- **Session EventStore migration has one unified entry point.** Migrating an old session to the EventStore used to happen only from `SessionRuntime.BindSession`, so entry points that assemble sessions directly — ACP/Desktop, channels, ESM, and background runs — left old sessions on the legacy SQLite transcript and kept new sessions on the `sqlite` content store. `BindSession`, `AttachSessionResources`, and `Builder.Build` now call the same migration entry point, `Manager.MigrateToEventStore`, with no per-site wrapper or special handling: an existing session is exported to the session-scoped EventStore and a new one is flipped to it regardless of which adapter opened it, with no divergence in content ownership. The entry is now safe to call unconditionally — while another owner is running the session it is a successful no-op instead of an attach-blocking error, the self-consistent legacy store keeps serving, and a later idle attach completes the migration; only corrupt or unreplayable legacy data fails closed.
+- **Stopping a session no longer fails while its run is terminalizing.** A terminal write that failed after the durable Run entered the committed `terminalizing` window left its row in a state only a terminal transition may advance, yet the Web UI stop path still tried to force `terminalizing` -> `cancelling`, which the run store rejects — so the request returned `persist run cancellation: invalid session run transition "terminalizing" -> "cancelling"` and the run looked permanently uncancellable. `ExecutionRuntime.CancelDurable` and the shutdown cancel path now detect a prepared/terminalizing terminal transaction, skip the illegal cancelling write, accept the cancellation (still cancelling the loop), and restart the prepared terminal write when its retry had stopped, so an interrupted run can still reach a terminal state.
+- **Appending to a session's EventStore is no longer quadratic in transcript size.** EventStore appends used to re-read the whole log several times per batch — a health inspection, an idempotency scan, a next-sequence scan, and a commit-time validity scan — so append cost grew with the session's accumulated content (512 entries: 3.8 ms → 178 ms per batch, 5.7 s cumulative) while the legacy SQLite path stayed flat. The health gate now trusts the process-local append-state cache whenever it is fresh for the current physical revision and checks only that every SQLite intent is committed; `NextSequence` reads the cached cursor; the idempotency probe uses the projection index and reads the full committed transcript only on a real retry; and `CommitEventIntent` accepts the just-fsynced batch instead of rescanning. Appends are now constant-time in transcript size (same probe: ~3 ms per batch, 0.30 s cumulative, about 19x faster), with the intent/lease protocol, fencing, and recovery verification unchanged. A deterministic regression test pins that appending to a warm session performs no whole-log scans.
+- **Opening a brand-new Web UI session no longer reports `session_not_found`.** A server-allocated Web UI session is persisted only when its first run starts, but the run-event, capability-event, and sub-agent lookups rejected that still-unpersisted id, so the Web UI surfaced `session_not_found` while creating a session. Those three lookups now project an empty result for an allocated id — matching the trajectory, capabilities, runtime, and message lookups — while an arbitrary unknown id is still rejected.
+- **EventStore migration is bounded and self-healing.** The one-time export of an old session's transcript is now written in batches of 64 entries instead of a single unbounded batch, so one fsync and one SQLite projection transaction stay bounded no matter how large the transcript is. The export also no longer wedges on stale or interrupted state: because the content store stays SQLite until the flip, any EventStore bytes or intents a previous interrupted attempt left behind are discarded and the transcript is re-exported, instead of refusing the migration and failing the attach.
+
+## v1.3.104
+
+### ✨ New Features
+
+- **StepFun Step 5 Preview model.** The StepFun provider catalog now includes `step-5-preview`.
+- **Feishu delivers tool-generated images.** Supported PNG, JPEG, GIF, and WebP images produced during a Feishu-bound run are materialized through the Runtime artifact pipeline and sent as image messages alongside the textual response.
+
+### 🐛 Bug Fixes
+
+- **ACP conversations retain their session history.** ACP builds a fresh Agent for each prompt but previously omitted the shared replay-seeding step, so every follow-up message was processed as a new conversation. Prompt handling now reloads the session manager and loads its canonical replay state into the newly built Agent while preserving the Runtime-owned current user entry, avoiding both amnesia and duplicate transcript rows. Regression coverage exercises two real stdio ACP prompts and both serve chat and WebUI run-submission paths.
+- **A live session owner can survive transient database stalls.** Recovery defers takeover when the synchronized lease bus reports a fresh announcement from another live owner, even if its SQLite lease row has expired; a same-process lease that is still live but could not renew is reported as busy instead of being reclaimed. Database unavailability or wall-clock expiry alone therefore remains an availability problem, not evidence of ownership loss. Fenced CAS takeover and explicit release remain the only ways to displace a live owner.
+- **Long-running provider turns keep their retry budget.** Stream transport and timeout recovery counters reset after a successful turn. Independent transient failures no longer accumulate across an entire run and exhaust continuation budget, while the per-turn cap still bounds growth from a repeatedly stuck turn.
+- **An ACP cancel in the final registration window takes effect.** After the Run becomes registered but before its cancellation handle is installed, the admission context is rechecked so a narrowly timed cancel terminates the prompt instead of starting a Run the client already abandoned.
+- **New WebUI sessions open without a false not-found error.** A server-allocated deferred session ID that has not yet been persisted by its first run now projects default capabilities and an empty trajectory from `/api/sessions/{id}/runtime`, `/capabilities`, and `/trajectory`. Unknown, mistyped, and deleted IDs still return 404 rather than masquerading as a blank new session.
 
 ## v1.3.103
 
@@ -1523,6 +1667,10 @@ Source: https://mothx.net/en/changelog.md
   - **Runtime binary setting.** The desktop settings (运行时 → MothX 运行时二进制) let the user switch between the bundled `mothx` executable (default) and a custom `mothx` binary path. Selection and validation live in the privileged Electron main process, the ACP runtime restarts on the switch, an unavailable custom path falls back to the bundled runtime with a visible notice, and a custom binary that fails to start rolls the selection back so the client stays usable. The `MOTHX_BINARY` environment variable remains the highest-priority development override.
 
 ### 🐛 Bug Fixes
+
+- **Interactive TUI no longer freezes on slow MCP servers at startup**
+  - Configured MCP servers were connected sequentially and strictly before the TUI came up: one unhealthy or slow server (for example an `npx` server downloading on first run, or an unreachable remote host) blocked first paint for up to its 15s handshake timeout, and any failure aborted the whole launch. `/reload` re-execs the process, so it paid the same cost again.
+  - Connections now run concurrently, so a set of slow servers costs the slowest one rather than their sum, and the group can be bounded with an overall timeout that caps connection startup only: a deadline never tears down an already-connected server. The interactive TUI now defers MCP entirely: the runtime comes up immediately, the TUI connects configured servers in the background after the program starts, tolerates individual failures (surfaced as a warning instead of aborting), and rebuilds the next agent so its tool surface picks up the newly connected servers. Non-interactive `--print` keeps the strict, synchronous behavior.
 
 - **ACP keeps cancel reachable while a session is loading and serializes a cascaded close against a child prompt**
   - Session-scoped ACP requests run on an async per-session lane, so a slow `session/new`/`load`/`fork` no longer head-of-line blocks the JSON-RPC read loop and `$/cancel_request`/`session/cancel` stay reachable. `session/prompt` now runs on that lane too; because it can block on execution admission (including the same-process draining wait) before the Run registers its cancel handle, its admission context is registered synchronously and is cancellable, so a cancel arriving before or during admission aborts the prompt instead of starting a Run the client already cancelled.
@@ -5509,11 +5657,15 @@ mothx [flags] [message...]
 | `--provider` | `-p` | Default from config file | LLM provider (deepseek-openai, deepseek-anthropic or custom name) |
 | `--model` | `-m` | Default from config file | Model ID |
 | `--mode` | `-M` | `yolo` | Run mode (plan, agent, yolo, os); falls back to `settings.json` `defaultMode` |
-| `--thinking` | `-t` | `off` | Thinking level (off, minimal, low, medium, high, xhigh) |
+| `--thinking` | `-t` | `off` | Thinking level (off, minimal, low, medium, high, xhigh, max) |
 | `--multi-agent` | - | `false` | Enable multi-agent tools and commands |
 | `--delegate` | - | `false` | Enable delegation mode (blocking single sub-agent tool) |
 | `--workflows` | - | `false` | Enable JavaScript workflow tools and `/workflows` commands |
 | `--artifact` | - | `false` | Enable generated artifact publishing for this TUI/CLI process |
+| `--expert` | - | - | Bind an expert bundle to this session; switching an existing expert forks the session |
+| `--web-search` | - | `false` | Enable configured local web search tools for this run |
+| `--browser` | - | `false` | Enable the browser automation tool |
+| `--cron` | - | `false` | Enable the cron tool for scheduled tasks |
 
 ### Session Management
 
@@ -5522,6 +5674,9 @@ mothx [flags] [message...]
 | `--continue` | `-c` | Continue most recent session |
 | `--resume` | `-r` | Resume session by ID or path |
 | `--session` | - | Use specific session ID or `.db` handle file |
+| `--list-sessions` | - | List recent sessions across all working directories |
+| `--list-sessions-limit` | - | How many sessions `--list-sessions` prints (default 20) |
+| `--list-sessions-cwd` | - | Only list sessions for this working directory |
 
 ### Output Control
 
@@ -5574,7 +5729,11 @@ Supports VS Code, JetBrains IDEs, and any ACP-compatible editor.
 | `--multi-agent` | - | false | Enable multi-agent tools for ACP sessions |
 | `--delegate` | - | false | Enable delegation mode for ACP sessions |
 | `--workflows` | - | false | Enable JavaScript workflow tools for ACP sessions |
+| `--web-search` | - | false | Enable configured local web search tools for this ACP run |
+| `--browser` | - | false | Enable browser automation for ACP sessions |
 | `--artifact` | - | false | Enable generated artifact publishing for this ACP/Desktop process |
+| `--permission-timeout` | - | `5m` | Approval decision timeout for `session/request_permission` (Go duration; env `MOTHX_ACP_PERMISSION_TIMEOUT`) |
+| `--question-timeout` | - | `5m` | Question decision timeout for ACP question requests (Go duration; env `MOTHX_ACP_QUESTION_TIMEOUT`) |
 
 See the [ACP Protocol](acp.md) documentation for IDE integration details.
 
@@ -5596,6 +5755,8 @@ mothx a2a [command]
 | `discover <url>` | Discover remote Agent Card |
 | `--init-a2a-config` | Create `a2a.json` config template |
 | `--force` | Force overwrite existing config file |
+
+`mothx a2a send` also accepts `--target <url>` (default `http://localhost:8093`) and `--auth-token <token>`.
 
 See [A2A Protocol](a2a.md) documentation for details.
 
@@ -5630,7 +5791,7 @@ mothx serve [flags]
 
 | Subcommand | Description |
 |------------|-------------|
-| `init-config [global|project]` | Create `serve.json` config template |
+| `init-config [global\|project]` | Create `serve.json` config template |
 | `--force` | Force overwrite existing config file |
 
 See [Serve Mode](serve.md) documentation for details.
@@ -5691,13 +5852,91 @@ The command refuses to start while a session run is active in that directory, na
 
 Attachment storage becomes unreachable once the rows that described it are archived, and the same happens when a session is deleted or an intake fails after its content was written. Reclamation never relies on a reset: the Runtime sweeps the private store while accepting new attachments (at most once an hour per process) and once a day through its own cron maintenance job, and removes only directories that no row references **and** that were last written before the attachment retention window plus a 24-hour grace period - eight days by default with the 7-day retention. That floor is why reclamation can never destroy something a restored archive could still serve. `--prune-unreferenced` runs the same pass immediately and reports what it reclaimed and what it kept as too young; `channels/` and `knowledge-bases/` are never touched by it. The scheduled pass is configured by the optional `maintenance` section of `settings.json` (`reclaimAttachmentStorage`, `storageReconcileSchedule`); see [configuration](configuration.md#maintenance).
 
+### `worktree` - Isolated Git Worktrees
+
+Create, list, reset, and remove isolated git worktrees managed by the shared Runtime. Worktrees default to `<data-dir>/worktrees`, are registered in the sessions database, and are shared by TUI/CLI, ACP/Desktop, and sub-agents. Creation is controlled by `settings.json` `worktree.enabled`; disabling creation still allows listing, resetting, and removing existing worktrees.
+
+```
+mothx worktree <list|create|remove|reset> [flags]
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List managed worktrees |
+| `create` | Create a worktree |
+| `remove <id\|directory>` | Remove a managed worktree |
+| `reset <id\|directory>` | Reset a worktree to its default branch |
+
+| Flag | Subcommand | Description |
+|------|------------|-------------|
+| `--repo <dir>` | list, create | Repository directory (default: current directory) |
+| `--project <id>` | list, create | Filter by, or associate with, a project ID |
+| `--name <name>` | create | Worktree name (default: derived from the repository) |
+| `--detach` | create | Create a detached worktree instead of a branch |
+| `--start <command>` | create | Startup command stored for the worktree |
+| `--root <dir>` | all | Override the worktree root directory |
+| `--json` | list, create | Print machine-readable JSON |
+
+Examples:
+```bash
+mothx worktree list
+mothx worktree create --repo ~/projects/app --name feature-auth
+mothx worktree reset feature-auth
+mothx worktree remove /path/to/worktree
+```
+
+### `knowledge-mcp` - Knowledge Base MCP Server
+
+Expose one or more managed knowledge bases as MCP tools over stdio. The server registers the ordinary `search_knowledge_base` tool; the allowlist is the authorization boundary.
+
+```
+mothx knowledge-mcp serve --knowledge-base <id> [--knowledge-base <id>...] [--session-dir <dir>]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--knowledge-base <id>` | Knowledge base ID enabled for this server; repeat for multiple bases |
+| `--session-dir <dir>` | Session storage directory (default: `settings.json`) |
+
+Knowledge bases are created and indexed from Desktop or the WebUI. See [Knowledge Bases](knowledge-bases.md).
+
+### `speedtest` - Provider Benchmark
+
+Benchmark configured providers/models with a text-only streaming request. Successful runs are averaged and sorted by output tokens per second.
+
+```
+mothx speedtest [flags]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--provider` | `-p` | all configured | Only test models from one provider |
+| `--vendor` | - | - | Alias for `--provider` |
+| `--model` | `-m` | all configured | Only test one model ID |
+| `--prompt` | - | built-in text prompt | Prompt used for every test |
+| `--max-tokens` | - | `256` | Maximum output tokens per request |
+| `--timeout` | - | `2m` | Per-model timeout |
+| `--concurrency` | - | `1` | Number of models tested in parallel |
+| `--runs` | - | `3` | Runs per model; successful runs are averaged |
+| `--thinking` | `-t` | `off` | Thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) |
+
+```bash
+mothx speedtest
+mothx speedtest -p deepseek-openai -m deepseek-v4-flash
+mothx speedtest --concurrency 4 --runs 2
+```
+
 ### `doctor` - Environment Diagnostics
 
 Diagnose your MothX environment: OS info, config files, providers, models, sandbox, MCP, and more.
 
 ```
-mothx doctor
+mothx doctor [--json]
 ```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | `false` | Print one machine-readable JSON diagnosis (`{ ok, version, summary, checks }`) and nothing else on stdout |
 
 The command checks your installation, configuration, provider connectivity, and sandbox availability.
 
@@ -5875,6 +6114,9 @@ mothx -t medium
 
 # Highest level
 mothx --thinking xhigh
+
+# Provider maximum (where supported, for example DeepSeek V4.1)
+mothx --thinking max
 ```
 
 ### Session Management
@@ -5931,26 +6173,31 @@ mothx acp --sandbox --mode agent
 
 Commands available during interactive sessions:
 
-### Mode & Model
+### Mode & Configuration
 
 | Command | Description |
 |---------|-------------|
-| `/mode [plan\|agent\|yolo]` | Switch or show current mode |
-| `/model [model_id]` | Switch or show current model |
-| `/think` | Cycle thinking level |
+| `/mode [plan\|agent\|yolo\|os]` | Switch or show the current mode |
+| `/model [model_id]` | Switch or show the current model |
+| `/defaultModel [project\|global]` | Change the persisted default model |
+| `/auth` | Configure provider credentials and endpoints |
+| `/settings` | Configure settings.json groups, including providers, defaults, behavior, and approval |
+| `/tuilang [global\|project] [auto\|zh\|en]` | Change the TUI language |
+| `/env [list\|set KEY VALUE\|unset KEY\|clear]` | Inspect or edit environment variables for the process |
+| `/esm [objective\|edit\|pause\|resume\|clear\|guide]` | Manage the ESM objective and progress panel |
 | `/compact` | Trigger context compaction |
 | `/delegate [on\|off\|status]` | Toggle or show delegate mode |
+| `/browser [on\|off\|status]` | Toggle or show the browser tool |
+| `/statusline [status\|on\|off\|command\|refresh] ...` | Configure the external status line |
+| `/btw <question>` | Ask a side question without interrupting the main task |
+| `/rule [force\|--force]` | Refresh project rules |
 | `/systeminit [guidance]` | Generate or refresh project `AGENTS.md` |
 | `/reload` | Restart with a fresh session (TUI) |
-| `/btw <question>` | Ask a side question without interrupting main task |
-| `/settings` | Configure settings.json groups, including providers, defaults, behavior, and approval |
-| `/alloweditpath [add <glob>\|remove <glob>\|clear]` | Manage auto-edit path whitelist |
+| `/alloweditpath [add <glob>\|remove <glob>\|clear]` | Manage the auto-edit path whitelist |
 | `/allowautoedit [on\|off] [global]` | Toggle full auto-edit in agent mode |
-| `/agent list` | List sub-agents in multi-agent mode |
-| `/agent switch <id>` | Switch the active sub-agent |
-| `/agent destroy <id>` | Destroy a sub-agent |
+| `/agent list\|switch <id>\|destroy <id>` | List, switch, or destroy sub-agents in multi-agent mode |
 
-### Session Management
+### Session & Orchestration
 
 | Command | Description |
 |---------|-------------|
@@ -5960,21 +6207,30 @@ Commands available during interactive sessions:
 | `/sessions clear` | Start fresh; the new session is created on the next message |
 | `/sessions del <id>` | Delete a session by ID prefix |
 | `/clear` | Clear conversation |
+| `/expert [list\|show <id>\|bind <id>\|unbind\|switch <id>]` | Manage the session Expert Team binding |
+| `/cron add\|list\|enable\|disable\|remove\|run` | Manage scheduled tasks |
+| `/workflows [list\|show <id>\|cancel <id>]` | Manage workflow runs |
 
 The `/sessions` picker supports Up/Down to select, Enter to switch, `n` to start fresh, `d` to delete the selected session, and Esc to close.
 
-### Skills
+### Skills & MCP
 
 | Command | Description |
 |---------|-------------|
 | `/skills` | List available skills |
 | `/skill <name>` | Activate a skill by name |
 | `/skill:<name>` | Activate a skill (alternative syntax) |
+| `/skillhub [search <q>]` | Open the online skill marketplace or search it |
+| `/skillmgr` | Open the installed-skill manager |
+| `/init_mcp [project\|global] [basic\|full] [--force]` | Create an MCP configuration template |
+| `/mcps` | List configured MCP servers |
+| `/paste-image` | Attach an image from the clipboard (where supported) |
 
 ### General
 
 | Command | Description |
 |---------|-------------|
+| `/stats server\|stop-server\|tui` | Open, stop, or print usage statistics |
 | `/help` | Show help |
 | `/quit` | Exit |
 
@@ -6006,6 +6262,12 @@ Default settings can be overridden via environment variables:
 | `VIBECODING_MODE` | Override default mode |
 | `VIBECODING_THINKING` | Override default thinking level |
 | `VIBECODING_USER_AGENT` | Custom User-Agent string |
+| `VIBECODING_ALLOW_SHELL_CONFIG` | Allow `!command` credential/header resolution |
+| `VIBECODING_DEBUG` | Enable provider request/response debug output |
+| `VIBECODING_NO_UPDATE_CHECK` | Disable update checks |
+| `MOTHX_ACP_PERMISSION_TIMEOUT` | Default ACP approval timeout (Go duration) |
+| `MOTHX_ACP_QUESTION_TIMEOUT` | Default ACP question timeout (Go duration) |
+| `MOTHX_WIN_OUTPUT_ENCODING` | Override captured Windows output decoding (`utf-8` or a code page number) |
 
 ## Exit Codes
 
@@ -6180,9 +6442,12 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `enablePlanTool` | bool | `true` | Register the built-in `plan` tool |
 | `enableArtifact` | bool | `false` | Allow TUI/CLI sessions to publish generated artifacts |
 | `enableACPArtifact` | bool | `false` | Allow Desktop/ACP sessions to publish generated artifacts |
+| `imageGeneration` | object | *(disabled)* | Standalone image-generation tool settings |
 | `maxContextTokens` | int | `0` (auto) | Override maximum context token count |
 | `contextFiles` | object | *(see below)* | Context file loading settings |
 | `skillsDir` | string | `"~/.mothx/skills"` | Global skills directory path |
+| `skills` | object | *(empty)* | Skill loading overrides (currently a disable list) |
+| `skillHub` | object | built-in defaults | Online skill marketplace settings |
 | `compaction` | object | *(see below)* | Context compaction settings |
 | `sandbox` | object | *(see below)* | Sandbox execution settings |
 | `sessionDir` | string | `"~/.mothx/sessions"` | SQLite session storage directory |
@@ -6192,8 +6457,9 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `tuilang` | string | `"auto"` | TUI language: `"auto"`, `"zh"`, or `"en"` |
 | `retry` | object | *(see below)* | API call retry settings |
 | `approval` | object | *(see below)* | Bash command approval settings |
+| `worktree` | object | *(see below)* | Isolated git worktree settings |
 | `maintenance` | object | *(see below)* | Runtime-owned background housekeeping (attachment storage reclamation) |
-| `webSearch` | object | *(see below)* | Hosted web search settings |
+| `webSearch` | object | *(see below)* | DeepSeek web search/fetch tool settings |
 | `updateCheck` | bool | `true` | Enable npm-based update notifications |
 
 ---
@@ -6301,7 +6567,6 @@ The built-in `volcengine` provider uses the Ark OpenAI-compatible endpoint and s
       "apiKey": "${VOLCENGINE_API_KEY}",
       "api": "openai-chat",
       "models": [
-        { "id": "doubao-seed-2-1-turbo-260628", "name": "Doubao Seed 2.1 Turbo", "contextWindow": 262144, "maxTokens": 262144, "input": ["text"] },
         { "id": "doubao-seed-evolving", "name": "Doubao Seed Evolving", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] },
         { "id": "doubao-seed-2-1-pro-260628", "name": "Doubao Seed 2.1 Pro", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] }
       ]
@@ -6354,27 +6619,44 @@ mothx --provider openai --model gpt-5.3-codex
 
 ### webSearch
 
-Hosted web search settings. This is disabled by default.
+Local web-search backend settings. This is disabled by default. When enabled, MothX registers the local `web_search` tool for chat providers without native hosted search. `web_fetch` is available for the DeepSeek backend. Provider-native hosted search (OpenAI Responses, and Anthropic Messages while `webSearch` is enabled) remains available and takes precedence over the local `web_search` function when present.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `enabled` | bool | — | `false` | Enable hosted web search registration |
-| `provider` | string | — | `defaultProvider` | Provider configuration name to use for hosted web search |
-| `providerType` | string | — | auto | Hosted tool type, usually `responses` or `messages` |
-| `model` | string | — | `""` | Optional metadata for routing, display, or future provider-specific handling |
+| `enabled` | bool | — | `false` | Enable the local `web_search` tool (and `web_fetch` for DeepSeek) |
+| `backend` | string | — | `deepseek` | `deepseek` or `yuanbao` (Tencent Yuanbao SearchPro) |
+| `provider` | string | — | `deepseek-openai` | DeepSeek credential fallback provider; ignored by the Yuanbao backend |
+| `baseUrl` | string | — | backend default | DeepSeek: `https://api.deepseek.com` (`/v1/tools/search` and `/v1/tools/fetch`). Yuanbao: `https://api.wsa.cloud.tencent.com` (`/SearchPro`) |
+| `token` | string | — | backend default | DeepSeek: provider `apiKey` or `${DEEPSEEK_API_KEY}`. Yuanbao: `${TENCENTCLOUD_WSA_APIKEY}`. An explicit value overrides the fallback |
+
+DeepSeek example:
 
 ```json
 {
   "webSearch": {
     "enabled": true,
-    "provider": "gpt",
-    "providerType": "responses",
-    "model": "gpt-5.4"
+    "backend": "deepseek",
+    "provider": "deepseek-openai",
+    "baseUrl": "https://api.deepseek.com",
+    "token": "${DEEPSEEK_API_KEY}"
   }
 }
 ```
 
-When `provider` points to a configured provider name, MothX resolves that provider's `baseUrl`, `api`, and vendor behavior before registering the hosted search tool. OpenAI Responses providers also expose the native Responses `web_search` tool automatically; this native capability does not depend on `webSearch.enabled`.
+Tencent Yuanbao example:
+
+```json
+{
+  "webSearch": {
+    "enabled": true,
+    "backend": "yuanbao",
+    "baseUrl": "https://api.wsa.cloud.tencent.com",
+    "token": "${TENCENTCLOUD_WSA_APIKEY}"
+  }
+}
+```
+
+Both backends use Bearer authentication and read-only requests, so they may be used in plan mode. With `deepseek`, `web_search` accepts a query plus optional `count` (1–50), `ori_question`, `localization`, and `need_content`, and `web_fetch` accepts one HTTP/HTTPS URL and returns the page as Markdown. With `yuanbao`, `web_search` sends `{"Query": ...}` to `/SearchPro` and normalizes the returned `Pages` (title, URL, site, date, score, passage); the Yuanbao API currently provides search only, so `web_fetch` is not registered.
 
 #### api field
 
@@ -6479,12 +6761,19 @@ Specifies how thinking/reasoning parameters are sent to the API:
 | `"anthropic"` | Use Anthropic `thinking` with `budget_tokens` |
 | `"deepseek"` | Use DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort` (OpenAI) or `output_config.effort` (Anthropic) |
 | `"xiaomi"` | Legacy thinking-only format: `thinking: {type: "enabled"}` |
+| `"thinking-only"` | Thinking switch without an effort field; use it to opt a DeepSeek V4.1 deployment out of `reasoning_effort` |
+| `"deepseek-v4.1"` | DeepSeek V4.1 `reasoning_effort`: `none` (no thinking), `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `"doubao-seed"` | Doubao Seed 2.1 / Evolving `reasoning_effort`: `minimal` (no thinking), `low`, `medium`, `high` (default) |
 
 When not set, automatically detects:
 - URL contains `deepseek` → `"deepseek"`
 - URL contains `xiaomimimo` → `"xiaomi"`
 - Model ID matches `doubao-seed-2.1*` or `doubao-seed-evolving` → `"doubao-seed"`
+- Model ID contains `deepseek-v4.1` or `deepseek-v4-1` → `"deepseek-v4.1"`
+
+An explicit provider `thinkingFormat` (or a model's `compat.thinkingFormat`) always wins over these heuristics. A deployment that only accepts the older thinking switch can opt out of `reasoning_effort` by setting `thinkingFormat` to `thinking-only`.
+
+MothX also learns this at runtime: when an OpenAI-compatible gateway rejects `reasoning_effort`, it retries immediately without the field, shows the reason in the retry notice, and records `thinkingFormat: "thinking-only"` plus `supportsReasoningEffort: false` on that model so later runs omit it.
 
 ```json
 {
@@ -6593,6 +6882,33 @@ The `compat` object is optional and should only be set when a model needs protoc
 
 ---
 
+### imageGeneration
+
+Standalone image-generation configuration for the `image_generation` tool. The tool is registered only when `enabled` is `true`. Omitted endpoint fields fall back to the selected provider, so a normal OpenAI provider configuration usually needs only `enabled` and `provider`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Register the `image_generation` tool |
+| `provider` | string | `openai` | Provider used to fill omitted `apiType`, `baseUrl`, and `token` fields |
+| `apiType` | string | `openai-images` | `openai-images` (Images API) or `openai-responses` (Responses native image generation) |
+| `baseUrl` | string | provider `baseUrl`, then `https://api.openai.com/v1` | Image API endpoint |
+| `token` | string | provider `apiKey` | Credential; supports `${ENV_VAR}` and opt-in `!command` resolution |
+| `model` | string | `gpt-image-1` | Image model ID |
+
+```json
+{
+  "imageGeneration": {
+    "enabled": true,
+    "provider": "openai",
+    "model": "gpt-image-1"
+  }
+}
+```
+
+See [`image_generation`](tools.md#image_generation---image-generation) for the tool parameters.
+
+---
+
 ### toolExecution
 
 This is a local execution setting only. `sequential` limits MothX's local workers after a response arrives; it does not ask the model to emit one tool call at a time, so providers may still return multiple tool calls in a single response. A `parallel` batch reports each call's start in the model's declared order, and that ordering never blocks execution: calls still run concurrently, each waits for its own approvals and durable execution record, and only the completion order is unrestricted. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. It does not control concurrency inside provider-hosted tools such as OpenAI Responses `web_search`; those calls remain under the provider's own orchestration and quota rules.
@@ -6658,6 +6974,7 @@ Default thinking level for reasoning models:
 | `medium` | Medium level (default) |
 | `high` | High level |
 | `xhigh` | Highest level |
+| `max` | Maximum level where the provider/model supports it (for example DeepSeek V4.1 `reasoning_effort`) |
 
 ```json
 { "defaultThinkingLevel": "medium" }
@@ -6747,6 +7064,46 @@ Path to the global skills directory. Supports `~` expansion.
 Skills are loaded from:
 - **Global skills**: `<skillsDir>/<name>/SKILL.md`
 - **Project skills**: `.skills/<name>/SKILL.md` (override global)
+
+### skills
+
+Disable specific skills by name without deleting their directories. Disabled skills are not loaded into the system prompt and cannot be activated for the session.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `disabled` | string array | `[]` | Skill names to exclude |
+
+```json
+{
+  "skills": {
+    "disabled": ["legacy-release-checklist"]
+  }
+}
+```
+
+See [Skills System](skills.md) for directory precedence and activation commands.
+
+### skillHub
+
+Online skill marketplace settings used by `/skillhub` and the Desktop/WebUI skill browser. Built-in market definitions are used when `markets` is omitted.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `defaultMarket` | string | `"skillhub.cn"` | Market selected when opening the marketplace |
+| `defaultInstallScope` | string | `"project"` | Default install target: `project` or `global` |
+| `officialHandles` | string array | built-in official handle | Marketplace handles treated as official publishers |
+| `markets` | object array | built-in markets | Custom market definitions: `{ id, name, siteURL, apiURL, enabled, apiToken }` |
+
+```json
+{
+  "skillHub": {
+    "defaultMarket": "skillhub.cn",
+    "defaultInstallScope": "project"
+  }
+}
+```
+
+See [Online Skill Marketplace](skillhub.md) for commands and market behavior.
 
 ---
 
@@ -7060,6 +7417,30 @@ In --print mode:
   }
 }
 ```
+
+### worktree
+
+Isolated git worktrees managed by the shared Runtime (`agentruntime.WorktreeManager`). Worktrees live under `<data-dir>/worktrees` by default and are registered in the sessions database, so TUI/CLI, ACP/Desktop, and sub-agents share the same registry.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Allow creating new worktrees; `false` keeps `list`, `remove`, and `reset` available |
+| `branchPrefix` | string | `"mothx"` | Branch name prefix for created worktrees |
+| `startCommand` | string | `""` | Default command stored for a worktree and run after create/reset |
+| `perChildSubagents` | bool | `false` | Run every sub-agent in its own isolated worktree |
+| `esm` | bool | `false` | ESM worker/critic/audit roles share one worktree per objective |
+
+```json
+{
+  "worktree": {
+    "enabled": true,
+    "branchPrefix": "mothx",
+    "perChildSubagents": false
+  }
+}
+```
+
+Create, list, reset, and remove worktrees with [`mothx worktree`](cli-reference.md#worktree---isolated-git-worktrees), or the equivalent ACP/Desktop controls.
 
 ### maintenance
 
@@ -7465,6 +7846,131 @@ This merges with your global settings — only the fields you specify are overri
 
 ---
 
+## MothX Desktop
+
+Source: https://mothx.net/en/desktop.md
+
+# MothX Desktop
+
+MothX Desktop is the graphical MothX client. It is a **pure ACP (Agent Client
+Protocol) client**: the Electron main process launches the bundled `mothx acp`
+runtime over stdio and speaks newline-delimited JSON-RPC. It does not start
+`mothx serve`, does not embed the Svelte Web UI, and does not expose an HTTP or
+token tunnel.
+
+## What it is
+
+- **One ACP client.** `desktop/main/acp-client.ts` owns request correlation,
+  notifications, reverse approval/question requests, restart/backoff, and
+  lifecycle. The renderer only talks to `window.mothx` through the preload IPC
+  bridge.
+- **A separate frontend.** The renderer is React 19 + shadcn/ui + Tailwind CSS
+  under `desktop/renderer/`; it is not the Svelte Web UI in `ui/`.
+- **A thin projection.** Sessions, runs, messages, tools, approvals, questions,
+  attachments, artifacts, Expert Teams, knowledge bases, worktrees, providers,
+  MCP configuration, and schedules are canonical ACP/Runtime state. Desktop only
+  renders and manages that state through ACP methods.
+- **Local presentation state only.** Theme, language, and new-session directory
+  history live in `desktop-store.json`. The runtime binary choice (bundled vs. a
+  user-picked path) is client-shell launch state in the Electron main process,
+  not a workspace or security boundary.
+
+## Features
+
+- Chat with streaming text, reasoning, tool cards, diffs, plan cards, and
+  usage/cache projections.
+- Approval and question dialogs backed by the shared Runtime decision model.
+- Session list, history paging, fork, resume, rename/metadata, project grouping,
+  pinning, and delete.
+- Attachments and generated artifacts, including artifact cards and preview.
+- Expert Teams: bind an expert or team for a session; switching an existing
+  expert forks the session.
+- Knowledge bases: create, scan, inspect runs/sources, query, schedule, and
+  clear the index.
+- Isolated git worktrees shared with the CLI and Runtime.
+- Provider/model, mode, thinking, sandbox, browser, and web-search settings.
+- Skills and the online Skill Hub, MCP servers, memory, cron automation, and
+  usage statistics.
+- Sub-agent status and read-only child transcript panels.
+
+Optional controls are gated by the feature keys advertised in
+`initialize._meta["mothx.dev"].features`. If a key is absent, the matching panel
+or action is unavailable rather than silently emulated.
+
+## Build and run
+
+From the repository root:
+
+```bash
+make desktop-vendor    # npm ci + build/vendor the platform runtime
+make desktop-build     # bundle main/preload and renderer into desktop/dist
+make desktop-dev       # renderer watch + Electron + DevTools/CDP
+```
+
+From `desktop/`:
+
+```bash
+npm run build          # build main/preload/renderer
+npm run typecheck      # TypeScript boundary check
+npm test               # main/preload/renderer and protocol tests
+npm run e2e            # optional Electron ACP smoke test
+npm start              # version:set + ensure:electron + build + launch
+```
+
+`make desktop-dev` prepares the runtime first and uses `desktop/.dev-user-data/`
+so a development instance does not fight an installed app for the single-instance
+lock. Linux requires a working display server; use a real desktop session,
+`ssh -X`, or Xvfb. Without `DISPLAY`, Electron exits during Chromium startup.
+
+Development packages:
+
+```bash
+make desktop-dist-dev-linux
+make desktop-dist-dev-mac
+make desktop-dist-dev-win
+```
+
+The packaged app vendors a source-built `mothx` runtime. The Electron main
+process resolves it in this order: `MOTHX_BINARY` (development override) → the
+custom binary selected in Desktop settings → the bundled vendor directory → the
+repository `bin/` directory. A missing custom binary falls back to the bundled
+one.
+
+## Runtime and protocol
+
+Desktop uses the same ACP v1 surface documented in [ACP Protocol](acp.md), plus
+`mothx.dev` extensions. The main process starts one shared ACP child process and
+routes multiple sessions through it. It never reads `settings.json`, the
+sessions database, or Serve configuration directly; management operations use
+`mothx/manage/*` and are capability-gated.
+
+Typical method groups:
+
+- Lifecycle: `initialize`, `mothx/doctor`
+- Sessions: `session/new`, `session/load`, `session/resume`, `session/fork`,
+  `session/list`, `session/close`, `session/delete`
+- Runs: `session/prompt`, `session/cancel`, `$/cancel_request`
+- Configuration: `session/set_config_option`, `session/set_mode`
+- Notifications: `session/update`, `_mothx/session_event`
+- Reverse requests: `session/request_permission`, `mothx/requestQuestion`
+- Attachments/artifacts: `mothx/attachment/list|fetch`
+- Management: `mothx/manage/*`
+
+## Troubleshooting
+
+- **Blank window or crash on Linux:** confirm `DISPLAY` points at a live X
+  server, or run under Xvfb.
+- **Custom runtime does not start:** verify the path is executable and reports a
+  compatible `mothx --version`; Desktop falls back to the bundled runtime.
+- **Optional panel missing:** the runtime did not advertise its feature key.
+  Update the bundled runtime or the Desktop release together.
+- **Approval or question never resolves:** check the ACP decision timeout
+  (`--permission-timeout`, `--question-timeout`, or the
+  `MOTHX_ACP_PERMISSION_TIMEOUT` / `MOTHX_ACP_QUESTION_TIMEOUT` environment
+  variables). The Runtime terminalizes unrecoverable pending decisions.
+
+---
+
 ## Development Guide
 
 Source: https://mothx.net/en/development.md
@@ -7522,59 +8028,41 @@ go test -run TestReadTool ./internal/tools/
 
 ```
 mothx/
-├── agent/                     # Public Agent/Provider interfaces and Builder
-├── bootstrap/                 # Bootstrap package for embedding
-├── cmd/mothx/            # CLI entry point
-│   ├── main.go                # Main program
-│   └── main_doctor.go         # `doctor` subcommand
+├── agent/                     # Public SDK types (Agent, Provider, Builder)
+├── bootstrap/                 # Public SDK wiring into internal implementations
+├── cmd/mothx/                 # CLI entry point and subcommands
+├── desktop/                   # Electron desktop client (pure ACP)
+├── ui/                        # Svelte Web UI embedded into Serve
 ├── internal/
-│   ├── a2a/                   # A2A protocol server and master mode
-│   ├── acp/                   # ACP / MCP integration
-│   ├── agent/                 # Core Agent loop
-│   │   ├── agent.go           # Agent main logic
-│   │   ├── factory.go         # AgentFactory
-│   │   ├── manager.go         # AgentManager
-│   │   ├── router.go          # EventRouter
-│   │   ├── subagent.go        # subagent_* tools
-│   │   ├── events.go          # Event type definitions
-│   │   ├── provider.go        # Provider adapter
-│   │   └── system_prompt.go   # System prompt generation
-│   ├── config/                # Configuration management
-│   ├── context/               # Context management and token estimation
-│   ├── contextfiles/          # Context file loading
+│   ├── agent/                 # Core Agent loop, events, prompts, sub-agent tools
+│   ├── agentruntime/          # Shared front-end-neutral Runtime and run lifecycle
+│   ├── acp/                   # ACP server and mothx.dev extensions
+│   ├── a2a/                   # A2A server and remote-agent master dispatch
+│   ├── architecture/          # Architecture guard tests
+│   ├── browser/               # vibe-browser tool
+│   ├── config/                # settings.json / serve.json
+│   ├── context/, contextfiles/# Token budget and project context
 │   ├── cron/                  # Scheduled task store and scheduler
-│   ├── serve/                 # Unified OpenAI API, Web UI, and messaging channels
-│   ├── mcp/                   # MCP server integration
-│   ├── memory/                # Persistent memory (memory.md)
-│   ├── messaging/             # Messaging platform abstraction
-│   ├── platform/              # Cross-platform compatibility
-│   ├── provider/              # LLM Provider abstraction
-│   │   ├── anthropic/         # Anthropic Messages API
-│   │   ├── google/            # Google Gemini/Vertex API
-│   │   ├── openai/            # OpenAI Chat Completions API
-│   │   ├── factory/           # Shared provider/model construction
-│   │   └── vendor*.go         # Vendor adapter registry
-│   ├── sandbox/               # Sandbox abstraction (bwrap, none)
-│   ├── session/               # Session management (SQLite)
-│   ├── skills/                # Skills system
-│   ├── stats/                 # Usage stats web dashboard
+│   ├── dao/                   # Sole SQL/query/row-mapping owner
+│   ├── db/                    # Connection/transaction/migration lifecycle
+│   ├── esm/                   # Enable Supervisor Mode
+│   ├── expert/                # Expert Team bundle discovery/validation
+│   ├── imageproc/             # Image normalization
+│   ├── mcp/                   # MCP integration
+│   ├── memory/, messaging/    # Channel memory and platform abstraction
+│   ├── platform/              # Cross-platform helpers and assets
+│   ├── provider/              # Protocol providers, vendor adapters, factory
+│   ├── sandbox/               # Sandbox abstraction
+│   ├── serve/                 # OpenAI API, Web UI, channels, hooks, cron
+│   ├── session/               # Session domain, migrations, event store
+│   ├── skills/, skillhub/     # Skills and marketplace
+│   ├── stats/                 # Usage statistics
 │   ├── systeminit/            # AGENTS.md generation
-│   ├── tools/                 # Tool implementations
-│   │   ├── bash.go            # Bash command execution
-│   │   ├── read.go            # File reading
-│   │   ├── write.go           # File writing
-│   │   ├── edit.go            # File editing
-│   │   ├── grep.go            # Content search (pure-Go ripgrep)
-│   │   ├── find.go            # File finding (pure-Go fd)
-│   │   ├── ls.go              # Directory listing
-│   │   ├── plan.go            # Task planning
-│   │   ├── question.go        # User clarification
-│   │   ├── skill_ref.go       # Skill reference loading
-│   │   └── a2a_dispatch.go    # A2A remote agent dispatch
-│   ├── tui/                   # Terminal UI (BubbleTea)
-│   └── workflow/              # Workflow runtime (JavaScript DSL)
-├── example/                   # SDK examples
-└── pkg/sdk/                   # Public SDK interface
+│   ├── tools/                 # Built-in tools
+│   ├── tui/                   # Bubble Tea TUI
+│   └── workflow/              # JavaScript workflow runtime
+├── example/                   # Public SDK examples
+└── docs/                      # Bilingual docs, generated indexes, site
 ```
 
 ## Core Interfaces
@@ -7596,10 +8084,32 @@ type Provider interface {
 type Tool interface {
     Name() string
     Description() string
+    PromptSnippet() string
+    PromptGuidelines() []string
     Parameters() json.RawMessage
-    Execute(ctx context.Context, params json.RawMessage) (string, error)
+    Execute(ctx context.Context, params map[string]any) (ToolResult, error)
 }
 ```
+
+## Agent Runtime Rules
+
+Production Agent construction and execution follow the shared Runtime boundary:
+
+- Build Agents only through `SessionRuntime.BuildAgent`, `BuildTransientAgent`, or
+  `agentruntime.NewAgentManager`. Do not add adapter-local `agent.Config`
+  assembly or call `agent.New`/`agent.NewWithLoopConfig`.
+- Resolve source, mode, capabilities, tools, sandbox, approval, MCP, and run
+  policy once with `ResolveSource`/`ResolvePolicy`; adapters project the result.
+- Use `ExecutionRuntime`/`RunStore` for durable runs and exactly one canonical
+  terminal event. Do not create a second run state machine.
+- Use `DecisionService`/`DecisionRecord` for approvals and questions.
+- Put all SQL in `internal/dao`; use `internal/db` only for connection,
+  transaction, and migration lifecycle.
+- Keep entry points thin: TUI, CLI, WebUI/API, Desktop/ACP, channels, Cron, ESM,
+  and A2A may decode protocols and render events, but not own sessions, run
+  lifecycle, attachments, artifacts, or policy.
+- Run `go test ./internal/architecture` after moving production construction or
+  persistence call sites.
 
 ## Adding New Tools
 
@@ -7630,6 +8140,14 @@ func (t *MyTool) Description() string {
     return "Description of my tool"
 }
 
+func (t *MyTool) PromptSnippet() string {
+    return "Short one-line description for the system prompt"
+}
+
+func (t *MyTool) PromptGuidelines() []string {
+    return []string{"Use this tool when ..."}
+}
+
 func (t *MyTool) Parameters() json.RawMessage {
     return json.RawMessage(`{
         "type": "object",
@@ -7643,38 +8161,27 @@ func (t *MyTool) Parameters() json.RawMessage {
     }`)
 }
 
-func (t *MyTool) Execute(ctx context.Context, params json.RawMessage) (string, error) {
-    var p struct {
-        Param1 string `json:"param1"`
+func (t *MyTool) Execute(ctx context.Context, params map[string]any) (ToolResult, error) {
+    param1, _ := params["param1"].(string)
+    if param1 == "" {
+        return ToolResult{}, fmt.Errorf("param1 is required")
     }
-    if err := json.Unmarshal(params, &p); err != nil {
-        return "", err
-    }
-    // Implement tool logic
-    return "result", nil
+    return NewTextToolResult("result"), nil
 }
 ```
 
 ### Step 2: Register Tool
 
-In `internal/tools/tool.go`'s `RegisterDefaults()` method:
+Add the canonical name to `builtinToolOrder` and its constructor to
+`builtinToolFactories()` in `internal/tools/tool.go`. `RegisterDefaults`,
+`RegisterDefaultsWithPlanTool`, and `RegisterFiltered` all derive from those two
+lists, so the tool is registered consistently.
 
-```go
-func (r *Registry) RegisterDefaults() {
-    r.Register(&ReadTool{workdir: r.workdir})
-    r.Register(&WriteTool{workdir: r.workdir})
-    r.Register(&EditTool{workdir: r.workdir})
-    r.Register(&BashTool{workdir: r.workdir, sandbox: r.sandbox})
-    r.Register(&GrepTool{workdir: r.workdir})
-    r.Register(&FindTool{workdir: r.workdir})
-    r.Register(&LsTool{workdir: r.workdir})
-    r.Register(&MyTool{workdir: r.workdir}) // Add new tool
-}
-```
+### Step 3: Describe it for the system prompt
 
-### Step 3: Update System Prompt
-
-Add tool description in `internal/agent/system_prompt.go`.
+Return a concise `PromptSnippet` and targeted `PromptGuidelines` from the tool.
+The shared Runtime builds the Available tools and Guidelines sections from those
+methods; do not add per-adapter prompt text.
 
 ### Step 4: Write Tests
 
@@ -7689,15 +8196,12 @@ import (
 
 func TestMyTool_Execute(t *testing.T) {
     tool := NewMyTool("/tmp")
-    params := `{"param1": "value"}`
-    
-    result, err := tool.Execute(context.Background(), json.RawMessage(params))
+    result, err := tool.Execute(context.Background(), map[string]any{"param1": "value"})
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
-    
-    if result != "expected" {
-        t.Errorf("expected 'expected', got '%s'", result)
+    if result.Text != "expected" {
+        t.Errorf("expected 'expected', got %q", result.Text)
     }
 }
 ```
@@ -7728,9 +8232,10 @@ func init() {
 }
 ```
 
-Provider creation for CLI and ACP goes through `internal/provider/factory`, so
-do not add vendor-specific creation code to `cmd/mothx/main.go` or
-`internal/acp/acp.go`.
+Provider creation for CLI, ACP, WebUI/Serve, and Desktop goes through
+`internal/provider/factory`; Agent construction goes through `agentruntime`.
+Do not add vendor-specific creation code to adapters or assemble a complete
+`agent.Config` outside the shared Runtime.
 
 ### Add a New Protocol Provider
 
@@ -7749,6 +8254,7 @@ not covered by OpenAI Chat Completions or Anthropic Messages.
 
 ```bash
 make test
+make test-desktop     # Electron main/preload/renderer tests
 ```
 
 ### Run Tests for Specific Package
@@ -8065,7 +8571,7 @@ configuration directory's `experts/` folder, and the project folder:
 Project bundles override global bundles with the same name, which override
 built-in bundles. A bundle contains `expert.json` and one or more persona
 files under `agents/`; invalid bundles are shown as unavailable and cannot be
-bound. See [the expert-team implementation proposal](../proposal/expert-team-mothx-proposal.md)
+bound. See [the expert-team implementation proposal](https://github.com/oschina/mothx/blob/main/docs/proposal/expert-team-mothx-proposal.md)
 for the bundle schema and architecture rationale.
 
 ## Create and install a team with the built-in Skill
@@ -8374,10 +8880,9 @@ mothx --mode plan
 | Debugging | medium |
 
 ```bash
-# Switch thinking level
-/think          # Cycle through levels
-Tab             # Keyboard shortcut
-mothx -t high  # Specify on command line
+# Change the thinking level
+/settings       # Settings > defaults > thinking level
+mothx -t high   # Specify per run on the command line
 ```
 
 ### Q: Why doesn't thinking mode work?
@@ -8848,12 +9353,12 @@ mothx --provider anthropic --model claude-3-5-sonnet-20241022
 
 ### Vendor Adapters
 
-MothX supports 25+ vendor adapters, including:
+MothX ships 60+ built-in provider presets, including:
 
 - **China**: Xiaomi, Volcengine/Doubao, Kimi, MiniMax, Seed, Qianfan, Bailian, Gitee, StepFun, Z.AI, LongCat, AMD Radeon
 - **International**: Google Gemini, Google Vertex, OpenRouter, Together, Groq, Fireworks, Mistral, GitHub Copilot, Cloudflare AI Gateway, Cloudflare Workers AI, Amazon Bedrock
 
-No additional configuration needed — just set the API key and start using.
+No additional configuration needed — just set the API key and start using. See the [Provider & Model Catalog](../provider-model-list.md) for the generated list of every built-in provider and model.
 
 ---
 
@@ -9385,6 +9890,9 @@ Disable via `settings.json` with `"updateCheck": false`, or via `VIBECODING_NO_U
 The following capabilities are integrated into the current runtime; actual availability depends on configuration and model compatibility:
 
 - **OpenAI Responses**: Supports native response item replay, reasoning, structured output, hosted tools, prompt cache, and optional durable background runs through `responses.background`. Background runs can be queried, canceled, reconnected, or abandoned and recover after Serve restarts.
+- **Desktop client**: A separate Electron ACP app with chat, tool/diff cards, approvals, questions, artifacts, Expert Teams, knowledge bases, worktrees, and management panels; it starts the bundled `mothx acp` runtime and never starts `mothx serve`.
+- **Knowledge bases**: A Desktop/WebUI-managed, rebuildable index of a read-only directory. Canonical index runs use the shared Runtime, snapshots publish atomically, and sessions query evidence through a standard Knowledge MCP server.
+- **Attachments and artifacts**: Runtime-owned intake, storage, replay, provider conversion, and delivery; `publish_artifact` is the only path that turns a completed file into a deliverable artifact.
 - **Web UI management**: Provides session search and pagination, run status and cancellation, an approval center, tool results, skill activation, MCP configuration, Provider/Serve settings, and a `/stats` dashboard.
 - **MCP**: Supports stdio, streamable HTTP, and legacy SSE.
 - **Parallel tool execution**: Local function and custom tool calls within one agent turn run through a bounded parallel worker pool. Call starts are reported in the model's declared order without blocking execution, so calls still overlap and only the completion order is unrestricted. The `toolExecution` setting controls `mode` (`parallel`/`sequential`) and `maxConcurrency` (default `10`). Shared by TUI, WebUI, Serve, channels, ACP, and sub-agents.
@@ -9400,7 +9908,7 @@ The following capabilities are integrated into the current runtime; actual avail
 MothX is an **all-in-one terminal AI coding assistant** with these core advantages:
 
 1. **One binary does it all**: No need to install multiple tools
-2. **Multi-provider support**: 20+ vendor adapters, one-click switching
+2. **Multi-provider support**: 60+ built-in provider presets, one-click switching
 3. **Security control**: Sandbox isolation, approval gates, blacklist protection
 4. **Rich features**: Session management, skills system, IDE integration
 5. **High performance**: SSE streaming, cache hit optimization
@@ -9463,7 +9971,7 @@ npm uninstall -g mothx-installer
 
 The online installers ultimately run `npm install -g mothx-installer`.
 
-### Method 4: Docker (GHCR)
+### Method 2: Docker (GHCR)
 
 ```bash
 # Default Ubuntu image, runs as root
@@ -9483,13 +9991,13 @@ Published architectures: `linux/amd64`, `linux/arm64`
 
 The container runs as `root` by default and includes `bash`, `git`, `curl`, `ca-certificates`, and `openssh-client`.
 
-### Method 5: Go Install
+### Method 3: Go Install
 
 ```bash
 go install github.com/oschina/mothx/cmd/mothx@latest
 ```
 
-### Method 6: Build from Source
+### Method 4: Build from Source
 
 ```bash
 # Clone repository
@@ -9502,7 +10010,7 @@ make build
 # Binary is located at bin/mothx
 ```
 
-### Method 7: Install to System
+### Method 5: Install to System
 
 ```bash
 # After building from source
@@ -9648,7 +10156,7 @@ mothx --mode yolo
 /mode plan      # Switch to Plan mode
 /mode agent     # Switch to Agent mode
 /model          # View current model
-/think          # Toggle thinking level
+/settings       # Configure defaults, including thinking level
 /clear          # Clear conversation
 /help           # Show help
 /quit           # Exit
@@ -9769,6 +10277,144 @@ This checks your environment, config files, providers, sandbox, MCP, sessions, s
 
 ---
 
+## Knowledge Bases
+
+Source: https://mothx.net/en/knowledge-bases.md
+
+# Knowledge Bases
+
+A knowledge base is a Desktop/WebUI-managed, rebuildable index of a directory you
+choose. It is not a chat attachment store, a general RAG path, or a special Agent
+mode. The source directory is **read-only**: MothX never writes to it, and
+deleting a knowledge base never deletes the source.
+
+Knowledge bases are useful for "ask questions about this repository, docs tree,
+or notes folder" while keeping the normal Agent Runtime and tools unchanged.
+
+## Create a knowledge base
+
+In Desktop or WebUI, choose **New Knowledge Base** and set:
+
+| Field | Description |
+|-------|-------------|
+| `name` | Display name |
+| `rootDir` | Absolute path to the source directory (read-only) |
+| `preprocessProfile` | `documents`, `code`, `notes`, or `mixed` |
+| `provider` / `model` | Model used by the bounded indexer Agent during scans |
+| `mode` | Indexer run mode; unattended scans resolve to a safe unattended mode |
+| `thinkingLevel` | Optional thinking level for the indexer |
+| `schedule` | Desktop only: `manual`, `hourly`, `daily`, `weekly`, `monthly`, or a 5-field cron expression |
+| `enabled` | Pause scheduling without deleting the base |
+| `ignoreGlobs` | Optional glob patterns relative to the source root |
+
+Profile file coverage:
+
+- `documents`: Markdown, MDX, text, reStructuredText, AsciiDoc, HTML
+- `code`: source and config files (Go, TS/JS, Python, Java, Rust, C/C++, C#, Ruby,
+  PHP, Swift, Kotlin, SQL, JSON, YAML, TOML, XML, GraphQL, shell) plus Markdown
+- `notes`: Markdown and text
+- `mixed`: both document and code sets
+
+PDF/Office files are not extracted deterministically in the first version. They
+are reported as skipped/unsupported in discovery diagnostics, and an Agent may
+still read them from the source directory with ordinary read-only tools. Binary,
+oversized, or unreadable files are skipped rather than sent to the model.
+
+Ignore rules combine the fixed directory list (`.git`, `.hg`, `.svn`, `.mothx`,
+`node_modules`, `vendor`, `dist`, `build`, `coverage`, `.next`, `.vite`),
+`ignoreGlobs`, and suggestions read from the source root's `.gitignore` and
+`.mothxignore`. Discovery reports `discovered`, `ignored`, and `skipped` results
+so a file is never silently excluded.
+
+## Indexing
+
+A scan is an ordinary Runtime Agent execution with a canonical durable Run. It:
+
+1. Discovers and validates files inside the source root.
+2. Applies ignore rules and records diagnostics.
+3. Extracts deterministic text chunks and builds the graph/FTS snapshot.
+4. Optionally runs the bounded indexer Agent to enrich the graph.
+5. Publishes the finished snapshot atomically and makes it active.
+
+If a rebuild fails or is cancelled, the previous active snapshot stays usable.
+Manual and scheduled scans share the same background-job machinery and coalesce
+so a trigger arriving during a scan becomes exactly one follow-up scan. Scheduled
+scans use the shared Cron store; the Cron job is namespaced and is not exposed as
+a user automation task.
+
+Inspect **Index runs** for status, counts, diff summaries, and failure codes.
+`clear` removes the active index while keeping the knowledge base configuration
+and source directory.
+
+## Querying from a session
+
+A main session accesses a knowledge base only through a configured standard
+Knowledge MCP server:
+
+```bash
+mothx knowledge-mcp serve --knowledge-base <id>
+```
+
+Register that command as an ordinary MCP server for the session. The server
+exposes `search_knowledge_base`; the MCP allowlist is the authorization boundary.
+Results are bounded reference data with file/chunk citations and uncertainty
+metadata; they are untrusted tool output, not instructions.
+
+There is no knowledge-specific Agent mode, prompt injection, renderer-side
+pre-query, or separate query model. The Agent calls the MCP tool like any other
+tool and reasons over the returned evidence.
+
+```bash
+mothx knowledge-mcp serve \
+  --knowledge-base kb_123 \
+  --knowledge-base kb_456
+```
+
+`--session-dir` overrides the session storage directory (defaults to
+`settings.json`). See [`knowledge-mcp`](cli-reference.md#knowledge-mcp---knowledge-base-mcp-server).
+
+## Management
+
+Desktop management uses the capability-gated ACP projections below. WebUI uses
+the equivalent Serve REST endpoints under `/api/knowledge-bases` instead:
+
+- `mothx/manage/knowledge-bases/list|get|create|update|delete`
+- `.../scan`, `.../status`, `.../query`, `.../mcp/apply`
+- `.../runs/list`, `.../runs/get`, `.../sources/list`
+- `.../schedule`, `.../clear`
+
+`knowledgeRuns` and `knowledgeSources` feature keys gate run history and
+file-level source browsing. Deleting a knowledge base removes its own database
+and registration; it never removes or modifies the source directory.
+
+## Storage
+
+Each knowledge base has one private SQLite database:
+
+```text
+<sessionDir>/knowledge-bases/<id>.db
+```
+
+The configuration row, snapshots, files, chunks, graph nodes/edges, FTS index,
+and evidence live inside that file. Canonical Runs and audit records stay in the
+shared `sessions.db`.
+
+The file is a rebuildable index, not a source of truth. Keep the source directory
+backed up; the index can always be rebuilt.
+
+## Security notes
+
+- The source directory is read-only for indexing and querying.
+- The Knowledge MCP allowlist determines which bases a session can query.
+- Query results are size-bounded and must be treated as untrusted reference data.
+- Indexer/Librarian agents may use ordinary read-only tools inside the source
+  root only; `yolo` does not turn indexing into write, delete, network, or
+  delegation access.
+- `mothx pure` archives the shared sessions database but leaves
+  `knowledge-bases/<id>.db` files in place.
+
+---
+
 ## Adding a New Provider
 
 Source: https://mothx.net/en/provider-guide.md
@@ -9828,15 +10474,24 @@ When a user configures a provider in `settings.json`:
 
 ```json
 {
-  "providers": [
-    {
-      "name": "my-provider",
-      "base_url": "https://api.myvendor.com/v1",
-      "api_key": "sk-..."
+  "providers": {
+    "my-provider": {
+      "vendor": "my-vendor",
+      "baseUrl": "https://api.myvendor.com/v1",
+      "apiKey": "sk-...",
+      "api": "openai-chat",
+      "models": [
+        { "id": "my-model", "name": "My Model", "contextWindow": 128000 }
+      ]
     }
-  ]
+  },
+  "defaultProvider": "my-provider",
+  "defaultModel": "my-model"
 }
 ```
+
+`providers` is an object keyed by provider ID; use `baseUrl`/`apiKey`, not
+`base_url`/`api_key`. A provider ID is the name you pass to `--provider`.
 
 The resolution flow is:
 
@@ -10099,7 +10754,7 @@ mothx -P "Generate API documentation"
 /mode agent     # Switch to Agent mode
 /mode yolo      # Switch to YOLO mode
 /model          # Show current model
-/think          # Toggle thinking level
+/settings       # Configure defaults, including thinking level
 /clear          # Clear conversation
 /help           # Show help
 /quit           # Exit
@@ -11034,6 +11689,9 @@ func truncate(s string, n int) string {
 | `WithSessionDir(dir)` | `~/.mothx/sessions` | Session persistence |
 | `WithCompaction(enabled, reserve)` | `true, 16384` | Context compaction settings |
 | `WithMultiAgent(bool)` | `false` | Enable sub-agent tools |
+| `WithDelegateMode(bool)` | `false` | Enable blocking single sub-agent delegation |
+| `WithExternalTools(tools...)` | none | Register host-provided custom tools |
+| `WithoutBuiltinTools()` | false | Disable all built-in coding tools (pair with `WithExternalTools`) |
 | `WithApprovalHandler(fn)` | nil | Custom tool approval callback |
 
 ---
@@ -12099,7 +12757,7 @@ Access `http://127.0.0.1:7872` to open the Web UI. When authentication is enable
 - **Session Management**: Pagination, keyboard shortcuts, historical sessions, runtime snapshots, capability toggles, and reconnect-safe approval state. Historical sessions are sorted by last-used time with the most recently replied-to session at the top; the session-management page shows each session's last reply time. Active runs remain protected after a page refresh until they reach a terminal state.
 - **Responses Background Runs**: When an `openai-responses` provider enables `responses.background`, Serve submits supported requests as remote background tasks, persists their response lineage and archived output, polls them through completion, resumes recoverable runs after restart, and executes local function/custom-tool calls. The authenticated run API supports `GET /api/responses/runs/{localRunID}?session_id={sessionID}` plus `cancel`, `reconnect`, and `abandon` actions; see [Configuration](configuration.md#responses-field).
 - **Settings Editor**: Provider/Model configuration, Defaults, Web Search, MCP, Context Files, Compaction, Sandbox, Retry, Approval, Provider Config. Provider, app, and Serve configuration changes refresh related status and tool availability without restarting the server. MCP settings edit the global `mcp.json`; the chat toolbar exposes project-level MCP configuration for the active session.
-- **Native Responses Web Search**: OpenAI Responses providers expose the upstream hosted `web_search` capability automatically; the separate Web Search setting controls MothX-local search only.
+- **DeepSeek Web Search fallback**: when enabled, the shared Runtime registers a local `web_search` tool backed by DeepSeek's official Search API or Tencent Yuanbao SearchPro (selectable with `webSearch.backend`) for providers without native hosted search. The DeepSeek backend also registers `web_fetch`. OpenAI Responses keeps its provider-native hosted web search, and Anthropic Messages uses its provider-native hosted search while `webSearch` is enabled; both take precedence over the local `web_search` function.
 - **Channel Management**: WeChat QR login and Feishu configuration
 - **WebSocket streams**: `/ws/runs` and `/ws/logs` are Serve event streams used by the Web UI; they are not a separate messaging channel
 - **Settings**: Memory, WorkDir, Logs, SkillHub, environment, and MCP management are available in addition to provider and agent settings
@@ -12884,7 +13542,7 @@ Organize skills by topic:
         └── SKILL.md
 
 # Windows
-%APPDATA%\vibecoding\skills\
+%APPDATA%\mothx\skills\
 ├── coding\
 │   ├── go-style\
 │   │   └── SKILL.md
@@ -13038,7 +13696,7 @@ When an agent turn returns multiple local function or custom tool calls, MothX c
 | `mode` | string | `"parallel"` | `"parallel"` uses bounded local workers; `"sequential"` executes returned calls one at a time locally (provider-side parallel output is unaffected) |
 | `maxConcurrency` | int | `10` | Maximum concurrent tool calls per agent turn (set to `1` for serial execution) |
 
-Calls report their start in the order the model emitted them, so a later call's start is never visible before an earlier call's. This ordering never blocks execution: calls still run concurrently, each waits for its own approvals and durable execution record independently, and they may finish in any order — tool completion events may therefore stream out of order, while provider continuation messages are restored in the original call order. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. `sequential` only changes local execution after a response arrives; a provider may still return multiple tool calls in one response. It does not control concurrency inside provider-hosted tools (e.g. OpenAI Responses `web_search`); those calls remain under the provider's own orchestration.
+Calls report their start in the order the model emitted them, so a later call's start is never visible before an earlier call's. This ordering never blocks execution: calls still run concurrently, each waits for its own approvals and durable execution record independently, and they may finish in any order — tool completion events may therefore stream out of order, while provider continuation messages are restored in the original call order. The setting is shared by TUI, WebUI, Serve, channels, ACP, and sub-agents built through the common runtime. `sequential` only changes local execution after a response arrives; a provider may still return multiple tool calls in one response. It does not control concurrency inside provider-hosted tools configured directly in provider settings (for example Responses Code Interpreter); those calls remain under the provider's own orchestration.
 
 
 ---
@@ -13050,9 +13708,15 @@ Calls report their start in the order the model emitted them, so a later call's 
 | [`read`](#read---file-reading) | File System | Read file content (supports images and pagination) | Read-only access allowed | All modes |
 | [`write`](#write---file-writing) | File System | Create or overwrite files | Requires Standard/Yolo | CLI, ACP, Serve, Channels |
 | [`edit`](#edit---precise-file-modification) | File System | Atomic text replacements | Requires Standard/Yolo | CLI, ACP, Serve, Channels |
+| [`insert`](#insert---structural-file-insertion) | File System | Insert content at a structural file position | Requires Standard/Yolo | CLI, ACP, Serve, Channels |
+| [`publish_artifact`](#publish_artifact---generated-artifact-publishing) | Artifact | Copy a completed file into Runtime-owned attachment storage | Read workdir + private attachment write | Artifact-enabled sessions |
 | [`ls`](#ls---directory-listing) | Exploration | List directory contents | Read-only access allowed | All modes |
 | [`find`](#find---file-search) | Exploration | Search for files by pattern | Read-only access allowed | All modes |
 | [`grep`](#grep---text-content-search) | Exploration | Regex search within files | Read-only access allowed | All modes |
+| [`web_search`](#web-search---deepseek-or-yuanbao-web-search) | Web | Search the live web via DeepSeek Search or Tencent Yuanbao SearchPro | Read-only network access | Providers without native hosted search (OpenAI Responses and Anthropic Messages use provider-native search) |
+| [`web_fetch`](#web-fetch---deepseek-web-fetch) | Web | Fetch one page as Markdown via the DeepSeek Fetch API | Read-only network access | Enabled by `webSearch` |
+| [`browser`](#browser---browser-automation) | Web | Control a Chromium-family browser through vibe-browser | Network + local process control | Enabled by `--browser` / browser capability |
+| [`image_generation`](#image_generation---image-generation) | Media | Generate images from a text prompt | Provider request | Enabled by `imageGeneration.enabled` |
 | [`bash`](#bash---command-execution) | Execution | Run shell commands (supports sync & async) | Subject to Sandbox Level | CLI, ACP, Serve, Channels |
 | [`jobs`](#jobs---background-job-management) | Execution | List or check status of background jobs | Read-only access allowed | All modes |
 | [`kill`](#kill---stop-background-job) | Execution | Stop a running background job | Requires Standard/Yolo | CLI, ACP, Serve, Channels |
@@ -13068,6 +13732,7 @@ Calls report their start in the order the model emitted them, so a later call's 
 | [`subagent_destroy`](#subagent_---delegated-work) | Multi-Agent | Remove sub-agents & clean up | Destroy | Multi-Agent Mode |
 | [`delegate_subagent`](#delegate_subagent---blocking-single-sub-agent-delegation) | Delegate | Run one synchronous sub-agent task | Sub-agent scoped limits | Delegate Mode |
 | [`workflow_run`](#workflow_run---dynamic-javascript-workflows) | Workflow | Run a JavaScript workflow with worker agents | Worker-agent scoped limits | Workflow Mode |
+| [`workflow_lint`](#workflow_lint---workflow-validation) | Workflow | Validate workflow JavaScript without running workers | Read-only | Workflow Mode |
 | [`workflow_status`](#workflow_status---workflow-run-status) | Workflow | Inspect workflow runs and results | Read-only | Workflow Mode |
 | [`workflow_cancel`](#workflow_cancel---workflow-cancellation) | Workflow | Cancel an active workflow run | In-process active run only | Workflow Mode |
 | [`a2a_dispatch`](#a2a_dispatch---remote-agent-dispatch) | Multi-Agent | Dispatch tasks to a remote A2A agent | Network request | A2A Master Mode |
@@ -13158,6 +13823,36 @@ The `edit` tool performs highly precise, **atomic multi-replacement operations**
       "newText": "func Start() {\n\tlog.Println(\"Booting microservice...\")"
     }
   ]
+}
+```
+
+---
+
+### insert - Structural File Insertion
+
+Inserts UTF-8 text into an existing file at exactly one structural position: the file head, the file tail, before a 1-based line, or after a 1-based line. It is the right tool when the location is structural and no unique text anchor exists. Use `edit` for exact text replacement, deletion, or text-matched insertion, and `write` to create or completely rewrite a file.
+
+#### Parameters:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | ✓ | File to modify. |
+| `content` | string | ✓ | UTF-8 text to insert. Must not be empty. |
+| `position` | object | ✓ | `{ "type": "head"\|"tail"\|"before_line"\|"after_line", "line": <1-based integer> }`. `line` is required for `before_line` and `after_line`. |
+| `create_if_missing` | bool | - | Create a missing file. Only valid with `head` or `tail`; default `false`. |
+| `ensure_newline` | bool | - | Ensure the inserted content ends with a newline; default `true`. |
+| `dedupe` | object | - | Optional `{ "enabled": true, "mode": "exact"\|"trimmed"\|"line" }` check that skips a byte-identical insertion. |
+| `dry_run` | bool | - | Report the diff without writing; default `false`. |
+
+Text-match parameters (`match`, `match_mode`, `occurrence`) are rejected on purpose; use `edit` for those semantics.
+
+#### Example Payload:
+```json
+{
+  "path": "internal/tools/registry.go",
+  "content": "\tregistry.Register(NewMyTool(registry))\n",
+  "position": { "type": "after_line", "line": 42 },
+  "dedupe": { "enabled": true, "mode": "exact" }
 }
 ```
 
@@ -13300,6 +13995,100 @@ Perform fast regex-based searches across codebase files. This tool runs the pure
   "include": "*.go"
 }
 ```
+
+---
+
+### web_search - DeepSeek or Yuanbao Web Search
+
+Searches the live web through the selected local backend. With `webSearch.backend = "deepseek"` it calls DeepSeek's official Search API (`POST /v1/tools/search`) using `webSearch.baseUrl`/`token` or the selected provider credential. With `backend = "yuanbao"` it calls Tencent Yuanbao SearchPro (`POST /SearchPro`) with `{"Query": ...}` and an API key from `webSearch.token` or `${TENCENTCLOUD_WSA_APIKEY}`. Results are returned as ranked titles, URLs, snippets, long summaries, optional page content, site metadata, dates, and authority scores. When the chat provider has native hosted search (OpenAI Responses, or Anthropic Messages while `webSearch` is enabled), MothX uses that hosted search instead and omits this local tool.
+
+#### Parameters:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | Search query (1–128 characters). Supports `site:`, `-site:`, `lang:`, `after:`, `before:`, `-term`, and quoted phrases. |
+| `count` | integer | No | Result count from 1 to 50 (default 10). |
+| `ori_question` | string | No | Original user question to improve intent understanding. |
+| `localization` | string | No | IP address used to prefer localized results. |
+| `need_content` | boolean | No | Include extracted page content in `content`. |
+
+#### Example Payload:
+```json
+{
+  "query": "DeepSeek V4 site:github.com OR site:huggingface.co lang:zh after:2025",
+  "count": 5,
+  "need_content": true
+}
+```
+
+---
+
+### web_fetch - DeepSeek Web Fetch
+
+Fetches one page through DeepSeek's official Fetch API (`POST /v1/tools/fetch`) and returns its Markdown content. The target must be an HTTP/HTTPS URL with a host and no embedded credentials.
+
+#### Parameters:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | Yes | Page URL (maximum 8192 characters). |
+
+#### Example Payload:
+```json
+{
+  "url": "https://example.com/article"
+}
+```
+
+---
+
+### browser - Browser Automation
+
+Opt-in browser control backed by the `vibe-browser` SDK. Enable it with `--browser` for TUI/CLI or the corresponding session capability in Serve, ACP, and Desktop. The tool drives a Chromium-family browser through actions rather than shell commands.
+
+Typical flow: `open` or `navigate` to a URL, call `snapshot` to obtain grounded selectors/refs, then `click`, `fill`, `type`, `press`, `select`, or `check`; finish with `get_text`, `get_html`, or `screenshot` for verification. After navigation or an interaction, wait for a selector/text/URL or take another snapshot before reporting success.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | ✓ | Action to perform. Common values: `open`, `navigate`, `back`, `forward`, `reload`, `snapshot`, `click`, `fill`, `type`, `press`, `select`, `get_text`, `get_html`, `get_value`, `screenshot`, `wait_for_selector`, `wait_for_text`, `wait_for_url`, `tab_new`, `tab_close`, `close`. |
+| `url` | string | - | Target URL for `open`/`navigate`. |
+| `selector` | string | - | CSS selector, or a ref returned by `snapshot`. |
+| `value` / `text` / `key` | string | - | Input value, text target, or keyboard key for the matching actions. |
+| `outputPath` | string | - | Project-relative path for `screenshot` output. |
+| `format` / `quality` | string / integer | - | Screenshot encoding (`png`, `jpeg`, `webp`) and quality. |
+| `fullPage` | bool | - | Capture the full scrollable page. |
+| `imageMode` / `maxLongEdge` | string / integer | - | Returned screenshot processing mode and maximum long edge. |
+
+Returned screenshots are model-visible images; large results can be bounded with `imageMode` and `maxLongEdge`.
+
+---
+
+### image_generation - Image Generation
+
+Generates one or more images from a text prompt using the standalone `imageGeneration` configuration. The tool is registered only when `imageGeneration.enabled` is `true`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `prompt` | string | ✓ | Image generation prompt. |
+| `size` | string | - | Requested size, for example `1024x1024`. |
+| `quality` | string | - | `low`, `medium`, `high`, or `auto`. |
+| `n` | integer | - | Number of images, 1-4. |
+
+Endpoint and credential fields fall back to the configured provider; `apiType` selects `openai-images` (default) or `openai-responses`. See [configuration](configuration.md#imagegeneration).
+
+---
+
+### publish_artifact - Generated Artifact Publishing
+
+The only Agent-facing way to declare a completed file as a deliverable artifact. It resolves symlinks, rejects directories and any path that escapes the session work directory, then copies the file into Runtime-owned attachment storage before reporting success, so later writes cannot mutate what is delivered. Artifact publishing is opt-in and configured independently for terminal (`enableArtifact`), ACP/Desktop (`enableACPArtifact`), and Serve/channel sessions.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | ✓ | Completed regular file, relative to the current working directory. |
+| `filename` | string | - | User-facing attachment filename. |
+| `kind` | string | - | `auto`, `image`, `file`, `audio`, or `video`; `auto` detects images from bytes. |
+
+Do not claim a file is deliverable merely because its path was mentioned. Publish it with this tool (or an authorized provider attachment resolver) so the Runtime owns the attachment record and delivery state.
 
 ---
 
@@ -13509,6 +14298,16 @@ Result shape:
 ```
 
 Use delegate mode for broad searches, multi-step investigations, focused implementation, or verification tasks. Avoid it for one-tool operations, tasks needing user clarification, or highly stateful work that depends on the full conversation.
+
+---
+
+### workflow_lint - Workflow Validation
+
+Validates a workflow script without invoking worker agents. It checks JavaScript syntax, `workflow`/`phase`/`agent` structure, agent option spelling, required prompts, and `result`/`resultKey`/`resultLatest`/`results` references. Run it before `workflow_run` for non-trivial generated or edited workflows.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `source` | string | ✓ | Complete raw JavaScript workflow DSL source. Do not pass Markdown fences. |
 
 ---
 
@@ -13798,13 +14597,13 @@ print(response.json())
 # docker-compose.yml
 version: '3'
 services:
-  vibecoding-1:
+  mothx-1:
     image: mothx
     command: serve
     ports:
       - "8081:8080"
   
-  vibecoding-2:
+  mothx-2:
     image: mothx
     command: serve
     ports:

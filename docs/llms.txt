@@ -18,6 +18,9 @@
 - [Tool System Reference Guide](https://mothx.net/en/tools.md)
 - [Session Management](https://mothx.net/en/sessions.md)
 - [Skills System](https://mothx.net/en/skills.md)
+- [Expert Teams](https://mothx.net/en/expert-teams.md)
+- [MothX Desktop](https://mothx.net/en/desktop.md)
+- [Knowledge Bases](https://mothx.net/en/knowledge-bases.md)
 - [Workflow JavaScript](https://mothx.net/en/workflow.md)
 
 ## Integrations and APIs

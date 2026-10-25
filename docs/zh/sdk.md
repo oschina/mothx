@@ -282,6 +282,9 @@ func truncate(s string, n int) string {
 | `WithSessionDir(dir)` | `~/.mothx/sessions` | 会话持久化目录 |
 | `WithCompaction(enabled, reserve)` | `true, 16384` | 上下文压缩设置 |
 | `WithMultiAgent(bool)` | `false` | 启用子 Agent 工具 |
+| `WithDelegateMode(bool)` | `false` | 启用阻塞式单子 Agent 委托 |
+| `WithExternalTools(tools...)` | 无 | 注册宿主提供的自定义工具 |
+| `WithoutBuiltinTools()` | false | 禁用全部内置编码工具（通常与 `WithExternalTools` 配合） |
 | `WithApprovalHandler(fn)` | nil | 自定义工具审批回调 |
 
 ---

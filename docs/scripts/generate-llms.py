@@ -9,13 +9,13 @@ DOCS = ROOT / "docs"
 GROUPS = {
     "en": [
         ("Start Here", ["quick-start-tutorial", "getting-started", "features-overview", "use-cases", "faq"]),
-        ("Core References", ["cli-reference", "configuration", "security", "tools", "sessions", "skills", "workflow"]),
+        ("Core References", ["cli-reference", "configuration", "security", "tools", "sessions", "skills", "expert-teams", "desktop", "knowledge-bases", "workflow"]),
         ("Integrations and APIs", ["serve", "a2a", "acp", "sdk", "provider-guide", "skillhub"]),
         ("Architecture and Development", ["architecture", "development", "scenarios", "changelog"]),
     ],
     "zh": [
         ("入门", ["quick-start-tutorial", "getting-started", "features-overview", "use-cases", "faq"]),
-        ("核心参考", ["cli-reference", "configuration", "security", "tools", "sessions", "skills", "workflow"]),
+        ("核心参考", ["cli-reference", "configuration", "security", "tools", "sessions", "skills", "expert-teams", "desktop", "knowledge-bases", "workflow"]),
         ("集成与 API", ["serve", "a2a", "acp", "sdk", "provider-guide", "skillhub"]),
         ("架构与开发", ["architecture", "development", "scenarios", "changelog"]),
     ],

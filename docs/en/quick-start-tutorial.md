@@ -138,7 +138,7 @@ mothx -P "Generate API documentation"
 /mode agent     # Switch to Agent mode
 /mode yolo      # Switch to YOLO mode
 /model          # Show current model
-/think          # Toggle thinking level
+/settings       # Configure defaults, including thinking level
 /clear          # Clear conversation
 /help           # Show help
 /quit           # Exit

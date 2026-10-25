@@ -156,9 +156,12 @@ MothX 使用两个配置文件:
 | `enablePlanTool` | bool | `true` | 是否注册内置 `plan` 工具 |
 | `enableArtifact` | bool | `false` | 是否允许 TUI/CLI 会话发布生成制品 |
 | `enableACPArtifact` | bool | `false` | 是否允许 Desktop/ACP 会话发布生成制品 |
+| `imageGeneration` | object | *(默认关闭)* | 独立图像生成工具设置 |
 | `maxContextTokens` | int | `0` (自动) | 覆盖最大上下文 token 数 |
 | `contextFiles` | object | *(见下文)* | 上下文文件加载设置 |
 | `skillsDir` | string | `"~/.mothx/skills"` | 全局技能目录路径 |
+| `skills` | object | *(空)* | 技能加载覆盖（目前为禁用列表） |
+| `skillHub` | object | 内置默认值 | 在线技能市场设置 |
 | `compaction` | object | *(见下文)* | 上下文压缩设置 |
 | `sandbox` | object | *(见下文)* | 沙箱执行设置 |
 | `sessionDir` | string | `"~/.mothx/sessions"` | SQLite 会话存储目录 |
@@ -168,6 +171,7 @@ MothX 使用两个配置文件:
 | `tuilang` | string | `"auto"` | TUI 语言: `"auto"`、`"zh"` 或 `"en"` |
 | `retry` | object | *(见下文)* | API 调用重试设置 |
 | `approval` | object | *(见下文)* | Bash 命令审批设置 |
+| `worktree` | object | *(见下文)* | 隔离 git worktree 设置 |
 | `maintenance` | object | *(见下文)* | Runtime 自有后台维护（附件存储回收） |
 | `webSearch` | object | *(见下文)* | DeepSeek 网页搜索/抓取工具设置 |
 | `updateCheck` | bool | `true` | 启用 npm 版本更新检测通知 |
@@ -592,6 +596,33 @@ MothX 也会在运行时学习该能力：当 OpenAI 兼容网关拒绝 `reasoni
 
 ---
 
+### imageGeneration
+
+用于 `image_generation` 工具的独立图像生成配置。只有 `enabled` 为 `true` 时才注册该工具。省略的端点字段会回退到所选 provider，因此通常只需配置 `enabled` 与 `provider`。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `enabled` | bool | `false` | 是否注册 `image_generation` 工具 |
+| `provider` | string | `openai` | 用于填充省略的 `apiType`、`baseUrl` 与 `token` 的 provider |
+| `apiType` | string | `openai-images` | `openai-images`（Images API）或 `openai-responses`（Responses 原生图像生成） |
+| `baseUrl` | string | provider `baseUrl`，再回退 `https://api.openai.com/v1` | 图像 API 端点 |
+| `token` | string | provider `apiKey` | 凭证；支持 `${ENV_VAR}` 与需显式开启的 `!command` 解析 |
+| `model` | string | `gpt-image-1` | 图像模型 ID |
+
+```json
+{
+  "imageGeneration": {
+    "enabled": true,
+    "provider": "openai",
+    "model": "gpt-image-1"
+  }
+}
+```
+
+工具参数见 [`image_generation`](tools.md#image_generation---图像生成)。
+
+---
+
 ### toolExecution
 
 该设置只控制本地执行。`sequential` 只会限制响应到达后的 MothX 本地 worker，不会要求模型一次只生成一个 tool call；provider 仍可能在一次响应中返回多个 tool call。`parallel` 批次按模型声明的顺序上报每个调用的启动，该顺序不阻塞执行：调用之间仍然并发运行，各自独立等待审批与持久化执行记录，只有完成顺序不受限制。TUI、WebUI、Serve、channels、ACP 以及通过共享 Runtime 创建的子 Agent 都使用同一配置。它不控制 OpenAI Responses `web_search` 等 provider 托管工具内部的并发；托管工具仍由 provider 自己的编排和配额规则负责。
@@ -657,6 +688,7 @@ WebUI 在“设置 > Tools”中提供这两个字段，TUI 在 `/settings` > Be
 | `medium` | 中等级别 (默认) |
 | `high` | 高级别 |
 | `xhigh` | 最高级别 |
+| `max` | provider/模型支持的最高级别（例如 DeepSeek V4.1 的 `reasoning_effort`） |
 
 ```json
 { "defaultThinkingLevel": "medium" }
@@ -746,6 +778,46 @@ MothX 会自动搜索并加载以下文件:
 技能加载位置：
 - **全局技能**: `<skillsDir>/<name>/SKILL.md`
 - **项目技能**: `.skills/<name>/SKILL.md` (覆盖全局)
+
+### skills
+
+按名称禁用技能，而无需删除目录。被禁用的技能不会加载到系统提示词，也不能在当前会话中激活。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `disabled` | string array | `[]` | 要排除的技能名称 |
+
+```json
+{
+  "skills": {
+    "disabled": ["legacy-release-checklist"]
+  }
+}
+```
+
+目录优先级与激活命令见[技能系统](skills.md)。
+
+### skillHub
+
+`/skillhub` 以及 Desktop/WebUI 技能浏览器使用的在线技能市场设置。省略 `markets` 时使用内置市场定义。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `defaultMarket` | string | `"skillhub.cn"` | 打开市场时默认选择的市场 |
+| `defaultInstallScope` | string | `"project"` | 默认安装位置：`project` 或 `global` |
+| `officialHandles` | string array | 内置官方 handle | 视为官方发布者的市场 handle |
+| `markets` | object array | 内置市场 | 自定义市场定义：`{ id, name, siteURL, apiURL, enabled, apiToken }` |
+
+```json
+{
+  "skillHub": {
+    "defaultMarket": "skillhub.cn",
+    "defaultInstallScope": "project"
+  }
+}
+```
+
+命令与市场行为见[在线 Skill 市场](skillhub.md)。
 
 ---
 
@@ -1059,6 +1131,30 @@ Agent 模式下：
   }
 }
 ```
+
+### worktree
+
+由共享 Runtime（`agentruntime.WorktreeManager`）管理的隔离 git worktree。默认位于 `<data-dir>/worktrees`，并注册在 sessions 数据库中，因此 TUI/CLI、ACP/Desktop 与子 Agent 共享同一份注册表。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `enabled` | bool | `true` | 是否允许创建新 worktree；`false` 仍保留 `list`、`remove`、`reset` |
+| `branchPrefix` | string | `"mothx"` | 创建 worktree 的分支名前缀 |
+| `startCommand` | string | `""` | 创建/重置后执行的默认启动命令 |
+| `perChildSubagents` | bool | `false` | 每个子 Agent 使用独立 worktree |
+| `esm` | bool | `false` | ESM worker/critic/audit 角色为每个目标共享一个 worktree |
+
+```json
+{
+  "worktree": {
+    "enabled": true,
+    "branchPrefix": "mothx",
+    "perChildSubagents": false
+  }
+}
+```
+
+使用 [`mothx worktree`](cli-reference.md#worktree---隔离-git-worktree) 或对应的 ACP/Desktop 控件创建、列出、重置与删除 worktree。
 
 ### maintenance（后台维护）
 

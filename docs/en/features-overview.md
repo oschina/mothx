@@ -32,12 +32,12 @@ mothx --provider anthropic --model claude-3-5-sonnet-20241022
 
 ### Vendor Adapters
 
-MothX supports 25+ vendor adapters, including:
+MothX ships 60+ built-in provider presets, including:
 
 - **China**: Xiaomi, Volcengine/Doubao, Kimi, MiniMax, Seed, Qianfan, Bailian, Gitee, StepFun, Z.AI, LongCat, AMD Radeon
 - **International**: Google Gemini, Google Vertex, OpenRouter, Together, Groq, Fireworks, Mistral, GitHub Copilot, Cloudflare AI Gateway, Cloudflare Workers AI, Amazon Bedrock
 
-No additional configuration needed — just set the API key and start using.
+No additional configuration needed — just set the API key and start using. See the [Provider & Model Catalog](../provider-model-list.md) for the generated list of every built-in provider and model.
 
 ---
 
@@ -569,6 +569,9 @@ Disable via `settings.json` with `"updateCheck": false`, or via `VIBECODING_NO_U
 The following capabilities are integrated into the current runtime; actual availability depends on configuration and model compatibility:
 
 - **OpenAI Responses**: Supports native response item replay, reasoning, structured output, hosted tools, prompt cache, and optional durable background runs through `responses.background`. Background runs can be queried, canceled, reconnected, or abandoned and recover after Serve restarts.
+- **Desktop client**: A separate Electron ACP app with chat, tool/diff cards, approvals, questions, artifacts, Expert Teams, knowledge bases, worktrees, and management panels; it starts the bundled `mothx acp` runtime and never starts `mothx serve`.
+- **Knowledge bases**: A Desktop/WebUI-managed, rebuildable index of a read-only directory. Canonical index runs use the shared Runtime, snapshots publish atomically, and sessions query evidence through a standard Knowledge MCP server.
+- **Attachments and artifacts**: Runtime-owned intake, storage, replay, provider conversion, and delivery; `publish_artifact` is the only path that turns a completed file into a deliverable artifact.
 - **Web UI management**: Provides session search and pagination, run status and cancellation, an approval center, tool results, skill activation, MCP configuration, Provider/Serve settings, and a `/stats` dashboard.
 - **MCP**: Supports stdio, streamable HTTP, and legacy SSE.
 - **Parallel tool execution**: Local function and custom tool calls within one agent turn run through a bounded parallel worker pool. Call starts are reported in the model's declared order without blocking execution, so calls still overlap and only the completion order is unrestricted. The `toolExecution` setting controls `mode` (`parallel`/`sequential`) and `maxConcurrency` (default `10`). Shared by TUI, WebUI, Serve, channels, ACP, and sub-agents.
@@ -584,7 +587,7 @@ The following capabilities are integrated into the current runtime; actual avail
 MothX is an **all-in-one terminal AI coding assistant** with these core advantages:
 
 1. **One binary does it all**: No need to install multiple tools
-2. **Multi-provider support**: 20+ vendor adapters, one-click switching
+2. **Multi-provider support**: 60+ built-in provider presets, one-click switching
 3. **Security control**: Sandbox isolation, approval gates, blacklist protection
 4. **Rich features**: Session management, skills system, IDE integration
 5. **High performance**: SSE streaming, cache hit optimization

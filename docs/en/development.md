@@ -51,59 +51,41 @@ go test -run TestReadTool ./internal/tools/
 
 ```
 mothx/
-├── agent/                     # Public Agent/Provider interfaces and Builder
-├── bootstrap/                 # Bootstrap package for embedding
-├── cmd/mothx/            # CLI entry point
-│   ├── main.go                # Main program
-│   └── main_doctor.go         # `doctor` subcommand
+├── agent/                     # Public SDK types (Agent, Provider, Builder)
+├── bootstrap/                 # Public SDK wiring into internal implementations
+├── cmd/mothx/                 # CLI entry point and subcommands
+├── desktop/                   # Electron desktop client (pure ACP)
+├── ui/                        # Svelte Web UI embedded into Serve
 ├── internal/
-│   ├── a2a/                   # A2A protocol server and master mode
-│   ├── acp/                   # ACP / MCP integration
-│   ├── agent/                 # Core Agent loop
-│   │   ├── agent.go           # Agent main logic
-│   │   ├── factory.go         # AgentFactory
-│   │   ├── manager.go         # AgentManager
-│   │   ├── router.go          # EventRouter
-│   │   ├── subagent.go        # subagent_* tools
-│   │   ├── events.go          # Event type definitions
-│   │   ├── provider.go        # Provider adapter
-│   │   └── system_prompt.go   # System prompt generation
-│   ├── config/                # Configuration management
-│   ├── context/               # Context management and token estimation
-│   ├── contextfiles/          # Context file loading
+│   ├── agent/                 # Core Agent loop, events, prompts, sub-agent tools
+│   ├── agentruntime/          # Shared front-end-neutral Runtime and run lifecycle
+│   ├── acp/                   # ACP server and mothx.dev extensions
+│   ├── a2a/                   # A2A server and remote-agent master dispatch
+│   ├── architecture/          # Architecture guard tests
+│   ├── browser/               # vibe-browser tool
+│   ├── config/                # settings.json / serve.json
+│   ├── context/, contextfiles/# Token budget and project context
 │   ├── cron/                  # Scheduled task store and scheduler
-│   ├── serve/                 # Unified OpenAI API, Web UI, and messaging channels
-│   ├── mcp/                   # MCP server integration
-│   ├── memory/                # Persistent memory (memory.md)
-│   ├── messaging/             # Messaging platform abstraction
-│   ├── platform/              # Cross-platform compatibility
-│   ├── provider/              # LLM Provider abstraction
-│   │   ├── anthropic/         # Anthropic Messages API
-│   │   ├── google/            # Google Gemini/Vertex API
-│   │   ├── openai/            # OpenAI Chat Completions API
-│   │   ├── factory/           # Shared provider/model construction
-│   │   └── vendor*.go         # Vendor adapter registry
-│   ├── sandbox/               # Sandbox abstraction (bwrap, none)
-│   ├── session/               # Session management (SQLite)
-│   ├── skills/                # Skills system
-│   ├── stats/                 # Usage stats web dashboard
+│   ├── dao/                   # Sole SQL/query/row-mapping owner
+│   ├── db/                    # Connection/transaction/migration lifecycle
+│   ├── esm/                   # Enable Supervisor Mode
+│   ├── expert/                # Expert Team bundle discovery/validation
+│   ├── imageproc/             # Image normalization
+│   ├── mcp/                   # MCP integration
+│   ├── memory/, messaging/    # Channel memory and platform abstraction
+│   ├── platform/              # Cross-platform helpers and assets
+│   ├── provider/              # Protocol providers, vendor adapters, factory
+│   ├── sandbox/               # Sandbox abstraction
+│   ├── serve/                 # OpenAI API, Web UI, channels, hooks, cron
+│   ├── session/               # Session domain, migrations, event store
+│   ├── skills/, skillhub/     # Skills and marketplace
+│   ├── stats/                 # Usage statistics
 │   ├── systeminit/            # AGENTS.md generation
-│   ├── tools/                 # Tool implementations
-│   │   ├── bash.go            # Bash command execution
-│   │   ├── read.go            # File reading
-│   │   ├── write.go           # File writing
-│   │   ├── edit.go            # File editing
-│   │   ├── grep.go            # Content search (pure-Go ripgrep)
-│   │   ├── find.go            # File finding (pure-Go fd)
-│   │   ├── ls.go              # Directory listing
-│   │   ├── plan.go            # Task planning
-│   │   ├── question.go        # User clarification
-│   │   ├── skill_ref.go       # Skill reference loading
-│   │   └── a2a_dispatch.go    # A2A remote agent dispatch
-│   ├── tui/                   # Terminal UI (BubbleTea)
-│   └── workflow/              # Workflow runtime (JavaScript DSL)
-├── example/                   # SDK examples
-└── pkg/sdk/                   # Public SDK interface
+│   ├── tools/                 # Built-in tools
+│   ├── tui/                   # Bubble Tea TUI
+│   └── workflow/              # JavaScript workflow runtime
+├── example/                   # Public SDK examples
+└── docs/                      # Bilingual docs, generated indexes, site
 ```
 
 ## Core Interfaces
@@ -125,10 +107,32 @@ type Provider interface {
 type Tool interface {
     Name() string
     Description() string
+    PromptSnippet() string
+    PromptGuidelines() []string
     Parameters() json.RawMessage
-    Execute(ctx context.Context, params json.RawMessage) (string, error)
+    Execute(ctx context.Context, params map[string]any) (ToolResult, error)
 }
 ```
+
+## Agent Runtime Rules
+
+Production Agent construction and execution follow the shared Runtime boundary:
+
+- Build Agents only through `SessionRuntime.BuildAgent`, `BuildTransientAgent`, or
+  `agentruntime.NewAgentManager`. Do not add adapter-local `agent.Config`
+  assembly or call `agent.New`/`agent.NewWithLoopConfig`.
+- Resolve source, mode, capabilities, tools, sandbox, approval, MCP, and run
+  policy once with `ResolveSource`/`ResolvePolicy`; adapters project the result.
+- Use `ExecutionRuntime`/`RunStore` for durable runs and exactly one canonical
+  terminal event. Do not create a second run state machine.
+- Use `DecisionService`/`DecisionRecord` for approvals and questions.
+- Put all SQL in `internal/dao`; use `internal/db` only for connection,
+  transaction, and migration lifecycle.
+- Keep entry points thin: TUI, CLI, WebUI/API, Desktop/ACP, channels, Cron, ESM,
+  and A2A may decode protocols and render events, but not own sessions, run
+  lifecycle, attachments, artifacts, or policy.
+- Run `go test ./internal/architecture` after moving production construction or
+  persistence call sites.
 
 ## Adding New Tools
 
@@ -159,6 +163,14 @@ func (t *MyTool) Description() string {
     return "Description of my tool"
 }
 
+func (t *MyTool) PromptSnippet() string {
+    return "Short one-line description for the system prompt"
+}
+
+func (t *MyTool) PromptGuidelines() []string {
+    return []string{"Use this tool when ..."}
+}
+
 func (t *MyTool) Parameters() json.RawMessage {
     return json.RawMessage(`{
         "type": "object",
@@ -172,38 +184,27 @@ func (t *MyTool) Parameters() json.RawMessage {
     }`)
 }
 
-func (t *MyTool) Execute(ctx context.Context, params json.RawMessage) (string, error) {
-    var p struct {
-        Param1 string `json:"param1"`
+func (t *MyTool) Execute(ctx context.Context, params map[string]any) (ToolResult, error) {
+    param1, _ := params["param1"].(string)
+    if param1 == "" {
+        return ToolResult{}, fmt.Errorf("param1 is required")
     }
-    if err := json.Unmarshal(params, &p); err != nil {
-        return "", err
-    }
-    // Implement tool logic
-    return "result", nil
+    return NewTextToolResult("result"), nil
 }
 ```
 
 ### Step 2: Register Tool
 
-In `internal/tools/tool.go`'s `RegisterDefaults()` method:
+Add the canonical name to `builtinToolOrder` and its constructor to
+`builtinToolFactories()` in `internal/tools/tool.go`. `RegisterDefaults`,
+`RegisterDefaultsWithPlanTool`, and `RegisterFiltered` all derive from those two
+lists, so the tool is registered consistently.
 
-```go
-func (r *Registry) RegisterDefaults() {
-    r.Register(&ReadTool{workdir: r.workdir})
-    r.Register(&WriteTool{workdir: r.workdir})
-    r.Register(&EditTool{workdir: r.workdir})
-    r.Register(&BashTool{workdir: r.workdir, sandbox: r.sandbox})
-    r.Register(&GrepTool{workdir: r.workdir})
-    r.Register(&FindTool{workdir: r.workdir})
-    r.Register(&LsTool{workdir: r.workdir})
-    r.Register(&MyTool{workdir: r.workdir}) // Add new tool
-}
-```
+### Step 3: Describe it for the system prompt
 
-### Step 3: Update System Prompt
-
-Add tool description in `internal/agent/system_prompt.go`.
+Return a concise `PromptSnippet` and targeted `PromptGuidelines` from the tool.
+The shared Runtime builds the Available tools and Guidelines sections from those
+methods; do not add per-adapter prompt text.
 
 ### Step 4: Write Tests
 
@@ -218,15 +219,12 @@ import (
 
 func TestMyTool_Execute(t *testing.T) {
     tool := NewMyTool("/tmp")
-    params := `{"param1": "value"}`
-    
-    result, err := tool.Execute(context.Background(), json.RawMessage(params))
+    result, err := tool.Execute(context.Background(), map[string]any{"param1": "value"})
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
-    
-    if result != "expected" {
-        t.Errorf("expected 'expected', got '%s'", result)
+    if result.Text != "expected" {
+        t.Errorf("expected 'expected', got %q", result.Text)
     }
 }
 ```
@@ -257,9 +255,10 @@ func init() {
 }
 ```
 
-Provider creation for CLI and ACP goes through `internal/provider/factory`, so
-do not add vendor-specific creation code to `cmd/mothx/main.go` or
-`internal/acp/acp.go`.
+Provider creation for CLI, ACP, WebUI/Serve, and Desktop goes through
+`internal/provider/factory`; Agent construction goes through `agentruntime`.
+Do not add vendor-specific creation code to adapters or assemble a complete
+`agent.Config` outside the shared Runtime.
 
 ### Add a New Protocol Provider
 
@@ -278,6 +277,7 @@ not covered by OpenAI Chat Completions or Anthropic Messages.
 
 ```bash
 make test
+make test-desktop     # Electron main/preload/renderer tests
 ```
 
 ### Run Tests for Specific Package

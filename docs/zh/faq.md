@@ -280,10 +280,9 @@ mothx --mode plan
 | 调试 bug | medium |
 
 ```bash
-# 切换思考级别
-/think          # 循环切换
-Tab             # 快捷键
-mothx -t high  # 命令行指定
+# 修改思考级别
+/settings       # 设置 > 默认值 > 思考级别
+mothx -t high   # 在命令行按次指定
 ```
 
 ### Q: 思考模式为什么没有效果？

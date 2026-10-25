@@ -18,6 +18,9 @@
 - [工具系统参考指南](https://mothx.net/zh/tools.md)
 - [会话管理](https://mothx.net/zh/sessions.md)
 - [技能系统](https://mothx.net/zh/skills.md)
+- [主角团](https://mothx.net/zh/expert-teams.md)
+- [MothX 桌面客户端](https://mothx.net/zh/desktop.md)
+- [知识库](https://mothx.net/zh/knowledge-bases.md)
 - [JavaScript 工作流](https://mothx.net/zh/workflow.md)
 
 ## 集成与 API
