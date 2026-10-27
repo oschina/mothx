@@ -9,6 +9,9 @@ This file contains the changes for the **current version only**. The full histor
 - **New Gitee/Moark Models: `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed`**
   - Added `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed` to the `gitee` and `moark` providers: thinking is enabled by default with Kimi's `low`/`high`/`max` effort scale (MothX's `minimal`/`low` map to `low`, `medium`/`high` to `high`, and `xhigh`/`max` to `max`), a 1M context window, and text+image input. Both use the verified `reasoning_effort` parameter through the `kimi` thinking format.
 
+- **New Gitee/Moark Model: `MiniMax-M3.1-Flash`**
+  - Added `MiniMax-M3.1-Flash` to the `gitee` and `moark` providers: thinking is enabled by default through the standard `reasoning_effort` parameter, with a 1M context window and text+image+video input; no default max_tokens is sent.
+
 ### 💥 Behavior Changes
 
 - **SQLite startup integrity checks are now explicitly opt-out.** MothX keeps running `PRAGMA quick_check` by default before using the session database. Very large databases can skip the fixed opening cost with `MOTHX_SQLITE_QUICK_CHECK=off`; `mothx doctor` still runs an on-demand read-only integrity check and reports `sessions.integrity`.

@@ -233,6 +233,7 @@ func TestMoarkModelMaxTokens(t *testing.T) {
 		"qwen3.7-plus":             65536,
 		"minimax-m2.7":             131072,
 		"minimax-m3":               128000,
+		"MiniMax-M3.1-Flash":       0,
 		"mimo-v2.5-pro":            131072,
 		"gemma-4-26b-a4b-it":       32768,
 		"deepseek-v4-flash":        384000,
@@ -440,6 +441,31 @@ func TestGiteeMoarkKimiK31ProDefaults(t *testing.T) {
 			if model.Compat == nil || model.Compat.ThinkingFormat != "kimi" {
 				t.Fatalf("%s %s compat = %#v, want kimi thinking format", providerName, modelID, model.Compat)
 			}
+		}
+	}
+}
+
+func TestGiteeMoarkMiniMaxM31FlashDefaults(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"gitee", "moark"} {
+		model := s.GetModelConfig(providerName, "MiniMax-M3.1-Flash")
+		if model == nil {
+			t.Fatalf("%s missing MiniMax-M3.1-Flash", providerName)
+		}
+		if !model.Reasoning || model.ContextWindow != 1000000 {
+			t.Fatalf("%s MiniMax-M3.1-Flash = %#v, want reasoning model with 1M context", providerName, model)
+		}
+		wantInput := []string{"text", "image", "video"}
+		if len(model.Input) != len(wantInput) {
+			t.Fatalf("%s MiniMax-M3.1-Flash input = %#v, want %#v", providerName, model.Input, wantInput)
+		}
+		for i := range wantInput {
+			if model.Input[i] != wantInput[i] {
+				t.Fatalf("%s MiniMax-M3.1-Flash input = %#v, want %#v", providerName, model.Input, wantInput)
+			}
+		}
+		if model.MaxTokens != 0 || model.MaxTokensWasSet() {
+			t.Fatalf("%s MiniMax-M3.1-Flash maxTokens = %d, explicitly set = %v; want 0, false", providerName, model.MaxTokens, model.MaxTokensWasSet())
 		}
 	}
 }
@@ -748,6 +774,7 @@ func TestRoutedProviderModelMaxTokensAreExplicit(t *testing.T) {
 			"qwen3.7-plus":             65536,
 			"minimax-m2.7":             131072,
 			"minimax-m3":               128000,
+			"MiniMax-M3.1-Flash":       0,
 			"deepseek-v4-flash":        384000,
 			"deepseek-v4-flash-0731":   0,
 			"deepseek-v4.1-flash":      0,

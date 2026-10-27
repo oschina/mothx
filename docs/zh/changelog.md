@@ -7,6 +7,9 @@
 - **新增 Gitee/Moark 模型：`kimi-k3.1-pro` 与 `kimi-k3.1-pro-highspeed`**
   - 为 `gitee` 与 `moark` 新增 `kimi-k3.1-pro` 与 `kimi-k3.1-pro-highspeed`：默认开启思考，使用 Kimi 的 `low`/`high`/`max` 推理强度档位（MothX 的 `minimal`/`low` 映射为 `low`，`medium`/`high` 映射为 `high`，`xhigh`/`max` 映射为 `max`），支持 1M 上下文与文本+图片输入。两者均通过 `kimi` 思考格式使用经过验证的 `reasoning_effort` 参数。
 
+- **Gitee/Moark 新增模型：`MiniMax-M3.1-Flash`**
+  - 为 `gitee` 与 `moark` 新增 `MiniMax-M3.1-Flash`：通过标准 `reasoning_effort` 参数默认开启思考，支持 1M 上下文与文本+图片+视频输入；默认不发送 max_tokens。
+
 ### 💥 行为变更
 
 - **SQLite 启动完整性检查现在可显式关闭。** MothX 默认仍会在使用会话库前执行 `PRAGMA quick_check`。超大数据库可用 `MOTHX_SQLITE_QUICK_CHECK=off` 跳过这项固定开销；`mothx doctor` 仍会执行按需的只读完整性检查，并报告 `sessions.integrity`。
