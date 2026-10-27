@@ -2,13 +2,27 @@ import { Cpu, Folder, SlidersHorizontal } from 'lucide-react';
 
 import { t } from '@/core/i18n';
 import { currentModelLabel, hasFeature } from '@/core/state';
-import { useAppState } from '@/hooks/useAppState';
+import { shallowEqual, useAppSelector } from '@/hooks/useAppState';
 import { useAppBackground } from '@/hooks/useAppBackground';
 import { basename, cn } from '@/lib/utils';
 
 // 状态栏:22px。连接状态点 + 版本 + 用量/模式/模型/工作目录投影。
 export function StatusBar() {
-  const appState = useAppState();
+  const appState = useAppSelector(
+    (state) => ({
+      connection: state.connection,
+      appInfo: state.appInfo,
+      activeSessionCwd: state.activeSessionCwd,
+      newSessionCwd: state.newSessionCwd,
+      usage: state.usage,
+      currentMode: state.currentMode,
+      activeSessionId: state.activeSessionId,
+      configOptions: state.configOptions,
+      draftConfigOptions: state.draftConfigOptions,
+      capabilities: state.connection.agentCapabilities,
+    }),
+    shallowEqual,
+  );
   const background = useAppBackground();
 
   const conn = appState.connection;

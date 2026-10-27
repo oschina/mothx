@@ -45,9 +45,28 @@ export function clearTranscript(sessionId: string | null): void {
 }
 
 function upsert(item: TranscriptItem): void {
-  const existing = state.transcript.find((entry) => entry.key === item.key);
-  if (existing) Object.assign(existing, item);
-  else state.transcript.push(item);
+  // Replace instead of mutating: React.memo on transcript entries relies on a
+  // changed item identity, so one streamed chunk must not invalidate every
+  // other card in a long transcript.
+  if (updateItem(item.key, (existing) => ({ ...existing, ...item }) as TranscriptItem)) return;
+  state.transcript.push(item);
+}
+
+// updateItem applies a functional change to the current item with this key and
+// returns whether it was found. It handles both the live transcript and the
+// page overlay used while replaying an older history page.
+function updateItem(key: string, update: (item: TranscriptItem) => TranscriptItem): boolean {
+  if (pageOverlay) {
+    const index = pageOverlay.findIndex((entry) => entry.key === key);
+    if (index >= 0) {
+      pageOverlay[index] = update(pageOverlay[index]);
+      return true;
+    }
+  }
+  const index = state.transcript.findIndex((entry) => entry.key === key);
+  if (index < 0) return false;
+  state.transcript[index] = update(state.transcript[index]);
+  return true;
 }
 
 // Prepends an older ACP transcript page without inventing a second message
@@ -107,6 +126,22 @@ function findItem(key: string): TranscriptItem | undefined {
   return state.transcript.find((entry) => entry.key === key);
 }
 
+// applyToolUpdate returns a new tool item with one streaming update folded in.
+// It never mutates the previous object, so unchanged cards keep their identity.
+function applyToolUpdate(item: ToolItem, update: Record<string, unknown>): ToolItem {
+  const next: ToolItem = { ...item };
+  if (update.title) next.title = String(update.title);
+  if (update.kind) next.toolKind = String(update.kind);
+  if (update.status) next.status = String(update.status);
+  if (update.rawInput) next.rawInput = update.rawInput as Record<string, unknown>;
+  if (update.locations) next.locations = update.locations as { path: string }[];
+  const contents = update.content;
+  if (Array.isArray(contents) && contents.length > 0) {
+    next.contents = contents as ToolCallContentShape[];
+  }
+  return next;
+}
+
 // ===== session/update 投影 =====
 
 export function applySessionUpdate(sessionId: string, update: Record<string, unknown>): void {
@@ -135,8 +170,9 @@ export function applySessionUpdate(sessionId: string, update: Record<string, unk
         }
       }
       const existing = findItem(key);
-      if (existing && existing.kind === 'user') existing.text += text;
-      else upsert({ kind: 'user', key, text });
+      if (existing && existing.kind === 'user') {
+        updateItem(key, (entry) => (entry.kind === 'user' ? { ...entry, text: entry.text + text } : entry));
+      } else upsert({ kind: 'user', key, text });
       emit();
       requestChatScroll();
       return;
@@ -146,8 +182,9 @@ export function applySessionUpdate(sessionId: string, update: Record<string, unk
       const text = contentText(update.content);
       const key = `agent:${messageId}`;
       const existing = findItem(key);
-      if (existing && existing.kind === 'agent') existing.text += text;
-      else upsert({ kind: 'agent', key, text });
+      if (existing && existing.kind === 'agent') {
+        updateItem(key, (entry) => (entry.kind === 'agent' ? { ...entry, text: entry.text + text } : entry));
+      } else upsert({ kind: 'agent', key, text });
       emit();
       requestChatScroll();
       return;
@@ -157,8 +194,9 @@ export function applySessionUpdate(sessionId: string, update: Record<string, unk
       const text = contentText(update.content);
       const key = `thought:${messageId}`;
       const existing = findItem(key);
-      if (existing && existing.kind === 'thought') existing.text += text;
-      else upsert({ kind: 'thought', key, text, open: false });
+      if (existing && existing.kind === 'thought') {
+        updateItem(key, (entry) => (entry.kind === 'thought' ? { ...entry, text: entry.text + text } : entry));
+      } else upsert({ kind: 'thought', key, text, open: false });
       emit();
       requestChatScroll();
       return;
@@ -188,21 +226,20 @@ export function applySessionUpdate(sessionId: string, update: Record<string, unk
       const toolCallId = String(update.toolCallId || '');
       if (!toolCallId) return;
       const key = `tool:${toolCallId}`;
-      let item = findItem(key);
-      if (!item || item.kind !== 'tool') {
-        item = { kind: 'tool', key, toolCallId, title: String(update.title || toolCallId), toolKind: 'other', status: 'pending', open: false, contents: [] };
-        state.transcript.push(item);
+      let next: ToolItem | null = null;
+      const found = updateItem(key, (item) => {
+        if (item.kind !== 'tool') return item;
+        next = applyToolUpdate(item, update);
+        return next;
+      });
+      if (!found) {
+        next = applyToolUpdate(
+          { kind: 'tool', key, toolCallId, title: String(update.title || toolCallId), toolKind: 'other', status: 'pending', open: false, contents: [] },
+          update,
+        );
+        state.transcript.push(next);
       }
-      if (update.title) item.title = String(update.title);
-      if (update.kind) item.toolKind = String(update.kind);
-      if (update.status) item.status = String(update.status);
-      if (update.rawInput) item.rawInput = update.rawInput as Record<string, unknown>;
-      if (update.locations) item.locations = update.locations as { path: string }[];
-      const contents = update.content;
-      if (Array.isArray(contents) && contents.length > 0) {
-        item.contents = contents as ToolCallContentShape[];
-      }
-      if (item.status === 'completed' || item.status === 'failed') maybeAddToolArtifactFallback(item);
+      if (next && (next.status === 'completed' || next.status === 'failed')) maybeAddToolArtifactFallback(next);
       emit();
       requestChatScroll();
       return;
@@ -303,8 +340,9 @@ function applyMetaOnlyUpdate(sessionId: string, update: Record<string, unknown>)
 
 function applyTitleUpdate(sessionId: string, title: string): void {
   if (!title) return;
-  const session = state.sessions.find((entry) => entry.sessionId === sessionId);
-  if (session) session.title = title;
+  state.sessions = state.sessions.map((entry) =>
+    entry.sessionId === sessionId ? { ...entry, title } : entry,
+  );
   if (sessionId === state.activeSessionId) state.activeTitle = title;
   emit();
 }
@@ -370,7 +408,9 @@ export function applySessionEvent(event: Record<string, unknown>): void {
       (entry) => (entry.kind === 'permission' || entry.kind === 'question') && entry.requestId === requestId && !entry.resolved,
     );
     if (item && (item.kind === 'permission' || item.kind === 'question')) {
-      item.deadline = Date.now() + remaining;
+      updateItem(item.key, (entry) =>
+        entry.kind === 'permission' || entry.kind === 'question' ? { ...entry, deadline: Date.now() + remaining } : entry,
+      );
       emit();
     }
     return;
@@ -507,8 +547,22 @@ export function applyReverseRequest(id: number | string, method: string, params:
   }
 }
 
+// setItemResolved replaces the decision card instead of mutating it. A delayed
+// click may target an item identity that a deadline update already replaced, so
+// updateItem merges into the current card with the same key.
+function setItemResolved(item: DecisionItem, resolved: string): void {
+  if (
+    updateItem(item.key, (entry) =>
+      entry.kind === 'permission' || entry.kind === 'question' ? { ...entry, resolved } : entry,
+    )
+  ) {
+    return;
+  }
+  upsert({ ...item, resolved });
+}
+
 export function resolvePermission(item: PermissionItem, optionId: string): void {
-  item.resolved = optionId;
+  setItemResolved(item, optionId);
   acp.respond(item.requestId, { outcome: { outcome: 'selected', optionId } });
   forgetPendingDecision(item.sessionId, item.requestId);
   finishDecision(item.sessionId);
@@ -516,7 +570,7 @@ export function resolvePermission(item: PermissionItem, optionId: string): void 
 }
 
 export function cancelPermission(item: PermissionItem): void {
-  item.resolved = t('chat.cancelled');
+  setItemResolved(item, t('chat.cancelled'));
   acp.respond(item.requestId, { outcome: { outcome: 'cancelled' } });
   forgetPendingDecision(item.sessionId, item.requestId);
   finishDecision(item.sessionId);
@@ -524,7 +578,7 @@ export function cancelPermission(item: PermissionItem): void {
 }
 
 export function resolveQuestion(item: QuestionItem, answer: string): void {
-  item.resolved = answer;
+  setItemResolved(item, answer);
   acp.respond(item.requestId, { answer, ok: true });
   forgetPendingDecision(item.sessionId, item.requestId);
   finishDecision(item.sessionId);
@@ -532,7 +586,7 @@ export function resolveQuestion(item: QuestionItem, answer: string): void {
 }
 
 export function cancelQuestion(item: QuestionItem): void {
-  item.resolved = t('chat.cancelled');
+  setItemResolved(item, t('chat.cancelled'));
   acp.respond(item.requestId, { cancelled: true });
   forgetPendingDecision(item.sessionId, item.requestId);
   finishDecision(item.sessionId);
@@ -557,13 +611,14 @@ function finishDecision(sessionId: string): void {
 export function terminalizePendingDecisions(sessionId = state.transcriptSessionId): void {
   if (!sessionId) return;
   let changed = false;
-  for (const entry of state.transcript) {
+  state.transcript = state.transcript.map((entry) => {
     if ((entry.kind === 'permission' || entry.kind === 'question') && entry.sessionId === sessionId && !entry.resolved) {
-      entry.resolved = t('chat.cancelled');
       acp.cancelReverse(entry.requestId);
       changed = true;
+      return { ...entry, resolved: t('chat.cancelled') };
     }
-  }
+    return entry;
+  });
   forgetPendingDecisions(sessionId);
   if (changed) emit();
 }
@@ -594,12 +649,23 @@ function forgetPendingDecisions(sessionId: string): void {
 // from looking actionable after that state without sending a second reverse
 // cancellation back to ACP.
 function dismissPendingDecisions(sessionId: string): void {
-  for (const entry of state.transcript) {
+  state.transcript = state.transcript.map((entry) => {
     if ((entry.kind === 'permission' || entry.kind === 'question') && entry.sessionId === sessionId && !entry.resolved) {
-      entry.resolved = t('chat.cancelled');
+      return { ...entry, resolved: t('chat.cancelled') };
     }
-  }
+    return entry;
+  });
   forgetPendingDecisions(sessionId);
+}
+
+// setTranscriptItemOpen stores the user's disclosure choice as a new item so
+// React.memo can keep every other card untouched.
+export function setTranscriptItemOpen(item: ToolItem | Extract<TranscriptItem, { kind: 'thought' }>, open: boolean): void {
+  updateItem(item.key, (entry) => {
+    if (entry.kind === 'tool' || entry.kind === 'thought') return { ...entry, open };
+    return entry;
+  });
+  emit();
 }
 
 function materializePendingDecisions(sessionId: string): void {

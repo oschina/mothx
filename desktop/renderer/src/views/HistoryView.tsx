@@ -11,15 +11,15 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { t } from '@/core/i18n';
 import { historySessions, loadMoreHistory, openSession, refreshHistory, setHistoryQuery, setHistoryScope } from '@/core/sessions';
-import { state, type ListedSessionShape } from '@/core/state';
-import { useAppState } from '@/hooks/useAppState';
+import { type ListedSessionShape, type ProjectShape } from '@/core/state';
+import { shallowEqual, useAppSelector } from '@/hooks/useAppState';
 
 function sessionTitle(session: ListedSessionShape): string {
   return session.title || session.sessionId.slice(0, 10);
 }
 
-function sessionProjectName(session: ListedSessionShape): string {
-  const project = state.projects.find((entry) => entry.id === session._meta?.projectId);
+function sessionProjectName(session: ListedSessionShape, projects: ProjectShape[]): string {
+  const project = projects.find((entry) => entry.id === session._meta?.projectId);
   return project?.name || t('tree.ungrouped');
 }
 
@@ -76,8 +76,19 @@ function historyStatusVariant(status: HistoryStatus): 'secondary' | 'info' | 'su
 }
 
 export function HistoryView() {
-  const appState = useAppState();
-  const [search, setSearch] = useState(appState.historyQuery);
+  const viewState = useAppSelector(
+    (state) => ({
+      sessionPages: state.sessionPages,
+      projects: state.projects,
+      sessionStatus: state.store.sessionStatus,
+      historyScope: state.historyScope,
+      historyProjectId: state.historyProjectId,
+      historyQuery: state.historyQuery,
+      capabilities: state.connection.agentCapabilities,
+    }),
+    shallowEqual,
+  );
+  const [search, setSearch] = useState(viewState.historyQuery);
   const debounceRef = useRef<number | undefined>(undefined);
   const page = historySessions();
 
@@ -111,10 +122,10 @@ export function HistoryView() {
             />
           </label>
           <Select
-            value={appState.historyScope}
+            value={viewState.historyScope}
             onValueChange={(value) => {
               if (value === 'project') {
-                const id = appState.historyProjectId || appState.projects[0]?.id || '';
+                const id = viewState.historyProjectId || viewState.projects[0]?.id || '';
                 if (!id) {
                   void setHistoryScope('all');
                   return;
@@ -134,13 +145,13 @@ export function HistoryView() {
               <SelectItem value="project">{t('history.scopeProject')}</SelectItem>
             </SelectContent>
           </Select>
-          {appState.historyScope === 'project' ? (
-            <Select value={appState.historyProjectId} onValueChange={(value) => void setHistoryScope('project', value)}>
+          {viewState.historyScope === 'project' ? (
+            <Select value={viewState.historyProjectId} onValueChange={(value) => void setHistoryScope('project', value)}>
               <SelectTrigger className="max-w-[150px]" aria-label="Project">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {appState.projects.map((project) => (
+                {viewState.projects.map((project) => (
                   <SelectItem key={project.id} value={project.id}>
                     {project.name}
                   </SelectItem>
@@ -154,7 +165,7 @@ export function HistoryView() {
           {page.sessions.map((session) => {
             // ACP run_status events update this presentation projection before
             // the next history page reload. Durable lastRun remains the fallback.
-            const status = historyStatus(session, appState.store.sessionStatus[session.sessionId]);
+            const status = historyStatus(session, viewState.sessionStatus[session.sessionId]);
             return (
               <RowItem
                 key={session.sessionId}
@@ -167,7 +178,7 @@ export function HistoryView() {
                   </>
                 }
                 desc={[
-                  sessionProjectName(session),
+                  sessionProjectName(session, viewState.projects),
                   session.cwd,
                   [session.provider, session.model].filter(Boolean).join(' / '),
                   session.updatedAt ? new Date(session.updatedAt).toLocaleString() : '',
@@ -176,7 +187,7 @@ export function HistoryView() {
                   .join(' · ')}
                 onClick={() => void openSession(session.sessionId)}
               >
-                <SessionMenu session={session} />
+                <SessionMenu session={session} projects={viewState.projects} />
               </RowItem>
             );
           })}

@@ -38,11 +38,11 @@ import {
 } from '@/core/composer';
 import { t } from '@/core/i18n';
 import { changeSessionWorkingDirectory, chooseWorkingDirectory } from '@/core/sessions';
-import { currentConfigOptions, currentModelLabel, currentProviderLabel, isSessionRunning, state, type SessionConfigOptionShape } from '@/core/state';
+import { currentConfigOptions, currentModelLabel, currentProviderLabel, isSessionRunning, sessionRunStatus, state, type SessionConfigOptionShape } from '@/core/state';
 import { formatBytes } from '@/core/transcript';
 import { applyWorkspacePickerTarget } from '@/core/workspace-picker';
 import { composerFocusEvents, composerInjectEvents, composerReplaceEvents, consumePendingInjection, consumePendingReplacement } from '@/core/bus';
-import { useAppState } from '@/hooks/useAppState';
+import { shallowEqual, useAppSelector } from '@/hooks/useAppState';
 import { useAppBackground } from '@/hooks/useAppBackground';
 import { cn, basename } from '@/lib/utils';
 import {
@@ -73,11 +73,11 @@ const FALLBACK_MODES = [
 ];
 
 function AttachRow() {
-  const appState = useAppState();
-  if (appState.attachments.length === 0) return null;
+  const attachments = useAppSelector((state) => state.attachments);
+  if (attachments.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-1.5 px-3 pt-2.5">
-      {appState.attachments.map((attachment) => (
+      {attachments.map((attachment) => (
         <div
           key={attachment.path}
           className="flex max-w-[220px] items-center gap-1.5 rounded-lg border border-borderstrong bg-background px-2 py-[3px] text-[11.5px]"
@@ -201,7 +201,20 @@ function ConfigChoiceList({
 }
 
 export function Composer({ source }: { source: 'home' | 'chat' }) {
-  const appState = useAppState();
+  const appState = useAppSelector(
+    (state) => ({
+      view: state.view,
+      configOptions: state.configOptions,
+      draftConfigOptions: state.draftConfigOptions,
+      activeSessionCwd: state.activeSessionCwd,
+      newSessionCwd: state.newSessionCwd,
+      activeSessionId: state.activeSessionId,
+      activeRunStatus: sessionRunStatus(state.activeSessionId),
+      availableCommands: state.availableCommands,
+      currentMode: state.currentMode,
+    }),
+    shallowEqual,
+  );
   const background = useAppBackground();
   const [value, setValue] = useState('');
   const [configOpen, setConfigOpen] = useState(false);

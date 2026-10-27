@@ -74,7 +74,7 @@ export async function attachFiles(): Promise<void> {
     // resource_link 要求文件位于协商的工作区内;工作区外(以及 Windows 的
     // 盘符路径,file URI 解析存在平台歧义)统一内嵌为 base64 resource。
     if (!windows && insideWorkspace(path)) {
-      state.attachments.push({ path, name, mimeType });
+      state.attachments = [...state.attachments, { path, name, mimeType }];
       continue;
     }
     const result = await desktop.readFileBase64(grant);
@@ -82,7 +82,7 @@ export async function attachFiles(): Promise<void> {
       toast(result.error.includes('exceeds') ? t('attach.tooLarge') : t('attach.failed', { e: result.error }));
       continue;
     }
-    state.attachments.push({ path, name, mimeType, size: result.size, embedded: true, data: result.data });
+    state.attachments = [...state.attachments, { path, name, mimeType, size: result.size, embedded: true, data: result.data }];
   }
   emit();
 }
@@ -97,14 +97,14 @@ export function attachPastedFiles(files: File[]): void {
       const dataUrl = String(reader.result || '');
       const comma = dataUrl.indexOf(',');
       if (comma < 0) return;
-      state.attachments.push({
+      state.attachments = [...state.attachments, {
         path: `clipboard:${Date.now()}:${image.name || 'image'}`,
         name: image.name || t('attach.pasteName', { n: state.attachments.length + 1 }),
         mimeType: image.type,
         size: image.size,
         embedded: true,
         data: dataUrl.slice(comma + 1),
-      });
+      }];
       emit();
     };
     reader.readAsDataURL(image);

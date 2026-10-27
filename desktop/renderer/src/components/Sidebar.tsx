@@ -1,7 +1,7 @@
 // 左侧任务树。项目只是全局 ACP 任务目录的组织维度分支;它们绝不筛选当前
 // 工作目录。任务分页/展开状态只存在于渲染进程内存。
 
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   Check,
@@ -44,10 +44,10 @@ import {
   ungroupedSessions,
 } from '@/core/sessions';
 import { openSettingsTab } from '@/core/settings-nav';
-import { hasFeature, isSessionRunning, sessionRunStatus, sessionTitle, state, type ListedSessionShape, type ProjectShape } from '@/core/state';
+import { hasFeature, isSessionRunning, sessionRunStatus, sessionTitle, type ListedSessionShape, type ProjectShape } from '@/core/state';
 import { applyTheme } from '@/core/theme';
 import { switchView } from '@/core/views';
-import { useAppState } from '@/hooks/useAppState';
+import { shallowEqual, useAppSelector } from '@/hooks/useAppState';
 import { useAppBackground } from '@/hooks/useAppBackground';
 import { useAutoHideScrollbar } from '@/hooks/useAutoHideScrollbar';
 import { useFlipList } from '@/hooks/useFlipList';
@@ -89,8 +89,7 @@ function sessionStatus(session: ListedSessionShape): string {
   return 'idle';
 }
 
-export function SessionMenu({ session }: { session: ListedSessionShape }) {
-  const appState = useAppState();
+export function SessionMenu({ session, projects }: { session: ListedSessionShape; projects: ProjectShape[] }) {
   const projectId = session._meta?.projectId || null;
   return (
     <DropdownMenu>
@@ -112,7 +111,7 @@ export function SessionMenu({ session }: { session: ListedSessionShape }) {
         <DropdownMenuItem onSelect={() => void renameSession(session.sessionId)}>{t('chat.rename')}</DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuLabel>{t('session.moveToProject')}</DropdownMenuLabel>
-        {appState.projects.map((project) => (
+        {projects.map((project) => (
           <DropdownMenuItem key={project.id} onSelect={() => void setSessionProject(session.sessionId, project.id)}>
             {project.id === projectId ? <Check className="size-3.5" /> : null}
             <span className="truncate">{project.name}</span>
@@ -140,17 +139,15 @@ export function SessionMenu({ session }: { session: ListedSessionShape }) {
   );
 }
 
-function SessionItem({ session, registerFlip }: { session: ListedSessionShape; registerFlip: (key: string) => (el: HTMLElement | null) => void }) {
-  const appState = useAppState();
+function SessionItem({ session, active, projects, registerFlip }: { session: ListedSessionShape; active: boolean; projects: ProjectShape[]; registerFlip: (key: string) => (el: HTMLElement | null) => void }) {
   const status = sessionStatus(session);
-  const active = appState.activeSessionId === session.sessionId;
   const title = sessionTitle(session.sessionId);
   return (
     <div
       ref={registerFlip(session.sessionId)}
       className={cn(
         'group flex h-[26px] cursor-pointer items-center gap-[7px] rounded-md px-2 hover:bg-hoverbg',
-        'animate-in fade-in slide-in-from-bottom-1 duration-200',
+        'animate-in fade-in slide-in-from-bottom-1',
         active && 'bg-activebg'
       )}
       title={`${title}${session.model ? ` · ${session.model}` : ''}${session.cwd ? ` · ${session.cwd}` : ''}`}
@@ -164,25 +161,32 @@ function SessionItem({ session, registerFlip }: { session: ListedSessionShape; r
       <span className={cn('size-1.5 shrink-0 rounded-full', DOT_CLASS[status] || 'bg-faint', (status === 'working' || status === 'planning') && 'session-live-dot')} />
       <span className="flex-1 truncate text-[12.5px]">{title}</span>
       {isPinned(session.sessionId) ? <Pin className="size-3 shrink-0 text-faint" /> : null}
-      <SessionMenu session={session} />
+      <SessionMenu session={session} projects={projects} />
     </div>
   );
 }
 
 function SessionRows({
   sessions,
-  keyword,
+  projects,
+  activeSessionId,
   registerFlip,
 }: {
   sessions: ListedSessionShape[];
-  keyword: string;
+  projects: ProjectShape[];
+  activeSessionId: string | null;
   registerFlip: (key: string) => (el: HTMLElement | null) => void;
 }) {
-  const visible = sortTaskSessions(sessions).filter((session) => matchesTaskSearch(session, state.projects, keyword));
   return (
     <>
-      {visible.map((session) => (
-        <SessionItem key={session.sessionId} session={session} registerFlip={registerFlip} />
+      {sessions.map((session) => (
+        <SessionItem
+          key={session.sessionId}
+          session={session}
+          active={activeSessionId === session.sessionId}
+          projects={projects}
+          registerFlip={registerFlip}
+        />
       ))}
     </>
   );
@@ -232,11 +236,24 @@ function ProjectMenu({ project }: { project: ProjectShape }) {
   );
 }
 
-function ProjectBranch({ project, keyword, registerFlip }: { project: ProjectShape; keyword: string; registerFlip: (key: string) => (el: HTMLElement | null) => void }) {
-  const appState = useAppState();
-  const expanded = appState.expandedProjectIds.includes(project.id);
+function ProjectBranch({
+  project,
+  expanded,
+  page,
+  visibleSessions,
+  projects,
+  activeSessionId,
+  registerFlip,
+}: {
+  project: ProjectShape;
+  expanded: boolean;
+  page: ReturnType<typeof sessionPage>;
+  visibleSessions: ListedSessionShape[];
+  projects: ProjectShape[];
+  activeSessionId: string | null;
+  registerFlip: (key: string) => (el: HTMLElement | null) => void;
+}) {
   const key = taskProjectPageKey(project.id);
-  const page = sessionPage(key);
   return (
     <div className="flex flex-col">
       <div className="group flex min-h-[27px] items-center gap-[3px] rounded-md px-1 hover:bg-hoverbg">
@@ -257,7 +274,7 @@ function ProjectBranch({ project, keyword, registerFlip }: { project: ProjectSha
       </div>
       {expanded ? (
         <div className="ml-[9px] border-l border-border pl-[7px]">
-          <SessionRows sessions={page.sessions} keyword={keyword} registerFlip={registerFlip} />
+          <SessionRows sessions={visibleSessions} projects={projects} activeSessionId={activeSessionId} registerFlip={registerFlip} />
           {page.loading && page.sessions.length === 0 ? <div className="px-2 py-1.5 text-[11.5px] text-muted-foreground">…</div> : null}
           {page.nextCursor ? (
             <LoadMore
@@ -282,24 +299,55 @@ interface NavEntry {
 }
 
 export function Sidebar() {
-  const appState = useAppState();
+  const appState = useAppSelector(
+    (state) => ({
+      view: state.view,
+      activeSessionId: state.activeSessionId,
+      sessionPages: state.sessionPages,
+      projects: state.projects,
+      sessions: state.sessions,
+      expandedProjectIds: state.expandedProjectIds,
+      runningSessions: state.runningSessions,
+      capabilities: state.connection.agentCapabilities,
+      sessionsLoading: state.sessionsLoading,
+      theme: state.store.theme,
+    }),
+    shallowEqual,
+  );
   const background = useAppBackground();
   const scrollRef = useRef<HTMLDivElement>(null);
   useAutoHideScrollbar(scrollRef);
   const [keyword, setKeyword] = useState('');
   const query = keyword.trim().toLowerCase();
 
-  // 列表签名(可见条目顺序)变化时才触发 FLIP 位移动画,避免流式重渲染开销。
-  const visibleIds = (list: ListedSessionShape[]) =>
-    sortTaskSessions(list)
-      .filter((session) => matchesTaskSearch(session, state.projects, query))
-      .map((session) => session.sessionId)
-      .join(',');
-  const flipSignature = [
-    ...appState.projects.map((project) => visibleIds(sessionPage(taskProjectPageKey(project.id)).sessions)),
-    visibleIds(recentSessions()),
-    visibleIds(ungroupedSessions()),
-  ].join('|');
+  // Sorting/filtering is memoized against the canonical projections. It runs
+  // only when a page, project, or search term changes, not for every streamed
+  // token in the chat transcript.
+  const filterSessions = (list: ListedSessionShape[]) =>
+    sortTaskSessions(list).filter((session) => matchesTaskSearch(session, appState.projects, query));
+  const recent = useMemo(() => recentSessions(), [appState.sessionPages]);
+  const ungrouped = useMemo(() => ungroupedSessions(), [appState.sessionPages]);
+  const recentVisible = useMemo(() => filterSessions(recent), [recent, appState.projects, query]);
+  const ungroupedVisible = useMemo(() => filterSessions(ungrouped), [ungrouped, appState.projects, query]);
+  const projectPages = useMemo(
+    () => appState.projects.map((project) => ({ project, page: sessionPage(taskProjectPageKey(project.id)) })),
+    [appState.projects, appState.sessionPages],
+  );
+  const projectVisible = useMemo(
+    () => new Map(projectPages.map(({ project, page }) => [project.id, filterSessions(page.sessions)])),
+    [projectPages, appState.projects, query],
+  );
+
+  // 列表签名(可见条目顺序)变化时才触发 FLIP 位移动画。
+  const flipSignature = useMemo(
+    () =>
+      [
+        ...projectPages.map(({ project }) => (projectVisible.get(project.id) || []).map((session) => session.sessionId).join(',')),
+        recentVisible.map((session) => session.sessionId).join(','),
+        ungroupedVisible.map((session) => session.sessionId).join(','),
+      ].join('|'),
+    [projectPages, projectVisible, recentVisible, ungroupedVisible],
+  );
   const registerFlip = useFlipList(flipSignature);
 
   const navEntries: NavEntry[] = [
@@ -320,8 +368,8 @@ export function Sidebar() {
   const ungroupedPage = sessionPage(taskUngroupedPageKey());
   const hasVisible =
     appState.projects.length > 0 ||
-    recentSessions().filter((session) => matchesTaskSearch(session, state.projects, query)).length > 0 ||
-    ungroupedSessions().filter((session) => matchesTaskSearch(session, state.projects, query)).length > 0;
+    recentVisible.length > 0 ||
+    ungroupedVisible.length > 0;
   const emptyText = query ? t('history.noResults') : appState.sessionsLoading ? '…' : t('nav.noTasks');
 
   return (
@@ -450,8 +498,17 @@ export function Sidebar() {
             </Tooltip>
           </div>
           <div>
-            {appState.projects.map((project) => (
-              <ProjectBranch key={project.id} project={project} keyword={query} registerFlip={registerFlip} />
+            {projectPages.map(({ project, page }) => (
+              <ProjectBranch
+                key={project.id}
+                project={project}
+                expanded={appState.expandedProjectIds.includes(project.id)}
+                page={page}
+                visibleSessions={projectVisible.get(project.id) || []}
+                projects={appState.projects}
+                activeSessionId={appState.activeSessionId}
+                registerFlip={registerFlip}
+              />
             ))}
             {appState.projects.length === 0 && hasFeature('projects') ? (
               <div className="px-2 py-1.5 text-[11.5px] text-muted-foreground">{t('projects.empty')}</div>
@@ -464,7 +521,12 @@ export function Sidebar() {
             <span>{t('tree.recent')}</span>
           </div>
           <div>
-            <SessionRows sessions={recentSessions()} keyword={query} registerFlip={registerFlip} />
+            <SessionRows
+              sessions={recentVisible}
+              projects={appState.projects}
+              activeSessionId={appState.activeSessionId}
+              registerFlip={registerFlip}
+            />
           </div>
         </section>
 
@@ -473,7 +535,12 @@ export function Sidebar() {
             <span>{t('tree.ungrouped')}</span>
           </div>
           <div>
-            <SessionRows sessions={ungroupedSessions()} keyword={query} registerFlip={registerFlip} />
+            <SessionRows
+              sessions={ungroupedVisible}
+              projects={appState.projects}
+              activeSessionId={appState.activeSessionId}
+              registerFlip={registerFlip}
+            />
             {ungroupedPage.nextCursor ? (
               <LoadMore
                 label={t('history.loadMore')}
@@ -494,13 +561,13 @@ export function Sidebar() {
             <button
               type="button"
               className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-hoverbg hover:text-strong"
-              aria-label={appState.store.theme === 'dark' ? t('settings.light') : t('settings.dark')}
-              onClick={() => applyTheme(appState.store.theme === 'dark' ? 'light' : 'dark')}
+              aria-label={appState.theme === 'dark' ? t('settings.light') : t('settings.dark')}
+              onClick={() => applyTheme(appState.theme === 'dark' ? 'light' : 'dark')}
             >
-              {appState.store.theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+              {appState.theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
             </button>
           </TooltipTrigger>
-          <TooltipContent>{appState.store.theme === 'dark' ? t('settings.light') : t('settings.dark')}</TooltipContent>
+          <TooltipContent>{appState.theme === 'dark' ? t('settings.light') : t('settings.dark')}</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>

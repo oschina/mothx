@@ -14,7 +14,7 @@ test('sub-agent panel reuses the chat transcript and has no composer', () => {
 
 test('chat header exposes the sub-agent count only when ACP advertises the capability', () => {
   assert.match(chatView, /hasFeature\('subagentPanel'\)/, 'the entry point must be capability gated');
-  assert.match(chatView, /<SubagentSummaryButton sessionId=\{appState\.activeSessionId\}/, 'the header must project the active session sub-agent list');
+  assert.match(chatView, /<SubagentSummaryButton sessionId=\{chat\.activeSessionId\}/, 'the header must project the active session sub-agent list');
   assert.match(chatView, /<SubagentDialog open=\{subagentsOpen\}/, 'clicking the summary opens the read-only dialog');
 });
 

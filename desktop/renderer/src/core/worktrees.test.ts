@@ -70,7 +70,7 @@ test('the home composer does not host the worktree action', () => {
 
 test('the chat header hosts the worktree menu once a conversation exists', () => {
   assert.match(chatViewSource, /worktreeSupported\(\)/, 'chat header must gate the worktree control on the capability key');
-  assert.match(chatViewSource, /Boolean\(appState\.activeSessionId\) && worktreeSupported\(\)/, 'worktree entry requires an active conversation');
+  assert.match(chatViewSource, /Boolean\(chat\.activeSessionId\) && worktreeSupported\(\)/, 'worktree entry requires an active conversation');
   assert.match(chatViewSource, /<WorktreeMenu \/>/, 'chat header must render the shared worktree menu');
   assert.doesNotMatch(worktreeMenuSource, /variant === 'header'/, 'menu no longer needs a multi-variant trigger');
 });

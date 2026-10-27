@@ -7,16 +7,27 @@ import { emit, state } from './state';
 import { toast } from './ui-host';
 
 export function applyTheme(theme: 'light' | 'dark'): void {
-  state.store.theme = theme;
+  state.store = { ...state.store, theme };
   if (typeof document !== 'undefined') {
-    document.documentElement.dataset.theme = theme;
+    const root = document.documentElement;
+    // A theme flip changes inherited colors on hundreds of nodes. Suppress
+    // transitions for the next two frames so rows/cards do not start a
+    // color/border/scrollbar-color transition storm.
+    root.classList.add('theme-switching');
+    root.dataset.theme = theme;
+    const clear = () => root.classList.remove('theme-switching');
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => requestAnimationFrame(clear));
+    } else {
+      setTimeout(clear, 0);
+    }
   }
   void desktop.storeSet({ theme }).catch(() => undefined);
   emit();
 }
 
 export function applyLocalePreference(locale: 'zh' | 'en'): void {
-  state.store.locale = locale;
+  state.store = { ...state.store, locale };
   void desktop.storeSet({ locale }).catch(() => undefined);
   emit();
 }
@@ -24,7 +35,7 @@ export function applyLocalePreference(locale: 'zh' | 'en'): void {
 // 窗体样式只是渲染层投影与原生红绿灯可见性的开关;不重建议程,也不改变任何
 // 会话/Run/安全边界。偏好由 main 进程持久化并同步应用。
 export function applyWindowStyle(style: 'mac' | 'win'): void {
-  state.store.windowStyle = style;
+  state.store = { ...state.store, windowStyle: style };
   if (typeof document !== 'undefined') {
     document.documentElement.dataset.windowStyle = style;
   }
@@ -154,12 +165,14 @@ export function applyHomeBackground(root: HTMLElement | null): void {
 export type HomeBackgroundPatch = Partial<Pick<typeof state.store, 'homeBackgroundImage' | 'homeBackgroundOpacity' | 'homeBackgroundBlur' | 'homeBackgroundScope' | 'homeBackgroundFit' | 'homeBackgroundPosition'>>;
 
 export function updateHomeBackground(patch: HomeBackgroundPatch, persist: boolean): void {
-  if (patch.homeBackgroundImage !== undefined) state.store.homeBackgroundImage = patch.homeBackgroundImage;
-  if (patch.homeBackgroundOpacity !== undefined) state.store.homeBackgroundOpacity = clampNumber(patch.homeBackgroundOpacity, 0, 100);
-  if (patch.homeBackgroundBlur !== undefined) state.store.homeBackgroundBlur = clampNumber(patch.homeBackgroundBlur, 0, 24);
-  if (patch.homeBackgroundScope !== undefined) state.store.homeBackgroundScope = patch.homeBackgroundScope;
-  if (patch.homeBackgroundFit !== undefined) state.store.homeBackgroundFit = patch.homeBackgroundFit;
-  if (patch.homeBackgroundPosition !== undefined) state.store.homeBackgroundPosition = patch.homeBackgroundPosition;
+  const next: typeof state.store = { ...state.store };
+  if (patch.homeBackgroundImage !== undefined) next.homeBackgroundImage = patch.homeBackgroundImage;
+  if (patch.homeBackgroundOpacity !== undefined) next.homeBackgroundOpacity = clampNumber(patch.homeBackgroundOpacity, 0, 100);
+  if (patch.homeBackgroundBlur !== undefined) next.homeBackgroundBlur = clampNumber(patch.homeBackgroundBlur, 0, 24);
+  if (patch.homeBackgroundScope !== undefined) next.homeBackgroundScope = patch.homeBackgroundScope;
+  if (patch.homeBackgroundFit !== undefined) next.homeBackgroundFit = patch.homeBackgroundFit;
+  if (patch.homeBackgroundPosition !== undefined) next.homeBackgroundPosition = patch.homeBackgroundPosition;
+  state.store = next;
   if (persist) {
     // Only the privileged native chooser may authorize a non-empty image path.
     // Clearance (empty string) and non-image settings may still be persisted

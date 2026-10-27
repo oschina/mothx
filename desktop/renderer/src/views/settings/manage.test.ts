@@ -541,8 +541,8 @@ test('MCP management functions are scope-aware and default to global', () => {
 
 test('ChatView exposes a capability-gated project MCP editor', () => {
   assert.match(chatView, /hasFeature\('manageMcp'\)/, 'project MCP button must be gated by manageMcp capability');
-  assert.match(chatView, /projectMcpEnabled = Boolean\(appState\.activeSessionId\) && hasFeature\('manageMcp'\)/, 'project MCP button requires an active session and the capability');
-  assert.match(chatView, /<McpPanel scope="project" sessionId=\{appState\.activeSessionId \|\| undefined\}\s*\/>/, 'project MCP editor must reuse McpPanel with project scope');
+  assert.match(chatView, /projectMcpEnabled = Boolean\(chat\.activeSessionId\) && hasFeature\('manageMcp'\)/, 'project MCP button requires an active session and the capability');
+  assert.match(chatView, /<McpPanel scope="project" sessionId=\{chat\.activeSessionId \|\| undefined\}\s*\/>/, 'project MCP editor must reuse McpPanel with project scope');
   assert.match(chatView, /<ServerCog \/>/, 'project MCP button must use a server icon');
   assert.doesNotMatch(chatView, /desktop\.storeSet|localStorage/i, 'project MCP UI must not persist locally');
 });

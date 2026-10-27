@@ -85,6 +85,22 @@ export interface DiagnosticLogger {
   log(message: string, source?: DiagnosticLogEntry['source']): void;
 }
 
+// The file/console/buffer sinks always record diagnostics. The renderer only
+// needs live entries while its log viewer is mounted, so this gate prevents a
+// chatty ACP child from crossing the IPC boundary for every line in the
+// background.
+export class DiagnosticStreamGate {
+  private enabled = false;
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled === true;
+  }
+
+  get enabledForRenderer(): boolean {
+    return this.enabled;
+  }
+}
+
 export interface DiagnosticLoggerDeps {
   buffer: DiagnosticLogBuffer;
   getLogStream: () => { write: (data: string) => void } | undefined;

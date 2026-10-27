@@ -406,7 +406,7 @@ export async function chooseWorkingDirectory(): Promise<boolean> {
   if (!picked || state.activeSessionId || state.draftGeneration !== generation) return false;
   const selectedGeneration = replaceDraftWorkspace('selected', picked);
   void desktop.storeSet({ lastWorkspace: picked });
-  state.store.lastWorkspace = picked;
+  state.store = { ...state.store, lastWorkspace: picked };
   emit();
   const { refreshDraftConfigOptions } = await import('./composer');
   void refreshDraftConfigOptions(picked, selectedGeneration);
@@ -451,7 +451,7 @@ export async function createIsolatedWorktree(): Promise<void> {
     } else {
       const generation = replaceDraftWorkspace('selected', worktree.directory);
       void desktop.storeSet({ lastWorkspace: worktree.directory });
-      state.store.lastWorkspace = worktree.directory;
+      state.store = { ...state.store, lastWorkspace: worktree.directory };
       const { refreshDraftConfigOptions } = await import('./composer');
       void refreshDraftConfigOptions(worktree.directory, generation);
     }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { state } from './state.ts';
-import { applyTranscriptPage } from './transcript.ts';
+import { applySessionUpdate, applyTranscriptPage } from './transcript.ts';
 
 // 历史回放(session/load、mothx/session/history)会把 tool_call 与其后续
 // tool_call_update 放在同一页里重放。回归点:同页 update 必须落到同一条
@@ -88,6 +88,38 @@ test('replayed publish_artifact tool completion still projects the fallback arti
     const artifact = state.transcript.find((entry) => entry.kind === 'artifact');
     assert.ok(artifact, 'completed publish_artifact in history must project an artifact card');
     assert.equal(artifact.kind === 'artifact' && artifact.filename, 'report.md');
+  } finally {
+    state.transcript = previous.transcript;
+    state.transcriptSessionId = previous.transcriptSessionId;
+  }
+});
+
+// React.memo on TranscriptEntry depends on this invariant: one streamed chunk
+// must replace only the changed item and leave every other card's identity alone.
+test('streaming chunks replace the transcript item instead of mutating it', () => {
+  const previous = { transcript: state.transcript, transcriptSessionId: state.transcriptSessionId };
+  state.transcript = [];
+  state.transcriptSessionId = 'sess-stream';
+  try {
+    applySessionUpdate('sess-stream', {
+      sessionUpdate: 'agent_message_chunk',
+      messageId: 'm1',
+      content: { type: 'text', text: 'a' },
+    });
+    const first = state.transcript[0];
+    assert.ok(first && first.kind === 'agent');
+    assert.equal(first.text, 'a');
+
+    applySessionUpdate('sess-stream', {
+      sessionUpdate: 'agent_message_chunk',
+      messageId: 'm1',
+      content: { type: 'text', text: 'b' },
+    });
+    const second = state.transcript[0];
+    assert.ok(second && second.kind === 'agent');
+    assert.equal(second.text, 'ab');
+    assert.notEqual(second, first, 'the changed item must be a new object');
+    assert.equal(first.text, 'a', 'the previous item snapshot must be unchanged');
   } finally {
     state.transcript = previous.transcript;
     state.transcriptSessionId = previous.transcriptSessionId;

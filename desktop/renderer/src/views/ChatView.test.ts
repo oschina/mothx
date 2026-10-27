@@ -9,7 +9,7 @@ const state = await readFile(new URL('../core/state.ts', import.meta.url), 'utf8
 test('active plan panel is derived from the transcript, not from a separate store or localStorage', () => {
   assert.match(
     chatView,
-    /\[\.\.\.appState\.transcript\]\.reverse\(\)\.find\(/,
+    /let plan: PlanItem \| undefined;[\s\S]*?state\.transcript\.length - 1/,
     'ChatView must locate the active plan by scanning the current transcript',
   );
   assert.match(
@@ -28,7 +28,7 @@ test('plan panel collapse state is ephemeral React state and resets on session o
   assert.ok(chatView.includes("useState(false)"), 'collapse state must be a local React useState, not persisted');
   assert.ok(chatView.includes("setPlanCollapsed(false)"), 'collapse state must reset when dependencies change');
   assert.ok(
-    chatView.includes("[appState.activeSessionId, activePlan?.key]"),
+    chatView.includes("[chat.activeSessionId, activePlan?.key]"),
     'collapse state must reset when the active session or active plan changes',
   );
 });

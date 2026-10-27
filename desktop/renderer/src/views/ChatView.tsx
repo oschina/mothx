@@ -1,7 +1,7 @@
 // 聊天/任务视图:头部(状态 chip + 标题 + 分叉/重命名/删除)、转录流与
 // 底部 composer。
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, ChevronDown, ChevronUp, List, Pencil, ServerCog, Share2, Trash2 } from 'lucide-react';
 
 import { ChatStream } from '@/components/ChatStream';
@@ -20,32 +20,53 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { t } from '@/core/i18n';
 import { deleteSession, forkSession, renameSession } from '@/core/sessions';
-import { activeRunStatus, hasFeature } from '@/core/state';
+import { hasFeature, sessionRunStatus } from '@/core/state';
 import { STATUS_VARIANT, type PlanItem } from '@/core/transcript';
 import { worktreeSupported } from '@/core/worktrees';
 import { useAppBackground } from '@/hooks/useAppBackground';
-import { useAppState } from '@/hooks/useAppState';
+import { shallowEqual, useAppSelector } from '@/hooks/useAppState';
 import { McpPanel } from '@/views/settings/McpPanel';
 import { cn } from '@/lib/utils';
 
 export function ChatView() {
-  const appState = useAppState();
+  const chat = useAppSelector(
+    (state) => {
+      let plan: PlanItem | undefined;
+      for (let index = state.transcript.length - 1; index >= 0; index -= 1) {
+        const item = state.transcript[index];
+        if (item.kind === 'plan' && item.entries.length > 0) {
+          plan = item;
+          break;
+        }
+      }
+      return {
+        activeSessionId: state.activeSessionId,
+        activeTitle: state.activeTitle,
+        runStatus: sessionRunStatus(state.activeSessionId),
+        planKey: plan?.key || '',
+        planEntries: plan?.entries || null,
+        planTitle: plan?.title || '',
+        planNote: plan?.note || '',
+        capabilities: state.connection.agentCapabilities,
+      };
+    },
+    shallowEqual,
+  );
   const background = useAppBackground();
   const [projectMcpOpen, setProjectMcpOpen] = useState(false);
   const [subagentsOpen, setSubagentsOpen] = useState(false);
   const [planCollapsed, setPlanCollapsed] = useState(false);
-  const projectMcpEnabled = Boolean(appState.activeSessionId) && hasFeature('manageMcp');
+  const projectMcpEnabled = Boolean(chat.activeSessionId) && hasFeature('manageMcp');
   const subagentPanelEnabled = hasFeature('subagentPanel');
   // 隔离工作区入口:已有对话后放在头部右上角,不再占用 composer 工具栏。
-  const worktreeEnabled = Boolean(appState.activeSessionId) && worktreeSupported();
-  const activePlan = useMemo(
-    () => [...appState.transcript].reverse().find((item): item is PlanItem => item.kind === 'plan' && item.entries.length > 0),
-    [appState.transcript],
-  );
+  const worktreeEnabled = Boolean(chat.activeSessionId) && worktreeSupported();
+  const activePlan: PlanItem | null = chat.planEntries
+    ? { kind: 'plan', key: chat.planKey, entries: chat.planEntries, title: chat.planTitle || undefined, note: chat.planNote || undefined }
+    : null;
 
   useEffect(() => {
     setPlanCollapsed(false);
-  }, [appState.activeSessionId, activePlan?.key]);
+  }, [chat.activeSessionId, activePlan?.key]);
 
   return (
     <section className="absolute inset-0 flex flex-col">
@@ -55,13 +76,13 @@ export function ChatView() {
           background.app && 'border-b-transparent bg-transparent'
         )}
       >
-        <StatusChip variant={STATUS_VARIANT[activeRunStatus()] || 'idle'} label={t(`status.${activeRunStatus()}`)} />
+        <StatusChip variant={STATUS_VARIANT[chat.runStatus] || 'idle'} label={t(`status.${chat.runStatus}`)} />
         <div className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-strong">
-          {appState.activeTitle || t('chat.newTask')}
+          {chat.activeTitle || t('chat.newTask')}
         </div>
         <div className="flex gap-0.5">
           {subagentPanelEnabled ? (
-            <SubagentSummaryButton sessionId={appState.activeSessionId} onClick={() => setSubagentsOpen(true)} />
+            <SubagentSummaryButton sessionId={chat.activeSessionId} onClick={() => setSubagentsOpen(true)} />
           ) : null}
           {worktreeEnabled ? <WorktreeMenu /> : null}
           {projectMcpEnabled ? (
@@ -86,7 +107,7 @@ export function ChatView() {
                 size="icon"
                 aria-label={t('chat.fork')}
                 onClick={() => {
-                  if (appState.activeSessionId) void forkSession(appState.activeSessionId);
+                  if (chat.activeSessionId) void forkSession(chat.activeSessionId);
                 }}
               >
                 <Share2 />
@@ -101,7 +122,7 @@ export function ChatView() {
                 size="icon"
                 aria-label={t('chat.rename')}
                 onClick={() => {
-                  if (appState.activeSessionId) void renameSession(appState.activeSessionId);
+                  if (chat.activeSessionId) void renameSession(chat.activeSessionId);
                 }}
               >
                 <Pencil />
@@ -116,7 +137,7 @@ export function ChatView() {
                 size="icon"
                 aria-label={t('chat.delete')}
                 onClick={() => {
-                  if (appState.activeSessionId) void deleteSession(appState.activeSessionId);
+                  if (chat.activeSessionId) void deleteSession(chat.activeSessionId);
                 }}
               >
                 <Trash2 />
@@ -150,12 +171,12 @@ export function ChatView() {
             <DialogTitle>{t('chat.projectMcpTitle')}</DialogTitle>
             <DialogDescription>{t('chat.projectMcpDesc')}</DialogDescription>
           </DialogHeader>
-          <McpPanel scope="project" sessionId={appState.activeSessionId || undefined} />
+          <McpPanel scope="project" sessionId={chat.activeSessionId || undefined} />
         </DialogContent>
       </Dialog>
 
       {subagentPanelEnabled ? (
-        <SubagentDialog open={subagentsOpen} onOpenChange={setSubagentsOpen} sessionId={appState.activeSessionId} />
+        <SubagentDialog open={subagentsOpen} onOpenChange={setSubagentsOpen} sessionId={chat.activeSessionId} />
       ) : null}
     </section>
   );

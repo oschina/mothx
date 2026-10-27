@@ -20,6 +20,16 @@
 
 - **内置的 Windows BusyBox 现在要求 Windows 10 及以上。** `busybox-windows-x86.exe` 与 `busybox-windows-x86_64.exe` 改用该 fork 的 UTF-8 配置重新构建（x86_64 用 `mingw64u_defconfig`，x86 用 `mingw32w_defconfig`），带有 UTF-8 应用程序清单（`activeCodePage=UTF-8`）以及 `FEATURE_UTF8_INPUT`、`FEATURE_UTF8_CONSOLE`、`FEATURE_UTF8_AUTODETECT`、`FEATURE_UTF8_CHILD_ENV` 与 `UNICODE_SUPPORT`。非 ASCII 的 `sh -c` 命令文本现在以 UTF-8 传入 argv，不再被降级为系统 ANSI 代码页（简体中文 Windows 上为 GBK），子进程也保持 UTF-8 环境基线。由于构建时设置了 `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`，在 Windows 7/8 上 BusyBox 会拒绝启动；此时 `bash` 工具会像「BusyBox 不可用」一样自动回退到 PowerShell，命令仍可执行（只是没有 UTF-8 基线）。MothX 的支持范围仍标注为 Windows 10/11。
 
+### ⚡ 性能
+
+- **Desktop 流式输出与长列表滚动不再重渲染整个外壳。** 渲染进程序列化状态通知,每帧最多提交一次;转录条目改为不可变替换,未变化的 Markdown/工具卡直接跳过渲染;侧边栏、状态栏、输入框与计划面板只订阅自己展示的状态切片;视口外的转录块可跳过布局与绘制;聊天自动跟随滚动与绘制 chunk 的提交合并。
+
+- **Desktop 首次任务列表不再逐个串行扫描会话。** ACP 列表行改用只做结构校验的 EventStore 投影,仅解析首条用户预览与最新标题/绑定,并用有界 worker 池预取当前页;真正打开会话时仍会校验全部 batch 摘要并 fail-closed。
+
+- **Electron 不再强制所有 Linux 打包桌面走软件渲染。** 存在 `DISPLAY`/`WAYLAND_DISPLAY` 时保留 GPU 合成(可用 `MOTHX_DESKTOP_DISABLE_GPU` 显式关闭),仅当 `/dev/shm` 缺失、不可写或小于 128MB 时才启用 `/tmp` 回退。ACP 事件也会按帧合并为一次 IPC 投递,诊断日志仅在日志面板打开时才跨 IPC 推送。
+
+- **Desktop 不再在悬停、切换主题或滚动露出内容时启动成片的过渡/动画。** Tailwind `duration-*` 不再和 `animate-in` 同时出现(此前任意悬停都会让会话行过渡所有继承属性);转录卡片不再在 `content-visibility` 滚动露出时重播入场动画;侧边栏滚动条保持恒定 8px 宽度;切换主题时会临时禁用继承颜色的过渡。
+
 ### 🐛 问题修复
 
 - **后台 Responses 任务在挂接期间收到停止时不再记为失败。** 并发 WAL 读可能让停止操作在后台 coordinator 挂接 Agent 之前把 Run 标为 cancelling。此前该分支会落入默认 `failed` 终态，并可能遗留 provider 侧任务；现在保留 `cancelled`，并显式取消远端 Responses 任务。

@@ -385,7 +385,26 @@ func (s *EventStore) Inspect() ([]EventBatch, error) {
 	if err != nil {
 		return nil, err
 	}
-	state, err := s.scanState(layout, false)
+	state, err := s.scanState(layout, false, true)
+	if err != nil {
+		return nil, err
+	}
+	return state.batches, nil
+}
+
+// inspectProjection is the read-only structural scan used by the non-canonical
+// list projection. It validates record framing and sequence contiguity but
+// skips the per-batch SHA-256 payload digest, which is the dominant cost when
+// a page of sessions is projected at startup. Canonical replay always uses
+// Inspect/Scan and still fails closed on any digest mismatch.
+func (s *EventStore) inspectProjection() ([]EventBatch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	layout, err := s.scanLayout()
+	if err != nil {
+		return nil, err
+	}
+	state, err := s.scanState(layout, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -425,14 +444,14 @@ func (s *EventStore) scanLayout() (eventStoreLayout, error) {
 	return eventStoreLayout{paths: paths}, nil
 }
 
-func (s *EventStore) scanState(layout eventStoreLayout, repairTail bool) (eventStoreScan, error) {
+func (s *EventStore) scanState(layout eventStoreLayout, repairTail, verifyDigest bool) (eventStoreScan, error) {
 	eventStoreStats.fullScans.Add(1)
 	all := make([]EventBatch, 0)
 	nextSeq := int64(eventStoreSeqBase)
 	seenBatchIDs := make(map[string]struct{})
 	seenEventIDs := make(map[string]struct{})
 	for index, path := range layout.paths {
-		result, err := scanEventStore(path, repairTail && (!layout.legacy || index == len(layout.paths)-1))
+		result, err := scanEventStore(path, repairTail && (!layout.legacy || index == len(layout.paths)-1), verifyDigest)
 		if err != nil {
 			return eventStoreScan{}, err
 		}
@@ -462,7 +481,7 @@ func (s *EventStore) scan(repairTail bool) ([]EventBatch, error) {
 	if err != nil {
 		return nil, err
 	}
-	state, err := s.scanState(layout, repairTail)
+	state, err := s.scanState(layout, repairTail, true)
 	if err != nil {
 		return nil, err
 	}
@@ -614,8 +633,14 @@ func cloneEventStoreAppendCache(cache *eventStoreAppendCache) *eventStoreAppendC
 	return out
 }
 
-func scanEventStore(path string, repairTail bool) (eventStoreScan, error) {
-	file, err := os.OpenFile(path, os.O_RDWR, 0600)
+func scanEventStore(path string, repairTail, verifyDigest bool) (eventStoreScan, error) {
+	// Read-only projections must not require write permission on the store; only
+	// the tail-repair path needs O_RDWR for truncation.
+	flags := os.O_RDONLY
+	if repairTail {
+		flags = os.O_RDWR
+	}
+	file, err := os.OpenFile(path, flags, 0600)
 	if errors.Is(err, os.ErrNotExist) {
 		return eventStoreScan{}, nil
 	}
@@ -680,9 +705,13 @@ func scanEventStore(path string, repairTail bool) (eventStoreScan, error) {
 			if begin == nil || line.BatchID != begin.BatchID || line.Count != len(events) || line.SeqFrom != begin.SeqFrom || line.SeqTo != begin.SeqTo {
 				return eventStoreScan{}, fmt.Errorf("event store has invalid footer for batch %s", line.BatchID)
 			}
-			digest, digestErr := batchDigest(events)
-			if digestErr != nil || digest != line.Digest {
-				return eventStoreScan{}, fmt.Errorf("event store checksum mismatch for batch %s", line.BatchID)
+			digest := line.Digest
+			if verifyDigest {
+				computed, digestErr := batchDigest(events)
+				if digestErr != nil || computed != line.Digest {
+					return eventStoreScan{}, fmt.Errorf("event store checksum mismatch for batch %s", line.BatchID)
+				}
+				digest = computed
 			}
 			result.batches = append(result.batches, EventBatch{BatchID: begin.BatchID, SeqFrom: begin.SeqFrom, SeqTo: begin.SeqTo, Events: events, Digest: digest})
 			result.nextSeq = line.SeqTo + 1
@@ -705,16 +734,18 @@ func scanEventStore(path string, repairTail bool) (eventStoreScan, error) {
 			break
 		}
 	}
-	if info, statErr := os.Stat(path); statErr == nil {
-		batchIDs := make(map[string]struct{}, len(result.batches))
-		eventIDs := make(map[string]struct{})
-		for _, batch := range result.batches {
-			batchIDs[batch.BatchID] = struct{}{}
-			for _, event := range batch.Events {
-				eventIDs[event.EventID] = struct{}{}
+	if verifyDigest {
+		if info, statErr := os.Stat(path); statErr == nil {
+			batchIDs := make(map[string]struct{}, len(result.batches))
+			eventIDs := make(map[string]struct{})
+			for _, batch := range result.batches {
+				batchIDs[batch.BatchID] = struct{}{}
+				for _, event := range batch.Events {
+					eventIDs[event.EventID] = struct{}{}
+				}
 			}
+			eventStoreAppendCaches.Store(path, &eventStoreAppendCache{size: info.Size(), modTime: info.ModTime(), nextSeq: result.nextSeq, batchIDs: batchIDs, eventIDs: eventIDs})
 		}
-		eventStoreAppendCaches.Store(path, &eventStoreAppendCache{size: info.Size(), modTime: info.ModTime(), nextSeq: result.nextSeq, batchIDs: batchIDs, eventIDs: eventIDs})
 	}
 	return result, nil
 }

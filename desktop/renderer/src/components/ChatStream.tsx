@@ -29,11 +29,17 @@ export function ChatStream() {
   }
 
   useEffect(() => {
-    return chatScrollEvents.on(({ force }) => {
+    let frame = 0;
+    const follow = () => {
+      frame = 0;
       const stream = streamRef.current;
-      if (!stream) return;
+      if (stream && autoScrollRef.current) stream.scrollTop = stream.scrollHeight;
+    };
+    return chatScrollEvents.on(({ force }) => {
       if (force) autoScrollRef.current = true;
-      if (autoScrollRef.current) stream.scrollTop = stream.scrollHeight;
+      // Coalesce the follow-up scroll with the frame that will paint the
+      // streamed chunk instead of forcing one layout per token.
+      if (autoScrollRef.current && frame === 0) frame = requestAnimationFrame(follow);
     });
   }, []);
 
@@ -90,7 +96,9 @@ export function ChatStream() {
       </div>
       <div className="mx-auto flex w-[min(760px,94%)] flex-col gap-4">
         {appState.transcript.map((item) => (
-          <TranscriptEntry key={item.key} item={item} live={item.key === liveThoughtKey} />
+          <div key={item.key} className="transcript-entry">
+            <TranscriptEntry item={item} live={item.key === liveThoughtKey} />
+          </div>
         ))}
       </div>
     </div>

@@ -4,7 +4,7 @@
 //   路由到外部浏览器,绝不在应用窗口内导航;
 // - 代码块带复制按钮;远程图片受 CSP 限制,降级为来源标记 chip。
 
-import { useRef, type ReactNode } from 'react';
+import { memo, useRef, type ReactNode } from 'react';
 import { Copy } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -60,7 +60,7 @@ const components: Components = {
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
 };
 
-export function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="md-body">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
@@ -68,4 +68,4 @@ export function Markdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});

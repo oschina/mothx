@@ -58,5 +58,5 @@ test('global-background titlebar preserves hover and close danger state', () => 
 
 test('titlebar projects app identity and version', () => {
   assert.match(titlebar, /MothxLogo/, 'titlebar must carry the shared brand asset');
-  assert.match(titlebar, /v\{appState\.appInfo\.version\}/, 'version badge must reflect the packaged app version');
+  assert.match(titlebar, /v\{version\}/, 'version badge must reflect the packaged app version');
 });

@@ -7,7 +7,7 @@ const historyView = await readFile(new URL('./HistoryView.tsx', import.meta.url)
 test('history rows show a live ACP run status badge with durable lastRun fallback', () => {
   assert.match(
     historyView,
-    /historyStatus\(session, appState\.store\.sessionStatus\[session\.sessionId\]\)/,
+    /historyStatus\(session, viewState\.sessionStatus\[session\.sessionId\]\)/,
     'the realtime ACP status projection must take precedence while history reloads catch up',
   );
   assert.match(

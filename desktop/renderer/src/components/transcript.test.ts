@@ -17,7 +17,7 @@ test('thought blocks render as a button with aria-expanded and default collapsed
   );
   assert.match(
     items,
-    /item\.open = !item\.open;\s*\n\s*emit\(\);/,
+    /setTranscriptItemOpen\(item, !item\.open\)/,
     'thought toggle must persist the open state on the transcript item and re-render',
   );
   assert.match(items, /\{item\.open \? \(/, 'thought text must only render while expanded');
@@ -82,7 +82,7 @@ test('tool_call and tool_call_update initialize tool disclosure state to collaps
   );
   assert.match(
     transcript,
-    /item = \{ kind: 'tool',[\s\S]*?open: false, contents: \[\] \};/,
+    /next = applyToolUpdate\(\s*\{ kind: 'tool',[\s\S]*?open: false, contents: \[\] \},/,
     'tool_call_update fallback must create tool items with open=false',
   );
   assert.match(
@@ -123,6 +123,19 @@ test('disclosure state survives streaming updates because it lives on the transc
   );
   assert.match(items, /key=\{item\.key\}|TranscriptEntry/, 'entries must be keyed for stable reconciliation');
   assert.match(stream, /key=\{item\.key\}/, 'stream rendering must key items by their canonical key');
+});
+
+test('transcript cards do not restart entrance animations when content-visibility reveals them', () => {
+  assert.doesNotMatch(
+    items,
+    /animate-in fade-in/,
+    'content-visibility:auto can start animate-in again on every scroll reveal; transcript cards must not use it',
+  );
+  assert.doesNotMatch(
+    items,
+    /duration-\d+/,
+    'Tailwind duration-* also sets transition-duration, which makes the initial transition-property:all animate every color/border change',
+  );
 });
 
 test('styles keep the button toggles keyboard-focusable', () => {

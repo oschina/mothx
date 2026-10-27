@@ -20,6 +20,16 @@
 
 - **The embedded Windows BusyBox now requires Windows 10 or later.** `busybox-windows-x86.exe` and `busybox-windows-x86_64.exe` are rebuilt from the fork's UTF-8 configs (`mingw64u_defconfig` for x86_64, `mingw32w_defconfig` for x86) and carry a UTF-8 application manifest (`activeCodePage=UTF-8`) together with `FEATURE_UTF8_INPUT`, `FEATURE_UTF8_CONSOLE`, `FEATURE_UTF8_AUTODETECT`, `FEATURE_UTF8_CHILD_ENV` and `UNICODE_SUPPORT`. Non-ASCII `sh -c` command text now reaches argv as UTF-8 instead of being down-converted to the system ANSI code page (GBK on zh-CN Windows), and the child environment keeps the UTF-8 baseline. The build sets `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`, so on Windows 7/8 BusyBox refuses to start; the `bash` tool then falls back to PowerShell exactly as it does whenever BusyBox is unavailable, so commands keep working (without the UTF-8 baseline). MothX continues to document Windows 10/11 as its supported Windows floor.
 
+### ⚡ Performance
+
+- **Desktop streaming and long-list scrolling no longer re-render the whole shell.** Renderer state notifications are coalesced into one commit per frame, transcript items are replaced immutably so unchanged Markdown/tool cards skip rendering, the sidebar/status bar/composer/plan panel subscribe only to the state slices they display, offscreen transcript blocks can skip layout/paint, and chat auto-scroll is coalesced with the commit that paints the chunk.
+
+- **The initial Desktop task list no longer scans every session sequentially.** ACP list rows now use a structural-only EventStore projection that decodes just the first user preview and latest title/bindings, and the page prefetches those projections with a bounded worker pool. Canonical session open still verifies every batch digest and fails closed.
+
+- **Electron no longer forces software rendering on every packaged Linux desktop.** GPU compositing is kept when `DISPLAY`/`WAYLAND_DISPLAY` exists (with an explicit `MOTHX_DESKTOP_DISABLE_GPU` escape hatch), and the `/dev/shm` fallback is applied only when that mount is missing, unwritable, or smaller than 128 MB. ACP events are also coalesced into one IPC delivery per frame, and live diagnostic logs cross IPC only while the log viewer is open.
+
+- **Desktop no longer starts transition/animation storms on hover, theme changes, or scroll reveals.** Tailwind `duration-*` no longer accompanies `animate-in` (which made every hovered sidebar row transition all inherited properties), transcript cards no longer replay entrance animations when `content-visibility` reveals them during scrolling, the sidebar scrollbar keeps a constant 8 px width, and theme switches temporarily suppress transitions on inherited colors.
+
 ### 🐛 Bug Fixes
 
 - **Stopping a Responses background task during attachment now stays cancelled.** Concurrent WAL reads can let a stop mark the Run cancelling before the background coordinator attaches its Agent. That path previously fell through to the default `failed` terminal status and could orphan the provider-side task. It now preserves `cancelled` and explicitly cancels the remote Responses task.

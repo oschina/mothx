@@ -417,13 +417,32 @@ func adoptEventIntent(ctx context.Context, sessionDir string, spec EventIntentSp
 // missing committed bytes, or a digest/sequence mismatch is never promoted to
 // canonical session content.
 func InspectEventStore(ctx context.Context, sessionDir, sessionID string) (EventStoreInspection, error) {
+	return inspectEventStore(ctx, sessionDir, sessionID, false)
+}
+
+// InspectEventStoreProjection is the display-only variant used by list rows.
+// It validates record framing, sequence contiguity, and committed intent
+// identity, but skips the per-batch SHA-256 payload check. The result is never
+// used for replay or canonical writes; a corrupt payload is still rejected by
+// InspectEventStore when the session is actually opened.
+func InspectEventStoreProjection(ctx context.Context, sessionDir, sessionID string) (EventStoreInspection, error) {
+	return inspectEventStore(ctx, sessionDir, sessionID, true)
+}
+
+func inspectEventStore(ctx context.Context, sessionDir, sessionID string, projection bool) (EventStoreInspection, error) {
 	store, err := NewEventStore(sessionDir, sessionID)
 	if err != nil {
 		return EventStoreInspection{}, err
 	}
 	// Reconciliation is observational: it must never repair or materialise the
 	// store, because it runs on session load without holding the writer lease.
-	physical, scanErr := store.Inspect()
+	var physical []EventBatch
+	var scanErr error
+	if projection {
+		physical, scanErr = store.inspectProjection()
+	} else {
+		physical, scanErr = store.Inspect()
+	}
 	inspection := EventStoreInspection{Batches: physical}
 	database, err := OpenRootDB(sessionDir)
 	if err != nil {

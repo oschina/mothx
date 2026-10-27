@@ -289,9 +289,23 @@ export const state: AppState = {
 type Listener = () => void;
 const listeners = new Set<Listener>();
 
-// React 桥接:emit 递增版本号,useSyncExternalStore 以版本为 snapshot,
+// React 桥接:emit 合并到一帧一次通知,useSyncExternalStore 以版本为 snapshot,
 // 保证就地变更 state 后所有订阅组件统一重渲染(等价于旧的 renderAll)。
+// 流式 provider 每秒会产生大量小块更新;若每次 chunk 都同步通知 React,整个
+// 外壳(侧边栏/状态栏/输入框/Markdown)会按 token 重渲染。这里只合并“通知”,
+// state 变更本身仍然是同步的;16ms 上限约等于一次 60fps 提交。
 let version = 0;
+let pendingNotification = false;
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
+const EMIT_FLUSH_MS = 16;
+
+function flushNotifications(): void {
+  flushTimer = undefined;
+  if (!pendingNotification) return;
+  pendingNotification = false;
+  version += 1;
+  for (const listener of [...listeners]) listener();
+}
 
 export function subscribe(listener: Listener): () => void {
   listeners.add(listener);
@@ -303,8 +317,20 @@ export function getStateVersion(): number {
 }
 
 export function emit(): void {
-  version += 1;
-  for (const listener of listeners) listener();
+  pendingNotification = true;
+  if (flushTimer !== undefined) return;
+  flushTimer = setTimeout(flushNotifications, EMIT_FLUSH_MS);
+}
+
+// flushPendingEmits applies a queued notification immediately. Startup and
+// teardown paths use it when they need subscribers settled before continuing;
+// tests use it to make coalescing deterministic without waiting on timers.
+export function flushPendingEmits(): void {
+  if (flushTimer !== undefined) {
+    clearTimeout(flushTimer);
+    flushTimer = undefined;
+  }
+  flushNotifications();
 }
 
 export function workspace(): string {
@@ -424,6 +450,9 @@ export function forgetSessionRun(sessionId: string | null | undefined): void {
 
 export function setSessionStatus(sessionId: string, status: string): void {
   if (!sessionId) return;
-  state.store.sessionStatus[sessionId] = status;
+  state.store = {
+    ...state.store,
+    sessionStatus: { ...state.store.sessionStatus, [sessionId]: status },
+  };
   void desktop.storeSet({ sessionStatus: { [sessionId]: status } }).catch(() => undefined);
 }

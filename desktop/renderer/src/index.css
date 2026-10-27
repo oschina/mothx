@@ -87,8 +87,6 @@
   --home-accent-soft: rgba(37, 99, 235, 0.1);
   --home-accent-softer: rgba(37, 99, 235, 0.055);
   --home-accent-shadow: rgba(37, 99, 235, 0.22);
-  --home-aurora-start: rgba(6, 182, 212, 0.22);
-  --home-aurora-end: rgba(37, 99, 235, 0.16);
   --home-shadow: 0 18px 50px rgba(15, 23, 42, 0.12);
   --home-image-overlay-rgb: 248 250 252;
   --app-outline-rgb: 15 23 42;
@@ -194,8 +192,6 @@
   --home-accent-soft: rgba(59, 130, 246, 0.16);
   --home-accent-softer: rgba(59, 130, 246, 0.09);
   --home-accent-shadow: rgba(59, 130, 246, 0.32);
-  --home-aurora-start: rgba(6, 182, 212, 0.16);
-  --home-aurora-end: rgba(37, 99, 235, 0.16);
   --home-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
   --home-image-overlay-rgb: 11 17 32;
   --app-outline-rgb: 248 250 252;
@@ -436,6 +432,13 @@ html[data-window-style="win"] {
     box-shadow: 0 0 6px color-mix(in srgb, var(--green) 55%, transparent);
   }
 
+  /* 长转录仍保留全部 keyed DOM(便于精确重放/锚点),但视口外的块可以
+     跳过布局与绘制。auto 会记住条目首次渲染后的真实高度。 */
+  .transcript-entry {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 120px;
+  }
+
   /* ---- 主画布:青蓝氛围光 ---- */
   .app-canvas {
     background-color: var(--background);
@@ -475,19 +478,7 @@ html[data-window-style="win"] {
     backdrop-filter: blur(10px);
   }
 
-  /* ---- 首页 hero 氛围光与渐变标题 ---- */
-  .hero-ambient-glow {
-    position: absolute;
-    top: -34px;
-    left: calc(50% - 160px);
-    width: 320px;
-    height: 200px;
-    background: radial-gradient(ellipse at center, rgba(6, 182, 212, 0.26) 0%, rgba(37, 99, 235, 0.16) 45%, transparent 75%);
-    filter: blur(32px);
-    pointer-events: none;
-    z-index: 0;
-    transition: transform 0.2s ease-out;
-  }
+  /* ---- 首页 hero 渐变标题 ---- */
   .home-hero-logo {
     animation: mx-hero-float 7s ease-in-out infinite;
   }
@@ -687,13 +678,10 @@ html[data-window-style="win"] {
     backdrop-filter: blur(10px) saturate(140%);
   }
 
-  /* ---- 首页极光渐变 ---- */
+  /* ---- 首页背景:纯色,不使用极光渐变 ---- */
   .home-aurora {
     position: relative;
-    background:
-      radial-gradient(760px circle at 16% -18%, var(--home-aurora-start), transparent 64%),
-      radial-gradient(640px circle at 88% 2%, var(--home-aurora-end), transparent 62%),
-      var(--home-bg);
+    background: var(--home-bg);
   }
   .home-aurora > * {
     position: relative;
@@ -701,10 +689,7 @@ html[data-window-style="win"] {
   }
   .has-home-background .home-aurora,
   .has-app-background .home-aurora {
-    background:
-      radial-gradient(760px circle at 16% -18%, var(--home-aurora-start), transparent 64%),
-      radial-gradient(640px circle at 88% 2%, var(--home-aurora-end), transparent 62%),
-      rgb(var(--home-image-overlay-rgb) / var(--app-background-veil, 0.72));
+    background: rgb(var(--home-image-overlay-rgb) / var(--app-background-veil, 0.72));
   }
   /* 仅首页背景:视图容器内独立图层 */
   .home-background-layer {
@@ -721,33 +706,40 @@ html[data-window-style="win"] {
     transform: scale(1.04);
   }
 
-  /* ---- 侧边栏自动隐藏滚动条:交互时显示,静置 2s 后隐藏 ---- */
+  /* ---- 侧边栏自动隐藏滚动条:交互时显示,静置 2s 后隐藏 ----
+  /* 滚动条宽度始终保持 8px,只切换 thumb 颜色/透明度。若在
+     scrollbar-width: none 与 thin 之间切换,滚动开始时会让整个列表重新
+     布局;滚轮的每一帧都可能再次触发。 */
   .autohide-scrollbar {
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
-    scrollbar-width: none;
-  }
-  .autohide-scrollbar.scrolling {
-    scrollbar-width: thin;
-    scrollbar-color: var(--fg-faint) transparent;
   }
   .autohide-scrollbar::-webkit-scrollbar {
-    width: 0;
-    height: 0;
-  }
-  .autohide-scrollbar.scrolling::-webkit-scrollbar {
     width: 8px;
+    height: 8px;
   }
   .autohide-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
   .autohide-scrollbar::-webkit-scrollbar-thumb {
-    background: var(--fg-faint);
+    background: transparent;
     border: 2px solid transparent;
     border-radius: 999px;
     background-clip: content-box;
   }
-  .autohide-scrollbar::-webkit-scrollbar-thumb:hover {
+  .autohide-scrollbar.scrolling::-webkit-scrollbar-thumb {
+    background: var(--fg-faint);
+  }
+  .autohide-scrollbar.scrolling::-webkit-scrollbar-thumb:hover {
     background: var(--fg-muted);
+  }
+
+  /* 主题切换会同时改变数百个元素的颜色变量。关闭过渡,避免每个元素都
+     启动 color/border/background/scrollbar-color 过渡。 */
+  html.theme-switching,
+  html.theme-switching *,
+  html.theme-switching *::before,
+  html.theme-switching *::after {
+    transition: none !important;
   }
 }

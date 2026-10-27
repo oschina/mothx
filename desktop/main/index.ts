@@ -12,7 +12,8 @@ import {
 } from './dev-mode';
 import { initialNewSessionDirectory } from './default-new-session-directory';
 import { createDiagnosticLogger, DiagnosticLogBuffer } from './diagnostic-logs';
-import { applyNativeWindowButtons, registerIpc, sendRendererEvent, type IpcDeps } from './ipc';
+import { applyNativeWindowButtons, registerIpc, sendRendererEvent, setDiagnosticStreaming, type IpcDeps } from './ipc';
+import { shouldDisableDevShm, shouldDisableGpu } from './linux-flags';
 import {
   describeRuntimeBinary,
   resolveRuntimeBinary,
@@ -114,12 +115,17 @@ configureDevModeSwitches(app.commandLine);
 // for packaged Linux builds.
 if (process.platform === 'linux' && app.isPackaged) {
   app.commandLine.appendSwitch('no-sandbox');
-  // Some Linux hosts and CI-produced AppImage environments do not provide a
-  // writable /dev/shm, which crashes Chromium's renderer before the UI can
-  // paint. Keep Chromium's shared-memory data under Electron's userData dir.
-  app.commandLine.appendSwitch('disable-dev-shm-usage');
-  // Avoid GPU-process startup failures on headless/remote Linux desktops.
-  app.commandLine.appendSwitch('disable-gpu');
+  // Only the hosts that cannot provide Chromium's shared-memory path need the
+  // /tmp fallback; normal desktops keep the faster compositor path.
+  if (shouldDisableDevShm()) {
+    app.commandLine.appendSwitch('disable-dev-shm-usage');
+  }
+  // Unconditional GPU disable forced software compositing (scroll/animation
+  // jank) on every packaged Linux desktop. Keep the fallback only for headless
+  // hosts, or when MOTHX_DESKTOP_DISABLE_GPU explicitly asks for it.
+  if (shouldDisableGpu({ platform: process.platform, packaged: app.isPackaged, env: process.env })) {
+    app.commandLine.appendSwitch('disable-gpu');
+  }
 }
 
 function rendererIndex(): string {
@@ -164,6 +170,12 @@ function createWindow(): void {
   });
   win.webContents.on('render-process-gone', (_event, details) => {
     logDesktopEvent(`renderer process gone: ${details.reason} ${details.exitCode}`, 'renderer');
+  });
+  win.webContents.on('did-start-loading', () => {
+    // A reload drops the preload subscriber without running its cleanup; do not
+    // keep projecting diagnostic lines to a renderer that is no longer viewing
+    // them (the viewer re-subscribes on mount).
+    setDiagnosticStreaming(false);
   });
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (isMainFrame) logDesktopEvent(`failed to load ${validatedURL}: ${errorCode} ${errorDescription}`, 'renderer');

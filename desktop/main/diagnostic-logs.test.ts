@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createDiagnosticLogger, DiagnosticLogBuffer, maskSecrets } from './diagnostic-logs.ts';
+import { createDiagnosticLogger, DiagnosticLogBuffer, DiagnosticStreamGate, maskSecrets } from './diagnostic-logs.ts';
 
 test('maskSecrets obscures Bearer tokens and Authorization headers', () => {
   assert.equal(maskSecrets('Authorization: Bearer sk-1234567890abcdef'), 'Authorization: ***');
@@ -21,6 +21,17 @@ test('maskSecrets obscures api key / token / secret / password values', () => {
 test('maskSecrets leaves unrelated text intact', () => {
   assert.equal(maskSecrets('starting ACP runtime /tmp/mothx'), 'starting ACP runtime /tmp/mothx');
   assert.equal(maskSecrets('error: unable to spawn child'), 'error: unable to spawn child');
+});
+
+test('DiagnosticStreamGate only projects live logs to the renderer on demand', () => {
+  const gate = new DiagnosticStreamGate();
+  assert.equal(gate.enabledForRenderer, false, 'live log projection must default off');
+  gate.setEnabled(true);
+  assert.equal(gate.enabledForRenderer, true);
+  gate.setEnabled(false);
+  assert.equal(gate.enabledForRenderer, false);
+  gate.setEnabled('yes' as never);
+  assert.equal(gate.enabledForRenderer, false, 'only a real true enables projection');
 });
 
 test('DiagnosticLogBuffer bounds entries and emits subscribers', () => {

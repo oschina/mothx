@@ -37,9 +37,7 @@ export function handleEvent(event: RendererEvent): void {
         // between the ready event and the privileged directory request.
         void initializeQuickStartWorkspace().then(
           () => {
-            void refreshSessions();
-            void refreshProjects();
-            void refreshDraftConfigOptions();
+            void Promise.allSettled([refreshSessions(), refreshProjects(), refreshDraftConfigOptions()]);
             emit();
           },
           (error: unknown) => {
@@ -52,19 +50,18 @@ export function handleEvent(event: RendererEvent): void {
       emit();
       return;
     case 'session-update':
+      // applySessionUpdate owns the single render notification for this event
+      // (including meta-only updates); emitting here doubled every token.
       applySessionUpdate(event.sessionId, event.update as Record<string, unknown>);
-      emit();
       return;
     case 'session-event':
       applySessionEvent(event.event as Record<string, unknown>);
       if (String((event.event as Record<string, unknown>)?.event || '') === 'cron_completed') {
         notifyCronCompleted(event.event as Record<string, unknown>);
       }
-      emit();
       return;
     case 'reverse-request':
       applyReverseRequest(event.id, event.method, (event.params || {}) as Record<string, unknown>);
-      emit();
       return;
     case 'worktree-status':
       applyWorktreeStatus(event.worktree);
@@ -78,9 +75,14 @@ export function handleEvent(event: RendererEvent): void {
 // bootstrapStore 加载 Desktop 本地偏好(store/appInfo/locale/theme)并返回
 // 根壳层背景应用函数需要的初始数据。React 根组件挂载前调用。
 export async function bootstrapStore(): Promise<void> {
-  const store = await desktop.storeGet().catch(() => null);
+  // Both reads are independent IPC round-trips; start them together so the
+  // first paint does not wait for two sequential process hops.
+  const [store, appInfo] = await Promise.all([
+    desktop.storeGet().catch(() => null),
+    desktop.appInfo().catch(() => null),
+  ]);
   if (store) state.store = store;
-  state.appInfo = await desktop.appInfo().catch(() => state.appInfo);
+  if (appInfo) state.appInfo = appInfo;
   setLocale(state.store.locale);
   applyTheme(state.store.theme);
   applyWindowStyleClass(state.store.windowStyle);
@@ -92,9 +94,11 @@ export async function bootstrapConnection(): Promise<void> {
   state.connection = await acp.getState().catch(() => state.connection);
   if (state.connection.state === 'ready') {
     desktop.log('renderer conn ready');
-    await initializeQuickStartWorkspace();
-    await refreshSessions();
-    await refreshDraftConfigOptions();
+    await Promise.all([
+      initializeQuickStartWorkspace(),
+      refreshSessions(),
+      refreshDraftConfigOptions(),
+    ]);
     void refreshProjects();
   }
   emit();

@@ -4,11 +4,14 @@ import { realpathSync, readFileSync, statSync } from 'node:fs';
 import type { AcpClient, AcpClientSnapshot } from './acp-client';
 import { initialNewSessionDirectory } from './default-new-session-directory';
 import type { DiagnosticLogBuffer, DiagnosticLogEntry } from './diagnostic-logs';
+import { DiagnosticStreamGate } from './diagnostic-logs';
 import { SelectedFileGrants } from './file-grants';
 import { readHomeImageDataURL } from './home-image';
 import type { ReadHomeImageResult } from './home-image';
 import { isRunnableBinary, type RuntimeBinarySource, type RuntimeBinaryStatus } from './runtime-binary';
 import { createStoreSetHandler, normalizeWindowStyle, type DesktopStore, type DesktopStoreData, type WindowStyle } from './store';
+
+import { RendererEventBatcher } from './renderer-event-batcher';
 
 export type RendererEvent =
   | { type: 'state'; snapshot: AcpClientSnapshot }
@@ -30,12 +33,38 @@ export interface IpcDeps {
 }
 
 export function sendRendererEvent(deps: IpcDeps, event: RendererEvent): void {
+  rendererEventDeps = deps;
+  rendererEvents.enqueue(event);
+}
+
+// flushRendererEvents is exposed for lifecycle/tests; normal delivery is
+// coalesced by the batcher.
+export function flushRendererEvents(): void {
+  rendererEvents.flush();
+}
+
+function deliverRendererEvents(events: RendererEvent[]): void {
+  const deps = rendererEventDeps;
+  if (!deps) return;
   const win = deps.getWindow();
   if (!win || win.isDestroyed()) return;
-  win.webContents.send('acp:event', event);
+  // Keep the wire shape backward compatible: one event stays an object, a
+  // batch is an array that preload expands into the same callbacks in order.
+  win.webContents.send('acp:event', events.length === 1 ? events[0] : events);
+}
+
+let rendererEventDeps: IpcDeps | undefined;
+const rendererEvents = new RendererEventBatcher<RendererEvent>(deliverRendererEvents);
+const diagnosticStreamGate = new DiagnosticStreamGate();
+
+export function setDiagnosticStreaming(enabled: boolean): void {
+  diagnosticStreamGate.setEnabled(enabled);
 }
 
 export function sendDiagnosticLog(deps: IpcDeps, entry: DiagnosticLogEntry): void {
+  // The viewer fetches a bounded snapshot on mount; live IPC is only needed
+  // while it is actually open.
+  if (!diagnosticStreamGate.enabledForRenderer) return;
   const win = deps.getWindow();
   if (!win || win.isDestroyed()) return;
   win.webContents.send('desktop:diagnostic-log', entry);
@@ -280,6 +309,10 @@ export function registerIpc(deps: IpcDeps): void {
   });
 
   ipcMain.handle('desktop:diagnostic-logs', () => deps.diagnosticLogs.snapshot());
+
+  ipcMain.on('desktop:diagnostic-stream', (_event, enabled) => {
+    setDiagnosticStreaming(enabled === true);
+  });
 
   ipcMain.handle('desktop:app-info', () => ({
     version: deps.appVersion,

@@ -1,7 +1,6 @@
 // 首页视图:hero、场景预设(办公/代码/创作)、快捷操作卡与 composer。
-// 极光渐变与用户背景图延续旧 renderer 的材质系统(index.css 组件层)。
+// 纯色背景与用户背景图延续旧 renderer 的材质系统(index.css 组件层)。
 
-import { useRef, type PointerEvent } from 'react';
 import { AlertCircle, Sparkles } from 'lucide-react';
 
 import { Composer } from '@/components/Composer';
@@ -9,17 +8,16 @@ import { HomeLogo } from '@/components/HomeLogo';
 import { Button } from '@/components/ui/button';
 import { acp } from '@/core/api';
 import { requestComposerReplace } from '@/core/bus';
-import { getLocale, PRESETS, t } from '@/core/i18n';
+import { PRESETS, t } from '@/core/i18n';
 import { emit, state } from '@/core/state';
-import { useAppState } from '@/hooks/useAppState';
+import { shallowEqual, useAppSelector } from '@/hooks/useAppState';
 import { useAppBackground } from '@/hooks/useAppBackground';
 import { useHomeLogo } from '@/hooks/useHomeLogo';
 import { switchView } from '@/core/views';
 import { cn } from '@/lib/utils';
 
 function ConnBanner() {
-  const appState = useAppState();
-  const conn = appState.connection;
+  const conn = useAppSelector((state) => state.connection);
   if (conn.state !== 'error' || !conn.error) return null;
   return (
     <div className="mb-3.5 flex items-center gap-2.5 rounded-[10px] border border-danger bg-danger-soft px-3.5 py-2.5 text-[12.5px]">
@@ -39,17 +37,18 @@ function ConnBanner() {
 }
 
 export function HomeView() {
-  const appState = useAppState();
+  const { presetId: activePreset, connection: conn, locale } = useAppSelector(
+    (state) => ({ presetId: state.preset, connection: state.connection, locale: state.store.locale }),
+    shallowEqual,
+  );
   const background = useAppBackground();
   const logo = useHomeLogo();
-  const preset = PRESETS[appState.preset] || PRESETS.coding;
-  const isZh = getLocale() === 'zh';
+  const preset = PRESETS[activePreset] || PRESETS.coding;
+  const isZh = locale === 'zh';
   const items = isZh ? preset.quickZh : preset.quickEn;
   const tags = isZh ? preset.tagZh : preset.tagEn;
   const prompts = isZh ? preset.promptsZh : preset.promptsEn;
 
-  const conn = appState.connection;
-  const heroGlowRef = useRef<HTMLDivElement>(null);
   const heroSlogan =
     conn.state === 'ready'
       ? `${t('conn.ready')} · mothx ${conn.agentInfo?.version || ''} · ACP v1`
@@ -58,24 +57,13 @@ export function HomeView() {
         : t(`conn.${conn.state}`);
 
   return (
-    <section
-      className="absolute inset-0 isolate flex flex-col overflow-hidden"
-      onPointerMove={(event: PointerEvent<HTMLElement>) => {
-        // 鼠标横向视差只移动 hero 光晕，不参与布局或状态。
-        const glow = heroGlowRef.current;
-        if (!glow) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        const delta = (event.clientX - (rect.left + rect.width / 2)) * 0.05;
-        glow.style.transform = `translateX(${delta}px)`;
-      }}
-    >
+    <section className="absolute inset-0 isolate flex flex-col overflow-hidden">
       {background.home ? <div className="home-background-layer" /> : null}
       <div className="home-aurora relative z-1 flex min-h-0 flex-1 flex-col items-center overflow-y-auto">
         <div className="box-border flex min-h-full w-[min(820px,92%)] flex-col justify-center pt-8 pb-12">
           <ConnBanner />
 
           <div className="relative mb-[26px] text-center">
-            <div ref={heroGlowRef} className="hero-ambient-glow" aria-hidden="true" />
             {!logo.hidden && (
               <span className="home-hero-logo relative z-1 mx-auto mb-3.5 block size-[58px] rounded-[14px] [filter:drop-shadow(0_8px_18px_var(--home-accent-shadow))]">
                 <HomeLogo logo={logo} />
@@ -93,7 +81,7 @@ export function HomeView() {
 
           <div className="mb-3.5 flex justify-center gap-2.5">
             {(['working', 'coding', 'design'] as const).map((presetId, index) => {
-              const active = appState.preset === presetId;
+              const active = activePreset === presetId;
               const labels = { working: t('home.presetWorking'), coding: t('home.presetCoding'), design: t('home.presetDesign') };
               return (
                 <button
@@ -117,8 +105,8 @@ export function HomeView() {
           </div>
 
           <div className="mb-3.5 min-h-[34px] text-center">
-            <div className="text-[12px] font-semibold text-home-text opacity-90">{t(`preset.${appState.preset}.sub`)}</div>
-            <div className="mt-[3px] text-[12px] leading-normal text-home-muted">{t(`preset.${appState.preset}.desc`)}</div>
+            <div className="text-[12px] font-semibold text-home-text opacity-90">{t(`preset.${activePreset}.sub`)}</div>
+            <div className="mt-[3px] text-[12px] leading-normal text-home-muted">{t(`preset.${activePreset}.desc`)}</div>
           </div>
 
           <div className="mx-auto mb-5 grid w-full max-w-[640px] grid-cols-3 gap-2.5 max-[560px]:grid-cols-2">

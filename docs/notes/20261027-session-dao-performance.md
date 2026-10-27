@@ -119,7 +119,26 @@
 - 新增测试：db 的环境开关、显式关闭后不执行修复、只读完整性检查、索引损坏分类；doctor 的缺失/健康/损坏数据库检查及条件化修复建议。
 - 中英文配置、会话文档和 changelog 已同步。
 
-## 3. 验证状态
+### 2.8 Desktop 首次列表的 EventStore 展示投影（后续优化，已验证）
+
+`mothx/session/listAll` 首屏仍需为每页会话补齐标题/预览,原实现通过
+`loadCommittedEventEntries` 重放整段 EventStore,50 个会话在本机约 1–3 秒。
+
+- `internal/session/event_store.go`
+  - `scanEventStore` 增加 `verifyDigest` 参数;新的 `inspectProjection()` 只校验记录框架与序列连续性,跳过每个 batch 的 SHA-256 重算,并且不写入 append cache。
+  - 非修复扫描改用 `O_RDONLY`,只读列表不再要求 EventStore 可写。
+- `internal/session/event_intents.go`
+  - 新增 `InspectEventStoreProjection`,复用 intent 校验但使用结构扫描;canonical `InspectEventStore` 仍校验全部摘要并 fail-closed。
+- `internal/session/event_store_display.go`
+  - 不再构造 `Manager`/`GetMessages()` 重放;直接从 committed batches 解码首条 user 预览、最新标题与绑定元数据。
+- `internal/session/session.go`
+  - `FillSessionDetailPreviews` 与 `LatestSessionBindings` 先用有界 worker 池(`min(GOMAXPROCS,8)`)预取当前页展示投影,再顺序填充,保证结果确定性。
+- Desktop renderer
+  - 状态通知合并到每帧一次;转录条目不可变替换并对 `TranscriptEntry`/`Markdown` 做 memo;侧边栏/状态栏/输入框/计划面板改用 selector 订阅;视口外转录块启用 `content-visibility`;自动跟随滚动与帧合并。
+
+本机 `mothx acp` 首次 `mothx/session/listAll` 从约 2.7s 降到约 1.2s。
+
+
 
 本轮新增代码已通过下列测试：
 

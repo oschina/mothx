@@ -6,7 +6,7 @@ import { t } from '@/core/i18n';
 import { applyWindowStyle } from '@/core/theme';
 import { toast } from '@/core/ui-host';
 import { useAppBackground } from '@/hooks/useAppBackground';
-import { useAppState } from '@/hooks/useAppState';
+import { shallowEqual, useAppSelector } from '@/hooks/useAppState';
 import { cn } from '@/lib/utils';
 
 type WindowStyle = 'mac' | 'win';
@@ -139,10 +139,12 @@ const WINDOW_STYLE_SWITCH_VISIBLE = false;
 // 标题栏:高度随窗体样式投影(macOS 42px / Windows 11 40px),可拖拽。
 // macOS 真机使用原生红绿灯;Windows 投影在所有平台自绘右侧控制键。
 export function TitleBar() {
-  const appState = useAppState();
+  const { windowStyle, version } = useAppSelector(
+    (state) => ({ windowStyle: state.store.windowStyle, version: state.appInfo.version }),
+    shallowEqual,
+  );
   const background = useAppBackground();
   const isDarwin = desktop.platform() === 'darwin';
-  const windowStyle: WindowStyle = appState.store.windowStyle;
 
   return (
     <header
@@ -176,7 +178,7 @@ export function TitleBar() {
             background.app && 'border border-[rgb(var(--app-outline-rgb)/.1)] bg-[rgb(var(--app-outline-rgb)/.07)] text-muted-foreground'
           )}
         >
-          v{appState.appInfo.version}
+          v{version}
         </span>
       </div>
 

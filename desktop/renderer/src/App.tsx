@@ -17,15 +17,25 @@ import { UiHost } from '@/components/UiHost';
 import { Toaster } from '@/components/ui/sonner';
 import { desktop } from '@/core/api';
 import { applyHomeBackground } from '@/core/theme';
-import { useAppState } from '@/hooks/useAppState';
+import { shallowEqual, useAppSelector } from '@/hooks/useAppState';
 import { useAppBackground } from '@/hooks/useAppBackground';
 import { cn } from '@/lib/utils';
 
 export function App() {
-  const appState = useAppState();
+  const view = useAppSelector((appState) => appState.view);
+  const store = useAppSelector(
+    (appState) => ({
+      homeBackgroundImage: appState.store.homeBackgroundImage,
+      homeBackgroundOpacity: appState.store.homeBackgroundOpacity,
+      homeBackgroundBlur: appState.store.homeBackgroundBlur,
+      homeBackgroundScope: appState.store.homeBackgroundScope,
+      homeBackgroundFit: appState.store.homeBackgroundFit,
+      homeBackgroundPosition: appState.store.homeBackgroundPosition,
+    }),
+    shallowEqual,
+  );
   const background = useAppBackground();
   const shellRef = useRef<HTMLDivElement>(null);
-  const store = appState.store;
 
   useEffect(() => {
     document.body.classList.add(`platform-${desktop.platform()}`);
@@ -53,13 +63,13 @@ export function App() {
             background.app ? 'app-surface-veil' : 'app-canvas'
           )}
         >
-          {appState.view === 'home' ? <HomeView /> : null}
-          {appState.view === 'chat' ? <ChatView /> : null}
-          {appState.view === 'skills' ? <SkillsView /> : null}
-          {appState.view === 'history' ? <HistoryView /> : null}
-          {appState.view === 'automation' ? <AutomationView /> : null}
-          {appState.view === 'library' ? <LibraryView /> : null}
-          {appState.view === 'settings' ? <SettingsView /> : null}
+          {view === 'home' ? <HomeView /> : null}
+          {view === 'chat' ? <ChatView /> : null}
+          {view === 'skills' ? <SkillsView /> : null}
+          {view === 'history' ? <HistoryView /> : null}
+          {view === 'automation' ? <AutomationView /> : null}
+          {view === 'library' ? <LibraryView /> : null}
+          {view === 'settings' ? <SettingsView /> : null}
         </main>
       </div>
       <StatusBar />

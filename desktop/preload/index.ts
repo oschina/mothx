@@ -58,6 +58,10 @@ export interface MothxDesktopBridge {
   };
 }
 
+// Number of mounted live-log subscribers in this renderer. Main only projects
+// diagnostic entries over IPC while this is non-zero.
+let diagnosticStreamSubscribers = 0;
+
 const bridge: MothxDesktopBridge = {
   isDesktop: true,
   platform: process.platform,
@@ -69,7 +73,15 @@ const bridge: MothxDesktopBridge = {
     getState: () => ipcRenderer.invoke('acp:state'),
     restart: () => ipcRenderer.invoke('acp:restart'),
     onEvent: (callback) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+      const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        // Main coalesces a frame's ACP events into one IPC message. Expand the
+        // batch here so the renderer contract stays one event per callback.
+        if (Array.isArray(payload)) {
+          for (const item of payload) callback(item);
+          return;
+        }
+        callback(payload);
+      };
       ipcRenderer.on('acp:event', listener);
       return () => ipcRenderer.removeListener('acp:event', listener);
     },
@@ -97,7 +109,15 @@ const bridge: MothxDesktopBridge = {
     onDiagnosticLog: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: DiagnosticLogEntry) => callback(payload);
       ipcRenderer.on('desktop:diagnostic-log', listener);
-      return () => ipcRenderer.removeListener('desktop:diagnostic-log', listener);
+      // The viewer asks for live entries only while it is mounted; the main
+      // process keeps buffering and writing to desktop.log either way.
+      diagnosticStreamSubscribers += 1;
+      if (diagnosticStreamSubscribers === 1) ipcRenderer.send('desktop:diagnostic-stream', true);
+      return () => {
+        ipcRenderer.removeListener('desktop:diagnostic-log', listener);
+        diagnosticStreamSubscribers = Math.max(0, diagnosticStreamSubscribers - 1);
+        if (diagnosticStreamSubscribers === 0) ipcRenderer.send('desktop:diagnostic-stream', false);
+      };
     },
   },
 };

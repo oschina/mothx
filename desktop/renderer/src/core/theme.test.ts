@@ -8,6 +8,19 @@ const homeView = await readFile(new URL('../views/HomeView.tsx', import.meta.url
 const appearance = await readFile(new URL('../views/settings/AppearancePanel.tsx', import.meta.url), 'utf8');
 const styles = await readFile(new URL('../index.css', import.meta.url), 'utf8');
 
+test('theme switches suppress transitions on inherited colors', () => {
+  assert.match(theme, /classList\.add\('theme-switching'\)/, 'theme changes must mark the root while colors update');
+  assert.match(theme, /classList\.remove\('theme-switching'\)/, 'the transition suppression must be lifted after the next frames');
+  assert.match(styles, /html\.theme-switching[\s\S]*?transition: none !important/, 'all inherited color transitions must be disabled during a theme switch');
+});
+
+test('home background stays a solid surface without the aurora gradient', () => {
+  assert.match(styles, /\.home-aurora \{[^}]*background: var\(--home-bg\)/, 'Home must use the solid home background token');
+  assert.doesNotMatch(styles, /\.home-aurora \{[^}]*radial-gradient/, 'Home must not draw the cyan/blue aurora gradients');
+  assert.doesNotMatch(styles, /\.hero-ambient-glow/, 'Home must not draw the blue radial glow behind the logo');
+  assert.doesNotMatch(homeView, /hero-ambient-glow/, 'HomeView must not mount the removed glow element');
+});
+
 test('background images use the restricted Desktop bridge instead of file URLs', () => {
   assert.match(theme, /desktop\.homeBackgroundDataURL\(path\)/);
   assert.doesNotMatch(theme, /file:\/\//, 'packaged renderers must not load the selected image through file://');

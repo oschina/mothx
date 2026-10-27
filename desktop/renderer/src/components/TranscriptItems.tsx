@@ -2,7 +2,7 @@
 // 子代理卡/错误卡。展开(open)状态保存在条目对象上,流式更新不覆盖用户
 // 的展开选择;审批/提问倒计时由 useNow 驱动。
 
-import { useLayoutEffect, useRef, useState } from 'react';
+import { memo, useLayoutEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 
 import { t } from '@/core/i18n';
-import { emit, type TranscriptItem } from '@/core/state';
+import { type TranscriptItem } from '@/core/state';
 import {
   buildDiffLines,
   cancelPermission,
@@ -38,6 +38,7 @@ import {
   prettyInput,
   resolvePermission,
   resolveQuestion,
+  setTranscriptItemOpen,
   statusLabel,
   toolSummary,
   type ArtifactItem,
@@ -79,7 +80,7 @@ const TOOL_BADGE: Record<string, string> = {
 
 export function UserBubble({ item }: { item: Extract<TranscriptItem, { kind: 'user' }> }) {
   return (
-    <div className="flex animate-in fade-in slide-in-from-bottom-1.5 justify-end duration-300">
+    <div className="flex justify-end">
       <div className="max-w-[78%] rounded-[12px_12px_3px_12px] bg-primary/8 px-3.5 py-2 text-[13px] leading-[1.65] break-words whitespace-pre-wrap text-strong">
         {item.text}
       </div>
@@ -89,7 +90,7 @@ export function UserBubble({ item }: { item: Extract<TranscriptItem, { kind: 'us
 
 export function AgentMessage({ item }: { item: Extract<TranscriptItem, { kind: 'agent' }> }) {
   return (
-    <div className="flex animate-in fade-in slide-in-from-bottom-1.5 gap-2.5 duration-300">
+    <div className="flex gap-2.5">
       <span className="mt-0.5 size-7 shrink-0 overflow-hidden rounded-lg">
         <MothxLogo />
       </span>
@@ -123,8 +124,7 @@ export function ThoughtBlock({ item, live = false }: { item: Extract<TranscriptI
   const previewRef = useRef<HTMLSpanElement>(null);
   const preview = !item.open && live ? thoughtPreview(item.text) : '';
   const toggle = () => {
-    item.open = !item.open;
-    emit();
+    setTranscriptItemOpen(item, !item.open);
   };
 
   // Keep the one-line preview pinned to the newest tokens while reasoning
@@ -147,7 +147,7 @@ export function ThoughtBlock({ item, live = false }: { item: Extract<TranscriptI
   }, [preview]);
 
   return (
-    <div className={cn('animate-in fade-in border-l-2 border-borderstrong pl-2.5 duration-300', item.open && '[&_.thought-chev]:rotate-90')}>
+    <div className={cn('border-l-2 border-borderstrong pl-2.5', item.open && '[&_.thought-chev]:rotate-90')}>
       <button
         type="button"
         className="thought-toggle flex w-full cursor-pointer items-center gap-1.5 rounded text-left text-[12px] text-muted-foreground select-none hover:text-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
@@ -233,11 +233,10 @@ function ToolBody({ item }: { item: ToolItem }) {
 export function ToolCard({ item }: { item: ToolItem }) {
   const Icon = TOOL_ICONS[item.toolKind] || Cpu;
   const toggle = () => {
-    item.open = !item.open;
-    emit();
+    setTranscriptItemOpen(item, !item.open);
   };
   return (
-    <div className="animate-in fade-in overflow-hidden rounded-[10px] border border-border bg-card duration-300">
+    <div className="overflow-hidden rounded-[10px] border border-border bg-card">
       <button
         type="button"
         className="tool-head flex w-full cursor-pointer items-center gap-[7px] px-3 py-[7px] text-left text-[12px] text-muted-foreground select-none hover:bg-hoverbg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
@@ -260,7 +259,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
 
 export function PlanCard({ item }: { item: PlanItem }) {
   return (
-    <div className="animate-in fade-in overflow-hidden rounded-[10px] border border-border bg-card shadow-panel duration-300">
+    <div className="overflow-hidden rounded-[10px] border border-border bg-card shadow-panel">
       <div className="flex items-center gap-2 border-b border-border bg-primary/4 px-3 py-2 text-[12.5px] font-semibold text-strong">
         <List className="size-4 text-primary" />
         <span>{t('chat.plan', { n: item.entries.length })}</span>
@@ -325,7 +324,7 @@ function ArtifactChip({ item }: { item: ArtifactItem }) {
 
 export function ArtifactCard({ item }: { item: ArtifactItem }) {
   return (
-    <div className="animate-in fade-in rounded-[10px] border border-border bg-card px-3 py-2.5 shadow-panel duration-300">
+    <div className="rounded-[10px] border border-border bg-card px-3 py-2.5 shadow-panel">
       <div className="mb-2 text-[12px] text-muted-foreground">
         {item.fromToolCall ? t('chat.artifactFallback') : t('chat.artifacts', { n: 1 })}
       </div>
@@ -351,7 +350,7 @@ export function PermissionCard({ item }: { item: PermissionItem }) {
   return (
     <div
       className={cn(
-        'animate-in fade-in overflow-hidden rounded-[10px] border bg-card shadow-panel duration-300',
+        'overflow-hidden rounded-[10px] border bg-card shadow-panel',
         item.resolved ? 'border-border opacity-75' : 'border-warning'
       )}
     >
@@ -404,7 +403,7 @@ export function QuestionCard({ item }: { item: QuestionItem }) {
   return (
     <div
       className={cn(
-        'animate-in fade-in overflow-hidden rounded-[10px] border bg-card shadow-panel duration-300',
+        'overflow-hidden rounded-[10px] border bg-card shadow-panel',
         item.resolved ? 'border-border opacity-75' : 'border-warning'
       )}
     >
@@ -461,7 +460,7 @@ export function QuestionCard({ item }: { item: QuestionItem }) {
 
 export function StatusLine({ item }: { item: Extract<TranscriptItem, { kind: 'status' }> }) {
   return (
-    <div className="flex animate-in fade-in items-center gap-2 text-[12px] text-muted-foreground duration-300">
+    <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
       {item.spin ? <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" /> : null}
       <span>{item.text}</span>
     </div>
@@ -477,7 +476,7 @@ export function SubagentCard({ item }: { item: Extract<TranscriptItem, { kind: '
         : 'bg-info-soft text-info';
   const detail = [item.role, item.expertId].filter(Boolean).join(' · ');
   return (
-    <div className="animate-in fade-in overflow-hidden rounded-[10px] border border-dashed border-borderstrong bg-card duration-300">
+    <div className="overflow-hidden rounded-[10px] border border-dashed border-borderstrong bg-card">
       <div className="flex items-center gap-2 px-3 py-[7px] text-[12px] text-muted-foreground">
         <Users className="size-4 shrink-0 text-expert" />
         <span className="min-w-0 flex-1 truncate font-semibold text-foreground">{`${t('chat.subagent')} · ${item.title}`}</span>
@@ -490,7 +489,7 @@ export function SubagentCard({ item }: { item: Extract<TranscriptItem, { kind: '
 
 export function ErrorCard({ item }: { item: Extract<TranscriptItem, { kind: 'error' }> }) {
   return (
-    <div className="animate-in fade-in rounded-[10px] border border-danger bg-danger-soft px-3 py-2.5 duration-300">
+    <div className="rounded-[10px] border border-danger bg-danger-soft px-3 py-2.5">
       <div className="flex items-center gap-[7px] text-[12.5px] font-semibold text-danger">
         <AlertCircle className="size-4" />
         <span>{t('status.failed')}</span>
@@ -506,7 +505,7 @@ export function ErrorCard({ item }: { item: Extract<TranscriptItem, { kind: 'err
   );
 }
 
-export function TranscriptEntry({ item, live = false }: { item: TranscriptItem; live?: boolean }) {
+function TranscriptEntryImpl({ item, live = false }: { item: TranscriptItem; live?: boolean }) {
   switch (item.kind) {
     case 'user':
       return <UserBubble item={item} />;
@@ -534,3 +533,9 @@ export function TranscriptEntry({ item, live = false }: { item: TranscriptItem; 
       return null;
   }
 }
+
+// Transcript items are replaced immutably (see core/transcript upsert), so an
+// unchanged card keeps its item identity and skips rendering entirely. This is
+// what keeps a long transcript from re-parsing every Markdown message on each
+// streamed token.
+export const TranscriptEntry = memo(TranscriptEntryImpl);

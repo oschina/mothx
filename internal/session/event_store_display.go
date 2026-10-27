@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -81,12 +82,11 @@ func loadEventStoreDisplay(sessionDir, sessionID string) (eventStoreDisplayState
 	if err != nil || fingerprint == "" {
 		return eventStoreDisplayState{}, false
 	}
-	manager, err := loadEventStoreDisplayManager(sessionDir, sessionID)
-	if err != nil || manager == nil {
+	state, ok := loadEventStoreDisplayProjection(sessionDir, sessionID)
+	if !ok {
 		return eventStoreDisplayState{}, false
 	}
-	state := eventStoreDisplayFromManager(manager)
-	// The store may have been appended to while the Manager loaded. Cache
+	// The store may have been appended to while the projection was read. Cache
 	// against the fingerprint observed after loading; a concurrent append
 	// simply makes the next list recompute.
 	if current, err := eventStorePhysicalFingerprint(sessionDir, sessionID); err == nil && current != "" {
@@ -116,57 +116,78 @@ func eventStoreDisplayLock(key string) *sync.Mutex {
 	return lock.(*sync.Mutex)
 }
 
-// loadEventStoreDisplayManager reads committed EventStore batches for a
-// read-only list projection. It deliberately does not run open-time EventStore
-// convergence: listing sessions must not repair turns, delete legacy rows, or
-// otherwise acquire canonical-write side effects just to render a preview.
-func loadEventStoreDisplayManager(sessionDir, sessionID string) (*Manager, error) {
-	manager := &Manager{sessionDir: sessionDir, eventStoreMode: true}
-	entries, useEventStore, err := manager.loadCommittedEventEntries(context.Background(), sessionID)
-	if err != nil {
-		return nil, err
+// loadEventStoreDisplayProjection reads the committed EventStore batches with
+// a structural-only scan and decodes just the few entries a list row needs.
+// It deliberately does not run open-time convergence: listing sessions must
+// not repair turns, delete legacy rows, or otherwise acquire canonical-write
+// side effects just to render a preview. Canonical session open still performs
+// full digest verification and fails closed.
+func loadEventStoreDisplayProjection(sessionDir, sessionID string) (eventStoreDisplayState, bool) {
+	inspection, err := InspectEventStoreProjection(context.Background(), sessionDir, sessionID)
+	if err != nil || (inspection.State != EventStoreHealthy && inspection.State != EventStoreReconciling) {
+		return eventStoreDisplayState{}, false
 	}
-	if !useEventStore || len(entries) == 0 {
-		return nil, nil
+	batches := committedEventBatches(inspection)
+	if len(batches) == 0 {
+		return eventStoreDisplayState{}, false
 	}
-	manager.entries = entries
-	return manager, nil
+	return eventStoreDisplayFromBatches(batches), true
 }
 
-func eventStoreDisplayFromManager(manager *Manager) eventStoreDisplayState {
+func eventStoreDisplayFromBatches(batches []EventBatch) eventStoreDisplayState {
 	state := eventStoreDisplayState{}
-	for _, message := range manager.GetMessages() {
-		if message.Role != "user" {
-			continue
-		}
-		text := message.Content
-		if text == "" {
-			for _, block := range message.Contents {
-				if block.Type == "text" && block.Text != "" {
-					text = block.Text
-					break
+	previewFound := false
+	for _, batch := range batches {
+		for _, event := range batch.Events {
+			switch EntryType(event.Kind) {
+			case EntryMessage:
+				if previewFound {
+					continue
+				}
+				var entry MessageEntry
+				if json.Unmarshal(event.Payload, &entry) != nil || entry.Message.Role != "user" {
+					continue
+				}
+				text := entry.Message.Content
+				if text == "" {
+					for _, block := range entry.Message.Contents {
+						if block.Type == "text" && block.Text != "" {
+							text = block.Text
+							break
+						}
+					}
+				}
+				if text != "" {
+					state.Preview = util.TruncateWithSuffix(text, 60, "...")
+				}
+				previewFound = true
+			case EntrySessionInfo:
+				var entry SessionInfoEntry
+				if json.Unmarshal(event.Payload, &entry) == nil {
+					state.Title = entry.Name
+				}
+			case EntryModelChange:
+				var entry ModelChangeEntry
+				if json.Unmarshal(event.Payload, &entry) == nil {
+					state.Bindings.ModelChange, state.Bindings.HasModelChange = entry, true
+				}
+			case EntryModeChange:
+				var entry ModeChangeEntry
+				if json.Unmarshal(event.Payload, &entry) == nil {
+					state.Bindings.ModeChange, state.Bindings.HasModeChange = entry, true
+				}
+			case EntryThinkingChange:
+				var entry ThinkingLevelChangeEntry
+				if json.Unmarshal(event.Payload, &entry) == nil {
+					state.Bindings.ThinkingLevelChange, state.Bindings.HasThinkingLevelChange = entry, true
+				}
+			case EntryAdditionalDirectories:
+				var entry AdditionalDirectoriesEntry
+				if json.Unmarshal(event.Payload, &entry) == nil {
+					state.Bindings.AdditionalDirectories, state.Bindings.HasAdditionalDirectories = entry, true
 				}
 			}
 		}
-		if text != "" {
-			state.Preview = util.TruncateWithSuffix(text, 60, "...")
-		}
-		break
-	}
-	if info, ok := manager.GetLatestSessionInfo(); ok {
-		state.Title = info.Name
-	}
-	if entry, ok := manager.GetLatestModelChange(); ok {
-		state.Bindings.ModelChange, state.Bindings.HasModelChange = entry, true
-	}
-	if entry, ok := manager.GetLatestModeChange(); ok {
-		state.Bindings.ModeChange, state.Bindings.HasModeChange = entry, true
-	}
-	if entry, ok := manager.GetLatestThinkingLevelChange(); ok {
-		state.Bindings.ThinkingLevelChange, state.Bindings.HasThinkingLevelChange = entry, true
-	}
-	if entry, ok := manager.GetLatestAdditionalDirectories(); ok {
-		state.Bindings.AdditionalDirectories, state.Bindings.HasAdditionalDirectories = entry, true
 	}
 	return state
 }

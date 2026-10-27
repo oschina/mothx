@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { activeSessionWorkspace, currentConfigOptions, newSessionWorkspace, state, workspace } from './state.ts';
+import { activeSessionWorkspace, currentConfigOptions, emit, flushPendingEmits, getStateVersion, newSessionWorkspace, state, subscribe, workspace } from './state.ts';
 import { sessionWorkingDirectory } from './sessions.ts';
 
 test('workspace boundaries keep an active session separate from the next-session selection', () => {
@@ -114,5 +114,30 @@ test('a missing next-session preference never adopts the ACP process cwd', () =>
     state.newSessionCwd = previous.newSessionCwd;
     state.draftWorkspaceSource = previous.draftWorkspaceSource;
     state.activeSessionCwd = previous.activeSessionCwd;
+  }
+});
+
+// Streaming providers deliver several updates between paints. React must see
+// one notification per flush, not one per chunk, or the whole shell re-renders
+// per token.
+test('state notifications coalesce into a single commit', () => {
+  flushPendingEmits();
+  let calls = 0;
+  const unsubscribe = subscribe(() => {
+    calls += 1;
+  });
+  try {
+    const before = getStateVersion();
+    emit();
+    emit();
+    emit();
+    assert.equal(calls, 0, 'no listener may run before the flush interval');
+    flushPendingEmits();
+    assert.equal(calls, 1, 'three updates must produce one notification');
+    assert.equal(getStateVersion(), before + 1);
+    flushPendingEmits();
+    assert.equal(calls, 1, 'an empty flush must not notify again');
+  } finally {
+    unsubscribe();
   }
 });

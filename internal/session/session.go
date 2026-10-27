@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -900,6 +901,9 @@ func LatestSessionBindings(sessionDir string, sessionIDs []string) (map[string]S
 			}
 			result[record.SessionID] = state
 		}
+	}
+	if len(eventStoreIDs) > 0 {
+		prefetchEventStoreDisplays(sessionDir, eventStoreIDs)
 	}
 	for _, sessionID := range eventStoreIDs {
 		if state, ok := loadEventStoreDisplay(sessionDir, sessionID); ok {
@@ -3085,7 +3089,20 @@ func ListAllDetailed(sessionDir string, opts ...ListOption) ([]SessionDetail, er
 // page of already-listed details. Legacy SQLite previews are already present.
 // It is the page-scoped completion step for WithDeferredEventStorePreview and
 // is safe to call for sessions that are already complete.
+//
+// The EventStore scan is CPU/IO bound and dominated by JSON decoding and
+// batch digest verification. Loading a page's sessions sequentially made the
+// initial Desktop task list wait for the whole page; prefetching with a small
+// bounded pool keeps the read path deterministic while cutting startup latency.
 func FillSessionDetailPreviews(sessionDir string, details []SessionDetail) {
+	ids := make([]string, 0, len(details))
+	for i := range details {
+		if details[i].MessageCount == 0 || details[i].Preview != "" || details[i].Name != "" {
+			continue
+		}
+		ids = append(ids, details[i].ID)
+	}
+	prefetchEventStoreDisplays(sessionDir, ids)
 	for i := range details {
 		if details[i].MessageCount == 0 || details[i].Preview != "" || details[i].Name != "" {
 			continue
@@ -3095,6 +3112,45 @@ func FillSessionDetailPreviews(sessionDir string, details []SessionDetail) {
 			details[i].Name = state.Title
 		}
 	}
+}
+
+// prefetchEventStoreDisplays warms the per-session display projection used by
+// list rows. loadEventStoreDisplay is safe for concurrent callers (per-session
+// locks + fingerprint-checked cache), and the worker count stays bounded so a
+// large page cannot saturate the SQLite read pool or the disk.
+func prefetchEventStoreDisplays(sessionDir string, sessionIDs []string) {
+	if len(sessionIDs) == 0 {
+		return
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 8 {
+		workers = 8
+	}
+	if workers > len(sessionIDs) {
+		workers = len(sessionIDs)
+	}
+	if workers <= 1 {
+		for _, sessionID := range sessionIDs {
+			_, _ = loadEventStoreDisplay(sessionDir, sessionID)
+		}
+		return
+	}
+	jobs := make(chan string)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for sessionID := range jobs {
+				_, _ = loadEventStoreDisplay(sessionDir, sessionID)
+			}
+		}()
+	}
+	for _, sessionID := range sessionIDs {
+		jobs <- sessionID
+	}
+	close(jobs)
+	wg.Wait()
 }
 
 func buildSessionDetails(sessions []SessionInfo, skipEventStorePreview bool) ([]SessionDetail, error) {
