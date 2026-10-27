@@ -890,31 +890,14 @@ func (p *SessionPool) listDetails() []ActiveSessionInfo {
 
 	sessions := make([]ActiveSessionInfo, 0, len(active))
 	for _, s := range active {
-		lastUsed := s.lastUsedAt()
-		messageCount := 0
-		if s.Manager != nil {
-			messageCount = len(s.Manager.GetMessages())
-		}
+		item := activeSessionInfoBase(s)
 		execution, executionErr := s.inspectExecution()
 		if executionErr != nil {
 			execution = agentruntime.UnknownSessionExecution(s.ID)
 		}
-		sessions = append(sessions, ActiveSessionInfo{
-			ID:           s.ID,
-			WorkDir:      s.WorkDir,
-			Mode:         s.Mode,
-			DelegateMode: s.DelegateMode,
-			Workflows:    s.Workflows,
-			WebSearch:    s.WebSearch,
-			Browser:      s.Browser,
-			A2AMaster:    s.A2AMaster,
-			MultiAgent:   s.MultiAgent,
-			Active:       true,
-			Running:      execution.Running,
-			Execution:    &execution,
-			LastUsed:     lastUsed,
-			MessageCount: messageCount,
-		})
+		item.Running = execution.Running
+		item.Execution = &execution
+		sessions = append(sessions, item)
 	}
 	sort.Slice(sessions, func(i, j int) bool {
 		if sessions[i].LastUsed.Equal(sessions[j].LastUsed) {
@@ -923,6 +906,55 @@ func (p *SessionPool) listDetails() []ActiveSessionInfo {
 		return sessions[i].LastUsed.After(sessions[j].LastUsed)
 	})
 	return sessions
+}
+
+// listDetailsBase projects pool members without inspecting durable execution
+// state. Callers that need execution snapshots for a wider set of sessions
+// (ListActiveSessions) batch-inspect once instead of paying one read per
+// session here.
+func (p *SessionPool) listDetailsBase() []ActiveSessionInfo {
+	if p == nil {
+		return nil
+	}
+	p.mu.RLock()
+	active := make([]*APISession, 0, len(p.sessions))
+	for _, s := range p.sessions {
+		active = append(active, s)
+	}
+	p.mu.RUnlock()
+
+	sessions := make([]ActiveSessionInfo, 0, len(active))
+	for _, s := range active {
+		sessions = append(sessions, activeSessionInfoBase(s))
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].LastUsed.Equal(sessions[j].LastUsed) {
+			return sessions[i].ID < sessions[j].ID
+		}
+		return sessions[i].LastUsed.After(sessions[j].LastUsed)
+	})
+	return sessions
+}
+
+func activeSessionInfoBase(s *APISession) ActiveSessionInfo {
+	messageCount := 0
+	if s.Manager != nil {
+		messageCount = s.Manager.MessageCount()
+	}
+	return ActiveSessionInfo{
+		ID:           s.ID,
+		WorkDir:      s.WorkDir,
+		Mode:         s.Mode,
+		DelegateMode: s.DelegateMode,
+		Workflows:    s.Workflows,
+		WebSearch:    s.WebSearch,
+		Browser:      s.Browser,
+		A2AMaster:    s.A2AMaster,
+		MultiAgent:   s.MultiAgent,
+		Active:       true,
+		LastUsed:     s.lastUsedAt(),
+		MessageCount: messageCount,
+	}
 }
 
 func (p *SessionPool) getExact(id string) (*APISession, error) {
@@ -1128,40 +1160,45 @@ func (e *PoolFullError) Error() string {
 }
 
 // ListActiveSessions returns persisted sessions from sessions.db, merged with
-// currently active API runtime state.
+// currently active API runtime state. Project/pin metadata and execution
+// snapshots are read in batches so the listing cost stays constant per request
+// instead of growing with the number of sessions.
 func (s *Server) ListActiveSessions() []ActiveSessionInfo {
 	if s == nil || s.pool == nil {
 		return nil
 	}
-	active := s.pool.listDetails()
 	if s.settings == nil || s.cfg == nil {
-		return active
+		return s.pool.listDetails()
 	}
-	details, err := session.ListAllDetailed(s.settings.GetSessionDir(), session.WithMessagesOnly())
+	sessionDir := s.settings.GetSessionDir()
+	active := s.pool.listDetailsBase()
+	details, err := session.ListAllDetailed(sessionDir, session.WithMessagesOnly())
 	if err != nil {
 		provider.DebugLogf("list persisted sessions: %v", err)
-		return active
+		return s.pool.listDetails()
 	}
+
+	allIDs := make([]string, 0, len(details)+len(active))
+	for _, detail := range details {
+		allIDs = append(allIDs, detail.ID)
+	}
+	for _, item := range active {
+		allIDs = append(allIDs, item.ID)
+	}
+	metadataByID := make(map[string]session.SessionMetadata, len(allIDs))
+	if len(allIDs) > 0 {
+		metadata, metaErr := session.ListSessionMetadata(sessionDir, allIDs)
+		if metaErr != nil {
+			provider.DebugLogf("list session metadata: %v", metaErr)
+		} else {
+			metadataByID = metadata
+		}
+	}
+
 	byID := make(map[string]ActiveSessionInfo, len(active)+len(details))
-	for _, item := range details {
-		item := ActiveSessionInfo{
-			ID:              item.ID,
-			WorkDir:         item.Cwd,
-			LastUsed:        item.ModTime,
-			MessageCount:    item.MessageCount,
-			Preview:         item.Preview,
-			Title:           item.Name,
-			ChannelType:     item.ChannelType,
-			ChannelID:       item.ChannelID,
-			ChannelLabel:    channelLabel(item.ChannelType, item.ChannelID),
-			Bound:           item.ChannelType == "wechat" || item.ChannelType == "feishu",
-			ParentSessionID: item.ParentSession, ForkBoundarySeq: item.ForkBoundarySeq, SeedLength: item.SeedLength, ForkKind: item.ForkKind,
-		}
-		if item.ChannelType == "" {
-			item.ChannelType = "local"
-			item.ChannelLabel = channelLabel(item.ChannelType, item.ChannelID)
-		}
-		if metadata, err := session.GetSessionMetadata(s.settings.GetSessionDir(), item.ID); err == nil {
+	for _, detail := range details {
+		item := activeSessionInfoFromDetail(detail)
+		if metadata, ok := metadataByID[detail.ID]; ok {
 			item.ProjectID, item.Pinned = metadata.ProjectID, metadata.Pinned
 		}
 		byID[item.ID] = item
@@ -1169,42 +1206,27 @@ func (s *Server) ListActiveSessions() []ActiveSessionInfo {
 	for _, item := range active {
 		persisted := byID[item.ID]
 		if persisted.ID == "" {
-			if metadata, err := session.GetSessionMetadata(s.settings.GetSessionDir(), item.ID); err == nil {
+			if metadata, ok := metadataByID[item.ID]; ok {
 				item.ProjectID, item.Pinned = metadata.ProjectID, metadata.Pinned
 			}
 			byID[item.ID] = item
 			continue
 		}
-		item.MessageCount = persisted.MessageCount
-		if item.WorkDir == "" {
-			item.WorkDir = persisted.WorkDir
-		}
-		if item.Preview == "" {
-			item.Preview = persisted.Preview
-		}
-		if persisted.Title != "" {
-			// The persisted session_info entry is authoritative: an active
-			// runtime can still hold the title from before a user rename.
-			item.Title = persisted.Title
-		}
-		item.ProjectID, item.Pinned = persisted.ProjectID, persisted.Pinned
-		if item.ChannelType == "" {
-			item.ChannelType = persisted.ChannelType
-		}
-		if item.ChannelID == "" {
-			item.ChannelID = persisted.ChannelID
-		}
-		if item.ChannelLabel == "" {
-			item.ChannelLabel = persisted.ChannelLabel
-		}
-		item.Bound = persisted.Bound || item.Bound
-		byID[item.ID] = item
+		byID[item.ID] = mergeActiveWithPersisted(item, persisted)
 	}
+
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	executions := agentruntime.InspectSessionExecutions(sessionDir, ids)
 	sessions := make([]ActiveSessionInfo, 0, len(byID))
-	for _, item := range byID {
-		execution, err := agentruntime.InspectSessionExecution(s.settings.GetSessionDir(), item.ID)
-		if err != nil {
-			provider.DebugLogf("inspect execution for session %q: %v", item.ID, err)
+	for id, item := range byID {
+		execution, ok := executions[id]
+		if !ok {
+			// Unreadable facts stay unknown; a missing projection must never be
+			// rendered as an idle session.
+			execution = agentruntime.UnknownSessionExecution(id)
 		}
 		item.Execution = &execution
 		item.Running = execution.Running
@@ -1217,6 +1239,110 @@ func (s *Server) ListActiveSessions() []ActiveSessionInfo {
 		return sessions[i].LastUsed.After(sessions[j].LastUsed)
 	})
 	return sessions
+}
+
+func activeSessionInfoFromDetail(detail session.SessionDetail) ActiveSessionInfo {
+	item := ActiveSessionInfo{
+		ID:              detail.ID,
+		WorkDir:         detail.Cwd,
+		LastUsed:        detail.ModTime,
+		MessageCount:    detail.MessageCount,
+		Preview:         detail.Preview,
+		Title:           detail.Name,
+		ChannelType:     detail.ChannelType,
+		ChannelID:       detail.ChannelID,
+		ChannelLabel:    channelLabel(detail.ChannelType, detail.ChannelID),
+		Bound:           detail.ChannelType == "wechat" || detail.ChannelType == "feishu",
+		ParentSessionID: detail.ParentSession, ForkBoundarySeq: detail.ForkBoundarySeq, SeedLength: detail.SeedLength, ForkKind: detail.ForkKind,
+	}
+	if item.ChannelType == "" {
+		item.ChannelType = "local"
+		item.ChannelLabel = channelLabel(item.ChannelType, item.ChannelID)
+	}
+	return item
+}
+
+// mergeActiveWithPersisted applies the list merge precedence: persisted session
+// info and metadata win over the in-memory runtime projection.
+func mergeActiveWithPersisted(active, persisted ActiveSessionInfo) ActiveSessionInfo {
+	active.MessageCount = persisted.MessageCount
+	if active.WorkDir == "" {
+		active.WorkDir = persisted.WorkDir
+	}
+	if active.Preview == "" {
+		active.Preview = persisted.Preview
+	}
+	if persisted.Title != "" {
+		// The persisted session_info entry is authoritative: an active runtime
+		// can still hold the title from before a user rename.
+		active.Title = persisted.Title
+	}
+	active.ProjectID, active.Pinned = persisted.ProjectID, persisted.Pinned
+	if active.ChannelType == "" {
+		active.ChannelType = persisted.ChannelType
+	}
+	if active.ChannelID == "" {
+		active.ChannelID = persisted.ChannelID
+	}
+	if active.ChannelLabel == "" {
+		active.ChannelLabel = persisted.ChannelLabel
+	}
+	active.Bound = persisted.Bound || active.Bound
+	return active
+}
+
+// activeSessionInfo builds the same single-item projection ListActiveSessions
+// produces for one ID, without listing or replaying every other session. It is
+// the post-write path for title/metadata updates.
+func (s *Server) activeSessionInfo(id string) (*ActiveSessionInfo, error) {
+	if s == nil || s.settings == nil {
+		return nil, ErrSessionNotFound
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, ErrSessionNotFound
+	}
+	sessionDir := s.settings.GetSessionDir()
+
+	var activeItem *ActiveSessionInfo
+	if s.pool != nil {
+		sess, err := s.pool.getExact(id)
+		if err != nil {
+			return nil, err
+		}
+		if sess != nil {
+			item := activeSessionInfoBase(sess)
+			activeItem = &item
+		}
+	}
+
+	detail, found, err := session.SessionDetailByID(sessionDir, id)
+	if err != nil {
+		provider.DebugLogf("read session detail %q: %v", id, err)
+	}
+
+	var item ActiveSessionInfo
+	switch {
+	case found && activeItem != nil:
+		item = mergeActiveWithPersisted(*activeItem, activeSessionInfoFromDetail(detail))
+	case found:
+		item = activeSessionInfoFromDetail(detail)
+	case activeItem != nil:
+		item = *activeItem
+	default:
+		return nil, ErrSessionNotFound
+	}
+
+	if metadata, metaErr := session.GetSessionMetadata(sessionDir, id); metaErr == nil {
+		item.ProjectID, item.Pinned = metadata.ProjectID, metadata.Pinned
+	}
+	execution, execErr := agentruntime.InspectSessionExecution(sessionDir, id)
+	if execErr != nil {
+		provider.DebugLogf("inspect execution for session %q: %v", id, execErr)
+	}
+	item.Execution = &execution
+	item.Running = execution.Running
+	return &item, nil
 }
 
 // CapabilityOverview returns serve-level capability defaults and availability.
@@ -1594,12 +1720,7 @@ func (s *Server) SetSessionMetadata(id string, metadata session.SessionMetadata)
 	if err := session.SetSessionMetadata(s.settings.GetSessionDir(), id, metadata); err != nil {
 		return nil, err
 	}
-	for _, item := range s.ListActiveSessions() {
-		if item.ID == id {
-			return &item, nil
-		}
-	}
-	return nil, ErrSessionNotFound
+	return s.activeSessionInfo(id)
 }
 
 // SetSessionTitle records a user-provided title without changing project metadata.
@@ -1614,12 +1735,7 @@ func (s *Server) SetSessionTitle(id, title string) (*ActiveSessionInfo, error) {
 	if _, err := mgr.AppendSessionTitle(title, "manual"); err != nil {
 		return nil, err
 	}
-	for _, item := range s.ListActiveSessions() {
-		if item.ID == id {
-			return &item, nil
-		}
-	}
-	return nil, ErrSessionNotFound
+	return s.activeSessionInfo(id)
 }
 
 func (s *Server) ListSessionRuns(id string, limit int) ([]session.SessionRun, error) {

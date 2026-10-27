@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -436,16 +437,46 @@ func leaseOwnerScope(sessionDir string, lease session.RuntimeLeaseSnapshot) stri
 // dialog, ACP session list). Sessions whose facts cannot be read are omitted
 // so one unreadable session degrades to "no badge" instead of failing the
 // whole listing; adapters must treat a missing entry as unknown, never idle.
+//
+// Fresh ownership-cache entries are projected without a database read. All
+// remaining IDs share one read-only facts transaction and then funnel through
+// the same projectSessionExecutionFromFacts used by the single-session path.
 func InspectSessionExecutions(sessionDir string, sessionIDs []string) map[string]SessionExecutionSnapshot {
 	results := make(map[string]SessionExecutionSnapshot, len(sessionIDs))
-	for _, id := range sessionIDs {
-		if strings.TrimSpace(id) == "" {
+	identity := session.RuntimeDatabaseIdentity(sessionDir)
+	remaining := make([]string, 0, len(sessionIDs))
+	seen := make(map[string]struct{}, len(sessionIDs))
+	for _, raw := range sessionIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
 			continue
 		}
-		if _, exists := results[id]; exists {
+		if _, exists := seen[id]; exists {
 			continue
 		}
-		snapshot, err := InspectSessionExecution(sessionDir, id)
+		seen[id] = struct{}{}
+		if snapshot, ok := inspectSessionExecutionFromOwnershipCache(sessionDir, id, identity); ok {
+			results[id] = snapshot
+			continue
+		}
+		remaining = append(remaining, id)
+	}
+	if len(remaining) == 0 {
+		return results
+	}
+	factsByID, err := session.ReadSessionExecutionFactsBatch(context.Background(), sessionDir, remaining)
+	if err != nil {
+		// The batch is one transaction: a failure leaves every remaining ID
+		// unknown (absent from the result), never idle.
+		return results
+	}
+	for _, id := range remaining {
+		facts, ok := factsByID[id]
+		if !ok {
+			continue
+		}
+		session.PrimeRuntimeOwnership(identity, id, facts.Lease, sessionExecutionRunID(facts), sessionExecutionRunStatus(facts))
+		snapshot, err := projectSessionExecutionFromFacts(sessionDir, id, facts)
 		if err != nil {
 			continue
 		}

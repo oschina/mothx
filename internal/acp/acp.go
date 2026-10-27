@@ -3908,14 +3908,14 @@ func (s *server) sessionCascadeIDs(root string) ([]string, error) {
 	if s == nil || s.currentSettings() == nil {
 		return []string{root}, nil
 	}
-	details, err := session.ListAllDetailed(s.currentSettings().GetSessionDir(), session.WithDeferredEventStorePreview())
+	parents, err := session.ListSessionParents(s.currentSettings().GetSessionDir())
 	if err != nil {
 		return nil, err
 	}
 	children := make(map[string][]string)
-	for _, detail := range details {
-		if detail.ParentSession != "" {
-			children[detail.ParentSession] = append(children[detail.ParentSession], detail.ID)
+	for _, link := range parents {
+		if link.ParentSession != "" {
+			children[link.ParentSession] = append(children[link.ParentSession], link.ID)
 		}
 	}
 	result := make([]string, 0, 1)

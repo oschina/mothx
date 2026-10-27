@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/oschina/mothx/internal/dao"
@@ -49,6 +50,18 @@ type Manager struct {
 	// forever. It is process-local bookkeeping for one call stack, never
 	// ownership or authority.
 	convergingEventStore bool
+	// eventStoreConverged records that this Manager's current in-memory view
+	// already ran the full EventStore convergence (duplicate cleanup plus
+	// control-plane repair) against the store it loaded. It lets a bind's
+	// MigrateToEventStore call reuse the observation the open just made instead
+	// of performing the same work, and the same physical scan, a second time.
+	// eventStoreConvergedFingerprint is the cheap physical layout identity that
+	// convergence ran against, so the reuse is only valid while the bytes on
+	// disk are still the ones that were converged.
+	// They are never ownership or replay authority: a fresh Manager starts
+	// unconverged and a Reload clears both so the reload converges again.
+	eventStoreConverged            bool
+	eventStoreConvergedFingerprint string
 }
 
 type replayState struct {
@@ -142,6 +155,10 @@ func (m *Manager) Reload() error {
 	m.header = nil
 	m.entries = nil
 	m.leafID = nil
+	// A reload must observe the current log, so it converges again rather than
+	// inheriting the previous open's convergence verdict.
+	m.eventStoreConverged = false
+	m.eventStoreConvergedFingerprint = ""
 	// Reload owns m.mu, so it reloads through the locked body. Calling load()
 	// here would re-lock the non-reentrant mutex and hang the process.
 	if err := m.loadLocked(context.Background()); err != nil {
@@ -391,82 +408,41 @@ func ListAll(sessionDir string, opts ...ListOption) ([]SessionInfo, error) {
 		fn(&opt)
 	}
 
+	if opt.search != "" {
+		// Search has one shared implementation: a single read-only candidate
+		// scan that matches cheap fields first and decodes content only for the
+		// remaining sessions. Pagination is applied inside that scan. The scan
+		// opens the session database itself, so the plain list open below is
+		// skipped for searches instead of opening the same database twice.
+		details, _, err := searchAllDetailed(sessionDir, opt.search, opt.limit, opt.offset, opt.messagesOnly)
+		if err != nil {
+			return nil, err
+		}
+		infos := make([]SessionInfo, len(details))
+		for i := range details {
+			infos[i] = details[i].SessionInfo
+		}
+		return infos, nil
+	}
+
 	db, ok, err := openExistingSessionDB(sessionDir)
 	if err != nil || !ok {
 		return nil, err
 	}
-
-	query := dao.SessionListFilter{Search: opt.search, MessagesOnly: opt.messagesOnly, Limit: opt.limit, Offset: opt.offset, CWDFilter: sessionCWDFilter()}
-	if opt.search != "" {
-		// SQLite no longer contains EventStore payloads. Fetch the ordered
-		// metadata candidate set first, then let the canonical Session replay
-		// perform content matching before applying pagination.
-		query.Search = ""
-		query.Limit = 0
-		query.Offset = 0
-	}
-	records, err := dao.NewSessionDAO(db.Bun()).List(context.Background(), query)
+	records, err := dao.NewSessionDAO(db.Bun()).List(context.Background(), dao.SessionListFilter{MessagesOnly: opt.messagesOnly, Limit: opt.limit, Offset: opt.offset, CWDFilter: sessionCWDFilter()})
 	if err != nil {
 		return nil, err
 	}
-	if opt.search != "" {
-		records = filterSessionRecordsBySearch(sessionDir, records, opt.search)
-		if opt.offset > 0 {
-			if opt.offset >= len(records) {
-				records = nil
-			} else {
-				records = records[opt.offset:]
-			}
-		}
-		if opt.limit > 0 && len(records) > opt.limit {
-			records = records[:opt.limit]
-		}
-	}
 	return sessionInfosFromRecords(sessionDir, records), nil
-}
-
-func filterSessionRecordsBySearch(sessionDir string, records []dao.SessionRecord, search string) []dao.SessionRecord {
-	needle := strings.ToLower(search)
-	filtered := make([]dao.SessionRecord, 0, len(records))
-	for _, record := range records {
-		if strings.Contains(strings.ToLower(record.ID), needle) || strings.Contains(strings.ToLower(record.CWD), needle) || strings.Contains(strings.ToLower(record.ChannelType), needle) || strings.Contains(strings.ToLower(record.ChannelID), needle) {
-			filtered = append(filtered, record)
-			continue
-		}
-		manager, err := OpenByIDExact(sessionDir, record.ID)
-		if err != nil {
-			continue
-		}
-		if info, ok := manager.GetLatestSessionInfo(); ok && strings.Contains(strings.ToLower(info.Name), needle) {
-			filtered = append(filtered, record)
-			continue
-		}
-		matched := false
-		for _, message := range manager.GetMessages() {
-			if strings.Contains(strings.ToLower(message.Content), needle) {
-				matched = true
-				break
-			}
-			for _, block := range message.Contents {
-				if strings.Contains(strings.ToLower(block.Text), needle) {
-					matched = true
-					break
-				}
-			}
-			if matched {
-				break
-			}
-		}
-		if matched {
-			filtered = append(filtered, record)
-		}
-	}
-	return filtered
 }
 
 // CountWithMessages returns the number of sessions that contain at least one
 // persisted conversation message. Empty sessions can be created transiently
 // during startup or request setup and are not user-visible history.
+//
+// A search count is taken from the same single scan that produces a search
+// page, so a caller that needs both does not pay for a second pass. The legacy
+// entry point remains; callers that need both should prefer SearchAllDetailed.
 func CountWithMessages(sessionDir string, opts ...ListOption) (int, error) {
 	if sessionDir == "" {
 		sessionDir = platform.SessionDir()
@@ -481,11 +457,11 @@ func CountWithMessages(sessionDir string, opts ...ListOption) (int, error) {
 		return 0, err
 	}
 	if opt.search != "" {
-		records, listErr := dao.NewSessionDAO(db.Bun()).List(context.Background(), dao.SessionListFilter{MessagesOnly: opt.messagesOnly, CWDFilter: sessionCWDFilter()})
-		if listErr != nil {
-			return 0, listErr
+		scan, scanErr := scanSessionSearch(sessionDir, opt.search, 0, 0, true)
+		if scanErr != nil {
+			return 0, scanErr
 		}
-		return len(filterSessionRecordsBySearch(sessionDir, records, opt.search)), nil
+		return scan.total, nil
 	}
 	return dao.NewSessionDAO(db.Bun()).Count(context.Background(), dao.SessionListFilter{Search: opt.search, MessagesOnly: opt.messagesOnly})
 }
@@ -712,7 +688,22 @@ func OpenByID(cwd, sessionDir, sessionID string) (*Manager, error) {
 }
 
 // OpenByIDExact opens a session by exact session ID regardless of cwd.
+// sessionOpenByIDExactCount counts OpenByIDExact entry into the canonical
+// open path. It is package-local test telemetry with no ownership meaning; list
+// and search assertions use it to prove that a projection does not fall back to
+// replaying every session.
+var sessionOpenByIDExactCount atomic.Uint64
+
+func sessionOpenedByIDExactCount() uint64 { return sessionOpenByIDExactCount.Load() }
+
+// OpenByIDExactCallCount reports the process-local number of OpenByIDExact
+// calls. It is test telemetry used to prove that list/search projections do not
+// fall back to replaying every session; it carries no ownership or lifecycle
+// meaning and must never be used as production control flow.
+func OpenByIDExactCallCount() uint64 { return sessionOpenByIDExactCount.Load() }
+
 func OpenByIDExact(sessionDir, sessionID string) (*Manager, error) {
+	sessionOpenByIDExactCount.Add(1)
 	if sessionID == "" {
 		return nil, fmt.Errorf("session id is empty")
 	}
@@ -1953,14 +1944,14 @@ func (m *Manager) loadLocked(ctx context.Context) error {
 		m.eventStoreMode = record.ContentStore == "event_store"
 		m.cwd = cwd.String
 
-		eventEntries, useEventStore, err := m.loadCommittedEventEntries(ctx, sessionID)
+		eventView, err := m.inspectCommittedEventEntries(ctx, sessionID)
 		if err != nil {
 			return err
 		}
-		if useEventStore {
+		if eventView.useEventStore {
 			m.eventStoreMode = true
-			m.entries = append(m.entries, eventEntries...)
-			for _, entry := range eventEntries {
+			m.entries = append(m.entries, eventView.entries...)
+			for _, entry := range eventView.entries {
 				id, _, _, _ := getEntryMetadata(entry)
 				if id != "" {
 					m.leafID = &id
@@ -1975,9 +1966,10 @@ func (m *Manager) loadLocked(ctx context.Context) error {
 			// SessionRuntime.BindSession, so it runs here, where every open path
 			// (New, Open, OpenByID, OpenByIDExact, ContinueRecent, Reload) passes.
 			// loadLocked holds m.mu, so this is the locked body of
-			// ConvergeEventStore. The recursion flag makes the reload inside it
-			// terminate instead of converging again.
-			return m.convergeEventStoreLocked(ctx)
+			// ConvergeEventStore. The observation above is handed to it so the
+			// open performs exactly one physical EventStore scan instead of
+			// re-reading the log for convergence and again for the turn repair.
+			return m.convergeEventStoreLocked(ctx, &eventView)
 		}
 
 		records, err := dao.NewSessionDAO(db.Bun()).Entries(context.Background(), m.entriesTable(), sessionID)
@@ -2103,6 +2095,24 @@ func (m *Manager) loadLocked(ctx context.Context) error {
 	})
 }
 
+// committedEventView is the result of one physical EventStore inspection: the
+// replayable transcript it implies, the committed batches that transcript was
+// decoded from, and whether the store selected itself as the content source.
+//
+// An open inspects the log once and passes this view to convergence and to the
+// control-plane repair, so neither has to rescan (and re-digest) every segment
+// to reach the same conclusion. The view is a read-only observation; it is
+// never ownership, authorization, or replay authority.
+type committedEventView struct {
+	entries       []interface{}
+	batches       []EventBatch
+	useEventStore bool
+}
+
+// hasEvents reports whether the committed log holds replayable content, i.e.
+// whether a legacy payload duplicate could exist to clean up.
+func (v committedEventView) hasEvents() bool { return len(v.entries) > 0 }
+
 // loadCommittedEventEntries selects the EventStore as the canonical content
 // source only when a session has committed event batches. Legacy sessions with
 // no event intents continue through the SQLite compatibility path; a session
@@ -2119,25 +2129,37 @@ func (m *Manager) loadLocked(ctx context.Context) error {
 // export path) keeps refusing a non-healthy store. Erroring here turned that
 // transient window into a hard open failure for any reader racing a live Run.
 func (m *Manager) loadCommittedEventEntries(ctx context.Context, sessionID string) ([]interface{}, bool, error) {
+	view, err := m.inspectCommittedEventEntries(ctx, sessionID)
+	if err != nil {
+		return nil, false, err
+	}
+	return view.entries, view.useEventStore, nil
+}
+
+// inspectCommittedEventEntries performs the one EventStore inspection an open
+// needs and returns the observation derived from it. Callers that also run
+// convergence or the control-plane repair hand the result on instead of
+// inspecting the log again.
+func (m *Manager) inspectCommittedEventEntries(ctx context.Context, sessionID string) (committedEventView, error) {
 	sessionDir := m.sessionDir
 	if sessionDir == "" {
 		sessionDir = filepath.Dir(resolveDBPath(m.file))
 	}
 	inspection, err := InspectEventStore(ctx, sessionDir, sessionID)
 	if err != nil {
-		return nil, false, err
+		return committedEventView{}, err
 	}
 	if len(inspection.Batches) == 0 && len(inspection.Intents) == 0 && !m.eventStoreMode {
-		return nil, false, nil
+		return committedEventView{}, nil
 	}
 	if len(inspection.Batches) == 0 && len(inspection.Intents) == 0 && m.eventStoreMode {
 		// A freshly created or migrated-empty session is intentionally an
 		// EventStore session before its first batch. Do not fall back to a
 		// legacy payload store merely because there is nothing to replay yet.
-		return nil, true, nil
+		return committedEventView{useEventStore: true}, nil
 	}
 	if inspection.State != EventStoreHealthy && inspection.State != EventStoreReconciling {
-		return nil, false, fmt.Errorf("session event store is %s: %s", inspection.State, inspection.Reason)
+		return committedEventView{}, fmt.Errorf("session event store is %s: %s", inspection.State, inspection.Reason)
 	}
 	// Reuse the physical batches from the inspection above instead of calling
 	// ReadCommittedEventBatches, which would rescan (and re-digest) every
@@ -2148,7 +2170,7 @@ func (m *Manager) loadCommittedEventEntries(ctx context.Context, sessionID strin
 		for _, event := range batch.Events {
 			entry, err := DecodeEventRecord(event)
 			if err != nil {
-				return nil, false, err
+				return committedEventView{}, err
 			}
 			if _, ok := entry.(Header); ok {
 				continue
@@ -2156,7 +2178,7 @@ func (m *Manager) loadCommittedEventEntries(ctx context.Context, sessionID strin
 			entries = append(entries, entry)
 		}
 	}
-	return entries, true, nil
+	return committedEventView{entries: entries, batches: batches, useEventStore: true}, nil
 }
 
 // sessionChildTables lists every session_id-keyed child table of sessions,
@@ -2950,6 +2972,12 @@ func ListAllDetailed(sessionDir string, opts ...ListOption) ([]SessionDetail, er
 	var options listOptions
 	for _, fn := range opts {
 		fn(&options)
+	}
+	if options.search != "" {
+		// The search scan already produces complete details for the page from a
+		// single pass; do not rebuild them through a second list projection.
+		details, _, err := searchAllDetailed(sessionDir, options.search, options.limit, options.offset, options.messagesOnly)
+		return details, err
 	}
 	sessions, err := ListAll(sessionDir, opts...)
 	if err != nil {

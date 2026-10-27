@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -241,5 +242,53 @@ func TestInspectSessionExecutionsProjectsBatchAndOmitsUnreadable(t *testing.T) {
 	// adapters render "no badge" instead of treating it as idle.
 	if missing, ok := results["batch-missing"]; !ok || missing.SessionExists || missing.State == SessionExecutionIdle {
 		t.Fatalf("missing session projection = %+v (present=%v)", missing, ok)
+	}
+}
+
+func TestInspectSessionExecutionsMatchesSingleProjection(t *testing.T) {
+	sessionDir := t.TempDir()
+	initRecoveryTestSession(t, sessionDir, "batch-equivalent-idle")
+	initRecoveryTestSession(t, sessionDir, "batch-equivalent-active")
+	if err := (RunStore{SessionDir: sessionDir}).Create(DurableRun{
+		ID: "batch-equivalent-run", SessionID: "batch-equivalent-active", Source: "tui", Status: "running", StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := []string{
+		"batch-equivalent-idle",
+		"batch-equivalent-active",
+		"batch-equivalent-missing",
+		"batch-equivalent-idle",
+		"",
+	}
+	batch := InspectSessionExecutions(sessionDir, ids)
+	if len(batch) != 3 {
+		t.Fatalf("batch projections = %d, want 3 (empty ignored, duplicates collapsed)", len(batch))
+	}
+	for _, id := range []string{"batch-equivalent-idle", "batch-equivalent-active", "batch-equivalent-missing"} {
+		single, err := InspectSessionExecution(sessionDir, id)
+		if err != nil {
+			t.Fatalf("single projection %q: %v", id, err)
+		}
+		got, ok := batch[id]
+		if !ok {
+			t.Fatalf("batch projection missing %q", id)
+		}
+		if !reflect.DeepEqual(got, single) {
+			t.Fatalf("%s batch projection = %+v, want %+v", id, got, single)
+		}
+	}
+	// A missing session must stay an explicit unknown/missing projection rather
+	// than being dropped or reported idle, and its presence must not disturb the
+	// other IDs.
+	if missing := batch["batch-equivalent-missing"]; missing.SessionExists || missing.State == SessionExecutionIdle {
+		t.Fatalf("missing projection = %+v", missing)
+	}
+	if idle := batch["batch-equivalent-idle"]; idle.State != SessionExecutionIdle {
+		t.Fatalf("idle projection = %+v", idle)
+	}
+	if active := batch["batch-equivalent-active"]; active.State != SessionExecutionOrphaned || active.ActiveRun == nil || active.ActiveRun.ID != "batch-equivalent-run" {
+		t.Fatalf("active projection = %+v", active)
 	}
 }

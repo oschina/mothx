@@ -10,7 +10,7 @@ import (
 	"github.com/oschina/mothx/internal/dao"
 )
 
-const currentSchemaVersion = 48
+const currentSchemaVersion = 49
 
 type schemaMigration struct {
 	version int
@@ -722,6 +722,33 @@ var schemaMigrations = []schemaMigration{
 		}
 		return nil
 	}},
+	// The session list orders by each session's newest timestamp, which it reads
+	// as MAX(timestamp) over that session's rows. Without (session_id, timestamp)
+	// every listed session scans its whole slice of the shared table; the
+	// covering index answers the aggregate from the index. The Run index serves
+	// "fetch this session's non-terminal runs": production reads filter by
+	// session_id plus an IN list of statuses (RunDAO.ActiveBySessions,
+	// ActiveRun, OrphanedFrom), so leading with session_id and status narrows to
+	// the matching runs instead of walking every run of the session. A
+	// status-leading (status, started_at) index cannot answer those queries: the
+	// IN list forbids a single ordered range, so the old single-column
+	// idx_session_runs_status was chosen and the whole-session scan remained.
+	// Additive only: no existing index, column, or meaning changes.
+	{version: 49, name: "add_session_list_aggregate_indexes", apply: func(tx *sql.Tx) error {
+		for _, index := range []struct {
+			name  string
+			apply string
+		}{
+			{"idx_entries_session_timestamp", `CREATE INDEX IF NOT EXISTS idx_entries_session_timestamp ON entries(session_id, timestamp)`},
+			{"idx_session_event_projections_session_timestamp", `CREATE INDEX IF NOT EXISTS idx_session_event_projections_session_timestamp ON session_event_projections(session_id, timestamp)`},
+			{"idx_session_runs_session_status_started", `CREATE INDEX IF NOT EXISTS idx_session_runs_session_status_started ON session_runs(session_id, status, started_at)`},
+		} {
+			if _, err := tx.Exec(index.apply); err != nil {
+				return fmt.Errorf("create %s: %w", index.name, err)
+			}
+		}
+		return nil
+	}},
 }
 
 func createResponseRuntimeTables(tx *sql.Tx) error {
@@ -814,9 +841,9 @@ func createResponseRuntimeTables(tx *sql.Tx) error {
 	return nil
 }
 
-func tableExists(tx *sql.Tx, table string) (bool, error) {
+func tableExists(q sqlQueryer, table string) (bool, error) {
 	var count int
-	if err := tx.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count); err != nil {
+	if err := q.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count); err != nil {
 		return false, fmt.Errorf("check table %s: %w", table, err)
 	}
 	return count != 0, nil
@@ -848,21 +875,55 @@ func addColumnIfMissing(tx *sql.Tx, table, column, definition string) error {
 	return nil
 }
 
-type schemaDatabase interface {
-	Begin() (*sql.Tx, error)
+// sqlQueryer is the read-only half of a database handle. Both *sql.DB and
+// *sql.Tx satisfy it, so schema probes run identically inside a migration
+// transaction and outside one. The outside form is what keeps opening an
+// up-to-date database free of write transactions.
+type sqlQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
 }
 
+type schemaDatabase interface {
+	Begin() (*sql.Tx, error)
+	// The read-only probes that decide whether a write is needed at all. Every
+	// process opening one session directory runs the migration check, so on an
+	// up-to-date schema this must not take the single SQLite writer lock.
+	sqlQueryer
+}
+
+// ensureSchemaMigrationsTable creates or repairs the migration ledger. The
+// repair needs a write transaction; a ledger that already has every required
+// column does not, and must not open one. Before this probe, every open of
+// sessions.db began one write transaction here and then one per applied
+// migration (28 on a current database), so a read-only open serialised the
+// single writer lock ~29 times.
 func ensureSchemaMigrationsTable(db schemaDatabase) error {
+	exists, err := tableExists(db, "schema_migrations")
+	if err != nil {
+		return err
+	}
+	if exists {
+		columns, err := tableColumns(db, "schema_migrations")
+		if err != nil {
+			return err
+		}
+		if columns["version"] && columns["name"] && columns["applied_at"] {
+			return nil
+		}
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var exists int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&exists); err != nil {
+	// Re-check inside the transaction: another process may have created or
+	// repaired the ledger between the probe above and this write lock.
+	var existsInTx int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&existsInTx); err != nil {
 		return err
 	}
-	if exists != 0 {
+	if existsInTx != 0 {
 		columns, err := tableColumns(tx, "schema_migrations")
 		if err != nil {
 			return err
@@ -884,8 +945,8 @@ func ensureSchemaMigrationsTable(db schemaDatabase) error {
 	return tx.Commit()
 }
 
-func tableColumns(tx *sql.Tx, table string) (map[string]bool, error) {
-	rows, err := tx.Query("PRAGMA table_info(" + table + ")")
+func tableColumns(q sqlQueryer, table string) (map[string]bool, error) {
+	rows, err := q.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
 		return nil, err
 	}
@@ -903,6 +964,42 @@ func tableColumns(tx *sql.Tx, table string) (map[string]bool, error) {
 	return result, rows.Err()
 }
 
+// appliedSchemaMigrations is the read-only snapshot of the migration ledger.
+// Versions records every non-NULL version row; names records every name,
+// including legacy rows whose version column is still NULL and therefore need
+// the byName backfill.
+type appliedSchemaMigrations struct {
+	versions map[int]bool
+	names    map[string]bool
+}
+
+func readAppliedSchemaMigrations(db schemaDatabase) (appliedSchemaMigrations, error) {
+	applied := appliedSchemaMigrations{versions: map[int]bool{}, names: map[string]bool{}}
+	rows, err := db.Query(`SELECT version, name FROM schema_migrations`)
+	if err != nil {
+		return applied, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var version sql.NullInt64
+		var name string
+		if err := rows.Scan(&version, &name); err != nil {
+			return applied, err
+		}
+		if version.Valid {
+			applied.versions[int(version.Int64)] = true
+		}
+		applied.names[name] = true
+	}
+	return applied, rows.Err()
+}
+
+// applySchemaMigrations brings the database to the current migration set. It
+// reads the ledger once, then opens a write transaction only for a migration
+// that is genuinely missing or for a legacy name-only row that still needs its
+// version backfilled. A fully migrated database therefore begins zero
+// transactions, which is what makes opening sessions.db read-only in the common
+// case instead of serialising ~29 BEGIN IMMEDIATE calls.
 func applySchemaMigrations(db schemaDatabase) error {
 	if err := ensureSchemaMigrationsTable(db); err != nil {
 		return err
@@ -915,45 +1012,86 @@ func applySchemaMigrations(db schemaDatabase) error {
 	migrations := make([]schemaMigration, len(schemaMigrations))
 	copy(migrations, schemaMigrations)
 	sort.Slice(migrations, func(i, j int) bool { return migrations[i].version < migrations[j].version })
+	applied, err := readAppliedSchemaMigrations(db)
+	if err != nil {
+		return err
+	}
 	for _, migration := range migrations {
-		tx, err := db.Begin()
-		if err != nil {
-			return fmt.Errorf("begin schema migration %d: %w", migration.version, err)
-		}
-		var byVersion, byName int
-		if err := tx.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", migration.version).Scan(&byVersion); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE name = ?", migration.name).Scan(&byName); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if byVersion != 0 || byName != 0 {
-			if byVersion == 0 {
-				if _, err := tx.Exec("UPDATE schema_migrations SET version = ? WHERE name = ? AND version IS NULL", migration.version, migration.name); err != nil {
-					tx.Rollback()
-					return err
-				}
+		byVersion := applied.versions[migration.version]
+		byName := applied.names[migration.name]
+		if byVersion || byName {
+			if byVersion {
+				continue
 			}
-			if err := tx.Commit(); err != nil {
+			// A legacy row recorded only by name: fill its version in one bounded
+			// transaction instead of doing it inside every migration's BEGIN.
+			if err := backfillSchemaMigrationVersion(db, migration); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := migration.apply(tx); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("apply schema migration %d (%s): %w", migration.version, migration.name, err)
-		}
-		if _, err := tx.Exec("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP)", migration.version, migration.name); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("record schema migration %d: %w", migration.version, err)
-		}
-		if err := tx.Commit(); err != nil {
+		if err := applySchemaMigration(db, migration); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// backfillSchemaMigrationVersion writes the version of a legacy name-only
+// ledger row with the original UPDATE ... WHERE name = ? AND version IS NULL
+// statement. The transaction re-checks the version first so a concurrent
+// upgrade that already backfilled the row cannot turn this into a duplicate
+// primary key.
+func backfillSchemaMigrationVersion(db schemaDatabase, migration schemaMigration) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin schema migration %d: %w", migration.version, err)
+	}
+	defer tx.Rollback()
+	var byVersion int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", migration.version).Scan(&byVersion); err != nil {
+		return err
+	}
+	if byVersion != 0 {
+		return tx.Commit()
+	}
+	if _, err := tx.Exec("UPDATE schema_migrations SET version = ? WHERE name = ? AND version IS NULL", migration.version, migration.name); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// applySchemaMigration applies one migration atomically. Its inner ledger check
+// preserves first-wins across processes: the caller's read-only snapshot may be
+// stale by the time this transaction acquires the writer lock.
+func applySchemaMigration(db schemaDatabase, migration schemaMigration) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin schema migration %d: %w", migration.version, err)
+	}
+	defer tx.Rollback()
+	var byVersion, byName int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", migration.version).Scan(&byVersion); err != nil {
+		return err
+	}
+	if err := tx.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE name = ?", migration.name).Scan(&byName); err != nil {
+		return err
+	}
+	if byVersion != 0 || byName != 0 {
+		if byVersion == 0 {
+			if _, err := tx.Exec("UPDATE schema_migrations SET version = ? WHERE name = ? AND version IS NULL", migration.version, migration.name); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	}
+	if err := migration.apply(tx); err != nil {
+		return fmt.Errorf("apply schema migration %d (%s): %w", migration.version, migration.name, err)
+	}
+	if _, err := tx.Exec("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP)", migration.version, migration.name); err != nil {
+		return fmt.Errorf("record schema migration %d: %w", migration.version, err)
+	}
+	return tx.Commit()
 }
 
 // knowledgeStoreSchema is deliberately separate from currentSchema: a

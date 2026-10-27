@@ -1577,45 +1577,10 @@ func (rt *channelRuntime) handleSessions(sessions activeSessionManager) http.Han
 			}
 			dir := srv.SessionDir()
 			search := strings.TrimSpace(r.URL.Query().Get("search"))
-			details, err := session.ListAllDetailed(dir, session.WithLimit(limit), session.WithOffset(offset), session.WithMessagesOnly(), session.WithSearch(search))
+			result, total, err := rt.listPersistedSessions(dir, search, limit, offset)
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
-			}
-			total, err := session.CountWithMessages(dir, session.WithSearch(search))
-			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
-			}
-			result := make([]openaiapi.ActiveSessionInfo, 0, len(details))
-			for _, d := range details {
-				item := openaiapi.ActiveSessionInfo{
-					ID:              d.ID,
-					WorkDir:         d.Cwd,
-					LastUsed:        d.ModTime,
-					MessageCount:    d.MessageCount,
-					Preview:         d.Preview,
-					Title:           d.Name,
-					ChannelType:     d.ChannelType,
-					ChannelID:       d.ChannelID,
-					ChannelLabel:    channelLabel(d.ChannelType, d.ChannelID),
-					Bound:           d.ChannelType == "wechat" || d.ChannelType == "feishu",
-					ParentSessionID: d.ParentSession, ForkBoundarySeq: d.ForkBoundarySeq, SeedLength: d.SeedLength, ForkKind: d.ForkKind,
-				}
-				if metadata, err := session.GetSessionMetadata(dir, item.ID); err == nil {
-					item.ProjectID, item.Pinned = metadata.ProjectID, metadata.Pinned
-				}
-				execution, inspectErr := agentruntime.InspectSessionExecution(dir, item.ID)
-				if inspectErr != nil {
-					log.Printf("[serve] inspect execution for session %q: %v", item.ID, inspectErr)
-				}
-				item.Execution = &execution
-				item.Running = execution.Running
-				if item.ChannelType == "" {
-					item.ChannelType = "local"
-					item.ChannelLabel = channelLabel(item.ChannelType, item.ChannelID)
-				}
-				result = append(result, item)
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"sessions": result, "total": total})
 			return
@@ -1636,6 +1601,83 @@ func (rt *channelRuntime) handleSessions(sessions activeSessionManager) http.Han
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"sessions": list})
 	}
+}
+
+// listPersistedSessions produces one paginated session page plus its total.
+// A search is answered by one SearchAllDetailed call (details and total from the
+// same read-only scan). Without a search, the existing SQL LIMIT/OFFSET list and
+// count path is unchanged.
+func (rt *channelRuntime) listPersistedSessions(dir, search string, limit, offset int) ([]openaiapi.ActiveSessionInfo, int, error) {
+	var details []session.SessionDetail
+	var total int
+	var err error
+	if search != "" {
+		details, total, err = session.SearchAllDetailed(dir, search, limit, offset)
+	} else {
+		details, err = session.ListAllDetailed(dir, session.WithLimit(limit), session.WithOffset(offset), session.WithMessagesOnly())
+		if err == nil {
+			total, err = session.CountWithMessages(dir)
+		}
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	ids := make([]string, 0, len(details))
+	for _, d := range details {
+		ids = append(ids, d.ID)
+	}
+	// Page-scoped batches: one metadata query and one execution facts read for
+	// the whole page instead of two queries per session. Missing rows keep the
+	// same zero-value metadata and conservative unknown execution projection as
+	// the per-item path.
+	metadataByID := make(map[string]session.SessionMetadata, len(ids))
+	if len(ids) > 0 {
+		metadata, metaErr := session.ListSessionMetadata(dir, ids)
+		if metaErr != nil {
+			log.Printf("[serve] list session metadata: %v", metaErr)
+		} else {
+			metadataByID = metadata
+		}
+	}
+	executions := agentruntime.InspectSessionExecutions(dir, ids)
+	result := make([]openaiapi.ActiveSessionInfo, 0, len(details))
+	for _, d := range details {
+		item := openaiapi.ActiveSessionInfo{
+			ID:              d.ID,
+			WorkDir:         d.Cwd,
+			LastUsed:        d.ModTime,
+			MessageCount:    d.MessageCount,
+			Preview:         d.Preview,
+			Title:           d.Name,
+			ChannelType:     d.ChannelType,
+			ChannelID:       d.ChannelID,
+			ChannelLabel:    channelLabel(d.ChannelType, d.ChannelID),
+			Bound:           d.ChannelType == "wechat" || d.ChannelType == "feishu",
+			ParentSessionID: d.ParentSession, ForkBoundarySeq: d.ForkBoundarySeq, SeedLength: d.SeedLength, ForkKind: d.ForkKind,
+		}
+		if metadata, ok := metadataByID[item.ID]; ok {
+			item.ProjectID, item.Pinned = metadata.ProjectID, metadata.Pinned
+		}
+		execution := persistedSessionExecution(item.ID, executions)
+		item.Execution = &execution
+		item.Running = execution.Running
+		if item.ChannelType == "" {
+			item.ChannelType = "local"
+			item.ChannelLabel = channelLabel(item.ChannelType, item.ChannelID)
+		}
+		result = append(result, item)
+	}
+	return result, total, nil
+}
+
+// persistedSessionExecution mirrors the ListActiveSessions merge: a projection
+// missing from the batch is unknown, never idle, so an unreadable session can
+// never be advertised as accepting work.
+func persistedSessionExecution(sessionID string, executions map[string]agentruntime.SessionExecutionSnapshot) agentruntime.SessionExecutionSnapshot {
+	if execution, ok := executions[sessionID]; ok {
+		return execution
+	}
+	return agentruntime.UnknownSessionExecution(sessionID)
 }
 
 // handleSessionID allocates an ID for a WebUI session whose durable creation

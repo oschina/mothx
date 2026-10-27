@@ -95,6 +95,20 @@ type TurnMarkerSeq struct {
 	Seq    int64  `bun:"seq"`
 }
 
+// HasLegacyEntries reports whether the session still carries the obsolete
+// payload-bearing SQLite duplicate of content the EventStore already owns.
+// Convergence probes with this read-only existence check before it opens a
+// write transaction: on an already-converged session the answer is no, so the
+// bind path performs no write at all instead of opening one transaction per
+// open just to prove there is nothing to delete.
+func (d *SessionEventProjectionDAO) HasLegacyEntries(ctx context.Context, executor bun.IDB, sessionID string) (bool, error) {
+	return executor.NewSelect().Table("entries").
+		ColumnExpr("1").
+		Where("session_id = ? AND type <> ?", sessionID, "session").
+		Limit(1).
+		Exists(ctx)
+}
+
 // DeleteLegacyEntries clears the obsolete payload-bearing SQLite transcript
 // only after the matching EventStore batch is committed and indexed.
 func (d *SessionEventProjectionDAO) DeleteLegacyEntries(ctx context.Context, executor bun.IDB, sessionID string) error {

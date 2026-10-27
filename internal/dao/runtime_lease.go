@@ -67,6 +67,23 @@ func (d *RuntimeLeaseDAO) ListHeld(ctx context.Context, executor bun.IDB) ([]Run
 	return records, err
 }
 
+// FindMany returns the lease rows of the given sessions in one query, keyed by
+// session ID. Sessions without a lease row are absent from the result.
+func (d *RuntimeLeaseDAO) FindMany(ctx context.Context, executor bun.IDB, sessionIDs []string) (map[string]RuntimeLeaseRecord, error) {
+	result := make(map[string]RuntimeLeaseRecord, len(sessionIDs))
+	if len(sessionIDs) == 0 {
+		return result, nil
+	}
+	var records []RuntimeLeaseRecord
+	if err := executor.NewSelect().Model(&records).Where("session_id IN (?)", bun.In(sessionIDs)).Scan(ctx); err != nil {
+		return nil, err
+	}
+	for _, record := range records {
+		result[record.SessionID] = record
+	}
+	return result, nil
+}
+
 func (d *RuntimeLeaseDAO) Insert(ctx context.Context, executor bun.IDB, record *RuntimeLeaseRecord) error {
 	_, err := executor.NewInsert().Model(record).Exec(ctx)
 	return err

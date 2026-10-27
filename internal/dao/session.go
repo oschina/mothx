@@ -96,14 +96,80 @@ type sessionListRow struct {
 // is the newest persisted entry, falling back to the creation timestamp, so
 // callers order and display sessions by when they were last used rather than by
 // when they were created.
+const sessionLastActiveOrderExpr = "COALESCE((SELECT MAX(e.timestamp) FROM entries e WHERE e.session_id = s.id), (SELECT MAX(p.timestamp) FROM session_event_projections p WHERE p.session_id = s.id), s.timestamp)"
+
+const sessionLastActiveExpr = sessionLastActiveOrderExpr + " AS last_active_at"
+
 var sessionListColumns = "s.id, s.cwd, s.timestamp, " +
-	"COALESCE((SELECT MAX(e.timestamp) FROM entries e WHERE e.session_id = s.id), (SELECT MAX(p.timestamp) FROM session_event_projections p WHERE p.session_id = s.id), s.timestamp) AS last_active_at, " +
+	sessionLastActiveExpr + ", " +
 	"s.channel_type, s.channel_id, s.parent_session, s.version, s.fork_boundary_seq, s.seed_length, s.fork_kind, s.expert_id, s.content_store"
 
 type SessionDetailAggregates struct {
 	MessageCounts map[string]int
 	FirstMessages map[string]string
 	LatestInfos   map[string]string
+}
+
+// SessionParentRecord is the lightweight fork-lineage projection of one
+// session. It deliberately carries no preview, title, or aggregate data, so a
+// caller that only needs the parent graph does not replay transcripts.
+type SessionParentRecord struct {
+	ID            string  `bun:"id"`
+	ParentSession *string `bun:"parent_session"`
+}
+
+// SessionSearchEntryRecord is one persisted entry payload considered by
+// session search. Data stays raw JSON: callers decode the entry structure and
+// match its text fields in Go instead of using a SQL LIKE over JSON members.
+type SessionSearchEntryRecord struct {
+	SessionID string `bun:"session_id"`
+	Type      string `bun:"type"`
+	Data      string `bun:"data"`
+}
+
+// ListParents returns the id/parent_session projection ordered by last use.
+// The order mirrors the session list so callers that build a child graph keep
+// the same traversal order without loading previews or titles.
+func (d *SessionDAO) ListParents(ctx context.Context) ([]SessionParentRecord, error) {
+	var rows []SessionParentRecord
+	err := d.db.NewSelect().TableExpr("sessions AS s").
+		Column("s.id", "s.parent_session").
+		OrderExpr(sessionLastActiveOrderExpr+" DESC").
+		Scan(ctx, &rows)
+	return rows, err
+}
+
+// StreamSearchContentEntries walks the searchable payload rows for the
+// requested sessions in one ordered query, invoking fn per row without
+// materializing the whole result. Only entry kinds whose persisted structure has
+// searchable text are selected; matching itself happens in Go on the decoded
+// entry, never on the raw JSON envelope. The callback may stop early by
+// returning an error.
+func (d *SessionDAO) StreamSearchContentEntries(ctx context.Context, sessionIDs []string, fn func(SessionSearchEntryRecord) error) error {
+	if len(sessionIDs) == 0 {
+		return nil
+	}
+	rows, err := d.db.NewSelect().Table("entries").
+		Column("session_id", "type", "data").
+		Where("session_id IN (?)", bun.In(sessionIDs)).
+		Where("type IN (?)", bun.In([]string{"message", "compaction", "content_override"})).
+		OrderExpr("session_id ASC").
+		OrderExpr("seq ASC").
+		Rows(ctx)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var record SessionSearchEntryRecord
+		if err := rows.Scan(&record.SessionID, &record.Type, &record.Data); err != nil {
+			return err
+		}
+		if err := fn(record); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func NewSessionDAO(db *bun.DB) *SessionDAO { return &SessionDAO{db: db} }
@@ -341,6 +407,38 @@ func (d *SessionDAO) Count(ctx context.Context, filter SessionListFilter) (int, 
 	var count int
 	return count, q.Scan(ctx, &count)
 }
+
+// ExistingIDs returns the subset of sessionIDs that have a row in the sessions
+// table. It lets a batch read distinguish a deleted session from one with no
+// durable execution rows without issuing one existence query per session.
+func (d *SessionDAO) ExistingIDs(ctx context.Context, executor bun.IDB, sessionIDs []string) ([]string, error) {
+	if len(sessionIDs) == 0 {
+		return nil, nil
+	}
+	var ids []string
+	err := executor.NewSelect().Table("sessions").Column("id").Where("id IN (?)", bun.In(sessionIDs)).Scan(ctx, &ids)
+	return ids, err
+}
+
+// FindListByID returns the session-list projection row for one session, or nil
+// when the session does not exist. It reuses the same columns and row mapping as
+// the full listing so a single-session read cannot drift from List.
+func (d *SessionDAO) FindListByID(ctx context.Context, id string) (*SessionRecord, error) {
+	if id == "" {
+		return nil, nil
+	}
+	row := new(sessionListRow)
+	err := d.db.NewSelect().TableExpr("sessions AS s").ColumnExpr(sessionListColumns).Where("s.id = ?", id).Limit(1).Scan(ctx, row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	records := sessionRecordsFromRows([]sessionListRow{*row})
+	return &records[0], nil
+}
+
 func (d *SessionDAO) FindExact(ctx context.Context, table, id string) (string, error) {
 	var value string
 	err := d.db.NewSelect().Table(table).Column("id").Where("id = ?", id).Limit(1).Scan(ctx, &value)

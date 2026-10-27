@@ -56,12 +56,37 @@ func (m *Manager) MigrateToEventStore(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	subAgent := m.subAgent
+	convergedOnOpen := m.eventStoreConverged
+	convergedFingerprint := m.eventStoreConvergedFingerprint
+	sessionDir, sessionID := "", ""
+	if convergedOnOpen && m.header != nil {
+		sessionDir = m.sessionDirOrDerive()
+		sessionID = m.header.ID
+	}
 	m.mu.Unlock()
 	if subAgent {
 		return errors.New("sub-agent sessions use the isolated sub_entries compatibility store")
 	}
-	if err := m.ConvergeEventStore(ctx); err != nil {
-		return err
+	// When this Manager's open already converged onto the EventStore it adopted the
+	// committed log, removed any legacy payload duplicate, and repaired the turn
+	// boundaries. Re-converging here would re-inspect (and re-digest) the whole
+	// log for a conclusion the open already reached, which is exactly the
+	// duplicate bind-time scan this path must not pay.
+	//
+	// Reusing that verdict is only sound while the bytes on disk are still the
+	// ones the open converged. "Converged on open" is in-memory history, not a
+	// statement about the current log: another process may have committed new
+	// events, or raw bytes may have appeared with no SQLite intent at all. The
+	// recorded physical layout fingerprint (segment names, sizes, mtimes — no
+	// content scan) is the cheap proof that the observation still applies; any
+	// difference, a failed fingerprint, or an empty one falls through to a full
+	// convergence so the store is inspected again and an unhealthy log still
+	// fails closed. An empty store has no segment files, so its fingerprint is
+	// empty and it converges again; that inspection is trivial.
+	if !convergedOnOpen || !eventStoreConvergenceStillValid(sessionDir, sessionID, convergedFingerprint) {
+		if err := m.ConvergeEventStore(ctx); err != nil {
+			return err
+		}
 	}
 	m.mu.Lock()
 	converged := m.eventStoreMode
@@ -82,10 +107,45 @@ func (m *Manager) MigrateToEventStore(ctx context.Context) error {
 	return err
 }
 
+// eventStoreConvergenceStillValid reports whether the EventStore bytes now on
+// disk are still the layout this Manager converged. A record is only reusable
+// when convergence recorded a non-empty physical fingerprint and the current
+// fingerprint matches it exactly. The caller must not hold m.mu: the fingerprint
+// only stats segment files, but it must not run underneath a lock callers may
+// hold while waiting on the session database.
+func eventStoreConvergenceStillValid(sessionDir, sessionID, recorded string) bool {
+	if recorded == "" || sessionID == "" {
+		return false
+	}
+	current, err := eventStorePhysicalFingerprint(sessionDir, sessionID)
+	if err != nil || current == "" {
+		return false
+	}
+	return current == recorded
+}
+
+// rememberEventStoreConvergenceLocked records that this Manager just converged
+// the EventStore layout currently on disk. The recorded fingerprint is what lets
+// MigrateToEventStore reuse the open's convergence without trusting a stale
+// in-memory verdict. A fingerprint that cannot be computed or is empty is stored
+// as empty, which disables the reuse instead of failing convergence: the session
+// is converged, it just cannot prove the log is unchanged later.
+//
+// The caller holds m.mu.
+func (m *Manager) rememberEventStoreConvergenceLocked(sessionDir, sessionID string) {
+	fingerprint, err := eventStorePhysicalFingerprint(sessionDir, sessionID)
+	if err != nil {
+		fingerprint = ""
+	}
+	m.eventStoreConverged = true
+	m.eventStoreConvergedFingerprint = fingerprint
+}
+
 // ConvergeEventStore makes this Manager read the canonical EventStore. It is the
 // single expression of "this session is now open": load() calls it for every
-// Manager that observes the EventStore, and MigrateToEventStore calls it before
-// deciding whether an export is needed.
+// Manager that observes the EventStore, and MigrateToEventStore calls it when
+// this Manager has not converged yet before deciding whether an export is
+// needed.
 //
 // Reading canonically is a property of the session, not of whichever entry point
 // happens to call SessionRuntime.BindSession. serve/chat, the background
@@ -104,7 +164,7 @@ func (m *Manager) ConvergeEventStore(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.convergeEventStoreLocked(ctx)
+	return m.convergeEventStoreLocked(ctx, nil)
 }
 
 // convergeEventStoreLocked is the convergence body of an open. The caller
@@ -120,9 +180,15 @@ func (m *Manager) ConvergeEventStore(ctx context.Context) error {
 // that no longer exist, so the heal belongs here rather than on some future
 // bind that may never come.
 //
+// view, when non-nil, is the committed-event observation the caller already made
+// for this same session. Reusing it is what keeps an open to a single physical
+// EventStore scan: convergence and the turn-boundary repair read the observation
+// instead of loading the log again. A nil view makes convergence inspect once
+// itself, which is what a standalone ConvergeEventStore call needs.
+//
 // It is deliberately a no-op while this Manager is already converging, so a
 // nested load cannot re-enter it.
-func (m *Manager) convergeEventStoreLocked(ctx context.Context) error {
+func (m *Manager) convergeEventStoreLocked(ctx context.Context, view *committedEventView) error {
 	if err := m.ensureInitializedLocked(); err != nil {
 		return err
 	}
@@ -146,7 +212,7 @@ func (m *Manager) convergeEventStoreLocked(ctx context.Context) error {
 	}
 	m.convergingEventStore = true
 	defer func() { m.convergingEventStore = false }()
-	return m.convergeFlippedSession(ctx, sessionDir)
+	return m.convergeFlippedSession(ctx, sessionDir, view)
 }
 
 // exportLegacyTranscript performs the one irreversible step of migration: the
@@ -251,7 +317,7 @@ func (m *Manager) exportLegacyTranscript(ctx context.Context) error {
 	if err := m.flipSessionContentStore(ctx, sessionDir); err != nil {
 		return err
 	}
-	return m.convergeFlippedSession(ctx, sessionDir)
+	return m.convergeFlippedSession(ctx, sessionDir, nil)
 }
 
 // resolveEventStoreExportBinding returns the lease identity to write an export
@@ -329,11 +395,12 @@ func (m *Manager) sessionDirOrDerive() string {
 // payload rows, because a session that reached this state through load() has no
 // duplicate left to clean up. What it does guarantee is that the control plane
 // (`conversation_turns` bounds) addresses positions that exist in the event log.
-// The repair is idempotent, takes no lease, and costs one read plus at most one
-// transaction, so running it on every bind stays cheap. Callers must already
-// hold m.mu and pass the canonical session directory.
-func (m *Manager) reconcileControlPlane(ctx context.Context, sessionDir string) error {
-	if err := repairUnmappedTurnBoundaries(ctx, sessionDir, m.header.ID); err != nil {
+// The repair is idempotent, takes no lease, and costs at most one transaction
+// over the batches the open already observed, so running it on every bind stays
+// cheap. Callers must already hold m.mu and pass the canonical session directory
+// together with the committed batches of the observation being converged.
+func (m *Manager) reconcileControlPlane(ctx context.Context, sessionDir string, batches []EventBatch) error {
+	if err := repairUnmappedTurnBoundaries(ctx, sessionDir, m.header.ID, batches); err != nil {
 		return fmt.Errorf("repair turn boundaries of session %s: %w", m.header.ID, err)
 	}
 	return nil
@@ -350,15 +417,20 @@ func (m *Manager) sessionContentStoreFlipped(ctx context.Context, sessionDir str
 }
 
 // eventStoreObservation is what an open needs to know about a session whose
-// canonical content store is the EventStore: the replayed transcript and
-// whether the committed log actually holds events.
+// canonical content store is the EventStore: the replayed transcript, the
+// committed batches it came from, and whether the log actually holds events.
 type eventStoreObservation struct {
 	entries   []interface{}
+	batches   []EventBatch
 	hasEvents bool
 }
 
 // observeEventStoreLocked reads the canonical EventStore for this Manager
 // without adopting it. The caller holds m.mu.
+//
+// view, when non-nil, is the observation the caller's open already made; it is
+// reused so convergence does not rescan the log for facts that are already in
+// hand. A nil view performs exactly one inspection here.
 //
 // This is the read-only half of convergence. It deliberately performs no write
 // at all: an open is not a mutation, so it must never truncate uncommitted
@@ -366,15 +438,18 @@ type eventStoreObservation struct {
 // observes becomes durable only when a caller that legitimately owns the write
 // (an append, the Runtime terminal transaction, or an export under a content
 // lease) applies it through applyEventStoreObservationLocked.
-func (m *Manager) observeEventStoreLocked(ctx context.Context) (eventStoreObservation, error) {
-	eventEntries, useEventStore, err := m.loadCommittedEventEntries(ctx, m.header.ID)
-	if err != nil {
-		return eventStoreObservation{}, err
+func (m *Manager) observeEventStoreLocked(ctx context.Context, view *committedEventView) (eventStoreObservation, error) {
+	if view == nil {
+		inspected, err := m.inspectCommittedEventEntries(ctx, m.header.ID)
+		if err != nil {
+			return eventStoreObservation{}, err
+		}
+		view = &inspected
 	}
-	if !useEventStore {
+	if !view.useEventStore {
 		return eventStoreObservation{}, fmt.Errorf("session %s content store is the EventStore but its committed events cannot be replayed", m.header.ID)
 	}
-	return eventStoreObservation{entries: eventEntries, hasEvents: len(eventEntries) > 0}, nil
+	return eventStoreObservation{entries: view.entries, batches: view.batches, hasEvents: view.hasEvents()}, nil
 }
 
 // applyEventStoreObservationLocked adopts an observed EventStore into this
@@ -401,8 +476,12 @@ func (m *Manager) applyEventStoreObservationLocked(observed eventStoreObservatio
 // idempotent convergence of facts that are already committed, so neither takes
 // a lease or a reservation: the write fence for real content changes stays
 // inside AppendEventStoreEntries and the Runtime terminal transaction.
-func (m *Manager) convergeFlippedSession(ctx context.Context, sessionDir string) error {
-	observed, err := m.observeEventStoreLocked(ctx)
+//
+// view, when non-nil, is the committed-event observation the caller already
+// made for this session, so this converges and repairs from it instead of
+// rescanning the log.
+func (m *Manager) convergeFlippedSession(ctx context.Context, sessionDir string, view *committedEventView) error {
+	observed, err := m.observeEventStoreLocked(ctx, view)
 	if err != nil {
 		return err
 	}
@@ -412,14 +491,34 @@ func (m *Manager) convergeFlippedSession(ctx context.Context, sessionDir string)
 		// Nothing was ever exported, so there is no duplicate payload to remove.
 		// Skipping the delete keeps the common new-session bind free of a write
 		// transaction while a durable Run is active.
+		m.rememberEventStoreConvergenceLocked(sessionDir, sessionID)
 		return nil
 	}
-	if err := WriteRootDatabase(ctx, sessionDir, func(tx *dao.Tx) error {
-		return dao.NewSessionEventProjectionDAO(nil).DeleteLegacyEntries(ctx, tx, sessionID)
-	}); err != nil {
-		return fmt.Errorf("remove legacy transcript payload after EventStore commit: %w", err)
+	// Deleting the duplicate is only necessary when one still exists. Probing
+	// first keeps an already-converged session's bind free of a write
+	// transaction: the delete always matched nothing, yet it still opened the
+	// single writer lock on every open.
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		return err
 	}
-	return m.reconcileControlPlane(ctx, sessionDir)
+	projectionDAO := dao.NewSessionEventProjectionDAO(nil)
+	hasLegacy, err := projectionDAO.HasLegacyEntries(ctx, db.Bun(), sessionID)
+	if err != nil {
+		return fmt.Errorf("probe legacy transcript payload: %w", err)
+	}
+	if hasLegacy {
+		if err := WriteRootDatabase(ctx, sessionDir, func(tx *dao.Tx) error {
+			return projectionDAO.DeleteLegacyEntries(ctx, tx, sessionID)
+		}); err != nil {
+			return fmt.Errorf("remove legacy transcript payload after EventStore commit: %w", err)
+		}
+	}
+	if err := m.reconcileControlPlane(ctx, sessionDir, observed.batches); err != nil {
+		return err
+	}
+	m.rememberEventStoreConvergenceLocked(sessionDir, sessionID)
+	return nil
 }
 
 // repairUnmappedTurnBoundaries retargets every turn whose recorded bounds do not
@@ -438,11 +537,10 @@ func (m *Manager) convergeFlippedSession(ctx context.Context, sessionDir string)
 // marker that carries its own turn ID, and only those two positions are trusted.
 // A turn with no matching marker stays untouched — guessing a boundary would
 // fabricate a fork point the transcript never had.
-func repairUnmappedTurnBoundaries(ctx context.Context, sessionDir, sessionID string) error {
-	batches, err := ReadCommittedEventBatches(ctx, sessionDir, sessionID)
-	if err != nil {
-		return err
-	}
+//
+// batches are the committed batches of the open's single EventStore observation.
+// The caller already inspected the log, so the repair must not scan it again.
+func repairUnmappedTurnBoundaries(ctx context.Context, sessionDir, sessionID string, batches []EventBatch) error {
 	markerSeqs := make(map[string]int64, len(batches)*2)
 	for _, batch := range batches {
 		for i, event := range batch.Events {

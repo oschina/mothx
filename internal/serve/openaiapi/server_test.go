@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -4591,5 +4592,152 @@ func TestRequestRunInputAudioVideoContentParts(t *testing.T) {
 	}
 	if _, _, err := requestRunInput(remote); err == nil {
 		t.Fatal("remote media references must be rejected")
+	}
+}
+
+func findActiveSessionInfo(t *testing.T, sessions []ActiveSessionInfo, id string) *ActiveSessionInfo {
+	t.Helper()
+	for i := range sessions {
+		if sessions[i].ID == id {
+			return &sessions[i]
+		}
+	}
+	return nil
+}
+
+func TestSetSessionTitleMatchesListProjection(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.pool.Stop()
+
+	mgr := session.New(srv.cfg.GetWorkDir(), srv.settings.GetSessionDir())
+	if err := mgr.InitWithID("title-projection"); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+	if _, err := mgr.AppendMessage(provider.NewUserMessage("hello")); err != nil {
+		t.Fatalf("append message: %v", err)
+	}
+	if err := srv.pool.Put(&APISession{
+		ID: "title-projection", WorkDir: srv.cfg.GetWorkDir(), Manager: mgr, Mode: "agent", LastUsed: time.Now(),
+	}); err != nil {
+		t.Fatalf("put session: %v", err)
+	}
+
+	updated, err := srv.SetSessionTitle("title-projection", "Renamed session")
+	if err != nil {
+		t.Fatalf("SetSessionTitle: %v", err)
+	}
+	if updated.Title != "Renamed session" {
+		t.Fatalf("returned title = %q", updated.Title)
+	}
+
+	listed := findActiveSessionInfo(t, srv.ListActiveSessions(), "title-projection")
+	if listed == nil {
+		t.Fatal("listed session missing")
+	}
+	if !reflect.DeepEqual(*updated, *listed) {
+		t.Fatalf("SetSessionTitle projection = %+v, list projection = %+v", *updated, *listed)
+	}
+}
+
+func TestSetSessionMetadataMatchesListProjection(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.pool.Stop()
+
+	mgr := session.New(srv.cfg.GetWorkDir(), srv.settings.GetSessionDir())
+	if err := mgr.InitWithID("metadata-projection"); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+	if _, err := mgr.AppendMessage(provider.NewUserMessage("hello")); err != nil {
+		t.Fatalf("append message: %v", err)
+	}
+	if err := srv.pool.Put(&APISession{
+		ID: "metadata-projection", WorkDir: srv.cfg.GetWorkDir(), Manager: mgr, Mode: "agent", LastUsed: time.Now(),
+	}); err != nil {
+		t.Fatalf("put session: %v", err)
+	}
+
+	updated, err := srv.SetSessionMetadata("metadata-projection", session.SessionMetadata{Pinned: true})
+	if err != nil {
+		t.Fatalf("SetSessionMetadata: %v", err)
+	}
+	if !updated.Pinned {
+		t.Fatal("returned metadata is not pinned")
+	}
+
+	listed := findActiveSessionInfo(t, srv.ListActiveSessions(), "metadata-projection")
+	if listed == nil {
+		t.Fatal("listed session missing")
+	}
+	if !reflect.DeepEqual(*updated, *listed) {
+		t.Fatalf("SetSessionMetadata projection = %+v, list projection = %+v", *updated, *listed)
+	}
+}
+
+func TestSetSessionMetadataPersistedOnlyMatchesListProjection(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.pool.Stop()
+
+	mgr := session.New(srv.cfg.GetWorkDir(), srv.settings.GetSessionDir())
+	if err := mgr.InitWithID("metadata-persisted-only"); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+	if _, err := mgr.AppendMessage(provider.NewUserMessage("persisted only")); err != nil {
+		t.Fatalf("append message: %v", err)
+	}
+
+	updated, err := srv.SetSessionMetadata("metadata-persisted-only", session.SessionMetadata{Pinned: true})
+	if err != nil {
+		t.Fatalf("SetSessionMetadata: %v", err)
+	}
+	if updated.Active {
+		t.Fatalf("persisted-only projection reported active: %+v", *updated)
+	}
+
+	listed := findActiveSessionInfo(t, srv.ListActiveSessions(), "metadata-persisted-only")
+	if listed == nil {
+		t.Fatal("listed session missing")
+	}
+	if !reflect.DeepEqual(*updated, *listed) {
+		t.Fatalf("SetSessionMetadata projection = %+v, list projection = %+v", *updated, *listed)
+	}
+}
+
+// TestListDetailsUsesCheapMessageCount asserts the list projection does not
+// deep-copy transcripts. GetMessages clones every content block, so a
+// several-hundred-message session would allocate hundreds of slices per call;
+// MessageCount only tracks entry IDs. This is an allocation assertion, not a
+// timing assertion.
+func TestListDetailsUsesCheapMessageCount(t *testing.T) {
+	pool := NewSessionPool(0, 0)
+	defer pool.Stop()
+
+	mgr := session.New(t.TempDir(), t.TempDir())
+	if err := mgr.InitWithID("cheap-message-count"); err != nil {
+		t.Fatalf("init session: %v", err)
+	}
+	const messages = 200
+	for i := 0; i < messages; i++ {
+		msg := provider.NewUserMessage("message")
+		msg.Contents = []provider.ContentBlock{
+			{Type: "text", Text: "message"},
+			{Type: "text", Text: "context"},
+		}
+		if _, err := mgr.AppendMessage(msg); err != nil {
+			t.Fatalf("append message %d: %v", i, err)
+		}
+	}
+	if err := pool.Put(&APISession{ID: "cheap-message-count", Manager: mgr}); err != nil {
+		t.Fatalf("put session: %v", err)
+	}
+
+	details := pool.listDetailsBase()
+	if len(details) != 1 || details[0].MessageCount != messages {
+		t.Fatalf("details = %+v, want one session with %d messages", details, messages)
+	}
+	allocs := testing.AllocsPerRun(20, func() {
+		_ = pool.listDetailsBase()
+	})
+	if allocs >= messages {
+		t.Fatalf("listDetailsBase allocations = %.0f, want far below %d message clones (GetMessages path)", allocs, messages)
 	}
 }

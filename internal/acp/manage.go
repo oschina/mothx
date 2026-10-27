@@ -2125,8 +2125,8 @@ func (s *server) handleManageStatsSummary(req rpcRequest) {
 	}
 	sessionsCount := 0
 	if s.currentSettings() != nil {
-		if details, err := session.ListAllDetailed(s.currentSettings().GetSessionDir(), session.WithDeferredEventStorePreview()); err == nil {
-			sessionsCount = len(details)
+		if count, err := session.CountAll(s.currentSettings().GetSessionDir()); err == nil {
+			sessionsCount = count
 		}
 	}
 	db, exists, err := s.manageStatsDB()

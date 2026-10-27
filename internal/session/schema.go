@@ -521,6 +521,16 @@ func (b busyRetryDatabase) Begin() (*sql.Tx, error) {
 	return database.BeginSQLTx(context.Background(), b.db, nil)
 }
 
+// Query and QueryRow delegate the read-only schema probes: the migration check
+// must decide whether anything needs writing without taking the writer lock.
+func (b busyRetryDatabase) Query(query string, args ...any) (*sql.Rows, error) {
+	return b.db.Query(query, args...)
+}
+
+func (b busyRetryDatabase) QueryRow(query string, args ...any) *sql.Row {
+	return b.db.QueryRow(query, args...)
+}
+
 // EnsureCurrentSchema creates the current schema only for an empty database.
 // Existing databases are validated but never migrated or otherwise modified.
 //

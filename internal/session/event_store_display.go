@@ -32,11 +32,13 @@ func eventStoreDisplayKey(sessionDir, sessionID string) string {
 	return sessionDir + "\x00" + sessionID
 }
 
-// eventStoreDisplayFingerprint identifies the physical EventStore layout
-// (segment names, sizes, and modification times). Appends and segment
-// rotation both change it, so a cached list projection can never outlive the
-// bytes it was derived from. A session with no event bytes returns "".
-func eventStoreDisplayFingerprint(sessionDir, sessionID string) (string, error) {
+// eventStorePhysicalFingerprint identifies the physical EventStore layout
+// (segment names, sizes, and modification times) without scanning it. Appends
+// and segment rotation both change it, so a cached list projection can never
+// outlive the bytes it was derived from, and an open can tell whether the log
+// it converged against is still the one on disk. A session with no event bytes
+// returns "".
+func eventStorePhysicalFingerprint(sessionDir, sessionID string) (string, error) {
 	store, err := NewEventStore(sessionDir, sessionID)
 	if err != nil {
 		return "", err
@@ -75,7 +77,7 @@ func loadEventStoreDisplay(sessionDir, sessionID string) (eventStoreDisplayState
 	if state, ok := cachedEventStoreDisplay(sessionDir, sessionID); ok {
 		return state, true
 	}
-	fingerprint, err := eventStoreDisplayFingerprint(sessionDir, sessionID)
+	fingerprint, err := eventStorePhysicalFingerprint(sessionDir, sessionID)
 	if err != nil || fingerprint == "" {
 		return eventStoreDisplayState{}, false
 	}
@@ -87,14 +89,14 @@ func loadEventStoreDisplay(sessionDir, sessionID string) (eventStoreDisplayState
 	// The store may have been appended to while the Manager loaded. Cache
 	// against the fingerprint observed after loading; a concurrent append
 	// simply makes the next list recompute.
-	if current, err := eventStoreDisplayFingerprint(sessionDir, sessionID); err == nil && current != "" {
+	if current, err := eventStorePhysicalFingerprint(sessionDir, sessionID); err == nil && current != "" {
 		eventStoreDisplays.Store(key, eventStoreDisplayCacheEntry{fingerprint: current, state: state})
 	}
 	return state, true
 }
 
 func cachedEventStoreDisplay(sessionDir, sessionID string) (eventStoreDisplayState, bool) {
-	fingerprint, err := eventStoreDisplayFingerprint(sessionDir, sessionID)
+	fingerprint, err := eventStorePhysicalFingerprint(sessionDir, sessionID)
 	if err != nil || fingerprint == "" {
 		return eventStoreDisplayState{}, false
 	}

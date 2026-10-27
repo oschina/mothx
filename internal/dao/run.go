@@ -145,6 +145,21 @@ func (d *RunDAO) OrphanedFrom(ctx context.Context, executor bun.IDB, statuses []
 	return records, err
 }
 
+// ActiveBySessions returns every non-terminal run belonging to the requested
+// sessions in one query. Ordering matches OrphanedFrom (started_at ASC) so a
+// batch projection of ActiveRuns keeps the single-session read's ordering.
+func (d *RunDAO) ActiveBySessions(ctx context.Context, executor bun.IDB, sessionIDs, statuses []string) ([]SessionRunRecord, error) {
+	if len(sessionIDs) == 0 || len(statuses) == 0 {
+		return nil, nil
+	}
+	var records []SessionRunRecord
+	err := executor.NewSelect().Model(&records).
+		Where("session_id IN (?)", bun.In(sessionIDs)).
+		Where("status IN (?)", bun.In(statuses)).
+		OrderExpr("started_at ASC").Scan(ctx)
+	return records, err
+}
+
 func (d *RunDAO) InputResourceIDs(ctx context.Context, sessionID string) (map[string][]string, error) {
 	var rows []struct {
 		RunID string `bun:"run_id"`

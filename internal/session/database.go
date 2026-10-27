@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/oschina/mothx/internal/dao"
 	database "github.com/oschina/mothx/internal/db"
@@ -64,6 +65,17 @@ func QueryRootDatabase(sessionDir string, fn func(*dao.Database) error) error {
 	return fn(db)
 }
 
+// writeRootTransactions counts the write transactions opened through
+// WriteRootDatabase. Like internal/db's begin/checkpoint counters it is
+// process-local telemetry with no authority; it exists so tests can pin that
+// opening an already-converged session does not take the single writer lock.
+var writeRootTransactions atomic.Uint64
+
+// writeRootTransactionCount reports the process-local WriteRootDatabase
+// transaction count. Package-internal so it never becomes a caller-visible
+// signal that could be mistaken for ownership state.
+func writeRootTransactionCount() uint64 { return writeRootTransactions.Load() }
+
 // WriteRootDatabase runs a write transaction against a session root's DAO-owned
 // database. The callback receives the Bun transaction wrapper.
 func WriteRootDatabase(ctx context.Context, sessionDir string, fn func(*dao.Tx) error) error {
@@ -75,6 +87,7 @@ func WriteRootDatabase(ctx context.Context, sessionDir string, fn func(*dao.Tx) 
 	if err != nil {
 		return err
 	}
+	writeRootTransactions.Add(1)
 	defer tx.Rollback()
 	if err := fn(tx); err != nil {
 		return err

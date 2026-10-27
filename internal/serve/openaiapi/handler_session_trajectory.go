@@ -45,6 +45,12 @@ const (
 
 var ErrInvalidTrajectoryCursor = errors.New("invalid trajectory cursor")
 
+// listSessionParents is the package-internal seam for the lightweight
+// id/parent_session projection used by the session exporter. Production always
+// calls session.ListSessionParents; tests replace it to prove that the exporter
+// never falls back to a full detail/preview listing.
+var listSessionParents = session.ListSessionParents
+
 // GetSessionTrajectory assembles a deterministic trajectory projection from
 // the existing transcript, run-event, and capability-event stores.
 func (s *Server) GetSessionTrajectory(id, before string, limit int) (*SessionTrajectoryResponse, error) {
@@ -378,30 +384,26 @@ func (s *Server) exportSessionIDs(rootID string, includeDescendants bool) ([]str
 	if !includeDescendants {
 		return []string{rootID}, nil
 	}
-	details, err := session.ListAllDetailed(s.SessionDir())
+	parents, err := listSessionParents(s.SessionDir())
 	if err != nil {
 		return []string{rootID}, nil
 	}
-	parent := make(map[string]string, len(details))
-	for _, detail := range details {
-		manager, err := session.OpenByIDExact(s.SessionDir(), detail.ID)
-		if err != nil || manager.GetHeader() == nil {
-			continue
-		}
-		parent[detail.ID] = manager.GetHeader().ParentSession
+	parent := make(map[string]string, len(parents))
+	for _, link := range parents {
+		parent[link.ID] = link.ParentSession
 	}
 	result := []string{rootID}
 	seen := map[string]bool{rootID: true}
-	for _, detail := range details {
-		if detail.ID == rootID || seen[detail.ID] {
+	for _, link := range parents {
+		if link.ID == rootID || seen[link.ID] {
 			continue
 		}
-		current := detail.ID
+		current := link.ID
 		visited := map[string]bool{}
 		for current != "" && !visited[current] {
 			if current == rootID {
-				result = append(result, detail.ID)
-				seen[detail.ID] = true
+				result = append(result, link.ID)
+				seen[link.ID] = true
 				break
 			}
 			visited[current] = true
