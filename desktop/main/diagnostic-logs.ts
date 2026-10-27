@@ -85,6 +85,16 @@ export interface DiagnosticLogger {
   log(message: string, source?: DiagnosticLogEntry['source']): void;
 }
 
+// Keep a single long-lived desktop.log bounded across launches. The startup
+// check rotates the previous run before appending a new one; the ACP child only
+// writes lifecycle/error lines, so this avoids unbounded disk growth without
+// adding a write-path syscall per line.
+export const DESKTOP_LOG_ROTATE_BYTES = 8 * 1024 * 1024;
+
+export function shouldRotateDesktopLog(sizeBytes: number): boolean {
+  return Number.isFinite(sizeBytes) && sizeBytes > DESKTOP_LOG_ROTATE_BYTES;
+}
+
 // The file/console/buffer sinks always record diagnostics. The renderer only
 // needs live entries while its log viewer is mounted, so this gate prevents a
 // chatty ACP child from crossing the IPC boundary for every line in the

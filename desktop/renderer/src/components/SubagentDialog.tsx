@@ -90,6 +90,7 @@ export function SubagentDialog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const requestRef = useRef(0);
+  const loadingAgentRef = useRef('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
 
@@ -102,6 +103,9 @@ export function SubagentDialog({
 
   const load = useCallback(async (agentId: string) => {
     if (!sessionId || !agentId) return;
+    // A slow child read must not overlap the 2s poll and pile up ACP requests.
+    if (loadingAgentRef.current === agentId) return;
+    loadingAgentRef.current = agentId;
     const request = requestRef.current + 1;
     requestRef.current = request;
     setLoading(true);
@@ -114,6 +118,7 @@ export function SubagentDialog({
       if (requestRef.current !== request) return;
       setError(t('chat.subagents.loadFailed', { e: cause instanceof Error ? cause.message : String(cause) }));
     } finally {
+      if (loadingAgentRef.current === agentId) loadingAgentRef.current = '';
       if (requestRef.current === request) setLoading(false);
     }
   }, [sessionId]);

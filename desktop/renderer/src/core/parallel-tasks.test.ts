@@ -49,6 +49,25 @@ test.after(() => {
   (globalThis as { window?: unknown }).window = previousWindow;
 });
 
+test('run status projections stay bounded over a long-lived window', () => {
+  reset();
+  const previousStore = state.store;
+  state.store = { ...state.store, sessionStatus: {} };
+  state.activeSessionId = 'active';
+  try {
+    for (let index = 0; index < 260; index += 1) {
+      setSessionRunStatus(`finished-${index}`, 'completed');
+    }
+    setSessionRunStatus('live-background', 'working');
+    assert.ok(Object.keys(state.runningSessions).length <= 200, 'terminal projections must be dropped oldest-first');
+    assert.equal(state.runningSessions['live-background'], 'working', 'a live background Run keeps its projection');
+    assert.ok(Object.keys(state.store.sessionStatus).length <= 400, 'remembered status map stays bounded');
+  } finally {
+    state.store = previousStore;
+    reset();
+  }
+});
+
 // 任务切换:另一个任务正在运行时,openSession 必须照常切换过去(并把该会话
 // 自己已记住的状态恢复出来),不能弹“当前任务还在运行”。
 test('switching tasks works while another task keeps running', async () => {

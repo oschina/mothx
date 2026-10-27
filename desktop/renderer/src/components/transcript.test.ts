@@ -125,6 +125,13 @@ test('disclosure state survives streaming updates because it lives on the transc
   assert.match(stream, /key=\{item\.key\}/, 'stream rendering must key items by their canonical key');
 });
 
+test('long transcripts render a bounded tail window and expand on demand', () => {
+  assert.match(stream, /export const TRANSCRIPT_RENDER_WINDOW = 300/, 'the live render window must be explicit');
+  assert.match(stream, /appState\.transcript\.slice\(start, end\)/, 'only the visible tail window may be rendered');
+  assert.match(stream, /setFrozenEnd\(appState\.transcript\.length\)/, 'scrolling away must freeze the window instead of jumping');
+  assert.match(stream, /setRenderLimit\(\(limit\) => limit \+ TRANSCRIPT_RENDER_WINDOW\)/, 'the reader must be able to expand the local window');
+});
+
 test('transcript cards do not restart entrance animations when content-visibility reveals them', () => {
   assert.doesNotMatch(
     items,

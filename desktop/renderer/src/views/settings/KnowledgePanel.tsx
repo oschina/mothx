@@ -1,7 +1,7 @@
 // 知识库面板:目录知识库的创建/编辑/扫描/删除与 MCP 服务器配置。所有
 // 数据经 ACP 投影;知识源目录只读,删除只移除配置与索引。
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Folder, Plus } from 'lucide-react';
 
 import { Field, FieldGrid, ManageCard, ManageHeader, ManageWorkspace, OptionSelect, ToggleField, UnsupportedRow } from '@/components/manage-primitives';
@@ -434,14 +434,23 @@ export function KnowledgePanel() {
   const [defaults, setDefaults] = useState<KnowledgeBaseDefaults | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerView[]>([]);
   const [creating, setCreating] = useState(false);
+  const loadingRef = useRef(false);
 
   const reload = useCallback(async () => {
-    const [loaded, loadedDefaults] = await Promise.all([loadKnowledgeBases(), knowledgeBaseDefaults()]);
-    setViews(loaded || []);
-    setDefaults(loadedDefaults);
-    if (hasFeature('manageMcp')) {
-      const servers = await loadMcp();
-      setMcpServers(servers || []);
+    // Indexing progress polls every few seconds; a slow management read must
+    // not overlap and pile up requests in a long-lived settings tab.
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    try {
+      const [loaded, loadedDefaults] = await Promise.all([loadKnowledgeBases(), knowledgeBaseDefaults()]);
+      setViews(loaded || []);
+      setDefaults(loadedDefaults);
+      if (hasFeature('manageMcp')) {
+        const servers = await loadMcp();
+        setMcpServers(servers || []);
+      }
+    } finally {
+      loadingRef.current = false;
     }
   }, []);
 

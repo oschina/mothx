@@ -91,15 +91,25 @@
 ## 4. 实测
 
 - 本机 `mothx acp` 首次 `mothx/session/listAll`：约 2.7s → 约 1.2s。
-- Desktop renderer：`npm run typecheck`、296 项 `npm test`、`npm run build` 全通过。
+- Desktop renderer：`npm run typecheck`、`npm test`、`npm run build` 全通过。
 - Go：`go test ./internal/session/... ./internal/acp ./internal/architecture` 通过；
   预览/绑定路径额外跑过 `-race`。
 
-## 5. 后续可选优化
+## 5. 长时间运行稳定性
+
+- 转录渲染改为 300 条尾部窗口；滚离底部时冻结窗口，新流式内容不会把视口顶走；「加载更早」先在本地展开，再走 ACP 分页。
+- `status` / `retry` / `compaction_start` 使用稳定 key，就地更新，不再为每次重试/压缩追加一条永远不删的状态行。
+- `runningSessions` 的终态投影上限 200（只淘汰终态，live Run 永不淘汰）；renderer `sessionStatus` 与主进程一致上限 400。
+- `sessionPages` 只保留当前历史搜索页，项目页缓存上限 32，删除项目会清理对应分支；已知 session 缓存上限 1000。
+- 子代理列表每个会话上限 200（优先保留 running），删除会话时清理子代理/待决决策。
+- 子代理面板、资料库、知识库设置轮询增加 in-flight guard，慢 ACP 响应不会每 2–4s 叠加请求。
+- 转录条目查找改用 key → index 映射，流式 chunk 不再每次全表扫描；批量插入/删除后重建，索引失效时自愈。
+- `useFlipList` 在元素卸载时清理 ref callback；`desktop.log` 启动时超过 8MB 轮转为 `.1`。
+
+## 6. 后续可选优化
 
 - 设置页各面板仍使用粗粒度 `useAppState`；后台任务流式时可进一步改为 selector。
-- 若单个会话仍积累数千条转录，可再做窗口化列表；当前 `content-visibility`
-  已覆盖大部分滚动收益。
+- 当前窗口化只限制 DOM/React 成本；极长任务的 `state.transcript` 字符串（尤其超大工具输出）仍会增长，必要时可在 Runtime 投影层截断展示副本。
 - 长期可把列表标题/预览/绑定持久化为 SQLite 展示投影，彻底消除启动时对
   EventStore 的扫描；当前结构扫描 + 并行预取已是低风险折中。
 - 大面积 `backdrop-filter`（用户背景图全局作用时）仍是 GPU 成本；如仍有掉帧，

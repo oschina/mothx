@@ -33,8 +33,14 @@ export function useFlipList(signature: string): (key: string) => (el: HTMLElemen
     let callback = callbacks.current.get(key);
     if (!callback) {
       callback = (el: HTMLElement | null) => {
-        if (el) elements.current.set(key, el);
-        else elements.current.delete(key);
+        if (el) {
+          elements.current.set(key, el);
+        } else {
+          // Deleted sessions/projects must not leave a ref callback behind for
+          // the lifetime of the window.
+          elements.current.delete(key);
+          callbacks.current.delete(key);
+        }
       };
       callbacks.current.set(key, callback);
     }

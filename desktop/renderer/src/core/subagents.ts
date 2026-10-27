@@ -16,6 +16,11 @@ interface SubagentMessagesResult {
 
 export type SubagentStatusKind = 'running' | 'completed' | 'failed' | 'cancelled' | 'incomplete';
 
+// A long-lived team/ESM session can spawn many children. Keep running agents
+// and the newest terminal ones; older terminal projections are recoverable from
+// the Runtime list if the dialog is reopened.
+const MAX_SUBAGENTS_PER_SESSION = 200;
+
 
 export function subagentStatusKind(status: string): SubagentStatusKind {
   switch (status) {
@@ -67,6 +72,21 @@ export function subagentSummary(list: SubagentInfo[]): { total: number; running:
   return { total: list.length, running, completed, failed };
 }
 
+function capSubagents(list: SubagentInfo[]): SubagentInfo[] {
+  if (list.length <= MAX_SUBAGENTS_PER_SESSION) return list;
+  const running = list.filter(isSubagentRunning);
+  if (running.length >= MAX_SUBAGENTS_PER_SESSION) return running.slice(-MAX_SUBAGENTS_PER_SESSION);
+  const terminal = list.filter((info) => !isSubagentRunning(info));
+  return [...running, ...terminal.slice(-(MAX_SUBAGENTS_PER_SESSION - running.length))];
+}
+
+export function forgetSessionSubagents(sessionId: string | null | undefined): void {
+  if (!sessionId || !state.subagents[sessionId]) return;
+  const next = { ...state.subagents };
+  delete next[sessionId];
+  state.subagents = next;
+}
+
 function mergeSubagent(previous: SubagentInfo | undefined, next: SubagentInfo): SubagentInfo {
   return {
     ...previous,
@@ -84,7 +104,7 @@ export async function refreshSubagents(sessionId: string | null | undefined): Pr
     const result = await invoke<SubagentListResult>('mothx/subagent/list', { sessionId });
     const previous = state.subagents[sessionId] || [];
     const byId = new Map(previous.map((info) => [info.agentId, info]));
-    const agents = (result.agents || []).map((info) => mergeSubagent(byId.get(info.agentId), info));
+    const agents = capSubagents((result.agents || []).map((info) => mergeSubagent(byId.get(info.agentId), info)));
     state.subagents = { ...state.subagents, [sessionId]: agents };
     emit();
   } catch (error) {
@@ -114,7 +134,7 @@ export function applySubagentEvent(event: Record<string, unknown>): void {
     status,
     messageCount: existing?.messageCount,
   });
-  const agents = index >= 0 ? previous.map((info, at) => (at === index ? next : info)) : [...previous, next];
+  const agents = capSubagents(index >= 0 ? previous.map((info, at) => (at === index ? next : info)) : [...previous, next]);
   state.subagents = { ...state.subagents, [sessionId]: agents };
   emit();
 }

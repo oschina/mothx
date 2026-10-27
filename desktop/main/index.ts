@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, Menu, shell } from 'electron';
-import { createWriteStream, mkdirSync } from 'node:fs';
+import { createWriteStream, mkdirSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { AcpClient } from './acp-client';
@@ -11,7 +11,7 @@ import {
   rendererDistPath,
 } from './dev-mode';
 import { initialNewSessionDirectory } from './default-new-session-directory';
-import { createDiagnosticLogger, DiagnosticLogBuffer } from './diagnostic-logs';
+import { createDiagnosticLogger, DiagnosticLogBuffer, shouldRotateDesktopLog } from './diagnostic-logs';
 import { applyNativeWindowButtons, registerIpc, sendRendererEvent, setDiagnosticStreaming, type IpcDeps } from './ipc';
 import { shouldDisableDevShm, shouldDisableGpu } from './linux-flags';
 import {
@@ -207,6 +207,13 @@ async function startRuntime(): Promise<void> {
   const logDir = join(app.getPath('userData'), 'logs');
   mkdirSync(logDir, { recursive: true });
   desktopLogPath = join(logDir, 'desktop.log');
+  try {
+    if (shouldRotateDesktopLog(statSync(desktopLogPath).size)) {
+      renameSync(desktopLogPath, `${desktopLogPath}.1`);
+    }
+  } catch {
+    // First run or an unreadable/ineffective rotation target: keep appending.
+  }
   logStream = createWriteStream(desktopLogPath, { flags: 'a' });
 
   const runtime = resolveRuntimeBinary(runtimeLookup());

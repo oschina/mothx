@@ -31,6 +31,7 @@
 - **Electron 不再强制所有 Linux 打包桌面走软件渲染。** 存在 `DISPLAY`/`WAYLAND_DISPLAY` 时保留 GPU 合成(可用 `MOTHX_DESKTOP_DISABLE_GPU` 显式关闭),仅当 `/dev/shm` 缺失、不可写或小于 128MB 时才启用 `/tmp` 回退。ACP 事件也会按帧合并为一次 IPC 投递,诊断日志仅在日志面板打开时才跨 IPC 推送。
 
 - **Desktop 不再在悬停、切换主题或滚动露出内容时启动成片的过渡/动画。** Tailwind `duration-*` 不再和 `animate-in` 同时出现(此前任意悬停都会让会话行过渡所有继承属性);转录卡片不再在 `content-visibility` 滚动露出时重播入场动画;侧边栏滚动条保持恒定 8px 宽度;切换主题时会临时禁用继承颜色的过渡。
+- **长时间运行的 Desktop 窗口保持有界。** 实时转录只渲染末尾 300 条(可在本地继续展开),status/retry/compaction 通知就地更新而不再累积,会话/搜索/子代理/Run 状态缓存都有上限,进度轮询不会重叠,转录查找改用索引避免每个 chunk 全表扫描,超大工具输出在展示副本中截断,`desktop.log` 在启动间按 8MB 轮转。
 
 ### 🐛 问题修复
 

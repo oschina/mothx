@@ -41,7 +41,20 @@ export function clearTranscript(sessionId: string | null): void {
   state.artifactRunCount = 0;
   state.pendingUserKey = null;
   state.usage = null;
+  rebuildTranscriptIndex();
   if (sessionId) materializePendingDecisions(sessionId);
+}
+
+// Streaming chunks are frequent, so item lookup must not scan the whole
+// transcript. The array stays the ordering authority; the index is validated
+// against it on every use and rebuilt after bulk inserts/removals.
+let transcriptIndex = new Map<string, number>();
+
+function rebuildTranscriptIndex(): void {
+  transcriptIndex = new Map();
+  for (let index = 0; index < state.transcript.length; index += 1) {
+    transcriptIndex.set(state.transcript[index].key, index);
+  }
 }
 
 function upsert(item: TranscriptItem): void {
@@ -50,6 +63,7 @@ function upsert(item: TranscriptItem): void {
   // other card in a long transcript.
   if (updateItem(item.key, (existing) => ({ ...existing, ...item }) as TranscriptItem)) return;
   state.transcript.push(item);
+  if (!pageOverlay) transcriptIndex.set(item.key, state.transcript.length - 1);
 }
 
 // updateItem applies a functional change to the current item with this key and
@@ -57,15 +71,24 @@ function upsert(item: TranscriptItem): void {
 // page overlay used while replaying an older history page.
 function updateItem(key: string, update: (item: TranscriptItem) => TranscriptItem): boolean {
   if (pageOverlay) {
-    const index = pageOverlay.findIndex((entry) => entry.key === key);
-    if (index >= 0) {
-      pageOverlay[index] = update(pageOverlay[index]);
+    const overlayIndex = pageOverlay.findIndex((entry) => entry.key === key);
+    if (overlayIndex >= 0) {
+      pageOverlay[overlayIndex] = update(pageOverlay[overlayIndex]);
       return true;
     }
+  }
+  // A direct transcript replacement in tests or a missed bulk update leaves the
+  // index stale; length/key validation keeps it self-healing.
+  if (transcriptIndex.size !== state.transcript.length) rebuildTranscriptIndex();
+  const indexed = transcriptIndex.get(key);
+  if (indexed !== undefined && state.transcript[indexed]?.key === key) {
+    state.transcript[indexed] = update(state.transcript[indexed]);
+    return true;
   }
   const index = state.transcript.findIndex((entry) => entry.key === key);
   if (index < 0) return false;
   state.transcript[index] = update(state.transcript[index]);
+  transcriptIndex.set(key, index);
   return true;
 }
 
@@ -107,8 +130,10 @@ export function applyTranscriptPage(sessionId: string, updates: Record<string, u
   }
   if (prepend && resolved.length > 0) {
     state.transcript.unshift(...resolved);
+    rebuildTranscriptIndex();
   } else if (!prepend) {
     state.transcript.push(...resolved);
+    rebuildTranscriptIndex();
   }
   emit();
 }
@@ -118,12 +143,31 @@ export function applyTranscriptPage(sessionId: string, updates: Record<string, u
 // 状态修改丢失,历史 tool 卡永远停留在初始 pending(排队中)。
 let pageOverlay: TranscriptItem[] | null = null;
 
-function findItem(key: string): TranscriptItem | undefined {
-  if (pageOverlay) {
-    const hit = pageOverlay.find((entry) => entry.key === key);
-    if (hit) return hit;
-  }
-  return state.transcript.find((entry) => entry.key === key);
+// Tool payloads live in the Runtime as canonical content; the renderer copy is
+// display-only. Bound huge outputs so a long run with many large tools cannot
+// grow the renderer heap without limit (the card already truncates display).
+const MAX_TOOL_TEXT_CHARS = 20_000;
+const MAX_TOOL_DIFF_CHARS = 40_000;
+
+function truncateToolText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}\n…` : text;
+}
+
+function capToolContents(contents: ToolCallContentShape[]): ToolCallContentShape[] {
+  return contents.map((content) => {
+    let next = content;
+    const block = content.content;
+    if (block && typeof block.text === 'string' && block.text.length > MAX_TOOL_TEXT_CHARS) {
+      next = { ...next, content: { ...block, text: truncateToolText(block.text, MAX_TOOL_TEXT_CHARS) } };
+    }
+    if (typeof next.oldText === 'string' && next.oldText.length > MAX_TOOL_DIFF_CHARS) {
+      next = { ...next, oldText: truncateToolText(next.oldText, MAX_TOOL_DIFF_CHARS) };
+    }
+    if (typeof next.newText === 'string' && next.newText.length > MAX_TOOL_DIFF_CHARS) {
+      next = { ...next, newText: truncateToolText(next.newText, MAX_TOOL_DIFF_CHARS) };
+    }
+    return next;
+  });
 }
 
 // applyToolUpdate returns a new tool item with one streaming update folded in.
@@ -137,7 +181,7 @@ function applyToolUpdate(item: ToolItem, update: Record<string, unknown>): ToolI
   if (update.locations) next.locations = update.locations as { path: string }[];
   const contents = update.content;
   if (Array.isArray(contents) && contents.length > 0) {
-    next.contents = contents as ToolCallContentShape[];
+    next.contents = capToolContents(contents as ToolCallContentShape[]);
   }
   return next;
 }
@@ -164,15 +208,15 @@ export function applySessionUpdate(sessionId: string, update: Record<string, unk
         state.pendingUserKey = null;
         if (index >= 0) {
           state.transcript.splice(index, 1, { kind: 'user', key, text });
+          rebuildTranscriptIndex();
           emit();
           requestChatScroll();
           return;
         }
       }
-      const existing = findItem(key);
-      if (existing && existing.kind === 'user') {
-        updateItem(key, (entry) => (entry.kind === 'user' ? { ...entry, text: entry.text + text } : entry));
-      } else upsert({ kind: 'user', key, text });
+      if (!updateItem(key, (entry) => (entry.kind === 'user' ? { ...entry, text: entry.text + text } : entry))) {
+        upsert({ kind: 'user', key, text });
+      }
       emit();
       requestChatScroll();
       return;
@@ -181,10 +225,9 @@ export function applySessionUpdate(sessionId: string, update: Record<string, unk
       const messageId = String(update.messageId || `agent-${state.transcript.length}`);
       const text = contentText(update.content);
       const key = `agent:${messageId}`;
-      const existing = findItem(key);
-      if (existing && existing.kind === 'agent') {
-        updateItem(key, (entry) => (entry.kind === 'agent' ? { ...entry, text: entry.text + text } : entry));
-      } else upsert({ kind: 'agent', key, text });
+      if (!updateItem(key, (entry) => (entry.kind === 'agent' ? { ...entry, text: entry.text + text } : entry))) {
+        upsert({ kind: 'agent', key, text });
+      }
       emit();
       requestChatScroll();
       return;
@@ -193,10 +236,9 @@ export function applySessionUpdate(sessionId: string, update: Record<string, unk
       const messageId = String(update.messageId || `thought-${state.transcript.length}`);
       const text = contentText(update.content);
       const key = `thought:${messageId}`;
-      const existing = findItem(key);
-      if (existing && existing.kind === 'thought') {
-        updateItem(key, (entry) => (entry.kind === 'thought' ? { ...entry, text: entry.text + text } : entry));
-      } else upsert({ kind: 'thought', key, text, open: false });
+      if (!updateItem(key, (entry) => (entry.kind === 'thought' ? { ...entry, text: entry.text + text } : entry))) {
+        upsert({ kind: 'thought', key, text, open: false });
+      }
       emit();
       requestChatScroll();
       return;
@@ -237,7 +279,7 @@ export function applySessionUpdate(sessionId: string, update: Record<string, unk
           { kind: 'tool', key, toolCallId, title: String(update.title || toolCallId), toolKind: 'other', status: 'pending', open: false, contents: [] },
           update,
         );
-        state.transcript.push(next);
+        upsert(next);
       }
       if (next && (next.status === 'completed' || next.status === 'failed')) maybeAddToolArtifactFallback(next);
       emit();
@@ -467,19 +509,22 @@ export function applySessionEvent(event: Record<string, unknown>): void {
   }
   if (!sessionOwnsTranscript(sessionId)) return;
   if (name === 'status') {
-    upsert({ kind: 'status', key: `status:${sessionId}:${Date.now()}`, text: String(event.message || ''), spin: true });
+    // One live status line per session. A long ESM/retry run can emit many
+    // status notices; Date.now() keys would append them forever and grow both
+    // state and the rendered transcript.
+    upsert({ kind: 'status', key: `status:${sessionId}`, text: String(event.message || ''), spin: true });
     emit();
     requestChatScroll();
     return;
   }
   if (name === 'retry') {
     const message = String((event as { message?: string }).message || '');
-    upsert({ kind: 'status', key: `retry:${sessionId}:${Date.now()}`, text: t('chat.retrying', { m: message }), spin: true });
+    upsert({ kind: 'status', key: `retry:${sessionId}`, text: t('chat.retrying', { m: message }), spin: true });
     emit();
     return;
   }
   if (name === 'compaction_start') {
-    upsert({ kind: 'status', key: `compaction:${sessionId}:${Date.now()}`, text: t('chat.compaction'), spin: true });
+    upsert({ kind: 'status', key: `compaction:${sessionId}`, text: t('chat.compaction'), spin: true });
     emit();
     return;
   }
@@ -619,6 +664,7 @@ export function terminalizePendingDecisions(sessionId = state.transcriptSessionI
     }
     return entry;
   });
+  rebuildTranscriptIndex();
   forgetPendingDecisions(sessionId);
   if (changed) emit();
 }
@@ -645,6 +691,13 @@ function forgetPendingDecisions(sessionId: string): void {
   state.pendingDecisions = next;
 }
 
+// forgetSessionDecisions releases the short-lived background-decisions copy for
+// a deleted session. Pending cards for a session that no longer exists must not
+// survive in the renderer forever.
+export function forgetSessionDecisions(sessionId: string): void {
+  forgetPendingDecisions(sessionId);
+}
+
 // Terminal Run state is authoritative. Keep an already-visible decision card
 // from looking actionable after that state without sending a second reverse
 // cancellation back to ACP.
@@ -655,6 +708,7 @@ function dismissPendingDecisions(sessionId: string): void {
     }
     return entry;
   });
+  rebuildTranscriptIndex();
   forgetPendingDecisions(sessionId);
 }
 

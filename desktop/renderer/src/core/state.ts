@@ -407,6 +407,13 @@ export function sessionTitle(sessionId: string): string {
 // reconfigured until it reaches a terminal status. "loading" is a read-side
 // projection (session/load in flight), not a Run, so it never blocks input.
 const LIVE_RUN_STATUSES: RunStatus[] = ['planning', 'working', 'pending', 'cancelling'];
+const TERMINAL_RUN_STATUSES = new Set<RunStatus>(['idle', 'completed', 'failed', 'cancelled']);
+// Mirror the main-process bound so the in-memory status map cannot outgrow the
+// persisted desktop-store snapshot over a long-lived process.
+const MAX_SESSION_STATUS_ENTRIES = 400;
+// Real live Runs are never evaluated against this bound; terminal projections
+// are dropped oldest-first once a long-lived window has seen many sessions.
+const MAX_RUN_STATUS_ENTRIES = 200;
 
 export function sessionRunStatus(sessionId: string | null | undefined): RunStatus {
   if (!sessionId) return 'idle';
@@ -437,7 +444,18 @@ export function anySessionRunning(): boolean {
 // session, so a background task finishing cannot restate the active task.
 export function setSessionRunStatus(sessionId: string | null | undefined, status: RunStatus): void {
   if (!sessionId) return;
-  state.runningSessions = { ...state.runningSessions, [sessionId]: status };
+  const next = { ...state.runningSessions, [sessionId]: status };
+  const keys = Object.keys(next);
+  if (keys.length > MAX_RUN_STATUS_ENTRIES) {
+    // Drop only terminal projections; a live background Run must keep its dot.
+    for (const key of keys) {
+      if (Object.keys(next).length <= MAX_RUN_STATUS_ENTRIES) break;
+      if (key !== state.activeSessionId && TERMINAL_RUN_STATUSES.has(next[key])) {
+        delete next[key];
+      }
+    }
+  }
+  state.runningSessions = next;
   setSessionStatus(sessionId, status);
 }
 
@@ -450,9 +468,13 @@ export function forgetSessionRun(sessionId: string | null | undefined): void {
 
 export function setSessionStatus(sessionId: string, status: string): void {
   if (!sessionId) return;
-  state.store = {
-    ...state.store,
-    sessionStatus: { ...state.store.sessionStatus, [sessionId]: status },
-  };
+  const sessionStatus = { ...state.store.sessionStatus, [sessionId]: status };
+  const keys = Object.keys(sessionStatus);
+  if (keys.length > MAX_SESSION_STATUS_ENTRIES) {
+    for (const key of keys.slice(0, keys.length - MAX_SESSION_STATUS_ENTRIES)) {
+      delete sessionStatus[key];
+    }
+  }
+  state.store = { ...state.store, sessionStatus };
   void desktop.storeSet({ sessionStatus: { [sessionId]: status } }).catch(() => undefined);
 }

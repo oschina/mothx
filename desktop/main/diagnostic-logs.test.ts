@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createDiagnosticLogger, DiagnosticLogBuffer, DiagnosticStreamGate, maskSecrets } from './diagnostic-logs.ts';
+import { createDiagnosticLogger, DESKTOP_LOG_ROTATE_BYTES, DiagnosticLogBuffer, DiagnosticStreamGate, maskSecrets, shouldRotateDesktopLog } from './diagnostic-logs.ts';
 
 test('maskSecrets obscures Bearer tokens and Authorization headers', () => {
   assert.equal(maskSecrets('Authorization: Bearer sk-1234567890abcdef'), 'Authorization: ***');
@@ -32,6 +32,14 @@ test('DiagnosticStreamGate only projects live logs to the renderer on demand', (
   assert.equal(gate.enabledForRenderer, false);
   gate.setEnabled('yes' as never);
   assert.equal(gate.enabledForRenderer, false, 'only a real true enables projection');
+});
+
+test('desktop.log rotates only after the bounded size', () => {
+  assert.equal(shouldRotateDesktopLog(0), false);
+  assert.equal(shouldRotateDesktopLog(DESKTOP_LOG_ROTATE_BYTES - 1), false);
+  assert.equal(shouldRotateDesktopLog(DESKTOP_LOG_ROTATE_BYTES), false);
+  assert.equal(shouldRotateDesktopLog(DESKTOP_LOG_ROTATE_BYTES + 1), true);
+  assert.equal(shouldRotateDesktopLog(Number.NaN), false);
 });
 
 test('DiagnosticLogBuffer bounds entries and emits subscribers', () => {

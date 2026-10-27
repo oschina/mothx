@@ -1,7 +1,7 @@
 // 资料库视图:知识库状态的 ACP 投影。完整编辑集中在设置页(知识库条目),
 // 这里只提供只读状态与跳转,避免 renderer 复制配置或索引生命周期。
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BookOpen } from 'lucide-react';
 
 import { PageHead, PageInner, PageScroll, RowItem, RowList } from '@/components/layout';
@@ -28,13 +28,18 @@ function knowledgeIndexingText(indexing: NonNullable<KnowledgeBaseView['indexing
 export function LibraryView() {
   const [load, setLoad] = useState<LibraryLoadState>({ status: 'loading' });
   const supported = hasFeature(KNOWLEDGE_BASE_FEATURE);
+  const loadingRef = useRef(false);
 
   const reload = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
       const knowledgeBases = await loadKnowledgeBaseViews();
       setLoad({ status: 'ready', knowledgeBases });
     } catch (error) {
       setLoad({ status: 'error', message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      loadingRef.current = false;
     }
   }, []);
 

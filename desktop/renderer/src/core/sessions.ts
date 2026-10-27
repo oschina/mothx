@@ -25,14 +25,22 @@ import {
   type TranscriptPageShape,
 } from './state';
 import { sortTaskSessions } from './task-tree';
-import { applyTranscriptPage, clearTranscript } from './transcript';
-import { refreshSubagents } from './subagents';
+import { applyTranscriptPage, clearTranscript, forgetSessionDecisions } from './transcript';
+import { forgetSessionSubagents, refreshSubagents } from './subagents';
 import { confirmDanger, promptModal, toast } from './ui-host';
 import { switchView } from './views';
 import { createWorktree, waitForWorktree, worktreeSupported } from './worktrees';
 
 const RECENT_SESSION_LIMIT = 8;
 const TRANSCRIPT_PAGE_SIZE = 40;
+// Bounded renderer caches. The Runtime remains the canonical session catalog;
+// these only prevent a long-lived window from retaining every search/project
+// page and every session summary it has ever seen.
+const MAX_KNOWN_SESSIONS = 1000;
+const MAX_PROJECT_PAGE_CACHE = 32;
+const MAX_HISTORY_PAGE_CACHE = 1;
+const HISTORY_PAGE_PREFIX = 'history:';
+const TASK_PROJECT_PAGE_PREFIX = 'task:project:';
 
 interface SessionListResult {
   sessions?: ListedSessionShape[];
@@ -86,8 +94,18 @@ export function sessionPage(key: string): SessionPageState {
   return state.sessionPages[key] || newPage();
 }
 
+function projectIdFromPageKey(key: string): string {
+  if (!key.startsWith(TASK_PROJECT_PAGE_PREFIX)) return '';
+  const rest = key.slice(TASK_PROJECT_PAGE_PREFIX.length);
+  const end = rest.lastIndexOf(':');
+  return end > 0 ? rest.slice(0, end) : '';
+}
+
 function rebuildSessionCache(): void {
   const byID = new Map<string, ListedSessionShape>();
+  // Seed from previously known sessions so a task opened from an older history
+  // page keeps its canonical title/cwd projection. The result stays bounded.
+  for (const session of state.sessions) byID.set(session.sessionId, session);
   for (const page of Object.values(state.sessionPages)) {
     for (const session of page.sessions) {
       const existing = byID.get(session.sessionId);
@@ -100,7 +118,71 @@ function rebuildSessionCache(): void {
       );
     }
   }
-  state.sessions = [...byID.values()];
+  const values = [...byID.values()];
+  state.sessions = values.length > MAX_KNOWN_SESSIONS ? values.slice(values.length - MAX_KNOWN_SESSIONS) : values;
+}
+
+// pruneSessionPages drops stale history searches and caps cached project pages.
+// Task pages for expanded projects are retained because the tree is showing
+// them; unexpanded project pages reload on demand.
+function pruneSessionPages(currentHistoryKey: string): void {
+  const pages: Record<string, SessionPageState> = {};
+  let changed = false;
+  let historyPages = 0;
+  for (const [key, page] of Object.entries(state.sessionPages)) {
+    if (key.startsWith(HISTORY_PAGE_PREFIX)) {
+      if (key !== currentHistoryKey || historyPages >= MAX_HISTORY_PAGE_CACHE) {
+        changed = true;
+        continue;
+      }
+      historyPages += 1;
+    }
+    pages[key] = page;
+  }
+  const projectKeys = Object.keys(pages).filter((key) => key.startsWith(TASK_PROJECT_PAGE_PREFIX));
+  if (projectKeys.length > MAX_PROJECT_PAGE_CACHE) {
+    const expanded = new Set(state.expandedProjectIds.map((id) => taskProjectPageKey(id)));
+    for (const key of projectKeys) {
+      if (projectKeys.length <= MAX_PROJECT_PAGE_CACHE) break;
+      if (expanded.has(key)) continue;
+      delete pages[key];
+      projectKeys.splice(projectKeys.indexOf(key), 1);
+      changed = true;
+    }
+  }
+  if (changed) {
+    state.sessionPages = pages;
+    rebuildSessionCache();
+  }
+}
+
+function evictProjectPages(projectId: string): void {
+  const prefix = taskProjectPageKey(projectId);
+  const pages: Record<string, SessionPageState> = {};
+  let changed = false;
+  for (const [key, page] of Object.entries(state.sessionPages)) {
+    if (key.startsWith(prefix)) {
+      changed = true;
+      continue;
+    }
+    pages[key] = page;
+  }
+  if (changed) {
+    state.sessionPages = pages;
+    rebuildSessionCache();
+  }
+}
+
+function isPageStillCurrent(key: string): boolean {
+  if (key.startsWith(HISTORY_PAGE_PREFIX)) return key === historyPageKey();
+  const projectId = projectIdFromPageKey(key);
+  if (projectId) {
+    // The project catalog is loaded asynchronously after the first task pages;
+    // an empty catalog must not reject a cached branch during startup.
+    if (state.projects.length === 0) return true;
+    return state.projects.some((project) => project.id === projectId);
+  }
+  return true;
 }
 
 // 分页加载不再清空旧数据:加载期间保留现有条目(仅标记 loading),成功后
@@ -125,6 +207,7 @@ async function runPageLoad(key: string, options: SessionListOptions, reset: bool
     return existingRequest;
   }
   const request = (async () => {
+    if (!isPageStillCurrent(key)) return;
     const base = state.sessionPages[key];
     if (!reset && base) {
       if (base.loading || (base.loaded && !base.nextCursor)) return;
@@ -137,6 +220,9 @@ async function runPageLoad(key: string, options: SessionListOptions, reset: bool
     emit();
     try {
       const result = await invoke<SessionListResult>('mothx/session/listAll', sessionListParams(options, cursor));
+      // A search/scope/project may have changed while this page was in flight.
+      // Never resurrect a pruned cache entry or a deleted project's branch.
+      if (!isPageStillCurrent(key)) return;
       const byID = new Map<string, ListedSessionShape>();
       if (!reset) {
         for (const existing of loadingPage.sessions) byID.set(existing.sessionId, existing);
@@ -237,7 +323,9 @@ export async function refreshHistory(): Promise<void> {
   if (state.historyScope === 'project' && !state.historyProjectId) {
     state.historyScope = 'all';
   }
-  await runPageLoad(historyPageKey(), {
+  const key = historyPageKey();
+  pruneSessionPages(key);
+  await runPageLoad(key, {
     scope: state.historyScope,
     projectId: state.historyProjectId,
     query: state.historyQuery,
@@ -534,6 +622,8 @@ export async function deleteSession(sessionId: string): Promise<void> {
   // the deleted task can never stay visible in a project branch or list.
   evictSessionFromPages(sessionId);
   forgetSessionRun(sessionId);
+  forgetSessionSubagents(sessionId);
+  forgetSessionDecisions(sessionId);
   if (state.activeSessionId === sessionId) void startNewTask(false);
   toast(t('session.deleted'));
   await refreshTaskLibrary();
@@ -666,6 +756,7 @@ export async function deleteProject(id: string): Promise<void> {
   try {
     await invoke('mothx/projects/delete', { id });
     state.expandedProjectIds = state.expandedProjectIds.filter((entry) => entry !== id);
+    evictProjectPages(id);
     await refreshTaskLibrary();
   } catch (error) {
     toast(error instanceof Error ? error.message : String(error));

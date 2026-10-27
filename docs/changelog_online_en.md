@@ -31,6 +31,7 @@ This file contains the changes for the **current version only**. The full histor
 - **Electron no longer forces software rendering on every packaged Linux desktop.** GPU compositing is kept when `DISPLAY`/`WAYLAND_DISPLAY` exists (with an explicit `MOTHX_DESKTOP_DISABLE_GPU` escape hatch), and the `/dev/shm` fallback is applied only when that mount is missing, unwritable, or smaller than 128 MB. ACP events are also coalesced into one IPC delivery per frame, and live diagnostic logs cross IPC only while the log viewer is open.
 
 - **Desktop no longer starts transition/animation storms on hover, theme changes, or scroll reveals.** Tailwind `duration-*` no longer accompanies `animate-in` (which made every hovered sidebar row transition all inherited properties), transcript cards no longer replay entrance animations when `content-visibility` reveals them during scrolling, the sidebar scrollbar keeps a constant 8 px width, and theme switches temporarily suppress transitions on inherited colors.
+- **Long-lived Desktop windows stay bounded.** The live transcript renders a 300-item tail window (expandable locally), status/retry/compaction notices update in place instead of accumulating, session/search/subagent/run-status caches are capped, progress polling cannot overlap, transcript lookup uses an index instead of scanning every chunk, oversized tool output is capped in the display copy, and `desktop.log` rotates at 8 MB between launches.
 
 ### 🐛 Bug Fixes
 

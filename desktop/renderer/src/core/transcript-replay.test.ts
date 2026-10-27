@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { state } from './state.ts';
-import { applySessionUpdate, applyTranscriptPage } from './transcript.ts';
+import { applySessionEvent, applySessionUpdate, applyTranscriptPage } from './transcript.ts';
 
 // 历史回放(session/load、mothx/session/history)会把 tool_call 与其后续
 // tool_call_update 放在同一页里重放。回归点:同页 update 必须落到同一条
@@ -88,6 +88,56 @@ test('replayed publish_artifact tool completion still projects the fallback arti
     const artifact = state.transcript.find((entry) => entry.kind === 'artifact');
     assert.ok(artifact, 'completed publish_artifact in history must project an artifact card');
     assert.equal(artifact.kind === 'artifact' && artifact.filename, 'report.md');
+  } finally {
+    state.transcript = previous.transcript;
+    state.transcriptSessionId = previous.transcriptSessionId;
+  }
+});
+
+test('status, retry, and compaction notices replace instead of accumulating', () => {
+  const previous = { transcript: state.transcript, transcriptSessionId: state.transcriptSessionId };
+  state.transcript = [];
+  state.transcriptSessionId = 'sess-status';
+  try {
+    applySessionEvent({ sessionId: 'sess-status', event: 'status', message: 'first' });
+    applySessionEvent({ sessionId: 'sess-status', event: 'status', message: 'second' });
+    applySessionEvent({ sessionId: 'sess-status', event: 'retry', message: 'one' });
+    applySessionEvent({ sessionId: 'sess-status', event: 'retry', message: 'two' });
+    applySessionEvent({ sessionId: 'sess-status', event: 'compaction_start' });
+    applySessionEvent({ sessionId: 'sess-status', event: 'compaction_start' });
+    const statuses = state.transcript.filter((entry) => entry.kind === 'status');
+    assert.equal(statuses.length, 3, 'one line per status/retry/compaction kind');
+    const status = statuses.find((entry) => entry.kind === 'status' && entry.key === 'status:sess-status');
+    assert.ok(status && status.kind === 'status');
+    assert.equal(status.text, 'second');
+  } finally {
+    state.transcript = previous.transcript;
+    state.transcriptSessionId = previous.transcriptSessionId;
+  }
+});
+
+test('oversized tool output is bounded in the renderer display copy', () => {
+  const previous = { transcript: state.transcript, transcriptSessionId: state.transcriptSessionId };
+  state.transcript = [];
+  state.transcriptSessionId = 'sess-big-tool';
+  try {
+    applySessionUpdate('sess-big-tool', {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-big',
+      title: 'bash yes',
+      kind: 'execute',
+      status: 'pending',
+    });
+    applySessionUpdate('sess-big-tool', {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-big',
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: 'x'.repeat(100000) } }],
+    });
+    const item = state.transcript.find((entry) => entry.kind === 'tool');
+    assert.ok(item && item.kind === 'tool');
+    const text = item.contents[0]?.content?.text || '';
+    assert.ok(text.length <= 20002, 'renderer tool text must stay bounded');
   } finally {
     state.transcript = previous.transcript;
     state.transcriptSessionId = previous.transcriptSessionId;
