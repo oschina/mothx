@@ -4170,23 +4170,57 @@ func (s *server) handleListSessions(req rpcRequest) {
 		return
 	}
 
-	details, err := session.ListAllDetailed(s.currentSettings().GetSessionDir(), session.WithDeferredEventStorePreview())
+	offset, err := sessionListOffset(in.Cursor)
+	if err != nil {
+		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
+		return
+	}
+	allowedRoots := append([]string{cwd}, additionalDirectories...)
+	sessionDir := s.currentSettings().GetSessionDir()
+	// Read one row beyond the page so pagination needs neither a full-history
+	// load nor a separate count. The CWD boundary is applied in SQL against the
+	// exact stored path spellings, before LIMIT/OFFSET.
+	details, err := session.ListAllDetailed(sessionDir,
+		session.WithCWDRoots(allowedRoots),
+		session.WithLimit(sessionListPageSize+1),
+		session.WithOffset(offset),
+		session.WithDeferredEventStorePreview(),
+	)
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
 		return
 	}
-	allowedRoots := map[string]struct{}{filepath.Clean(cwd): {}}
-	for _, directory := range additionalDirectories {
-		allowedRoots[filepath.Clean(directory)] = struct{}{}
-	}
-	filtered := details[:0]
-	for _, detail := range details {
-		if _, ok := allowedRoots[filepath.Clean(detail.Cwd)]; ok {
-			filtered = append(filtered, detail)
+	nextCursor := ""
+	if len(details) > sessionListPageSize {
+		details = details[:sessionListPageSize]
+		nextCursor = encodeSessionCursor(offset + len(details))
+	} else if len(details) == 0 && offset > 0 {
+		// Preserve the existing invalid-cursor contract without counting the
+		// whole history: a cursor is valid only when at least one filtered row
+		// exists immediately before it.
+		previous, probeErr := session.ListAllDetailed(sessionDir,
+			session.WithCWDRoots(allowedRoots),
+			session.WithLimit(1),
+			session.WithOffset(offset-1),
+			session.WithDeferredEventStorePreview(),
+		)
+		if probeErr != nil {
+			s.writeResponse(req.ID, nil, acpFailureRPCError(probeErr, nil, agentruntime.PhasePersistence))
+			return
+		}
+		if len(previous) == 0 {
+			s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
+			return
 		}
 	}
-	details = filtered
-	s.writeSessionList(req, details, in.Cursor)
+	s.writeSessionListPage(req, details, nextCursor)
+}
+
+func sessionListOffset(cursor string) (int, error) {
+	if cursor == "" {
+		return 0, nil
+	}
+	return decodeSessionCursor(cursor)
 }
 
 // handleListAllSessions projects the persisted task library across every
@@ -4204,15 +4238,57 @@ func (s *server) handleListAllSessions(req rpcRequest) {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: "ACP settings are unavailable"})
 		return
 	}
-	// A page can be rendered from cheap SQLite metadata; EventStore previews
-	// are projected only for the page that is actually returned. A content
-	// search still needs every candidate's title/preview, so it keeps the full
-	// projection path.
-	listOpts := []session.ListOption{}
-	if strings.TrimSpace(in.Query) == "" {
-		listOpts = append(listOpts, session.WithDeferredEventStorePreview())
+	scope, projectID, err := normalizeSessionListScope(in)
+	if err != nil {
+		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: err.Error()})
+		return
 	}
-	details, err := session.ListAllDetailed(s.currentSettings().GetSessionDir(), listOpts...)
+	sessionDir := s.currentSettings().GetSessionDir()
+	if strings.TrimSpace(in.Query) == "" {
+		offset, err := sessionListOffset(in.Cursor)
+		if err != nil {
+			s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
+			return
+		}
+		listOpts := []session.ListOption{
+			session.WithLimit(sessionListPageSize + 1),
+			session.WithOffset(offset),
+			session.WithDeferredEventStorePreview(),
+		}
+		if scope != "all" {
+			listOpts = append(listOpts, session.WithProjectScope(projectID))
+		}
+		details, err := session.ListAllDetailed(sessionDir, listOpts...)
+		if err != nil {
+			s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
+			return
+		}
+		nextCursor := ""
+		if len(details) > sessionListPageSize {
+			details = details[:sessionListPageSize]
+			nextCursor = encodeSessionCursor(offset + len(details))
+		} else if len(details) == 0 && offset > 0 {
+			previous, probeErr := session.ListAllDetailed(sessionDir, append(listOpts, session.WithLimit(1), session.WithOffset(offset-1))...)
+			if probeErr != nil {
+				s.writeResponse(req.ID, nil, acpFailureRPCError(probeErr, nil, agentruntime.PhasePersistence))
+				return
+			}
+			if len(previous) == 0 {
+				s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
+				return
+			}
+		}
+		s.writeSessionListPage(req, details, nextCursor)
+		return
+	}
+
+	// Search still needs every candidate's title/preview before it can determine
+	// the page, but the project scope is already constrained in SQL.
+	listOpts := []session.ListOption{}
+	if scope != "all" {
+		listOpts = append(listOpts, session.WithProjectScope(projectID))
+	}
+	details, err := session.ListAllDetailed(sessionDir, listOpts...)
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
 		return
@@ -4229,7 +4305,7 @@ func (s *server) handleListAllSessions(req rpcRequest) {
 // pagination. The catalog remains a Runtime/session projection: this helper
 // only combines persisted session details, canonical session metadata, and
 // canonical project names for a read-only adapter query.
-func (s *server) filterGlobalSessionList(details []session.SessionDetail, in listSessionsRequest) ([]session.SessionDetail, error) {
+func normalizeSessionListScope(in listSessionsRequest) (string, string, error) {
 	scope := strings.ToLower(strings.TrimSpace(in.Scope))
 	projectID := strings.TrimSpace(in.ProjectID)
 	if scope == "" {
@@ -4239,13 +4315,21 @@ func (s *server) filterGlobalSessionList(details []session.SessionDetail, in lis
 		scope = "project"
 	}
 	if scope != "all" && scope != "project" && scope != "ungrouped" {
-		return nil, fmt.Errorf("invalid session list scope %q", in.Scope)
+		return "", "", fmt.Errorf("invalid session list scope %q", in.Scope)
 	}
 	if scope == "project" && projectID == "" {
-		return nil, fmt.Errorf("projectId is required for project session list scope")
+		return "", "", fmt.Errorf("projectId is required for project session list scope")
 	}
 	if scope == "ungrouped" && projectID != "" {
-		return nil, fmt.Errorf("projectId is not valid for ungrouped session list scope")
+		return "", "", fmt.Errorf("projectId is not valid for ungrouped session list scope")
+	}
+	return scope, projectID, nil
+}
+
+func (s *server) filterGlobalSessionList(details []session.SessionDetail, in listSessionsRequest) ([]session.SessionDetail, error) {
+	scope, projectID, err := normalizeSessionListScope(in)
+	if err != nil {
+		return nil, err
 	}
 
 	query := strings.ToLower(strings.TrimSpace(in.Query))
@@ -4299,26 +4383,31 @@ func (s *server) filterGlobalSessionList(details []session.SessionDetail, in lis
 	return filtered, nil
 }
 
+// writeSessionList paginates an already materialized catalog. Standard
+// session/list uses writeSessionListPage with a SQL page; the global catalog
+// still needs its Go-side scope/query filters before a page is known.
 func (s *server) writeSessionList(req rpcRequest, details []session.SessionDetail, cursor string) {
-	offset := 0
-	if cursor != "" {
-		var err error
-		offset, err = decodeSessionCursor(cursor)
-		if err != nil {
-			s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
-			return
-		}
+	offset, err := sessionListOffset(cursor)
+	if err != nil {
+		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
+		return
 	}
 	if offset > len(details) {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
 		return
 	}
-
 	end := offset + sessionListPageSize
 	if end > len(details) {
 		end = len(details)
 	}
-	pageDetails := details[offset:end]
+	nextCursor := ""
+	if end < len(details) {
+		nextCursor = encodeSessionCursor(end)
+	}
+	s.writeSessionListPage(req, details[offset:end], nextCursor)
+}
+
+func (s *server) writeSessionListPage(req rpcRequest, pageDetails []session.SessionDetail, nextCursor string) {
 	pageIDs := make([]string, 0, len(pageDetails))
 	for _, detail := range pageDetails {
 		pageIDs = append(pageIDs, detail.ID)
@@ -4419,9 +4508,7 @@ func (s *server) writeSessionList(req rpcRequest, details []session.SessionDetai
 			Meta:                  meta,
 		})
 	}
-	if end < len(details) {
-		result.NextCursor = encodeSessionCursor(end)
-	}
+	result.NextCursor = nextCursor
 	s.writeResponse(req.ID, result, nil)
 }
 

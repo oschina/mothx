@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,6 +120,82 @@ func TestOpenForeignKeysOptionIsPerDatabase(t *testing.T) {
 // MOTHX_SQLITE_SYNCHRONOUS=FULL escape hatch restores the legacy per-commit
 // durability. The variable is read per connection open, so processes running
 // different builds or settings can share one database file.
+// TestQuickCheckEnabledDefaultsOnAndSupportsExplicitOptOut pins the safety
+// default: only an explicit disable value may skip startup integrity checks.
+func TestQuickCheckEnabledDefaultsOnAndSupportsExplicitOptOut(t *testing.T) {
+	t.Setenv("MOTHX_SQLITE_QUICK_CHECK", "")
+	if !StartupQuickCheckEnabled() {
+		t.Fatal("StartupQuickCheckEnabled() = false, want the safe default true")
+	}
+	for _, value := range []string{"off", "FALSE", "0", "skip", "disabled"} {
+		t.Setenv("MOTHX_SQLITE_QUICK_CHECK", value)
+		if StartupQuickCheckEnabled() {
+			t.Fatalf("StartupQuickCheckEnabled() with %q = true, want false", value)
+		}
+	}
+	for _, value := range []string{"on", "true", "1", "unexpected"} {
+		t.Setenv("MOTHX_SQLITE_QUICK_CHECK", value)
+		if !StartupQuickCheckEnabled() {
+			t.Fatalf("StartupQuickCheckEnabled() with %q = false, want default true", value)
+		}
+	}
+}
+
+func TestOpenSkipsStartupQuickCheckOnlyWhenExplicitlyDisabled(t *testing.T) {
+	TakeIndexRepairs()
+	path := filepath.Join(t.TempDir(), "skip-quick-check.db")
+	staleIndexDatabase(t, path)
+	TakeIndexRepairs()
+	t.Setenv("MOTHX_SQLITE_QUICK_CHECK", "off")
+	if _, err := Open(path, nil); err != nil {
+		t.Fatalf("Open with startup quick_check disabled: %v", err)
+	}
+	if repairs := TakeIndexRepairs(); len(repairs) != 0 {
+		t.Fatalf("Open ran index repair while quick_check was disabled: %#v", repairs)
+	}
+	if err := Close(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifyIntegrityReportsStaleIndexWithoutRepairing(t *testing.T) {
+	TakeIndexRepairs()
+	path := filepath.Join(t.TempDir(), "verify.db")
+	staleIndexDatabase(t, path)
+
+	err := VerifyIntegrity(path)
+	var integrity *IntegrityError
+	if !errors.As(err, &integrity) {
+		t.Fatalf("VerifyIntegrity error = %v, want *IntegrityError", err)
+	}
+	if integrity.Path == "" || !isStaleIndexReport(integrity.Report) {
+		t.Fatalf("IntegrityError = %#v, want path and stale-index report", integrity)
+	}
+	if !IsIndexOnlyIntegrityError(err) {
+		t.Fatalf("IsIndexOnlyIntegrityError(%v) = false, want true", err)
+	}
+	if repairs := TakeIndexRepairs(); len(repairs) != 0 {
+		t.Fatalf("read-only VerifyIntegrity repaired the database: %#v", repairs)
+	}
+}
+
+func TestVerifyIntegrityAcceptsHealthyDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "healthy.db")
+	_, err := Open(path, func(sqlDB *sql.DB) error {
+		_, err := sqlDB.Exec(`CREATE TABLE IF NOT EXISTS verify_probe (id TEXT PRIMARY KEY)`)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Close(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyIntegrity(path); err != nil {
+		t.Fatalf("VerifyIntegrity(healthy) = %v", err)
+	}
+}
+
 func TestSynchronousModeDefaultsToNormalWithFullEscapeHatch(t *testing.T) {
 	if mode := synchronousMode(); mode != "NORMAL" {
 		t.Fatalf("synchronousMode() = %q, want NORMAL", mode)

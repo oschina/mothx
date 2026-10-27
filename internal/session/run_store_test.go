@@ -255,9 +255,9 @@ func TestFinishSessionRunAndConversationTurnRollsBackInvalidDeliveryPlan(t *test
 }
 
 // TestListSessionRunsDoesNotDeadlockPool guards against issuing the per-run
-// input resource query inside the session_runs rows loop, which self-deadlocks
-// the MaxOpenConns(1) pooled connection (outer rows hold the only connection;
-// the nested query waits forever on context.Background()).
+// input resource query inside the session_runs rows loop. That keeps an outer
+// row cursor open while starting nested queries, unnecessarily consuming two
+// pooled connections and making the projection scale worse under load.
 func TestListSessionRunsDoesNotDeadlockPool(t *testing.T) {
 	sessionDir := t.TempDir()
 	mgr := New(t.TempDir(), sessionDir)

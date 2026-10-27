@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/oschina/mothx/internal/config"
+	database "github.com/oschina/mothx/internal/db"
+	"github.com/oschina/mothx/internal/session"
 )
 
 func TestRunReportsMissingProviderKeyWithoutLeakingConfiguredValue(t *testing.T) {
@@ -66,6 +69,55 @@ func TestRunUsesProjectSettingsForRequestedCWD(t *testing.T) {
 	result := Run(workDir, "test-version")
 	if got := checkByID(t, result, "provider.default").Detail; got != "project-provider" {
 		t.Fatalf("provider detail = %q, want project-provider", got)
+	}
+}
+
+func TestCheckSessionIntegritySkipsMissingAndValidatesExistingDatabase(t *testing.T) {
+	settings := config.DefaultSettings()
+	settings.SessionDir = t.TempDir()
+	missing := checkSessionIntegrity(settings)
+	if missing.ID != "sessions.integrity" || missing.Status != StatusSkip {
+		t.Fatalf("missing integrity check = %#v, want skip", missing)
+	}
+
+	path := session.RootDatabasePath(settings.SessionDir)
+	if _, err := database.Open(path, func(sqlDB *sql.DB) error {
+		_, err := sqlDB.Exec(`CREATE TABLE IF NOT EXISTS doctor_probe (id TEXT PRIMARY KEY)`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(path); err != nil {
+		t.Fatal(err)
+	}
+	healthy := checkSessionIntegrity(settings)
+	if healthy.Status != StatusOK {
+		t.Fatalf("healthy integrity check = %#v, want ok", healthy)
+	}
+
+	if err := os.WriteFile(path, []byte("not a sqlite database"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	broken := checkSessionIntegrity(settings)
+	if broken.Status != StatusError || broken.Fix == "" || !strings.Contains(broken.Fix, "restore") {
+		t.Fatalf("broken integrity check = %#v, want backup/restore guidance", broken)
+	}
+}
+
+func TestSessionIntegrityFixMatchesRepairCapability(t *testing.T) {
+	stale := &database.IntegrityError{Path: "sessions.db", Report: "wrong # of entries in index idx_entries_session_type"}
+	t.Setenv("MOTHX_SQLITE_QUICK_CHECK", "")
+	if fix := sessionIntegrityFix(stale); !strings.Contains(fix, "restart") || strings.Contains(fix, "unset") {
+		t.Fatalf("enabled startup fix = %q, want restart guidance", fix)
+	}
+	t.Setenv("MOTHX_SQLITE_QUICK_CHECK", "off")
+	if fix := sessionIntegrityFix(stale); !strings.Contains(fix, "unset MOTHX_SQLITE_QUICK_CHECK") || !strings.Contains(fix, "restart") {
+		t.Fatalf("disabled startup fix = %q, want unset-and-restart guidance", fix)
+	}
+
+	damage := &database.IntegrityError{Path: "sessions.db", Report: "database disk image is malformed"}
+	if fix := sessionIntegrityFix(damage); !strings.Contains(fix, "restore") || strings.Contains(fix, "repair stale indexes") {
+		t.Fatalf("table damage fix = %q, want backup/restore guidance", fix)
 	}
 }
 

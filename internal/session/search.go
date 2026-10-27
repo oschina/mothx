@@ -43,14 +43,14 @@ type sessionSearchScan struct {
 // no lease is acquired, no write transaction is taken, and EventStore
 // convergence is never triggered.
 func SearchAllDetailed(sessionDir, query string, limit, offset int) ([]SessionDetail, int, error) {
-	return searchAllDetailed(sessionDir, query, limit, offset, true)
+	return searchAllDetailed(sessionDir, query, limit, offset, dao.SessionListFilter{MessagesOnly: true})
 }
 
 // searchAllDetailed is the option-aware form behind SearchAllDetailed and the
 // legacy ListAll/ListAllDetailed WithSearch entry points. messagesOnly keeps
 // their historical candidate filter without introducing a second matcher.
-func searchAllDetailed(sessionDir, query string, limit, offset int, messagesOnly bool) ([]SessionDetail, int, error) {
-	scan, err := scanSessionSearch(sessionDir, query, limit, offset, messagesOnly)
+func searchAllDetailed(sessionDir, query string, limit, offset int, filter dao.SessionListFilter) ([]SessionDetail, int, error) {
+	scan, err := scanSessionSearch(sessionDir, query, limit, offset, filter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -63,7 +63,7 @@ func searchAllDetailed(sessionDir, query string, limit, offset int, messagesOnly
 // scanSessionSearch performs the single candidate + content pass. Cheap fields
 // (ID/cwd/channel/title/preview) are evaluated from the list row and the
 // aggregate projection; only sessions that miss them read persisted content.
-func scanSessionSearch(sessionDir, query string, limit, offset int, messagesOnly bool) (sessionSearchScan, error) {
+func scanSessionSearch(sessionDir, query string, limit, offset int, filter dao.SessionListFilter) (sessionSearchScan, error) {
 	result := sessionSearchScan{aggregates: newSessionDetailAggregates(), eventStoreProjects: map[string]sessionSearchProjection{}, legacyPreviews: map[string]string{}}
 	if sessionDir == "" {
 		sessionDir = platform.SessionDir()
@@ -75,7 +75,10 @@ func scanSessionSearch(sessionDir, query string, limit, offset int, messagesOnly
 		return result, err
 	}
 	sessionDAO := dao.NewSessionDAO(db.Bun())
-	records, err := sessionDAO.List(context.Background(), dao.SessionListFilter{MessagesOnly: messagesOnly, CWDFilter: sessionCWDFilter()})
+	// Search performs its own matching and pagination over the complete candidate
+	// set, so only the SQL-supplied scope predicates may remain here.
+	filter.Limit, filter.Offset, filter.Search = 0, 0, ""
+	records, err := sessionDAO.List(context.Background(), filter)
 	if err != nil {
 		return result, err
 	}

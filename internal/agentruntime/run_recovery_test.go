@@ -66,7 +66,7 @@ func TestRecoverOrphanedRunsParallelizesAndPreservesScanOrder(t *testing.T) {
 	var active, maxActive atomic.Int32
 	// Rendezvous: the first worker stays inside the callback until a second one
 	// arrives, so the overlap assertion is deterministic instead of depending on
-	// how the scheduler and the single-connection SQLite interleave. The barrier
+	// how the scheduler and SQLite reads interleave. The barrier
 	// normally closes within milliseconds; the generous 30s budget only bounds the
 	// serialized case, where the first worker times out and the assertion below
 	// fails with a clear message (later workers find the barrier open).

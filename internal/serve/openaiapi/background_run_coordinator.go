@@ -184,6 +184,17 @@ func (s *Server) executeResponsesBackgroundRunWithConfig(sess *APISession, durab
 		cancelRun()
 		backgroundAgent.Abort()
 	}) {
+		// A stop may mark the Run cancelling between admission and this attach.
+		// In that case the deferred terminal write must preserve cancellation,
+		// not fall through to its default failure status.
+		if durableCtx != nil && durableCtx.Err() != nil {
+			terminalStatus = "cancelled"
+			// The remote task exists but the local cancellation callback was never
+			// attached, so release it explicitly instead of orphaning it upstream.
+			cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = manager.Cancel(cancelCtx, sess.ID, run.LocalRunID)
+			cancel()
+		}
 		return
 	}
 	if s.runManager != nil {
@@ -795,6 +806,12 @@ func (s *Server) monitorRecoveredResponsesBackgroundRun(sess *APISession, durabl
 		cancelRun()
 		backgroundAgent.Abort()
 	}) {
+		if durableCtx != nil && durableCtx.Err() != nil {
+			terminalStatus = "cancelled"
+			cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = s.responsesRuns.Cancel(cancelCtx, sess.ID, responseRun.LocalRunID)
+			cancel()
+		}
 		return
 	}
 	s.attachResponsesBackgroundCancel(localRun.ID, sess.ID, responseRun.LocalRunID, func() {

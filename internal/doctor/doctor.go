@@ -14,10 +14,12 @@ import (
 	"strings"
 
 	"github.com/oschina/mothx/internal/config"
+	database "github.com/oschina/mothx/internal/db"
 	"github.com/oschina/mothx/internal/mcp"
 	"github.com/oschina/mothx/internal/platform"
 	providerfactory "github.com/oschina/mothx/internal/provider/factory"
 	"github.com/oschina/mothx/internal/serve"
+	"github.com/oschina/mothx/internal/session"
 	"github.com/oschina/mothx/internal/skills"
 	appversion "github.com/oschina/mothx/internal/version"
 )
@@ -73,6 +75,7 @@ func Run(cwd, version string) Response {
 	checks = append(checks, checkSandbox(settings)...)
 	checks = append(checks, checkMCP(cwd)...)
 	checks = append(checks, checkSessions(settings))
+	checks = append(checks, checkSessionIntegrity(settings))
 	checks = append(checks, checkSkills(cwd, settings)...)
 	checks = append(checks, checkContext(cwd, settings)...)
 
@@ -284,6 +287,7 @@ func checkEnvironmentOverrides() []Check {
 		{"VIBECODING_MODEL", "defaultModel"},
 		{"VIBECODING_MODE", "defaultMode"},
 		{"VIBECODING_THINKING", "defaultThinkingLevel"},
+		{"MOTHX_SQLITE_QUICK_CHECK", "startup integrity checks"},
 	}
 	checks := make([]Check, 0, len(overrides))
 	for _, override := range overrides {
@@ -340,6 +344,42 @@ func checkSessions(settings *config.Settings) Check {
 		return Check{ID: "sessions", Status: StatusError, Title: "Sessions", Detail: path + " is not a directory"}
 	}
 	return Check{ID: "sessions", Status: StatusOK, Title: "Sessions", Detail: path}
+}
+
+// checkSessionIntegrity performs the on-demand counterpart to the startup
+// quick_check. It is read-only, so doctor remains safe to run while another
+// MothX process is serving the same database.
+func checkSessionIntegrity(settings *config.Settings) Check {
+	if settings == nil {
+		return Check{ID: "sessions.integrity", Status: StatusSkip, Title: "Session database integrity", Detail: "settings unavailable"}
+	}
+	path := session.RootDatabasePath(settings.GetSessionDir())
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return Check{ID: "sessions.integrity", Status: StatusSkip, Title: "Session database integrity", Detail: path + " (not created yet)"}
+	} else if err != nil {
+		return Check{ID: "sessions.integrity", Status: StatusError, Title: "Session database integrity", Detail: err.Error()}
+	}
+	if err := database.VerifyIntegrity(path); err != nil {
+		return Check{
+			ID: "sessions.integrity", Status: StatusError, Title: "Session database integrity",
+			Detail: err.Error(),
+			Fix:    sessionIntegrityFix(err),
+		}
+	}
+	return Check{ID: "sessions.integrity", Status: StatusOK, Title: "Session database integrity", Detail: path}
+}
+
+// sessionIntegrityFix describes only actions that can actually help. Startup can
+// repair stale secondary indexes, but not arbitrary table damage; if startup
+// checks are disabled, restarting alone will not repair anything.
+func sessionIntegrityFix(err error) string {
+	if !database.IsIndexOnlyIntegrityError(err) {
+		return "Back up sessions.db and restore a known-good backup; do not delete the database"
+	}
+	if database.StartupQuickCheckEnabled() {
+		return "Back up sessions.db, then restart MothX so startup can repair stale indexes; do not delete the database"
+	}
+	return "Back up sessions.db, unset MOTHX_SQLITE_QUICK_CHECK, then restart MothX so startup can repair stale indexes; do not delete the database"
 }
 
 func checkSkills(cwd string, settings *config.Settings) []Check {

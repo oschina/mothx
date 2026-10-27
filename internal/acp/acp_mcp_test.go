@@ -497,6 +497,62 @@ func TestListSessionsUsesOpaqueCursor(t *testing.T) {
 	}
 }
 
+func TestListSessionsFiltersAllowedRootsBeforePaging(t *testing.T) {
+	dir := t.TempDir()
+	cwd := t.TempDir()
+	sibling := cwd + "-sibling"
+	for i := 0; i < sessionListPageSize+5; i++ {
+		newTestSession(t, cwd, dir, fmt.Sprintf("allowed-%03d", i), 0)
+	}
+	// These are newer and would occupy the first SQL rows without a CWD filter.
+	for i := 0; i < 10; i++ {
+		newTestSession(t, sibling, dir, fmt.Sprintf("sibling-%03d", i), 0)
+	}
+
+	var out bytes.Buffer
+	s := &server{settings: &config.Settings{SessionDir: dir}, w: &out}
+	beforeRows := session.SessionListRowsRead()
+	s.handleListSessions(rpcRequest{ID: json.RawMessage("1"), Params: json.RawMessage(fmt.Sprintf(`{"cwd":%q}`, cwd))})
+	if rows := session.SessionListRowsRead() - beforeRows; rows != sessionListPageSize+1 {
+		t.Fatalf("first list read %d rows, want %d (SQL LIMIT, not full catalog)", rows, sessionListPageSize+1)
+	}
+	first := jsonLines(t, &out)[0]["result"].(map[string]any)
+	firstSessions := first["sessions"].([]any)
+	if len(firstSessions) != sessionListPageSize {
+		t.Fatalf("first page size = %d, want %d", len(firstSessions), sessionListPageSize)
+	}
+	for _, raw := range firstSessions {
+		if got := raw.(map[string]any)["cwd"]; got != cwd {
+			t.Fatalf("first page contained unauthorized cwd %q, want %q", got, cwd)
+		}
+	}
+	cursor, _ := first["nextCursor"].(string)
+	if cursor == "" {
+		t.Fatal("missing nextCursor for filtered page")
+	}
+
+	out.Reset()
+	beforeRows = session.SessionListRowsRead()
+	s.handleListSessions(rpcRequest{ID: json.RawMessage("2"), Params: json.RawMessage(fmt.Sprintf(`{"cwd":%q,"cursor":%q}`, cwd, cursor))})
+	if rows := session.SessionListRowsRead() - beforeRows; rows != 5 {
+		t.Fatalf("second list read %d rows, want 5", rows)
+	}
+	second := jsonLines(t, &out)[0]["result"].(map[string]any)
+	if got := len(second["sessions"].([]any)); got != 5 {
+		t.Fatalf("second page size = %d, want 5", got)
+	}
+	if second["nextCursor"] != nil {
+		t.Fatalf("second page nextCursor = %#v, want omitted", second["nextCursor"])
+	}
+
+	out.Reset()
+	beyond := encodeSessionCursor(1000)
+	s.handleListSessions(rpcRequest{ID: json.RawMessage("3"), Params: json.RawMessage(fmt.Sprintf(`{"cwd":%q,"cursor":%q}`, cwd, beyond))})
+	if code := jsonLines(t, &out)[0]["error"].(map[string]any)["code"]; code != float64(-32602) {
+		t.Fatalf("beyond-end cursor error code = %#v, want -32602", code)
+	}
+}
+
 func TestListAllSessionsReturnsTheGlobalProjectCatalog(t *testing.T) {
 	dir := t.TempDir()
 	firstCwd := t.TempDir()
@@ -517,6 +573,74 @@ func TestListAllSessionsReturnsTheGlobalProjectCatalog(t *testing.T) {
 	}
 	if seen["first-project-session"] != firstCwd || seen["second-project-session"] != secondCwd {
 		t.Fatalf("global session catalog = %#v, want both project directories", seen)
+	}
+}
+
+func TestListAllSessionsFiltersProjectScopeBeforePagination(t *testing.T) {
+	dir := t.TempDir()
+	project, err := session.CreateProject(dir, "Paged project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < sessionListPageSize+2; i++ {
+		id := fmt.Sprintf("project-page-%03d", i)
+		newTestSession(t, t.TempDir(), dir, id, 0)
+		if err := session.SetSessionMetadata(dir, id, session.SessionMetadata{ProjectID: project.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		newTestSession(t, t.TempDir(), dir, fmt.Sprintf("ungrouped-page-%03d", i), 0)
+	}
+
+	var out bytes.Buffer
+	s := &server{settings: &config.Settings{SessionDir: dir}, w: &out}
+	beforeRows := session.SessionListRowsRead()
+	s.handleListAllSessions(rpcRequest{ID: json.RawMessage("1"), Params: json.RawMessage(fmt.Sprintf(`{"scope":"project","projectId":%q}`, project.ID))})
+	if rows := session.SessionListRowsRead() - beforeRows; rows != sessionListPageSize+1 {
+		t.Fatalf("project list read %d rows, want %d (SQL scope+LIMIT, not full catalog)", rows, sessionListPageSize+1)
+	}
+	first := jsonLines(t, &out)[0]["result"].(map[string]any)
+	firstSessions := first["sessions"].([]any)
+	if len(firstSessions) != sessionListPageSize {
+		t.Fatalf("project first page size = %d, want %d", len(firstSessions), sessionListPageSize)
+	}
+	for _, raw := range firstSessions {
+		id := raw.(map[string]any)["sessionId"].(string)
+		if !strings.HasPrefix(id, "project-page-") {
+			t.Fatalf("project first page leaked %q", id)
+		}
+	}
+	cursor, _ := first["nextCursor"].(string)
+	if cursor == "" {
+		t.Fatal("missing project nextCursor")
+	}
+
+	out.Reset()
+	beforeRows = session.SessionListRowsRead()
+	s.handleListAllSessions(rpcRequest{ID: json.RawMessage("2"), Params: json.RawMessage(fmt.Sprintf(`{"scope":"project","projectId":%q,"cursor":%q}`, project.ID, cursor))})
+	if rows := session.SessionListRowsRead() - beforeRows; rows != 2 {
+		t.Fatalf("project second page read %d rows, want 2", rows)
+	}
+	second := jsonLines(t, &out)[0]["result"].(map[string]any)
+	if got := len(second["sessions"].([]any)); got != 2 {
+		t.Fatalf("project second page size = %d, want 2", got)
+	}
+	if second["nextCursor"] != nil {
+		t.Fatalf("project second page nextCursor = %#v, want omitted", second["nextCursor"])
+	}
+
+	out.Reset()
+	s.handleListAllSessions(rpcRequest{ID: json.RawMessage("3"), Params: json.RawMessage(`{"scope":"ungrouped"}`)})
+	ungrouped := jsonLines(t, &out)[0]["result"].(map[string]any)["sessions"].([]any)
+	if len(ungrouped) != 10 {
+		t.Fatalf("ungrouped page size = %d, want 10", len(ungrouped))
+	}
+	for _, raw := range ungrouped {
+		id := raw.(map[string]any)["sessionId"].(string)
+		if !strings.HasPrefix(id, "ungrouped-page-") {
+			t.Fatalf("ungrouped page leaked %q", id)
+		}
 	}
 }
 

@@ -71,6 +71,15 @@ func IsIntegrityError(err error) bool {
 	return errors.As(err, &integrity)
 }
 
+// IsIndexOnlyIntegrityError reports whether err is an integrity failure limited
+// to stale secondary-index entries, the one case startup can repair losslessly
+// with REINDEX. Callers that render recovery guidance use this to distinguish
+// "restart to repair indexes" from "restore from backup".
+func IsIndexOnlyIntegrityError(err error) bool {
+	var integrity *IntegrityError
+	return errors.As(err, &integrity) && isStaleIndexReport(integrity.Report)
+}
+
 var state = struct {
 	sync.Mutex
 	dbs map[string]*bun.DB
@@ -309,15 +318,21 @@ func openOnce(path string, migrate Migrator, opts Options) (*bun.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite db: %w", err)
 	}
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
+	// WAL permits readers to proceed while one connection holds the writer lock.
+	// Keep a small pool so a write transaction waiting for that lock cannot block
+	// every unrelated read in this process. SQLite still allows only one writer,
+	// so write transactions remain serialized by the database.
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetMaxIdleConns(4)
 	if err := sqlDB.Ping(); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("initialize sqlite connection: %w", err)
 	}
-	if err := checkIntegrity(sqlDB, path); err != nil {
-		_ = sqlDB.Close()
-		return nil, err
+	if StartupQuickCheckEnabled() {
+		if err := checkIntegrity(sqlDB, path); err != nil {
+			_ = sqlDB.Close()
+			return nil, err
+		}
 	}
 	if err := enableWAL(sqlDB); err != nil {
 		_ = sqlDB.Close()
@@ -336,6 +351,48 @@ func openOnce(path string, migrate Migrator, opts Options) (*bun.DB, error) {
 // connection already carries, and it is a variable only so the contention path
 // can be tested without a full-budget stall.
 var indexRepairBudget = BusyTimeout
+
+// StartupQuickCheckEnabled reports whether opening a managed database performs
+// the startup quick_check. The check stays enabled by default because it is the
+// only barrier that stops a structurally damaged database before migrations or
+// queries touch it. MOTHX_SQLITE_QUICK_CHECK=off is an explicit availability
+// escape hatch for very large databases; it never disables on-demand
+// VerifyIntegrity checks such as `mothx doctor`.
+func StartupQuickCheckEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MOTHX_SQLITE_QUICK_CHECK"))) {
+	case "off", "false", "0", "skip", "disabled":
+		return false
+	default:
+		return true
+	}
+}
+
+// VerifyIntegrity runs an uncached, read-only SQLite quick_check for an existing
+// database. It never repairs or configures the file, so diagnostic entry points
+// can use it without changing canonical data. A non-ok report is returned as
+// *IntegrityError.
+func VerifyIntegrity(path string) error {
+	canonical, err := CanonicalPath(path)
+	if err != nil {
+		return err
+	}
+	connection, err := sql.Open("sqlite", readOnlyDSN(canonical))
+	if err != nil {
+		return fmt.Errorf("open read-only sqlite db for integrity check: %w", err)
+	}
+	defer connection.Close()
+	if err := connection.Ping(); err != nil {
+		return fmt.Errorf("open read-only sqlite db for integrity check: %w", err)
+	}
+	report, err := quickCheck(connection)
+	if err != nil {
+		return fmt.Errorf("run sqlite integrity check: %w", err)
+	}
+	if report != "ok" {
+		return &IntegrityError{Path: canonical, Report: report}
+	}
+	return nil
+}
 
 // checkIntegrity validates the database before it is used. SQLite can report a
 // stale secondary-index entry after an interrupted write even when every table

@@ -763,8 +763,8 @@ func ListSessionRuns(sessionDir, sessionID string, limit int) ([]SessionRun, err
 	for _, record := range records {
 		result = append(result, sessionRunFromRecord(&record))
 	}
-	// rows are exhausted (the single pooled connection is released at EOF), so
-	// issuing per-run queries now cannot self-deadlock the MaxOpenConns(1) pool.
+	// rows are exhausted (the pooled connection is released at EOF), so issuing
+	// per-run queries now does not hold a connection while starting nested reads.
 	if err := loadInputResourceIDs(context.Background(), db, result); err != nil {
 		return nil, err
 	}

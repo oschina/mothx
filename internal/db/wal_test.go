@@ -129,7 +129,7 @@ func TestWalStatsReportsOpenDatabase(t *testing.T) {
 	}
 }
 
-func TestPoolStatsReportsSingleConnectionModel(t *testing.T) {
+func TestPoolStatsReportsReadConcurrentConnectionModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "poolstats.db")
 	migrate := func(sqlDB *sql.DB) error {
 		_, err := sqlDB.Exec(`CREATE TABLE IF NOT EXISTS pool_probe (value TEXT NOT NULL)`)
@@ -164,7 +164,49 @@ func TestPoolStatsReportsSingleConnectionModel(t *testing.T) {
 	if filepath.IsAbs(found.Path) {
 		t.Fatalf("PoolStats path %q must be a base name, not an absolute path", found.Path)
 	}
-	if found.MaxOpenConnections != 1 {
-		t.Fatalf("maxOpenConnections = %d, want 1 (the single-writer connection model)", found.MaxOpenConnections)
+	if found.MaxOpenConnections != 4 {
+		t.Fatalf("maxOpenConnections = %d, want 4 (WAL read concurrency)", found.MaxOpenConnections)
+	}
+}
+
+// TestReadProceedsWhileWriteTransactionHoldsLock proves the pool no longer
+// self-blocks a read behind an active writer transaction. SQLite still permits
+// only one writer, but WAL mode lets another connection read the last committed
+// snapshot while that transaction is open.
+func TestReadProceedsWhileWriteTransactionHoldsLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "write-read.db")
+	migrate := func(sqlDB *sql.DB) error {
+		_, err := sqlDB.Exec(`CREATE TABLE IF NOT EXISTS write_read_probe (value TEXT NOT NULL)`)
+		return err
+	}
+	connection, err := Open(path, migrate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := Close(path); err != nil {
+			t.Errorf("close %s: %v", path, err)
+		}
+	}()
+
+	txCtx, cancelTx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelTx()
+	tx, err := connection.BeginTx(txCtx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(txCtx, `INSERT INTO write_read_probe (value) VALUES ('held')`); err != nil {
+		t.Fatal(err)
+	}
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelRead()
+	var count int
+	if err := connection.NewRaw(`SELECT COUNT(*) FROM write_read_probe`).Scan(readCtx, &count); err != nil {
+		t.Fatalf("read while writer transaction is open: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("read count = %d, want the last committed snapshot (0)", count)
 	}
 }

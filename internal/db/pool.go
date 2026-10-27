@@ -5,13 +5,12 @@ import (
 	"sort"
 )
 
-// DatabasePoolStat reports one open database's connection-pool counters. Every
-// managed connection uses SetMaxOpenConns(1), so WaitCount/WaitDuration is the
-// direct measure of how often and how long a transaction or query had to queue
-// for the single connection: a growing value under concurrent sessions is the
-// baseline that would justify (or rule out) a separate read connection pool.
-// Path is the database file's base name so the local /debug/vars surface does
-// not expose absolute filesystem paths.
+// DatabasePoolStat reports one open database's connection-pool counters. Managed
+// connections keep a small pool so WAL readers can proceed while one connection
+// holds the writer lock. WaitCount/WaitDuration measures how often and how long
+// a transaction or query had to queue for one of those connections. Path is the
+// database file's base name so the local /debug/vars surface does not expose
+// absolute filesystem paths.
 type DatabasePoolStat struct {
 	Path               string `json:"path"`
 	MaxOpenConnections int    `json:"maxOpenConnections"`
@@ -26,9 +25,7 @@ type DatabasePoolStat struct {
 }
 
 // PoolStats reports the connection-pool counters for every database this
-// process currently holds open, sorted by path. It is the measurement half of
-// deciding whether the single-writer connection model needs a read pool; it
-// changes no behavior.
+// process currently holds open, sorted by path. It changes no behavior.
 func PoolStats() []DatabasePoolStat {
 	state.Lock()
 	stats := make([]DatabasePoolStat, 0, len(state.dbs))

@@ -11,6 +11,8 @@
 
 ### 💥 行为变更
 
+- **SQLite 启动完整性检查现在可显式关闭。** MothX 默认仍会在使用会话库前执行 `PRAGMA quick_check`。超大数据库可用 `MOTHX_SQLITE_QUICK_CHECK=off` 跳过这项固定开销；`mothx doctor` 仍会执行按需的只读完整性检查，并报告 `sessions.integrity`。
+
 - **非托管网页搜索改用 DeepSeek Search/Fetch。** 原先通过 `webSearch` 的 provider/type/model 配置注册的 provider 搜索工具已被替换为 DeepSeek 官方 `POST /v1/tools/search` 与 `POST /v1/tools/fetch` 支撑的本地 `web_search`、`web_fetch`。OpenAI Responses 的 provider 原生托管搜索保持不变；Anthropic Messages 在 `webSearch` 启用时使用其 provider 原生托管搜索。两者都优先于本地 `web_search`。`webSearch` 现在配置 `provider`、`baseUrl` 与 `token`（未设置 token 时回退到 provider API key）；两个工具均为只读，可在 plan 模式使用。
 
 - **新增腾讯元宝搜索后端。** `webSearch.backend` 现在可选择 `deepseek`（官方 Search/Fetch API）或 `yuanbao`（腾讯元宝 SearchPro，`POST /SearchPro`）。元宝后端发送 `{"Query": ...}`，把返回的 `Pages` 归一化为标题、URL、站点、时间、分数与正文摘要，并使用 `webSearch.token` 或 `${TENCENTCLOUD_WSA_APIKEY}` 鉴权；元宝目前只提供搜索，因此 `web_fetch` 仅在 DeepSeek 后端可用。
@@ -18,6 +20,8 @@
 - **内置的 Windows BusyBox 现在要求 Windows 10 及以上。** `busybox-windows-x86.exe` 与 `busybox-windows-x86_64.exe` 改用该 fork 的 UTF-8 配置重新构建（x86_64 用 `mingw64u_defconfig`，x86 用 `mingw32w_defconfig`），带有 UTF-8 应用程序清单（`activeCodePage=UTF-8`）以及 `FEATURE_UTF8_INPUT`、`FEATURE_UTF8_CONSOLE`、`FEATURE_UTF8_AUTODETECT`、`FEATURE_UTF8_CHILD_ENV` 与 `UNICODE_SUPPORT`。非 ASCII 的 `sh -c` 命令文本现在以 UTF-8 传入 argv，不再被降级为系统 ANSI 代码页（简体中文 Windows 上为 GBK），子进程也保持 UTF-8 环境基线。由于构建时设置了 `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`，在 Windows 7/8 上 BusyBox 会拒绝启动；此时 `bash` 工具会像「BusyBox 不可用」一样自动回退到 PowerShell，命令仍可执行（只是没有 UTF-8 基线）。MothX 的支持范围仍标注为 Windows 10/11。
 
 ### 🐛 问题修复
+
+- **后台 Responses 任务在挂接期间收到停止时不再记为失败。** 并发 WAL 读可能让停止操作在后台 coordinator 挂接 Agent 之前把 Run 标为 cancelling。此前该分支会落入默认 `failed` 终态，并可能遗留 provider 侧任务；现在保留 `cancelled`，并显式取消远端 Responses 任务。
 
 - **Windows 捕获输出在捕获边界统一归一化。** 子进程各自决定管道编码——Python、Java、C 运行库与 shell 内建命令常用 ANSI 代码页（简体中文 Windows 上为 GBK），而 Go、Rust、Node.js 及多数 CLI 写 UTF-8，同一条命令还可能混用两者。现在不再注入针对单一运行时的环境变量，而是由 `bash` 工具通过 `platform.DecodeProcessOutput` 归一化捕获到的 stdout/stderr：非合法 UTF-8 的字节用当前代码页解码，合法 UTF-8 直接信任，混合输出则按「最大非 ASCII 连续段」分别判定。`MOTHX_WIN_OUTPUT_ENCODING=utf-8` 可强制 UTF-8，设为数字（如 `936`）可强制该代码页。
 

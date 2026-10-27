@@ -408,13 +408,17 @@ func ListAll(sessionDir string, opts ...ListOption) ([]SessionInfo, error) {
 		fn(&opt)
 	}
 
+	cwds, err := resolveListCWDs(sessionDir, opt)
+	if err != nil {
+		return nil, err
+	}
 	if opt.search != "" {
 		// Search has one shared implementation: a single read-only candidate
 		// scan that matches cheap fields first and decodes content only for the
 		// remaining sessions. Pagination is applied inside that scan. The scan
 		// opens the session database itself, so the plain list open below is
 		// skipped for searches instead of opening the same database twice.
-		details, _, err := searchAllDetailed(sessionDir, opt.search, opt.limit, opt.offset, opt.messagesOnly)
+		details, _, err := searchAllDetailed(sessionDir, opt.search, opt.limit, opt.offset, listSQLFilter(opt, cwds))
 		if err != nil {
 			return nil, err
 		}
@@ -429,11 +433,57 @@ func ListAll(sessionDir string, opts ...ListOption) ([]SessionInfo, error) {
 	if err != nil || !ok {
 		return nil, err
 	}
-	records, err := dao.NewSessionDAO(db.Bun()).List(context.Background(), dao.SessionListFilter{MessagesOnly: opt.messagesOnly, Limit: opt.limit, Offset: opt.offset, CWDFilter: sessionCWDFilter()})
+	records, err := dao.NewSessionDAO(db.Bun()).List(context.Background(), listSQLFilter(opt, cwds))
 	if err != nil {
 		return nil, err
 	}
+	sessionListRowsReadCount.Add(uint64(len(records)))
 	return sessionInfosFromRecords(sessionDir, records), nil
+}
+
+func listSQLFilter(opt listOptions, cwds []string) dao.SessionListFilter {
+	return dao.SessionListFilter{
+		CWDs:         cwds,
+		ProjectID:    opt.projectID,
+		Ungrouped:    opt.ungrouped,
+		MessagesOnly: opt.messagesOnly,
+		Limit:        opt.limit,
+		Offset:       opt.offset,
+		CWDFilter:    sessionCWDFilter(),
+	}
+}
+
+// resolveListCWDs maps canonical allowed roots to the exact working-directory
+// spellings stored in the session database. Matching happens here, in the shared
+// session layer, rather than in a SQL LIKE: a root must authorize that directory
+// itself, never a sibling whose name merely shares a prefix. nil means no CWD
+// restriction; an empty non-nil slice means no session is visible.
+func resolveListCWDs(sessionDir string, opt listOptions) ([]string, error) {
+	if !opt.cwdRootsSet {
+		return nil, nil
+	}
+	if len(opt.cwdRoots) == 0 {
+		return []string{}, nil
+	}
+	db, ok, err := openExistingSessionDB(sessionDir)
+	if err != nil || !ok {
+		return []string{}, err
+	}
+	stored, err := dao.NewSessionDAO(db.Bun()).DistinctCWDs(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	allowed := make(map[string]struct{}, len(opt.cwdRoots))
+	for _, root := range opt.cwdRoots {
+		allowed[filepath.Clean(root)] = struct{}{}
+	}
+	resolved := make([]string, 0, len(stored))
+	for _, cwd := range stored {
+		if _, ok := allowed[filepath.Clean(cwd)]; ok {
+			resolved = append(resolved, cwd)
+		}
+	}
+	return resolved, nil
 }
 
 // CountWithMessages returns the number of sessions that contain at least one
@@ -456,14 +506,20 @@ func CountWithMessages(sessionDir string, opts ...ListOption) (int, error) {
 	if err != nil || !ok {
 		return 0, err
 	}
+	cwds, err := resolveListCWDs(sessionDir, opt)
+	if err != nil {
+		return 0, err
+	}
 	if opt.search != "" {
-		scan, scanErr := scanSessionSearch(sessionDir, opt.search, 0, 0, true)
+		scan, scanErr := scanSessionSearch(sessionDir, opt.search, 0, 0, listSQLFilter(opt, cwds))
 		if scanErr != nil {
 			return 0, scanErr
 		}
 		return scan.total, nil
 	}
-	return dao.NewSessionDAO(db.Bun()).Count(context.Background(), dao.SessionListFilter{Search: opt.search, MessagesOnly: opt.messagesOnly})
+	filter := listSQLFilter(opt, cwds)
+	filter.Search = opt.search
+	return dao.NewSessionDAO(db.Bun()).Count(context.Background(), filter)
 }
 
 func CountAll(sessionDir string) (int, error) {
@@ -490,6 +546,10 @@ type listOptions struct {
 	messagesOnly          bool
 	search                string
 	skipEventStorePreview bool
+	cwdRoots              []string
+	cwdRootsSet           bool
+	projectID             string
+	ungrouped             bool
 }
 
 type ListOption func(*listOptions)
@@ -503,6 +563,27 @@ func WithLimit(limit int) ListOption {
 func WithOffset(offset int) ListOption {
 	return func(o *listOptions) {
 		o.offset = offset
+	}
+}
+
+// WithCWDRoots limits a listing to the directories authorized by the caller.
+// Roots are cleaned and matched against the exact stored CWD spellings in SQL,
+// so path aliases such as "/work/." remain valid while a sibling prefix such as
+// "/work-other" never becomes visible. Calling it with no roots lists nothing.
+func WithCWDRoots(roots []string) ListOption {
+	return func(o *listOptions) {
+		o.cwdRoots = append([]string(nil), roots...)
+		o.cwdRootsSet = true
+	}
+}
+
+// WithProjectScope limits a listing to one project, or to sessions with no
+// project when projectID is empty. The DAO applies it as one indexed metadata
+// predicate before pagination; adapters never filter a loaded global catalog.
+func WithProjectScope(projectID string) ListOption {
+	return func(o *listOptions) {
+		o.projectID = strings.TrimSpace(projectID)
+		o.ungrouped = o.projectID == ""
 	}
 }
 
@@ -695,6 +776,16 @@ func OpenByID(cwd, sessionDir, sessionID string) (*Manager, error) {
 var sessionOpenByIDExactCount atomic.Uint64
 
 func sessionOpenedByIDExactCount() uint64 { return sessionOpenByIDExactCount.Load() }
+
+// sessionListRowsReadCount counts rows materialized by the non-search session
+// list SQL. It is package-local test telemetry with no ownership meaning; ACP
+// pagination tests use it to prove that a page is read in SQL instead of loading
+// the whole catalog and slicing it afterwards.
+var sessionListRowsReadCount atomic.Uint64
+
+// SessionListRowsRead reports the cumulative number of session-list rows read by
+// this process. Callers should treat it as diagnostic/test telemetry, not state.
+func SessionListRowsRead() uint64 { return sessionListRowsReadCount.Load() }
 
 // OpenByIDExactCallCount reports the process-local number of OpenByIDExact
 // calls. It is test telemetry used to prove that list/search projections do not
@@ -2976,7 +3067,11 @@ func ListAllDetailed(sessionDir string, opts ...ListOption) ([]SessionDetail, er
 	if options.search != "" {
 		// The search scan already produces complete details for the page from a
 		// single pass; do not rebuild them through a second list projection.
-		details, _, err := searchAllDetailed(sessionDir, options.search, options.limit, options.offset, options.messagesOnly)
+		cwds, err := resolveListCWDs(sessionDir, options)
+		if err != nil {
+			return nil, err
+		}
+		details, _, err := searchAllDetailed(sessionDir, options.search, options.limit, options.offset, listSQLFilter(options, cwds))
 		return details, err
 	}
 	sessions, err := ListAll(sessionDir, opts...)

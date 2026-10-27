@@ -70,6 +70,9 @@ const (
 
 type SessionListFilter struct {
 	CWD, Search   string
+	CWDs          []string
+	ProjectID     string
+	Ungrouped     bool
 	CWDFilter     SessionCWDFilter
 	MessagesOnly  bool
 	Limit, Offset int
@@ -357,18 +360,22 @@ func applySessionCWDFilter(q *bun.SelectQuery, column, cwd string, filter Sessio
 	q.Where(column+" = ?", cwd)
 }
 
+// DistinctCWDs returns every persisted working-directory spelling. Callers that
+// hold canonical allowed roots use this to resolve them to exact stored values
+// before applying a list filter; adapters never construct path SQL themselves.
+func (d *SessionDAO) DistinctCWDs(ctx context.Context) ([]string, error) {
+	var cwds []string
+	err := d.db.NewSelect().Table("sessions").Column("cwd").Distinct().Scan(ctx, &cwds)
+	return cwds, err
+}
+
 func (d *SessionDAO) List(ctx context.Context, filter SessionListFilter) ([]SessionRecord, error) {
 	var rows []sessionListRow
 	q := d.db.NewSelect().TableExpr("sessions AS s").ColumnExpr(sessionListColumns)
-	applySessionCWDFilter(q, "s.cwd", filter.CWD, filter.CWDFilter)
-	if filter.MessagesOnly {
-		q.Where("EXISTS (SELECT 1 FROM entries e WHERE e.session_id = s.id AND e.type = 'message') OR EXISTS (SELECT 1 FROM session_event_projections p WHERE p.session_id = s.id AND p.type = 'message')")
-	}
-	if filter.Search != "" {
-		p := "%" + filter.Search + "%"
-		q.Where("(s.id LIKE ? COLLATE NOCASE OR s.cwd LIKE ? COLLATE NOCASE OR s.channel_type LIKE ? COLLATE NOCASE OR s.channel_id LIKE ? COLLATE NOCASE OR EXISTS (SELECT 1 FROM entries e WHERE e.session_id = s.id AND e.data LIKE ? COLLATE NOCASE))", p, p, p, p, p)
-	}
-	q.OrderExpr("last_active_at DESC")
+	applySessionListFilter(q, filter)
+	// A stable tie-breaker is required for LIMIT/OFFSET pages: two sessions with
+	// the same last-active value must not move between pages.
+	q.OrderExpr("last_active_at DESC, s.id ASC")
 	if filter.Limit > 0 {
 		q.Limit(filter.Limit)
 	}
@@ -392,18 +399,33 @@ func sessionRecordsFromRows(rows []sessionListRow) []SessionRecord {
 	}
 	return result
 }
-func (d *SessionDAO) Count(ctx context.Context, filter SessionListFilter) (int, error) {
-	q := d.db.NewSelect().TableExpr("sessions AS s").ColumnExpr("COUNT(*)")
+func applySessionListFilter(q *bun.SelectQuery, filter SessionListFilter) {
+	applySessionCWDFilter(q, "s.cwd", filter.CWD, filter.CWDFilter)
+	if filter.CWDs != nil {
+		if len(filter.CWDs) == 0 {
+			q.Where("1 = 0")
+		} else {
+			q.Where("s.cwd IN (?)", bun.In(filter.CWDs))
+		}
+	}
+	if filter.ProjectID != "" {
+		q.Where("EXISTS (SELECT 1 FROM session_metadata m WHERE m.session_id = s.id AND m.project_id = ?)", filter.ProjectID)
+	}
+	if filter.Ungrouped {
+		q.Where("NOT EXISTS (SELECT 1 FROM session_metadata m WHERE m.session_id = s.id AND m.project_id IS NOT NULL AND m.project_id != '')")
+	}
 	if filter.MessagesOnly {
 		q.Where("EXISTS (SELECT 1 FROM entries e WHERE e.session_id = s.id AND e.type = 'message') OR EXISTS (SELECT 1 FROM session_event_projections p WHERE p.session_id = s.id AND p.type = 'message')")
-	}
-	if filter.CWD != "" {
-		applySessionCWDFilter(q, "s.cwd", filter.CWD, filter.CWDFilter)
 	}
 	if filter.Search != "" {
 		p := "%" + filter.Search + "%"
 		q.Where("(s.id LIKE ? COLLATE NOCASE OR s.cwd LIKE ? COLLATE NOCASE OR s.channel_type LIKE ? COLLATE NOCASE OR s.channel_id LIKE ? COLLATE NOCASE OR EXISTS (SELECT 1 FROM entries e WHERE e.session_id = s.id AND e.data LIKE ? COLLATE NOCASE))", p, p, p, p, p)
 	}
+}
+
+func (d *SessionDAO) Count(ctx context.Context, filter SessionListFilter) (int, error) {
+	q := d.db.NewSelect().TableExpr("sessions AS s").ColumnExpr("COUNT(*)")
+	applySessionListFilter(q, filter)
 	var count int
 	return count, q.Scan(ctx, &count)
 }
