@@ -1170,9 +1170,14 @@ func DefaultSettings() *Settings {
 		ContextFiles:      ContextFilesSettings{Enabled: true},
 		SkillsDir:         platform.SkillsDir(),
 		SkillHub: SkillHubSettings{
-			DefaultMarket:       "skillhub.cn",
+			DefaultMarket:       "yuandun",
 			DefaultInstallScope: "project",
 			OfficialHandles:     []string{DefaultSkillHubOfficialHandle},
+			Markets: []SkillHubMarketSettings{
+				{ID: "yuandun", Name: "源盾", SiteURL: "https://yuandun.gitee.com", APIURL: "https://yuandun.gitee.com", Enabled: true},
+				{ID: "skillhub.cn", Name: "SkillHub.cn", SiteURL: "https://skillhub.cn", Enabled: true},
+				{ID: "clawhub.ai", Name: "ClawHub.ai", SiteURL: "https://clawhub.ai", Enabled: true},
+			},
 		},
 		Compaction: CompactionSettings{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 20000},
 		Sandbox: SandboxSettings{
@@ -1459,6 +1464,7 @@ func LoadSettingsFor(cwd string) (*Settings, error) {
 		s.DefaultThinkingLevel = v
 	}
 	normalizeLegacyWebSearchProvider(s)
+	normalizeLegacySkillHubDefaultMarket(s)
 	return s, nil
 }
 
@@ -1549,6 +1555,7 @@ func LoadSettingsWithMeta() (*Settings, LoadMeta, error) {
 	// .baseUrl is explicit. Project the truthful credential source so every
 	// adapter shows what will actually be used.
 	normalizeLegacyWebSearchProvider(s)
+	normalizeLegacySkillHubDefaultMarket(s)
 
 	return s, meta, nil
 }
@@ -1636,6 +1643,28 @@ func normalizeLegacyWebSearchProvider(s *Settings) {
 		return
 	}
 	s.WebSearch.Provider = "deepseek-openai"
+}
+
+// normalizeLegacySkillHubDefaultMarket migrates the pre-源盾 implicit default.
+// Older settings stored skillHub.defaultMarket="skillhub.cn" without an explicit
+// markets list; treat that as the legacy product default and move it to 源盾.
+// A custom market list without 源盾 keeps the user's skillhub.cn choice.
+func normalizeLegacySkillHubDefaultMarket(s *Settings) {
+	if s == nil || strings.TrimSpace(s.SkillHub.DefaultMarket) != "skillhub.cn" {
+		return
+	}
+	if len(s.SkillHub.Markets) == 0 || hasSkillHubMarket(s.SkillHub.Markets, "yuandun") {
+		s.SkillHub.DefaultMarket = "yuandun"
+	}
+}
+
+func hasSkillHubMarket(markets []SkillHubMarketSettings, id string) bool {
+	for _, market := range markets {
+		if market.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadGlobalSettingsSparse loads only fields explicitly present in the global

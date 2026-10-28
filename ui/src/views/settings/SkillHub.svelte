@@ -10,7 +10,7 @@
   import SettingsSection from './SettingsSection.svelte';
   import SettingsField from './SettingsField.svelte';
 
-  let form = { defaultMarket: 'skillhub.cn', defaultInstallScope: 'project', officialHandles: [], markets: [] };
+  let form = { defaultMarket: 'yuandun', defaultInstallScope: 'project', officialHandles: [], markets: [] };
   let last = '';
   $: if ($settings !== last) { last = $settings; load($settings); }
 
@@ -19,7 +19,7 @@
       const cfg = JSON.parse(raw || '{}');
       const hub = cfg.skillHub || {};
       form = {
-        defaultMarket: hub.defaultMarket || 'skillhub.cn',
+        defaultMarket: hub.defaultMarket || 'yuandun',
         defaultInstallScope: hub.defaultInstallScope || 'project',
         officialHandles: hub.officialHandles || [],
         markets: hub.markets || []
@@ -81,7 +81,7 @@
           <CardContent class="market-card-content">
             <div class="market-fields">
               <SettingsField label={$t('settings.skillhub.id')}>
-                <Input bind:value={market.id} placeholder="skillhub.cn" />
+                <Input bind:value={market.id} placeholder="yuandun" />
               </SettingsField>
               <SettingsField label={$t('settings.skillhub.name')}>
                 <Input bind:value={market.name} />

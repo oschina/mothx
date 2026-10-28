@@ -1,14 +1,17 @@
 # Online Skill Marketplace Integration
 
-MothX is compatible with existing skill marketplaces (SkillHub / ClawHub). Skill packages published on these platforms can be used directly in MothX.
+MothX is compatible with existing skill marketplaces (源盾 / SkillHub / ClawHub). Skill packages published on these platforms can be used directly in MothX.
 
 | Platform | URL | Region |
 |----------|-----|--------|
+| **源盾 (Yuandun)** | [https://yuandun.gitee.com](https://yuandun.gitee.com/) | China |
 | **SkillHub** | [https://skillhub.cn](https://skillhub.cn/) | China |
 | **ClawHub** | [https://clawhub.ai](https://clawhub.ai/) | International |
 
 MothX includes a built-in TUI marketplace for browsing, searching, inspecting, and
-installing public SkillHub / ClawHub packages. Open it with `/skillhub`.
+installing public 源盾 / SkillHub / ClawHub packages. Open it with `/skillhub`. 源盾 is
+listed first and is the default market. MothX identifies itself to 源盾 with
+`X-Client-Source: MothX` and `User-Agent: MothX`; 源盾 uses the header for download attribution.
 
 This guide covers:
 
@@ -24,20 +27,20 @@ This guide covers:
 Open the built-in marketplace with `/skillhub`.
 
 In the `mothx serve` Web UI, open **Skills** from the sidebar. The Web UI and TUI share
-the same SkillHub / ClawHub adapters and safe installer, including Official, Browse,
+the same 源盾 / SkillHub / ClawHub adapters and safe installer, including Official, Browse,
 Search, detail, install, update, and current-session activation. Project installs are
 derived from the current session workDir and constrained by `allowedWorkDirs`.
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Shift+Tab` | Switch SkillHub.cn / ClawHub.ai |
+| `Tab` / `Shift+Tab` | Switch 源盾 / SkillHub.cn / ClawHub.ai |
 | `[` / `]` | Switch Browse / Search / Official |
 | `/` | Edit the search query; `Enter` searches |
 | `Up` / `Down` | Select a skill |
-| `Left` / `Right` | Page through SkillHub results or ClawHub cursors |
+| `Left` / `Right` | Page through cursor-based markets (源盾 / ClawHub) or SkillHub pages |
 | `Enter` | Load details and file list |
 | `d` | Open the scrollable files, security, and evaluation detail view |
-| `c` / `s` | Cycle category / sort in SkillHub.cn Browse |
+| `c` / `s` | Cycle category / sort in 源盾 or SkillHub.cn Browse |
 | `i` | Install to the selected scope |
 | `u` | Update an installed skill when a newer version is available |
 | `a` | Install and activate for the current session |
@@ -46,12 +49,13 @@ derived from the current session workDir and constrained by `allowedWorkDirs`.
 | `Esc` | Close the marketplace |
 
 Lists show download counts as `DL`. SkillHub.cn Browse is ordered by downloads.
+源盾 Browse uses the market's cursor and supports the same category and sort controls.
 `[official]` means the skill is published by a configured Official account;
 `[certified]` identifies a verified publisher; `[verified]` is the marketplace's
 skill verification flag; and `[risk]` marks a suspicious result. These labels are
 kept separate because account origin is not the same as platform verification.
 Details also show source, category, tags, security scan summaries, evaluation availability, and download endpoints when provided by the market. The `d` view distinguishes primary and fallback download sources.
-SkillHub.cn Browse supports category filters and descending downloads, stars, installs, score, or updated-time sorting.
+SkillHub.cn Browse supports category filters and descending downloads, stars, installs, score, or updated-time sorting. 源盾 Browse supports its fixed categories and COMPREHENSIVE / DOWNLOADS / STARS / LATEST sorting through the same controls.
 Installed skills with a newer version show `[update]`; press `u` to update. Active skills are reloaded into the current session after an update.
 
 The command form is also available:
@@ -78,7 +82,7 @@ the local skill directories.
 
 ## Skill Format Compatibility
 
-MothX's skill format is fully compatible with the SkillHub / ClawHub standard:
+MothX's skill format is fully compatible with the 源盾 / SkillHub / ClawHub standard:
 
 ```
 skill-name/
@@ -173,14 +177,22 @@ Configure the global skills directory in `settings.json`:
 {
   "skillsDir": "~/.mothx/skills",
   "skillHub": {
-    "defaultMarket": "skillhub.cn",
+    "defaultMarket": "yuandun",
     "defaultInstallScope": "project",
-    "officialHandles": ["user_0064faa7"]
+    "officialHandles": ["user_0064faa7"],
+    "markets": [
+      { "id": "yuandun", "name": "源盾", "enabled": true, "apiURL": "https://yuandun.gitee.com" },
+      { "id": "skillhub.cn", "name": "SkillHub.cn", "enabled": true },
+      { "id": "clawhub.ai", "name": "ClawHub.ai", "enabled": true }
+    ]
   }
 }
 ```
 
 `officialHandles` controls the accounts aggregated in the SkillHub.cn Official tab.
+The 源盾 market ships with `https://yuandun.gitee.com` as its default `apiURL`;
+override it only when using a mirror. 源盾 is ordered before SkillHub.cn and is the
+default market.
 Project skills load automatically without extra configuration.
 
 ---

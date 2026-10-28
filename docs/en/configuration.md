@@ -803,16 +803,21 @@ Online skill marketplace settings used by `/skillhub` and the Desktop/WebUI skil
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `defaultMarket` | string | `"skillhub.cn"` | Market selected when opening the marketplace |
+| `defaultMarket` | string | `"yuandun"` | Market selected when opening the marketplace; falls back to the first enabled market |
 | `defaultInstallScope` | string | `"project"` | Default install target: `project` or `global` |
 | `officialHandles` | string array | built-in official handle | Marketplace handles treated as official publishers |
-| `markets` | object array | built-in markets | Custom market definitions: `{ id, name, siteURL, apiURL, enabled, apiToken }` |
+| `markets` | object array | built-in markets | Custom market definitions: `{ id, name, siteURL, apiURL, enabled, apiToken }`; 源盾 (`id: "yuandun"`) defaults to `https://yuandun.gitee.com` |
 
 ```json
 {
   "skillHub": {
-    "defaultMarket": "skillhub.cn",
-    "defaultInstallScope": "project"
+    "defaultMarket": "yuandun",
+    "defaultInstallScope": "project",
+    "markets": [
+      { "id": "yuandun", "name": "源盾", "enabled": true, "apiURL": "https://yuandun.gitee.com" },
+      { "id": "skillhub.cn", "name": "SkillHub.cn", "enabled": true },
+      { "id": "clawhub.ai", "name": "ClawHub.ai", "enabled": true }
+    ]
   }
 }
 ```

@@ -215,7 +215,7 @@ Skills are reusable prompt snippets for:
 
 ### Online Skill Marketplace
 
-MothX is compatible with SkillHub / ClawHub, supporting:
+MothX is compatible with 源盾 / SkillHub / ClawHub, supporting:
 
 - **Skill installation**: One-click install online skills
 - **Cron infrastructure**: Scheduled skill execution

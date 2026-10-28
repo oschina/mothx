@@ -180,7 +180,7 @@ mothx/
 - [系统架构](architecture.md) — 核心组件、数据流
 - [工具系统](tools.md) — 内置工具指南
 - [技能系统](skills.md) — 可复用提示片段
-- [在线 Skill 市场](skillhub.md) — SkillHub / ClawHub 集成
+- [在线 Skill 市场](skillhub.md) — 源盾 / SkillHub / ClawHub 集成
 - [工作流模式](workflow.md) — JavaScript DSL 多 Agent 编排
 - [SDK 集成](sdk.md) — 在 Go 应用中嵌入 MothX Agent
 - [添加供应商](provider-guide.md) — 添加或定制 provider

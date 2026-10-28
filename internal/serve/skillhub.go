@@ -71,12 +71,12 @@ func (rt *channelRuntime) handleSkillHub(server *openaiapi.Server) http.HandlerF
 		path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/skillhub/"), "/")
 		switch {
 		case path == "markets" && r.Method == http.MethodGet:
-			service, _, err := skillHubServiceForRequest(server, r.URL.Query().Get("sessionId"), r.URL.Query().Get("workDir"))
+			service, runtime, err := skillHubServiceForRequest(server, r.URL.Query().Get("sessionId"), r.URL.Query().Get("workDir"))
 			if err != nil {
 				writeSkillHubError(w, err)
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"markets": service.Markets()})
+			writeJSON(w, http.StatusOK, map[string]any{"markets": service.Markets(), "defaultMarket": runtime.DefaultMarket})
 		case path == "categories" && r.Method == http.MethodGet:
 			rt.handleSkillHubCategories(w, r, server)
 		case path == "official" && r.Method == http.MethodGet:
@@ -365,7 +365,7 @@ func skillHubMarket(value, fallback string) (skillhub.Market, error) {
 		value = fallback
 	}
 	market := skillhub.Market(value)
-	if market != skillhub.MarketSkillHub && market != skillhub.MarketClawHub {
+	if market != skillhub.MarketYuandun && market != skillhub.MarketSkillHub && market != skillhub.MarketClawHub {
 		return "", fmt.Errorf("unsupported marketplace %q", value)
 	}
 	return market, nil

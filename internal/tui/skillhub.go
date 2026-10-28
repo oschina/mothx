@@ -257,13 +257,21 @@ func (a *App) handleSkillHubCommand(parts []string) tea.Cmd {
 func parseSkillHubID(value string) (skillhub.Market, string, error) {
 	parts := strings.SplitN(value, "/", 2)
 	if len(parts) != 2 || parts[1] == "" {
-		return "", "", fmt.Errorf("market skill must use skillhub.cn/<slug> or clawhub.ai/<id>")
+		return "", "", fmt.Errorf("market skill must use yuandun/<id>, skillhub.cn/<slug> or clawhub.ai/<id>")
 	}
 	market := skillhub.Market(parts[0])
-	if market != skillhub.MarketSkillHub && market != skillhub.MarketClawHub {
+	if market != skillhub.MarketYuandun && market != skillhub.MarketSkillHub && market != skillhub.MarketClawHub {
 		return "", "", fmt.Errorf("unsupported marketplace %q", parts[0])
 	}
 	return market, parts[1], nil
+}
+
+func skillHubCursorMarket(market skillhub.Market) bool {
+	return market == skillhub.MarketYuandun || market == skillhub.MarketClawHub
+}
+
+func skillHubBrowseFilters(market skillhub.Market) bool {
+	return market == skillhub.MarketYuandun || market == skillhub.MarketSkillHub
 }
 
 func filepathBase(id string) string {
@@ -272,10 +280,10 @@ func filepathBase(id string) string {
 }
 
 func (a *App) defaultSkillHubMarket() skillhub.Market {
-	if a.settings != nil && skillhub.Market(a.settings.SkillHub.DefaultMarket) == skillhub.MarketClawHub {
-		return skillhub.MarketClawHub
+	if a.settings != nil {
+		return skillhub.ResolveDefaultMarket(a.settings.SkillHub)
 	}
-	return skillhub.MarketSkillHub
+	return skillhub.ResolveDefaultMarket(config.SkillHubSettings{})
 }
 
 func (a *App) defaultSkillHubScope() string {
@@ -305,7 +313,7 @@ func (a *App) closeSkillHub() {
 }
 
 func (a *App) loadSkillHubCategories() tea.Cmd {
-	if a.skillHub == nil || a.skillHubMarket != skillhub.MarketSkillHub {
+	if a.skillHub == nil || !skillHubBrowseFilters(a.skillHubMarket) {
 		return nil
 	}
 	service, market := a.skillHub, a.skillHubMarket
@@ -349,7 +357,7 @@ func (a *App) loadSkillHub() tea.Cmd {
 			}
 		case skillHubSearch:
 			request := skillhub.SearchQuery{Query: query, Limit: pageSize}
-			if market == skillhub.MarketClawHub {
+			if skillHubCursorMarket(market) {
 				request.Cursor = cursor
 			}
 			page, err = service.Search(context.Background(), market, request)
@@ -359,6 +367,9 @@ func (a *App) loadSkillHub() tea.Cmd {
 				request.Page, request.Sort, request.Order, request.Category = pageNo, sortBy, "desc", category
 			} else {
 				request.Cursor = cursor
+				if market == skillhub.MarketYuandun {
+					request.Sort, request.Category = sortBy, category
+				}
 			}
 			page, err = service.Search(context.Background(), market, request)
 		}
@@ -614,27 +625,9 @@ func (a *App) handleSkillHubKey(msg tea.KeyMsg) tea.Cmd {
 		a.closeSkillHub()
 		return nil
 	case msg.Type == tea.KeyTab:
-		if a.skillHubMarket == skillhub.MarketSkillHub {
-			a.skillHubMarket = skillhub.MarketClawHub
-		} else {
-			a.skillHubMarket = skillhub.MarketSkillHub
-		}
-		if a.skillHubMarket == skillhub.MarketClawHub && a.skillHubView == skillHubOfficial {
-			a.skillHubView = skillHubBrowse
-		}
-		a.resetSkillHubPaging()
-		return tea.Batch(a.loadSkillHub(), a.loadSkillHubCategories())
+		return a.cycleSkillHubMarket(1)
 	case msg.Type == tea.KeyShiftTab:
-		if a.skillHubMarket == skillhub.MarketSkillHub {
-			a.skillHubMarket = skillhub.MarketClawHub
-		} else {
-			a.skillHubMarket = skillhub.MarketSkillHub
-		}
-		if a.skillHubMarket == skillhub.MarketClawHub && a.skillHubView == skillHubOfficial {
-			a.skillHubView = skillHubBrowse
-		}
-		a.resetSkillHubPaging()
-		return tea.Batch(a.loadSkillHub(), a.loadSkillHubCategories())
+		return a.cycleSkillHubMarket(-1)
 	case msg.Type == tea.KeyUp:
 		if a.skillHubSelected > 0 {
 			a.skillHubSelected--
@@ -656,7 +649,7 @@ func (a *App) handleSkillHubKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	case msg.Type == tea.KeyLeft && a.skillHubCanPage():
-		if a.skillHubMarket == skillhub.MarketClawHub {
+		if skillHubCursorMarket(a.skillHubMarket) {
 			if len(a.skillHubCursorHistory) == 0 {
 				return nil
 			}
@@ -674,7 +667,7 @@ func (a *App) handleSkillHubKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	case msg.Type == tea.KeyRight && a.skillHubCanPage():
-		if a.skillHubMarket == skillhub.MarketClawHub {
+		if skillHubCursorMarket(a.skillHubMarket) {
 			if a.skillHubNextCursor == "" {
 				return nil
 			}
@@ -727,6 +720,38 @@ func (a *App) handleSkillHubKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (a *App) cycleSkillHubMarket(delta int) tea.Cmd {
+	markets := []skillhub.Market{skillhub.MarketYuandun, skillhub.MarketSkillHub, skillhub.MarketClawHub}
+	if a.skillHub != nil {
+		infos := a.skillHub.Markets()
+		if len(infos) > 0 {
+			markets = markets[:0]
+			for _, info := range infos {
+				markets = append(markets, info.ID)
+			}
+		}
+	}
+	if len(markets) == 0 {
+		return nil
+	}
+	current := 0
+	for i, market := range markets {
+		if market == a.skillHubMarket {
+			current = i
+			break
+		}
+	}
+	next := (current + delta + len(markets)) % len(markets)
+	a.skillHubMarket = markets[next]
+	if a.skillHubMarket != skillhub.MarketSkillHub && a.skillHubView == skillHubOfficial {
+		a.skillHubView = skillHubBrowse
+	}
+	a.skillHubCategory = ""
+	a.skillHubCategories = nil
+	a.resetSkillHubPaging()
+	return tea.Batch(a.loadSkillHub(), a.loadSkillHubCategories())
+}
+
 func (a *App) skillHubPageSize() int {
 	height := a.height - lipgloss.Height(a.renderFooter()) - 5
 	pageSize := height - 8
@@ -740,8 +765,8 @@ func (a *App) skillHubPageSize() int {
 }
 
 func (a *App) cycleSkillHubCategory() tea.Cmd {
-	if a.skillHubMarket != skillhub.MarketSkillHub || a.skillHubView != skillHubBrowse {
-		a.skillHubMessage = "Category filtering is available in SkillHub.cn Browse."
+	if !skillHubBrowseFilters(a.skillHubMarket) || a.skillHubView != skillHubBrowse {
+		a.skillHubMessage = "Category filtering is available in 源盾 / SkillHub.cn Browse."
 		return nil
 	}
 	if len(a.skillHubCategories) == 0 {
@@ -776,8 +801,8 @@ var skillHubSortOptions = []skillHubSortOption{
 }
 
 func (a *App) cycleSkillHubSort() tea.Cmd {
-	if a.skillHubMarket != skillhub.MarketSkillHub || a.skillHubView != skillHubBrowse {
-		a.skillHubMessage = "Sorting is available in SkillHub.cn Browse."
+	if !skillHubBrowseFilters(a.skillHubMarket) || a.skillHubView != skillHubBrowse {
+		a.skillHubMessage = "Sorting is available in 源盾 / SkillHub.cn Browse."
 		return nil
 	}
 	current := 0
@@ -818,8 +843,33 @@ func (a *App) skillHubCategoryLabel() string {
 	return a.skillHubCategory
 }
 
+func (a *App) skillHubMarketTabs() string {
+	infos := []skillhub.MarketInfo{
+		{ID: skillhub.MarketYuandun, Name: "源盾"},
+		{ID: skillhub.MarketSkillHub, Name: "SkillHub.cn"},
+		{ID: skillhub.MarketClawHub, Name: "ClawHub.ai"},
+	}
+	if a.skillHub != nil {
+		if projected := a.skillHub.Markets(); len(projected) > 0 {
+			infos = projected
+		}
+	}
+	parts := make([]string, 0, len(infos))
+	for _, info := range infos {
+		label := info.Name
+		if label == "" {
+			label = string(info.ID)
+		}
+		if info.ID == a.skillHubMarket {
+			label = "[ " + label + " ]"
+		}
+		parts = append(parts, label)
+	}
+	return strings.Join(parts, "  ")
+}
+
 func (a *App) skillHubCanPage() bool {
-	if a.skillHubMarket == skillhub.MarketClawHub {
+	if skillHubCursorMarket(a.skillHubMarket) {
 		return a.skillHubView == skillHubBrowse || a.skillHubView == skillHubSearch
 	}
 	return a.skillHubView == skillHubOfficial || a.skillHubView == skillHubBrowse
@@ -837,10 +887,7 @@ func (a *App) renderSkillHub() string {
 	if a.skillHubDetailExpanded {
 		return a.renderExpandedSkillHubDetail(width, height)
 	}
-	marketTabs := "[ SkillHub.cn ]  ClawHub.ai"
-	if a.skillHubMarket == skillhub.MarketClawHub {
-		marketTabs = "SkillHub.cn  [ ClawHub.ai ]"
-	}
+	marketTabs := a.skillHubMarketTabs()
 	views := "[ Browse ]  Search  Official"
 	switch a.skillHubView {
 	case skillHubSearch:
@@ -848,7 +895,7 @@ func (a *App) renderSkillHub() string {
 	case skillHubOfficial:
 		views = "Browse  Search  [ Official ]"
 	}
-	if a.skillHubMarket == skillhub.MarketClawHub {
+	if a.skillHubMarket != skillhub.MarketSkillHub {
 		views = strings.ReplaceAll(views, "  Official", "")
 	}
 	searchLabel := "Search: " + a.skillHubQuery
@@ -861,7 +908,7 @@ func (a *App) renderSkillHub() string {
 		status += fmt.Sprintf("   Page %d", a.skillHubPage)
 	}
 	filter := ""
-	if a.skillHubMarket == skillhub.MarketSkillHub && a.skillHubView == skillHubBrowse {
+	if skillHubBrowseFilters(a.skillHubMarket) && a.skillHubView == skillHubBrowse {
 		filter = "Category: " + a.skillHubCategoryLabel() + " (c)   Sort: " + a.skillHubSortLabel() + " desc (s)"
 	}
 	lines := []string{"SkillHub", marketTabs, views, searchLabel, xansi.Truncate(filter, width, "..."), xansi.Truncate(status, width, "..."), strings.Repeat("-", width)}

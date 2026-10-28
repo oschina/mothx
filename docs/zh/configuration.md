@@ -803,16 +803,21 @@ MothX 会自动搜索并加载以下文件:
 
 | 字段 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
-| `defaultMarket` | string | `"skillhub.cn"` | 打开市场时默认选择的市场 |
+| `defaultMarket` | string | `"yuandun"` | 打开市场时默认选择的市场；不可用时回退到首个已启用市场 |
 | `defaultInstallScope` | string | `"project"` | 默认安装位置：`project` 或 `global` |
 | `officialHandles` | string array | 内置官方 handle | 视为官方发布者的市场 handle |
-| `markets` | object array | 内置市场 | 自定义市场定义：`{ id, name, siteURL, apiURL, enabled, apiToken }` |
+| `markets` | object array | 内置市场 | 自定义市场定义：`{ id, name, siteURL, apiURL, enabled, apiToken }`；源盾（`id: "yuandun"`）默认使用 `https://yuandun.gitee.com` |
 
 ```json
 {
   "skillHub": {
-    "defaultMarket": "skillhub.cn",
-    "defaultInstallScope": "project"
+    "defaultMarket": "yuandun",
+    "defaultInstallScope": "project",
+    "markets": [
+      { "id": "yuandun", "name": "源盾", "enabled": true, "apiURL": "https://yuandun.gitee.com" },
+      { "id": "skillhub.cn", "name": "SkillHub.cn", "enabled": true },
+      { "id": "clawhub.ai", "name": "ClawHub.ai", "enabled": true }
+    ]
   }
 }
 ```

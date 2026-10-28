@@ -214,7 +214,7 @@ mothx --session <session-file.db>
 
 ### 在线 Skill 市场
 
-MothX 兼容 SkillHub / ClawHub，支持：
+MothX 兼容源盾 / SkillHub / ClawHub，支持：
 
 - **技能安装**：一键安装在线技能
 - **Cron 基础设施**：定时执行技能

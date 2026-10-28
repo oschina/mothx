@@ -8,7 +8,31 @@ import { confirmDanger, toast } from './ui-host';
 export interface Market { id: string; name?: string; capabilities?: { categories?: boolean }; }
 export interface Target { path: string; scope: 'project' | 'global'; label: string; }
 export interface Installed { installed?: boolean; updateAvailable?: boolean; name?: string; scope?: string; }
-export interface Skill { market: string; id: string; name?: string; displayName?: string; slug?: string; description?: string; version?: string; category?: string; author?: string; suspicious?: boolean; installed?: Installed; }
+export interface Skill {
+  market: string;
+  id: string;
+  name?: string;
+  displayName?: string;
+  slug?: string;
+  description?: string;
+  version?: string;
+  category?: string;
+  author?: string;
+  suspicious?: boolean;
+  securityStatus?: string;
+  securityStatusName?: string;
+  installed?: Installed;
+  iconUrl?: string;
+  downloads?: number;
+  installs?: number;
+  stars?: number;
+  source?: string;
+  tags?: string[];
+  files?: { path: string; size?: number }[];
+  downloadSources?: { url: string; kind: string; fallback?: boolean }[];
+  securityReports?: Record<string, unknown>;
+  evaluation?: unknown;
+}
 export interface SearchPage { items?: Skill[]; }
 export interface SessionActiveSkills { activeSkills?: string[]; }
 export interface CategoryEntry { key: string; name: string; nameEn?: string; }
@@ -37,7 +61,7 @@ export async function loadCatalogBootstrap(sessionId: string, preferredMarket: s
   const markets = marketResult.markets || [];
   const targets = targetResult.targets || [];
   const activeSkills = installedResult.session?.activeSkills || [];
-  // 默认市场是 ACP 投影的 Runtime/settings 状态(产品默认 skillhub.cn);
+  // 默认市场是 ACP 投影的 Runtime/settings 状态(源盾配置后优先);
   // 只有在运行时未给出默认值时才退回列表首个市场。
   const defaultMarket = marketResult.defaultMarket || '';
   const market = markets.some((item) => item.id === preferredMarket)
@@ -64,13 +88,15 @@ export interface SearchParams {
   market: string;
   query: string;
   category?: string;
+  sort?: string;
   official?: boolean;
 }
 
 export async function searchSkills(params: SearchParams): Promise<Skill[]> {
+  const sort = params.market === 'clawhub.ai' ? '' : params.sort || 'downloads';
   const page = await invoke<SearchPage>(
     params.official ? 'mothx/manage/skillhub/official' : 'mothx/manage/skillhub/search',
-    { sessionId: params.sessionId, market: params.market, query: params.query.trim(), category: params.category || '', sort: 'downloads', order: 'desc', limit: 20, page: 1 },
+    { sessionId: params.sessionId, market: params.market, query: params.query.trim(), category: params.category || '', sort, order: 'desc', limit: 20, page: 1 },
   );
   return page.items || [];
 }

@@ -10,9 +10,26 @@ import (
 type Market string
 
 const (
+	MarketYuandun  Market = "yuandun"
 	MarketSkillHub Market = "skillhub.cn"
 	MarketClawHub  Market = "clawhub.ai"
 )
+
+// MarketPriority controls the order in which built-in markets are projected to
+// clients. Lower values come first; the 源盾 market intentionally precedes
+// SkillHub.cn so it is presented first wherever markets are listed.
+func MarketPriority(market Market) int {
+	switch market {
+	case MarketYuandun:
+		return 0
+	case MarketSkillHub:
+		return 1
+	case MarketClawHub:
+		return 2
+	default:
+		return 100
+	}
+}
 
 type MarketCapabilities struct {
 	Search, List, CursorPagination, PagePagination bool
@@ -60,31 +77,33 @@ type SkillID struct {
 }
 
 type SkillSummary struct {
-	Market            Market          `json:"market"`
-	ID                string          `json:"id"`
-	Slug              string          `json:"slug"`
-	Name              string          `json:"name"`
-	DisplayName       string          `json:"displayName"`
-	Description       string          `json:"description"`
-	Version           string          `json:"version"`
-	Author            string          `json:"author"`
-	Category          string          `json:"category"`
-	Tags              []string        `json:"tags,omitempty"`
-	IconURL           string          `json:"iconUrl,omitempty"`
-	Homepage          string          `json:"homepage,omitempty"`
-	SourceURL         string          `json:"sourceUrl,omitempty"`
-	Source            string          `json:"source,omitempty"`
-	PublisherName     string          `json:"publisherName,omitempty"`
-	CertifiedName     string          `json:"certifiedName,omitempty"`
-	PublisherVerified bool            `json:"publisherVerified,omitempty"`
-	Downloads         int64           `json:"downloads,omitempty"`
-	Installs          int64           `json:"installs,omitempty"`
-	Stars             int64           `json:"stars,omitempty"`
-	Score             float64         `json:"score,omitempty"`
-	Verified          bool            `json:"verified,omitempty"`
-	Suspicious        bool            `json:"suspicious,omitempty"`
-	UpdatedAt         time.Time       `json:"updatedAt,omitempty"`
-	Installed         *InstalledState `json:"installed,omitempty"`
+	Market             Market          `json:"market"`
+	ID                 string          `json:"id"`
+	Slug               string          `json:"slug"`
+	Name               string          `json:"name"`
+	DisplayName        string          `json:"displayName"`
+	Description        string          `json:"description"`
+	Version            string          `json:"version"`
+	Author             string          `json:"author"`
+	Category           string          `json:"category"`
+	Tags               []string        `json:"tags,omitempty"`
+	IconURL            string          `json:"iconUrl,omitempty"`
+	Homepage           string          `json:"homepage,omitempty"`
+	SourceURL          string          `json:"sourceUrl,omitempty"`
+	Source             string          `json:"source,omitempty"`
+	PublisherName      string          `json:"publisherName,omitempty"`
+	CertifiedName      string          `json:"certifiedName,omitempty"`
+	PublisherVerified  bool            `json:"publisherVerified,omitempty"`
+	Downloads          int64           `json:"downloads,omitempty"`
+	Installs           int64           `json:"installs,omitempty"`
+	Stars              int64           `json:"stars,omitempty"`
+	Score              float64         `json:"score,omitempty"`
+	Verified           bool            `json:"verified,omitempty"`
+	Suspicious         bool            `json:"suspicious,omitempty"`
+	SecurityStatus     string          `json:"securityStatus,omitempty"`
+	SecurityStatusName string          `json:"securityStatusName,omitempty"`
+	UpdatedAt          time.Time       `json:"updatedAt,omitempty"`
+	Installed          *InstalledState `json:"installed,omitempty"`
 }
 
 type SkillDetail struct {
@@ -118,6 +137,7 @@ type Category struct {
 type DownloadMeta struct {
 	SourceURL string `json:"sourceUrl"`
 	Filename  string `json:"filename,omitempty"`
+	SHA256    string `json:"sha256,omitempty"`
 }
 
 type InstalledState struct {

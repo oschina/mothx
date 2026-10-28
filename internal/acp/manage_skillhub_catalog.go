@@ -81,7 +81,7 @@ func manageSkillHubMarket(value, fallback string) (skillhub.Market, error) {
 		value = fallback
 	}
 	market := skillhub.Market(value)
-	if market != skillhub.MarketSkillHub && market != skillhub.MarketClawHub {
+	if market != skillhub.MarketYuandun && market != skillhub.MarketSkillHub && market != skillhub.MarketClawHub {
 		return "", fmt.Errorf("unsupported skill market %q", value)
 	}
 	return market, nil

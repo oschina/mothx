@@ -3,6 +3,8 @@ package skillhub
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,6 +108,11 @@ func Install(ctx context.Context, client MarketClient, request InstallRequest) (
 	if err := copyLimited(archivePath, body, maxDownloadBytes); err != nil {
 		return InstallResult{}, err
 	}
+	if source.SHA256 != "" {
+		if err := verifyArchiveSHA256(archivePath, source.SHA256); err != nil {
+			return InstallResult{}, err
+		}
+	}
 	extractDir := filepath.Join(tempDir, "extract")
 	if err := extractZip(archivePath, extractDir); err != nil {
 		return InstallResult{}, err
@@ -140,6 +147,23 @@ func copyLimited(path string, source io.Reader, limit int64) error {
 	}
 	if written > limit {
 		return fmt.Errorf("download exceeds %d byte limit", limit)
+	}
+	return nil
+}
+
+func verifyArchiveSHA256(path, expected string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	actual := hex.EncodeToString(hash.Sum(nil))
+	if !strings.EqualFold(actual, strings.TrimSpace(expected)) {
+		return fmt.Errorf("downloaded archive sha256 mismatch: got %s, want %s", actual, expected)
 	}
 	return nil
 }

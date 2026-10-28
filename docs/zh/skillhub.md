@@ -1,14 +1,16 @@
 # 在线 Skill 市场集成
 
-MothX 兼容市面上的 Skill 市场（SkillHub / ClawHub），可以直接使用这些平台发布的技能包。
+MothX 兼容市面上的 Skill 市场（源盾 / SkillHub / ClawHub），可以直接使用这些平台发布的技能包。
 
 | 平台 | 地址 | 区域 |
 |------|------|------|
+| **源盾（Yuandun）** | [https://yuandun.gitee.com](https://yuandun.gitee.com/) | 中国 |
 | **SkillHub** | [https://skillhub.cn](https://skillhub.cn/) | 中国 |
 | **ClawHub** | [https://clawhub.ai](https://clawhub.ai/) | 海外 |
 
-MothX 内建了 TUI Skill 市场，可以浏览、搜索、查看详情并安装 SkillHub / ClawHub
-公开技能包。使用 `/skillhub` 打开。
+MothX 内建了 TUI Skill 市场，可以浏览、搜索、查看详情并安装源盾 / SkillHub / ClawHub
+公开技能包。使用 `/skillhub` 打开。源盾排在市场列表最前面，并作为默认市场。
+MothX 会为源盾请求带上 `X-Client-Source: MothX` 与 `User-Agent: MothX`，源盾用该头统计下载来源。
 
 本指南涵盖：
 
@@ -29,14 +31,14 @@ SkillHub / ClawHub adapter 和安全安装器，支持 Official、Browse、Searc
 
 | 按键 | 行为 |
 |------|------|
-| `Tab` / `Shift+Tab` | 切换 SkillHub.cn / ClawHub.ai |
+| `Tab` / `Shift+Tab` | 切换源盾 / SkillHub.cn / ClawHub.ai |
 | `[` / `]` | 切换 Browse / Search / Official |
 | `/` | 编辑搜索词，`Enter` 执行搜索 |
 | `Up` / `Down` | 选择 Skill |
-| `Left` / `Right` | SkillHub 页码或 ClawHub cursor 前后翻页 |
+| `Left` / `Right` | 游标市场（源盾 / ClawHub）或 SkillHub 页码翻页 |
 | `Enter` | 加载详情和文件清单 |
 | `d` | 打开可滚动的文件、安全报告和 evaluation 明细 |
-| `c` / `s` | 在 SkillHub.cn Browse 中切换分类 / 排序 |
+| `c` / `s` | 在源盾或 SkillHub.cn Browse 中切换分类 / 排序 |
 | `i` | 安装到当前 scope |
 | `u` | 更新有新版本的已安装 Skill |
 | `a` | 安装并在当前 session 激活 |
@@ -45,12 +47,14 @@ SkillHub / ClawHub adapter 和安全安装器，支持 Official、Browse、Searc
 | `Esc` | 关闭市场 |
 
 列表使用 `DL` 显示下载量，SkillHub.cn Browse 按下载量降序排列。
+源盾 Browse 使用市场游标分页，同样支持分类与排序切换。
 `[official]` 表示由配置的 Official 账号发布；`[certified]` 表示发布方已认证；
 `[verified]` 是市场返回的 Skill 认证字段；`[risk]` 表示存在可疑风险。这些标记会分开显示，
 因为账号来源不等同于平台认证。
 市场提供相应数据时，详情还会显示来源、分类、tags、安全扫描摘要、evaluation 状态和下载端点；
 `d` 明细视图会区分主下载来源和回退来源。
 SkillHub.cn Browse 支持分类过滤，以及下载量、star、安装量、score、更新时间降序切换。
+源盾 Browse 通过同一组快捷支持固定分类以及 COMPREHENSIVE / DOWNLOADS / STARS / LATEST 排序。
 已安装 Skill 有新版本时显示 `[update]`，按 `u` 更新；若该 Skill 已在当前 session 激活，
 更新后会重新加载其上下文。
 
@@ -74,7 +78,7 @@ session 的 agent，使下一次请求包含该技能。
 
 ## 技能格式兼容
 
-MothX 的技能格式与 SkillHub / ClawHub 标准完全一致：
+MothX 的技能格式与源盾 / SkillHub / ClawHub 标准完全一致：
 
 ```
 skill-name/
@@ -169,15 +173,21 @@ EOF
 {
   "skillsDir": "~/.mothx/skills",
   "skillHub": {
-    "defaultMarket": "skillhub.cn",
+    "defaultMarket": "yuandun",
     "defaultInstallScope": "project",
-    "officialHandles": ["user_0064faa7"]
+    "officialHandles": ["user_0064faa7"],
+    "markets": [
+      { "id": "yuandun", "name": "源盾", "enabled": true, "apiURL": "https://yuandun.gitee.com" },
+      { "id": "skillhub.cn", "name": "SkillHub.cn", "enabled": true },
+      { "id": "clawhub.ai", "name": "ClawHub.ai", "enabled": true }
+    ]
   }
 }
 ```
 
-`officialHandles` 控制 SkillHub.cn Official tab 聚合哪些账号。项目技能目录会自动加载，
-无需额外配置。
+`officialHandles` 控制 SkillHub.cn Official tab 聚合哪些账号。源盾默认使用
+`https://yuandun.gitee.com` 作为 `apiURL`，只有使用镜像时才需要覆盖。源盾排在
+SkillHub.cn 之前，并作为默认市场。项目技能目录会自动加载，无需额外配置。
 
 ---
 

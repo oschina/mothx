@@ -89,7 +89,7 @@ Welcome to the MothX Documentation Center!
 - [System Architecture](architecture.md) — Core components, data flow
 - [Tool System](tools.md) — Built-in tools guide
 - [Skills System](skills.md) — Reusable prompt snippets
-- [Online Skill Marketplace](skillhub.md) — SkillHub / ClawHub integration
+- [Online Skill Marketplace](skillhub.md) — 源盾 / SkillHub / ClawHub integration
 - [Session Management](sessions.md) — Session storage and management
 - [Workflow Mode](workflow.md) — JavaScript DSL for multi-agent orchestration
 - [SDK Integration](sdk.md) — Embed MothX agent in your Go applications

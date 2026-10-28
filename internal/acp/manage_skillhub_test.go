@@ -284,14 +284,33 @@ func TestManageSkillHubPreservesUnknownFields(t *testing.T) {
 	}
 }
 
-func TestManageSkillHubDefaultMarketFallsBackToProductDefault(t *testing.T) {
-	if got := manageSkillHubDefaultMarket(nil); got != "skillhub.cn" {
-		t.Fatalf("nil settings defaultMarket = %q, want skillhub.cn", got)
+func TestManageSkillHubMarketAcceptsYuandun(t *testing.T) {
+	market, err := manageSkillHubMarket("yuandun", "skillhub.cn")
+	if err != nil || market != "yuandun" {
+		t.Fatalf("market = %q, err = %v", market, err)
+	}
+}
+
+func TestManageSkillHubDefaultMarketPrefersConfiguredYuandun(t *testing.T) {
+	settings := config.DefaultSettings()
+	settings.SkillHub.Markets = []config.SkillHubMarketSettings{{
+		ID:      "yuandun",
+		Name:    "源盾",
+		APIURL:  "https://yuandun.test",
+		Enabled: true,
+	}}
+	if got := manageSkillHubDefaultMarket(settings); got != "yuandun" {
+		t.Fatalf("defaultMarket = %q, want yuandun", got)
+	}
+}
+func TestManageSkillHubDefaultMarketUsesProductDefault(t *testing.T) {
+	if got := manageSkillHubDefaultMarket(nil); got != "yuandun" {
+		t.Fatalf("nil settings defaultMarket = %q, want yuandun", got)
 	}
 	blank := config.DefaultSettings()
 	blank.SkillHub.DefaultMarket = "  "
-	if got := manageSkillHubDefaultMarket(blank); got != "skillhub.cn" {
-		t.Fatalf("blank defaultMarket = %q, want skillhub.cn", got)
+	if got := manageSkillHubDefaultMarket(blank); got != "yuandun" {
+		t.Fatalf("blank defaultMarket = %q, want yuandun", got)
 	}
 	custom := config.DefaultSettings()
 	custom.SkillHub.DefaultMarket = "clawhub.ai"

@@ -1406,10 +1406,31 @@ func TestGetGlobalSkillsDir(t *testing.T) {
 	}
 }
 
+func TestNormalizeLegacySkillHubDefaultMarket(t *testing.T) {
+	legacy := DefaultSettings()
+	legacy.SkillHub.DefaultMarket = "skillhub.cn"
+	legacy.SkillHub.Markets = nil
+	normalizeLegacySkillHubDefaultMarket(legacy)
+	if legacy.SkillHub.DefaultMarket != "yuandun" {
+		t.Fatalf("legacy default = %q, want yuandun", legacy.SkillHub.DefaultMarket)
+	}
+
+	custom := DefaultSettings()
+	custom.SkillHub.DefaultMarket = "skillhub.cn"
+	custom.SkillHub.Markets = []SkillHubMarketSettings{{ID: "skillhub.cn", Enabled: true}}
+	normalizeLegacySkillHubDefaultMarket(custom)
+	if custom.SkillHub.DefaultMarket != "skillhub.cn" {
+		t.Fatalf("custom default = %q, want skillhub.cn", custom.SkillHub.DefaultMarket)
+	}
+}
+
 func TestDefaultSkillHubSettings(t *testing.T) {
 	settings := DefaultSettings()
-	if settings.SkillHub.DefaultMarket != "skillhub.cn" {
+	if settings.SkillHub.DefaultMarket != "yuandun" {
 		t.Fatalf("default SkillHub market = %q", settings.SkillHub.DefaultMarket)
+	}
+	if len(settings.SkillHub.Markets) == 0 || settings.SkillHub.Markets[0].ID != "yuandun" {
+		t.Fatalf("default SkillHub markets = %#v", settings.SkillHub.Markets)
 	}
 	if settings.SkillHub.DefaultInstallScope != "project" {
 		t.Fatalf("default SkillHub scope = %q", settings.SkillHub.DefaultInstallScope)

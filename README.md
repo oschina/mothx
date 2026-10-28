@@ -160,7 +160,7 @@ mothx/
 - [System Architecture](docs/en/architecture.md) — Core components, data flow
 - [Tool System](docs/en/tools.md) — Built-in tools guide
 - [Skills System](docs/en/skills.md) — Reusable prompt snippets
-- [Online Skill Marketplace](docs/en/skillhub.md) — SkillHub / ClawHub integration
+- [Online Skill Marketplace](docs/en/skillhub.md) — 源盾 / SkillHub / ClawHub integration
 - [Dynamic Workflows](docs/en/workflow.md) — JavaScript workflow automation
 
 ### 🔒 Security

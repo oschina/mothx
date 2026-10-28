@@ -8,6 +8,7 @@ import (
 
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/mcp"
+	"github.com/oschina/mothx/internal/skillhub"
 )
 
 // manageSkillHubMarketView is the safe, token-free projection of one SkillHub
@@ -53,18 +54,15 @@ func manageSkillHubView(settings *config.Settings) map[string]any {
 }
 
 // manageSkillHubDefaultMarket resolves the canonical default market once: the
-// persisted setting wins, and the product default (skillhub.cn) fills an empty
-// value. Every ACP projection and catalog fallback must use this resolver
-// instead of guessing from market ordering or an adapter-local constant.
+// persisted preference wins when that market is configured, then the
+// highest-priority configured market fills the gap. Every ACP projection and
+// catalog fallback must use this resolver instead of guessing from market
+// ordering or an adapter-local constant.
 func manageSkillHubDefaultMarket(settings *config.Settings) string {
 	if settings == nil {
-		return config.DefaultSettings().SkillHub.DefaultMarket
+		return string(skillhub.ResolveDefaultMarket(config.DefaultSettings().SkillHub))
 	}
-	defaultMarket := strings.TrimSpace(settings.SkillHub.DefaultMarket)
-	if defaultMarket == "" {
-		defaultMarket = config.DefaultSettings().SkillHub.DefaultMarket
-	}
-	return defaultMarket
+	return string(skillhub.ResolveDefaultMarket(settings.SkillHub))
 }
 
 // handleManageSkillHubGet projects the current SkillHub settings without ever

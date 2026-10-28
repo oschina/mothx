@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/skillhub"
 )
 
 // SkillHubRuntime contains the serve settings needed by marketplace handlers.
@@ -39,12 +40,11 @@ func (s *Server) SkillHubRuntime() SkillHubRuntime {
 	}
 	if s.settings != nil {
 		runtime.GlobalSkillsDir = s.settings.GetGlobalSkillsDir()
-		runtime.DefaultMarket = s.settings.SkillHub.DefaultMarket
+		runtime.DefaultMarket = string(skillhub.ResolveDefaultMarket(s.settings.SkillHub))
 		runtime.DefaultScope = s.settings.SkillHub.DefaultInstallScope
 		runtime.OfficialHandles = append([]string(nil), s.settings.SkillHub.OfficialHandles...)
-	}
-	if runtime.DefaultMarket == "" {
-		runtime.DefaultMarket = "skillhub.cn"
+	} else {
+		runtime.DefaultMarket = string(skillhub.ResolveDefaultMarket(config.SkillHubSettings{}))
 	}
 	if runtime.DefaultScope == "" {
 		runtime.DefaultScope = "project"

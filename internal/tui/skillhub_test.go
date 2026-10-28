@@ -15,6 +15,10 @@ func TestParseSkillHubID(t *testing.T) {
 	if err != nil || market != skillhub.MarketClawHub || id != "openclaw/git" {
 		t.Fatalf("parseSkillHubID() = %q, %q, %v", market, id, err)
 	}
+	market, id, err = parseSkillHubID("yuandun/owner/skill")
+	if err != nil || market != skillhub.MarketYuandun || id != "owner/skill" {
+		t.Fatalf("parseSkillHubID(yuandun) = %q, %q, %v", market, id, err)
+	}
 	if _, _, err := parseSkillHubID("unknown/example"); err == nil {
 		t.Fatal("expected unknown market error")
 	}
@@ -43,7 +47,7 @@ func TestSkillHubKeysChangeScopeAndClose(t *testing.T) {
 }
 
 func TestSkillHubConfiguredOfficialViewAndUnicodeSearch(t *testing.T) {
-	a := &App{settings: &config.Settings{SkillHub: config.SkillHubSettings{OfficialHandles: []string{"official"}}}}
+	a := &App{settings: &config.Settings{SkillHub: config.SkillHubSettings{DefaultMarket: "skillhub.cn", Markets: []config.SkillHubMarketSettings{{ID: "skillhub.cn", Enabled: true}}, OfficialHandles: []string{"official"}}}}
 	if cmd := a.openSkillHub(); cmd == nil {
 		t.Fatal("openSkillHub did not return a load command")
 	}

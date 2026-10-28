@@ -23,7 +23,7 @@ type Service struct {
 
 func NewService(globalDir string, projectDirs []string, officialHandles []string, clients ...MarketClient) *Service {
 	if len(clients) == 0 {
-		clients = []MarketClient{NewSkillHubClient("", nil), NewClawHubClient("", nil)}
+		clients = defaultMarketClients()
 	}
 	indexed := make(map[Market]MarketClient, len(clients))
 	for _, client := range clients {
@@ -42,7 +42,13 @@ func (s *Service) Markets() []MarketInfo {
 	for _, client := range s.clients {
 		result = append(result, client.Market())
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	sort.SliceStable(result, func(i, j int) bool {
+		left, right := MarketPriority(result[i].ID), MarketPriority(result[j].ID)
+		if left != right {
+			return left < right
+		}
+		return result[i].ID < result[j].ID
+	})
 	return result
 }
 func (s *Service) Search(ctx context.Context, market Market, query SearchQuery) (SearchPage, error) {
