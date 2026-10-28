@@ -97,7 +97,7 @@ Welcome to the MothX Documentation Center!
 - [System Architecture](architecture.md) — Core components, data flow
 - [Tool System](tools.md) — Built-in tools guide
 - [Skills System](skills.md) — Reusable prompt snippets
-- [Online Skill Marketplace](skillhub.md) — SkillHub / ClawHub integration
+- [Online Skill Marketplace](skillhub.md) — 源盾 / SkillHub / ClawHub integration
 - [Session Management](sessions.md) — Session storage and management
 - [Workflow Mode](workflow.md) — JavaScript DSL for multi-agent orchestration
 - [SDK Integration](sdk.md) — Embed MothX agent in your Go applications
@@ -1545,18 +1545,99 @@ Source: https://mothx.net/en/changelog.md
 
 # Changelog
 
-## v1.3.105-pre-4
+## v1.3.107
 
 ### ✨ New Features
+
+- **源盾 (Yuandun) is now the default SkillHub marketplace.** MothX adds a native 源盾 client for search, detail, files, security audit, and downloads, registers it ahead of SkillHub.cn and ClawHub.ai, and migrates the legacy `skillhub.cn` default. The market is projected through ACP, Serve, the TUI, the Web UI, and Desktop, which also gain a refreshed marketplace layout and a right-side detail drawer. Downloads identify MothX with `X-Client-Source: MothX`, and archives carrying `X-Skill-SHA256` are verified before extraction. Suspected (not confirmed) security findings use an amber warning tone so they stay distinct from risky results.
+
+- **`mothx maintenance` inspects and compacts the session database.** `status` reports transcript/tool-record counts, database size, and reclaimable free pages; `vacuum` runs SQLite VACUUM and reports the result, with `--dry-run` to preview. The command never deletes messages or prunes tool-execution records; the scheduled maintenance job remains the only path that can bound terminal tool records and backfill the search index.
 
 - **New Gitee/Moark Models: `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed`**
   - Added `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed` to the `gitee` and `moark` providers: thinking is enabled by default with Kimi's `low`/`high`/`max` effort scale (MothX's `minimal`/`low` map to `low`, `medium`/`high` to `high`, and `xhigh`/`max` to `max`), a 1M context window, and text+image input. Both use the verified `reasoning_effort` parameter through the `kimi` thinking format.
 
+- **New Gitee/Moark Model: `MiniMax-M3.1-Flash`**
+  - Added `MiniMax-M3.1-Flash` to the `gitee` and `moark` providers: thinking is enabled by default through the standard `reasoning_effort` parameter, with a 1M context window and text+image+video input; no default max_tokens is sent.
+
 ### 💥 Behavior Changes
+
+- **Gitee/Moark model lists are reordered for discoverability.** The `gitee` and `moark` presets now lead with `deepseek-v4.1-flash-1017` and `deepseek-v4.1-flash`, followed by `qwen3.8-flash`, `qwen3.8-max`, `glm-5.3-flash`, `glm-5.3`, `MiniMax-M3.1-Flash`, `step-3.7-flash`, and `auto`; the remaining models follow in natural alphabetical order. Because preset order is also the fallback when no default model is configured, an unconfigured Gitee/Moark session now defaults to `deepseek-v4.1-flash-1017`.
+
+- **The Serve session list is bounded by default.** `/api/sessions` without `limit` now returns the first 100 sessions plus `total`, `limit`, `offset`, and `hasMore`; pass `limit`/`offset` to page through history. `scope=active` and `/api/sessions/active` project only the in-memory session pool instead of loading all history, and per-session MCP configuration resolves its working directory by ID.
+
+- **Session storage maintenance is scheduled without deleting transcript messages.** MothX now projects a daily `mothx-maintenance:session-storage` job that preserves every `entries`/`sub_entries` transcript row forever. It may prune only completed/abandoned `tool_execution_records` older than `maintenance.toolExecutionRetentionDays` (default `0`, keep forever), always keeps running/interrupted/retry-requested records so uncertain tool side effects stay fenced, runs `PRAGMA optimize`, and optionally runs `VACUUM` when `maintenance.vacuumSessionStorage` is enabled.
+
+- **SQLite startup integrity checks are now explicitly opt-out.** MothX keeps running `PRAGMA quick_check` by default before using the session database. Very large databases can skip the fixed opening cost with `MOTHX_SQLITE_QUICK_CHECK=off`; `mothx doctor` still runs an on-demand read-only integrity check and reports `sessions.integrity`.
 
 - **Non-hosted web search now uses DeepSeek Search/Fetch.** The old `webSearch` provider/type/model configuration that registered a provider-backed search tool was replaced by local `web_search` and `web_fetch` tools backed by DeepSeek's official `POST /v1/tools/search` and `POST /v1/tools/fetch` endpoints. Provider-native hosted search for OpenAI Responses is unchanged, and Anthropic Messages uses its native hosted search while `webSearch` is enabled; both take precedence over the local `web_search` function. `webSearch` now configures `provider`, `baseUrl`, and `token` (with the provider API key as fallback); both tools are read-only and available in plan mode.
 
 - **Tencent Yuanbao search backend added.** `webSearch.backend` selects `deepseek` (official Search/Fetch APIs) or `yuanbao` (Tencent Yuanbao SearchPro at `POST /SearchPro`). The Yuanbao backend sends `{"Query": ...}`, normalizes the returned `Pages` into title/URL/site/date/score/passage results, authenticates with `webSearch.token` or `${TENCENTCLOUD_WSA_APIKEY}`, and currently provides search only, so `web_fetch` remains available only with the DeepSeek backend.
+
+### ⚡ Performance
+
+- **Opening and listing sessions no longer rescans the whole store.** A current database reads its migration ledger once and opens without a write transaction or writer lock; EventStore inspection is reused per open; execution facts, list metadata, and message counts are batched; cascade, export, and stats projections stop opening every session; and search uses one read-only scan that preserves compaction and content-override semantics.
+
+- **User background mode lowers large-area backdrop blur.** When a user background image is active, the app surface veil, control/titlebar surfaces, composer, and home quick cards use smaller blur radii, reducing continuous GPU compositing cost while keeping the semi-transparent surfaces readable.
+
+- **Repeated searches reuse unchanged EventStore projections.** A fingerprint-keyed, byte-bounded cache avoids replaying the same EventStore session on every search; an append or segment rotation invalidates it.
+
+- **Repeated session searches reuse the completed page.** A query/page cache sits in front of the candidate scan, so a repeated Desktop/WebUI history query performs no list query and no content replay. Cache entries are keyed by the durable store-wide write version, which SQLite triggers bump on session, legacy payload, EventStore projection, and project-membership writes; an append, title/binding/cwd change, delete, or write from another process invalidates the page instead of serving stale results.
+
+- **Session list rows no longer scan the EventStore at startup.** First-user preview, latest title, and binding metadata are persisted in a small SQLite display projection, written with each committed batch, copied on fork, rebuilt with the event projection, and backfilled by maintenance. List and bindings reads use the row when present and fall back to the canonical EventStore scan when it is missing.
+
+- **Desktop settings panels no longer re-render on every background chunk.** All 16 settings panels now select only the connection/store fields they display instead of subscribing to the whole app state.
+
+- **Session content search now narrows work through a derived FTS5 index.** Searches ask a trigram full-text index for candidate sessions before replaying anything; the canonical replay still decides the final match, so compaction-discarded content and content overrides keep their exact semantics. The index is written in the same transaction as each append, rebuilt with the event projection, copied on fork, and backfilled when a pre-index session is attached. Short queries, index errors, and not-yet-indexed sessions fall back to the previous full scan, and search itself remains read-only. The daily session-storage maintenance pass also backfills up to 512 unindexed sessions, newest first, so existing history becomes searchable without opening every session.
+
+- **Desktop streaming and long-list scrolling no longer re-render the whole shell.** Renderer state notifications are coalesced into one commit per frame, transcript items are replaced immutably so unchanged Markdown/tool cards skip rendering, the sidebar/status bar/composer/plan panel subscribe only to the state slices they display, offscreen transcript blocks can skip layout/paint, and chat auto-scroll is coalesced with the commit that paints the chunk.
+
+- **The initial Desktop task list no longer scans every session sequentially.** ACP list rows now use a structural-only EventStore projection that decodes just the first user preview and latest title/bindings, and the page prefetches those projections with a bounded worker pool. Canonical session open still verifies every batch digest and fails closed.
+
+- **Electron no longer forces software rendering on every packaged Linux desktop.** GPU compositing is kept when `DISPLAY`/`WAYLAND_DISPLAY` exists (with an explicit `MOTHX_DESKTOP_DISABLE_GPU` escape hatch), and the `/dev/shm` fallback is applied only when that mount is missing, unwritable, or smaller than 128 MB. ACP events are also coalesced into one IPC delivery per frame, and live diagnostic logs cross IPC only while the log viewer is open.
+
+- **Desktop no longer starts transition/animation storms on hover, theme changes, or scroll reveals.** Tailwind `duration-*` no longer accompanies `animate-in` (which made every hovered sidebar row transition all inherited properties), transcript cards no longer replay entrance animations when `content-visibility` reveals them during scrolling, the sidebar scrollbar keeps a constant 8 px width, and theme switches temporarily suppress transitions on inherited colors.
+
+- **Long-lived Desktop windows stay bounded.** The live transcript renders a 300-item tail window (expandable locally), status/retry/compaction notices update in place instead of accumulating, session/search/subagent/run-status caches are capped, progress polling cannot overlap, transcript lookup uses an index instead of scanning every chunk, oversized tool output is capped in the display copy, and `desktop.log` rotates at 8 MB between launches.
+
+### 🐛 Bug Fixes
+
+- **Stuck detection no longer stops reasoning-only progress, and the terminal error keeps its reason.** Turns that produce reasoning output now count as progress, so a reasoning model that keeps calling tools without user-facing text is no longer treated as stuck; the silent-turn guard still stops a loop with neither text nor reasoning. `ErrAgentStuck` now carries the silent-turn count and is projected through the Run result and error event, so Runtime `ErrorInfo` and every adapter can report why the loop guard stopped.
+
+- **A partially applied session-list migration now converges.** Some databases recorded schema version 49 before the Run index was added to that migration body, so `idx_session_runs_session_status_started` stayed missing forever: recorded versions are skipped, not re-inspected. Version 50 re-asserts the index with `CREATE INDEX IF NOT EXISTS`, converging those databases on the next start while leaving fresh ones unchanged.
+
+- **Stopping a Responses background task during attachment now stays cancelled.** Concurrent WAL reads can let a stop mark the Run cancelling before the background coordinator attaches its Agent. That path previously fell through to the default `failed` terminal status and could orphan the provider-side task. It now preserves `cancelled` and explicitly cancels the remote Responses task.
+
+## v1.3.106
+
+### 🐛 Bug Fixes
+
+- **Desktop chat and home backgrounds no longer render the canvas dot mesh.** The decorative dot overlay was removed so background images and surface treatments stay clean on both views.
+
+## v1.3.105
+
+### 🐛 Bug Fixes
+
+- **Desktop hides the window-style switch and aligns platform defaults.** macOS hosts now resolve to the macOS frame and Windows/Linux hosts to the Windows 11 frame before `desktop-store.json` loads, and the manual switch is hidden behind a feature flag while its implementation is retained for later reuse.
+
+## v1.3.105-pre-7
+
+### 🐛 Bug Fixes
+
+- **Runs that stop on a tool-call turn now reach a terminal state.** When the assistant payload and tool results were already committed, the terminal turn-end was re-parented under an earlier entry and rejected by the leaf fence, leaving the Run terminalizing and its execution lease unreleased. The turn-end now anchors at the manager's current leaf, and the TUI maps incomplete tasks to the canonical `RunStateIncomplete` state.
+
+## v1.3.105-pre-6
+
+### ✨ New Features
+
+- **Desktop shows and inspects sub-agents.** The chat header now reports how many sub-agents the session has and whether they are running; opening it shows a read-only panel listing every child with its status and renders one child's transcript with the ordinary chat message, tool-card, and reasoning styles. ACP adds the read-only `mothx/subagent/list` and `mothx/subagent/messages` projections plus the `subagentPanel` capability key, so Desktop no longer relies on isolated started/terminal cards.
+
+### 🐛 Bug Fixes
+
+- **Stop handling now projects one Runtime decision across TUI and ACP, with race and recovery fixes.** ACP `session/cancel` snapshots the Run ID under `cancelMu` instead of racing the prompt handler, and the shared stop projection is bounded so it cannot stall the JSON-RPC read loop. TUI abort/reset moves the canonical stop and terminal write off the Bubble Tea update loop (quit waits for completion), so the UI no longer freezes; a canonical Run terminalized by another owner is adopted locally even when the terminal state differs, with the full terminal broadcast, instead of leaving the session permanently busy. A stopped recovered Responses background task now terminalizes as `cancelled` rather than `failed`.
+
+## v1.3.105-pre-5
+
+### 💥 Behavior Changes
 
 - **The embedded Windows BusyBox now requires Windows 10 or later.** `busybox-windows-x86.exe` and `busybox-windows-x86_64.exe` are rebuilt from the fork's UTF-8 configs (`mingw64u_defconfig` for x86_64, `mingw32w_defconfig` for x86) and carry a UTF-8 application manifest (`activeCodePage=UTF-8`) together with `FEATURE_UTF8_INPUT`, `FEATURE_UTF8_CONSOLE`, `FEATURE_UTF8_AUTODETECT`, `FEATURE_UTF8_CHILD_ENV` and `UNICODE_SUPPORT`. Non-ASCII `sh -c` command text now reaches argv as UTF-8 instead of being down-converted to the system ANSI code page (GBK on zh-CN Windows), and the child environment keeps the UTF-8 baseline. The build sets `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`, so on Windows 7/8 BusyBox refuses to start; the `bash` tool then falls back to PowerShell exactly as it does whenever BusyBox is unavailable, so commands keep working (without the UTF-8 baseline). MothX continues to document Windows 10/11 as its supported Windows floor.
 
@@ -1567,10 +1648,6 @@ Source: https://mothx.net/en/changelog.md
 - **Genuine UTF-8 text is no longer re-read as GBK.** The two encodings overlap on two-byte sequences, and the previous whole-block heuristic could decide once for an entire capture, re-decoding real UTF-8 text into unrelated Han characters (`Привет` → `袩褉懈胁械褌`, and a mixed line into `涓枃`). Ambiguity is now resolved per non-ASCII run and only when the stream carries no stronger UTF-8 signal: a stream whose UTF-8 reading contains CJK characters or any 3- or 4-byte sequence is never second-guessed, and only short runs of two-byte pairs are eligible. Byte-identical legacy fragments (for example a lone GBK `写`) still decode as before.
 
 - **The extracted Windows BusyBox is refreshed when the embedded asset changes.** A previously extracted copy is compared with the embedded asset by SHA-256 and replaced atomically when they differ, so an upgraded MothX never keeps running an old shell. If a running BusyBox holds the executable image locked, the old copy is kept for that run and the refresh is retried on the next startup.
-
-- **Stop handling now projects one Runtime decision across TUI and ACP, with race and recovery fixes.** ACP `session/cancel` snapshots the Run ID under `cancelMu` instead of racing the prompt handler, and the shared stop projection is bounded so it cannot stall the JSON-RPC read loop. TUI abort/reset moves the canonical stop and terminal write off the Bubble Tea update loop (quit waits for completion), so the UI no longer freezes; a canonical Run terminalized by another owner is adopted locally even when the terminal state differs, with the full terminal broadcast, instead of leaving the session permanently busy. A stopped recovered Responses background task now terminalizes as `cancelled` rather than `failed`.
-
-- **Desktop shows and inspects sub-agents.** The chat header now reports how many sub-agents the session has and whether they are running; opening it shows a read-only panel listing every child with its status and renders one child's transcript with the ordinary chat message, tool-card, and reasoning styles. ACP adds the read-only `mothx/subagent/list` and `mothx/subagent/messages` projections plus the `subagentPanel` capability key, so Desktop no longer relies on isolated started/terminal cards.
 
 ## v1.3.105-pre-1
 
@@ -5852,6 +5929,34 @@ The command refuses to start while a session run is active in that directory, na
 
 Attachment storage becomes unreachable once the rows that described it are archived, and the same happens when a session is deleted or an intake fails after its content was written. Reclamation never relies on a reset: the Runtime sweeps the private store while accepting new attachments (at most once an hour per process) and once a day through its own cron maintenance job, and removes only directories that no row references **and** that were last written before the attachment retention window plus a 24-hour grace period - eight days by default with the 7-day retention. That floor is why reclamation can never destroy something a restored archive could still serve. `--prune-unreferenced` runs the same pass immediately and reports what it reclaimed and what it kept as too young; `channels/` and `knowledge-bases/` are never touched by it. The scheduled pass is configured by the optional `maintenance` section of `settings.json` (`reclaimAttachmentStorage`, `storageReconcileSchedule`); see [configuration](configuration.md#maintenance).
 
+### `maintenance` - Inspect and Compact the Session Database
+
+Session-storage maintenance never deletes transcript messages. `status` is read-only: it reports the database size, transcript and sub-agent entry counts, tool-execution record count, and reclaimable free pages. `vacuum` runs SQLite `VACUUM` to release free pages and reports the before/after state; `--dry-run` previews the reclaimable space without rewriting the database. No tool-execution record is pruned by either command.
+
+```
+mothx maintenance status [flags]
+mothx maintenance vacuum [flags]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--session-dir` | - | Configured session directory | Session directory to inspect or vacuum |
+| `--dry-run` | - | false | `vacuum` only: report reclaimable free pages without rewriting the database |
+
+Examples:
+```bash
+# Show database size, transcript counts, and reclaimable space
+mothx maintenance status
+
+# Preview what VACUUM would reclaim
+mothx maintenance vacuum --dry-run
+
+# Rewrite sessions.db and release free pages
+mothx maintenance vacuum
+```
+
+`VACUUM` rewrites the whole database, needs free disk space equal to its size, and holds the SQLite writer for the duration of the rewrite; run it while other MothX processes are idle. The scheduled Runtime maintenance job performs the same optional VACUUM and applies the configured retention only to terminal tool-execution idempotency records; transcript messages are preserved by both paths. See [configuration](configuration.md#maintenance).
+
 ### `worktree` - Isolated Git Worktrees
 
 Create, list, reset, and remove isolated git worktrees managed by the shared Runtime. Worktrees default to `<data-dir>/worktrees`, are registered in the sessions database, and are shared by TUI/CLI, ACP/Desktop, and sub-agents. Creation is controlled by `settings.json` `worktree.enabled`; disabling creation still allows listing, resetting, and removing existing worktrees.
@@ -6458,7 +6563,7 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `retry` | object | *(see below)* | API call retry settings |
 | `approval` | object | *(see below)* | Bash command approval settings |
 | `worktree` | object | *(see below)* | Isolated git worktree settings |
-| `maintenance` | object | *(see below)* | Runtime-owned background housekeeping (attachment storage reclamation) |
+| `maintenance` | object | *(see below)* | Runtime-owned background housekeeping (attachment and session storage maintenance) |
 | `webSearch` | object | *(see below)* | DeepSeek web search/fetch tool settings |
 | `updateCheck` | bool | `true` | Enable npm-based update notifications |
 
@@ -7089,16 +7194,21 @@ Online skill marketplace settings used by `/skillhub` and the Desktop/WebUI skil
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `defaultMarket` | string | `"skillhub.cn"` | Market selected when opening the marketplace |
+| `defaultMarket` | string | `"yuandun"` | Market selected when opening the marketplace; falls back to the first enabled market |
 | `defaultInstallScope` | string | `"project"` | Default install target: `project` or `global` |
 | `officialHandles` | string array | built-in official handle | Marketplace handles treated as official publishers |
-| `markets` | object array | built-in markets | Custom market definitions: `{ id, name, siteURL, apiURL, enabled, apiToken }` |
+| `markets` | object array | built-in markets | Custom market definitions: `{ id, name, siteURL, apiURL, enabled, apiToken }`; 源盾 (`id: "yuandun"`) defaults to `https://yuandun.gitee.com` |
 
 ```json
 {
   "skillHub": {
-    "defaultMarket": "skillhub.cn",
-    "defaultInstallScope": "project"
+    "defaultMarket": "yuandun",
+    "defaultInstallScope": "project",
+    "markets": [
+      { "id": "yuandun", "name": "源盾", "enabled": true, "apiURL": "https://yuandun.gitee.com" },
+      { "id": "skillhub.cn", "name": "SkillHub.cn", "enabled": true },
+      { "id": "clawhub.ai", "name": "ClawHub.ai", "enabled": true }
+    ]
   }
 }
 ```
@@ -7450,11 +7560,17 @@ Runtime-owned background housekeeping. These are not user automation tasks: Moth
 |-------|------|---------|-------------|
 | `reclaimAttachmentStorage` | bool | `true` | Reclaim attachment storage that no durable row references any more |
 | `storageReconcileSchedule` | string | `@daily` | Cadence of that reconciliation (`@daily`, `@every 12h`, or a 5-field cron expression) |
+| `reclaimSessionStorage` | bool | `true` | Run session-storage maintenance. It never deletes transcript messages |
+| `sessionStorageSchedule` | string | `@daily` | Cadence of session-storage maintenance (`@daily`, `@every 12h`, or a 5-field cron expression) |
+| `toolExecutionRetentionDays` | int | `0` | Keep completed/abandoned tool-execution idempotency records for this many days; `0` keeps them forever |
+| `vacuumSessionStorage` | bool | `false` | Run `VACUUM` after pruning to release free pages |
 
 ```json
 {
   "maintenance": {
-    "reclaimAttachmentStorage": false
+    "reclaimAttachmentStorage": false,
+    "toolExecutionRetentionDays": 90,
+    "vacuumSessionStorage": true
   }
 }
 ```
@@ -7462,6 +7578,8 @@ Runtime-owned background housekeeping. These are not user automation tasks: Moth
 Reclamation removes only directories under the session directory's `artifacts/` store that (a) no `session_attachments` row references **and** (b) were last written before the attachment retention window plus a 24-hour grace period (8 days by default with the 7-day retention). It fails closed when the sessions database cannot be read, never follows symbolic links, and ignores anything not shaped like its own generated attachment identifiers, so unrelated data is never interpreted as reclaimable storage. That floor is also what keeps reclamation from destroying anything a restored `mothx pure` archive could still serve. See [`mothx pure`](cli-reference.md#pure---archive-the-sessions-database).
 
 An invalid `storageReconcileSchedule` falls back to the default with a `[cron]` log line, and changing the cadence updates only the scheduled job's schedule - run counters and status are preserved. Turning reclamation off removes the scheduled job at the next scheduler start, and a stale job row that still fires is refused instead of deleting anything.
+
+Session-storage maintenance preserves every transcript message forever: it never deletes `entries`, `sub_entries`, compaction entries, content overrides, or EventStore content. It may prune only `completed`/`abandoned` `tool_execution_records` older than `toolExecutionRetentionDays` (default `0` keeps every record); `running`, `interrupted`, and `retry_requested` records are always kept so an uncertain tool side effect stays fenced. Every pass runs `PRAGMA optimize` and backfills the derived session-content search index for up to 512 not-yet-indexed sessions (newest first); unreadable stores are skipped and retried on the next run. `vacuumSessionStorage` additionally rewrites the database file to release free pages; it is off by default because `VACUUM` holds the SQLite writer for the duration of the rewrite.
 
 ### Project-Level Allow Rules (`allow.json`)
 
@@ -7704,6 +7822,7 @@ These environment variables override settings at runtime:
 | `VIBECODING_DEBUG` | Enable provider-level request/response debug output | `export VIBECODING_DEBUG=1` |
 | `VIBECODING_PPROF_ADDR` | pprof listen address when `--debug` is set | `export VIBECODING_PPROF_ADDR=127.0.0.1:6061` |
 | `MOTHX_SQLITE_SYNCHRONOUS` | Session-database SQLite durability: defaults to `NORMAL` (the WAL-recommended pairing, no per-commit fsync); set to `FULL` to restore per-commit fsync | `export MOTHX_SQLITE_SYNCHRONOUS=FULL` |
+| `MOTHX_SQLITE_QUICK_CHECK` | Startup SQLite integrity check: enabled by default; set to `off` to skip it for very large databases. `mothx doctor` still performs an on-demand read-only check | `export MOTHX_SQLITE_QUICK_CHECK=off` |
 | `VIBECODING_NO_UPDATE_CHECK` | Disable update check | `export VIBECODING_NO_UPDATE_CHECK=1` |
 | `VIBECODING_NPM_REGISTRY` | Override npm registry for update checks | `export VIBECODING_NPM_REGISTRY=https://registry.npmjs.org` |
 
@@ -9536,7 +9655,7 @@ Skills are reusable prompt snippets for:
 
 ### Online Skill Marketplace
 
-MothX is compatible with SkillHub / ClawHub, supporting:
+MothX is compatible with 源盾 / SkillHub / ClawHub, supporting:
 
 - **Skill installation**: One-click install online skills
 - **Cron infrastructure**: Scheduled skill execution
@@ -12754,7 +12873,7 @@ Access `http://127.0.0.1:7872` to open the Web UI. When authentication is enable
 
 - **Chat Interface**: SSE streaming output, tool call/result rendering, plan cards, and a session runtime menu for `plan`, `agent`, and `yolo` modes. Submissions preserve persisted conversation history; optional images, session tool toggles, skills, and explicit mode can be sent with a run. Runtime mode and capability changes apply immediately from the server's authoritative response, while session-list refreshes remain best-effort. The composer reflects server-side queued/running states after reconnect.
 - **Approval Center**: Review pending tool approvals, approve once or deny, persist command/path allow rules, and inspect the session approval audit history.
-- **Session Management**: Pagination, keyboard shortcuts, historical sessions, runtime snapshots, capability toggles, and reconnect-safe approval state. Historical sessions are sorted by last-used time with the most recently replied-to session at the top; the session-management page shows each session's last reply time. Active runs remain protected after a page refresh until they reach a terminal state.
+- **Session Management**: Pagination, keyboard shortcuts, historical sessions, runtime snapshots, capability toggles, and reconnect-safe approval state. Historical sessions are sorted by last-used time with the most recently replied-to session at the top; the session-management page shows each session's last reply time. Active runs remain protected after a page refresh until they reach a terminal state. `GET /api/sessions` is bounded: without `limit` it returns the first 100 sessions plus `total`, `limit`, `offset`, and `hasMore`, and `scope=active`/`/api/sessions/active` project only the in-memory session pool instead of loading all history.
 - **Responses Background Runs**: When an `openai-responses` provider enables `responses.background`, Serve submits supported requests as remote background tasks, persists their response lineage and archived output, polls them through completion, resumes recoverable runs after restart, and executes local function/custom-tool calls. The authenticated run API supports `GET /api/responses/runs/{localRunID}?session_id={sessionID}` plus `cancel`, `reconnect`, and `abandon` actions; see [Configuration](configuration.md#responses-field).
 - **Settings Editor**: Provider/Model configuration, Defaults, Web Search, MCP, Context Files, Compaction, Sandbox, Retry, Approval, Provider Config. Provider, app, and Serve configuration changes refresh related status and tool availability without restarting the server. MCP settings edit the global `mcp.json`; the chat toolbar exposes project-level MCP configuration for the active session.
 - **DeepSeek Web Search fallback**: when enabled, the shared Runtime registers a local `web_search` tool backed by DeepSeek's official Search API or Tencent Yuanbao SearchPro (selectable with `webSearch.backend`) for providers without native hosted search. The DeepSeek backend also registers `web_fetch`. OpenAI Responses keeps its provider-native hosted web search, and Anthropic Messages uses its provider-native hosted search while `webSearch` is enabled; both take precedence over the local `web_search` function.
@@ -12895,7 +13014,7 @@ Entries keep stable IDs and parent IDs so the conversation can be replayed as a 
 - A process crash (kill -9, panic) loses nothing.
 - An OS crash or power loss does not corrupt the database, but commits made since the last checkpoint (typically seconds of writes) may roll back; a missing run terminal state converges through the lease-expiry → orphan-recovery path, so a session never stays stuck as "running" forever.
 
-Deployments sensitive to power loss (unstable power, some network drives) can restore the legacy per-commit fsync behavior with the `MOTHX_SQLITE_SYNCHRONOUS=FULL` environment variable; it takes effect per process, and mixed old/new processes sharing one database file is safe. With `--debug`, the `mothx_sqlite` metrics on the `/debug/vars` endpoint (busy-retry hits and backoff total, transaction begin count/total wait/slowest single wait plus bucket-approximated p50/p99, checkpoint attempt/failure and frame counts, per-database WAL size, and per-database connection-pool wait counters) and the `mothx_runtime_lease` metrics (lease fence-loss count and per-database heartbeat health) make cross-process writer contention and lease health observable. Full design and load-test matrix: `docs/proposal/sqlite-write-pressure-reduction-proposal.md`.
+Deployments sensitive to power loss (unstable power, some network drives) can restore the legacy per-commit fsync behavior with the `MOTHX_SQLITE_SYNCHRONOUS=FULL` environment variable; it takes effect per process, and mixed old/new processes sharing one database file is safe. Startup runs a SQLite `quick_check` before the session database is used. Very large databases can skip this fixed opening cost with `MOTHX_SQLITE_QUICK_CHECK=off`; `mothx doctor` still performs an on-demand, read-only integrity check and reports `sessions.integrity`. Session-storage maintenance (`maintenance.reclaimSessionStorage`) never deletes transcript messages: it only prunes completed/abandoned tool-execution idempotency records when `toolExecutionRetentionDays` is configured above `0`, optionally runs `VACUUM`, and backfills the derived search index and list display projections for up to 512 sessions per pass. With `--debug`, the `mothx_sqlite` metrics on the `/debug/vars` endpoint (busy-retry hits and backoff total, transaction begin count/total wait/slowest single wait plus bucket-approximated p50/p99, checkpoint attempt/failure and frame counts, per-database WAL size, and per-database connection-pool wait counters) and the `mothx_runtime_lease` metrics (lease fence-loss count and per-database heartbeat health) make cross-process writer contention and lease health observable. Full design and load-test matrix: `docs/proposal/sqlite-write-pressure-reduction-proposal.md`.
 
 ## Session Operations
 
@@ -13057,15 +13176,18 @@ Source: https://mothx.net/en/skillhub.md
 
 # Online Skill Marketplace Integration
 
-MothX is compatible with existing skill marketplaces (SkillHub / ClawHub). Skill packages published on these platforms can be used directly in MothX.
+MothX is compatible with existing skill marketplaces (源盾 / SkillHub / ClawHub). Skill packages published on these platforms can be used directly in MothX.
 
 | Platform | URL | Region |
 |----------|-----|--------|
+| **源盾 (Yuandun)** | [https://yuandun.gitee.com](https://yuandun.gitee.com/) | China |
 | **SkillHub** | [https://skillhub.cn](https://skillhub.cn/) | China |
 | **ClawHub** | [https://clawhub.ai](https://clawhub.ai/) | International |
 
 MothX includes a built-in TUI marketplace for browsing, searching, inspecting, and
-installing public SkillHub / ClawHub packages. Open it with `/skillhub`.
+installing public 源盾 / SkillHub / ClawHub packages. Open it with `/skillhub`. 源盾 is
+listed first and is the default market. MothX identifies itself to 源盾 with
+`X-Client-Source: MothX` and `User-Agent: MothX`; 源盾 uses the header for download attribution.
 
 This guide covers:
 
@@ -13081,20 +13203,20 @@ This guide covers:
 Open the built-in marketplace with `/skillhub`.
 
 In the `mothx serve` Web UI, open **Skills** from the sidebar. The Web UI and TUI share
-the same SkillHub / ClawHub adapters and safe installer, including Official, Browse,
+the same 源盾 / SkillHub / ClawHub adapters and safe installer, including Official, Browse,
 Search, detail, install, update, and current-session activation. Project installs are
 derived from the current session workDir and constrained by `allowedWorkDirs`.
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Shift+Tab` | Switch SkillHub.cn / ClawHub.ai |
+| `Tab` / `Shift+Tab` | Switch 源盾 / SkillHub.cn / ClawHub.ai |
 | `[` / `]` | Switch Browse / Search / Official |
 | `/` | Edit the search query; `Enter` searches |
 | `Up` / `Down` | Select a skill |
-| `Left` / `Right` | Page through SkillHub results or ClawHub cursors |
+| `Left` / `Right` | Page through cursor-based markets (源盾 / ClawHub) or SkillHub pages |
 | `Enter` | Load details and file list |
 | `d` | Open the scrollable files, security, and evaluation detail view |
-| `c` / `s` | Cycle category / sort in SkillHub.cn Browse |
+| `c` / `s` | Cycle category / sort in 源盾 or SkillHub.cn Browse |
 | `i` | Install to the selected scope |
 | `u` | Update an installed skill when a newer version is available |
 | `a` | Install and activate for the current session |
@@ -13103,12 +13225,13 @@ derived from the current session workDir and constrained by `allowedWorkDirs`.
 | `Esc` | Close the marketplace |
 
 Lists show download counts as `DL`. SkillHub.cn Browse is ordered by downloads.
+源盾 Browse uses the market's cursor and supports the same category and sort controls.
 `[official]` means the skill is published by a configured Official account;
 `[certified]` identifies a verified publisher; `[verified]` is the marketplace's
 skill verification flag; and `[risk]` marks a suspicious result. These labels are
 kept separate because account origin is not the same as platform verification.
 Details also show source, category, tags, security scan summaries, evaluation availability, and download endpoints when provided by the market. The `d` view distinguishes primary and fallback download sources.
-SkillHub.cn Browse supports category filters and descending downloads, stars, installs, score, or updated-time sorting.
+SkillHub.cn Browse supports category filters and descending downloads, stars, installs, score, or updated-time sorting. 源盾 Browse supports its fixed categories and COMPREHENSIVE / DOWNLOADS / STARS / LATEST sorting through the same controls.
 Installed skills with a newer version show `[update]`; press `u` to update. Active skills are reloaded into the current session after an update.
 
 The command form is also available:
@@ -13135,7 +13258,7 @@ the local skill directories.
 
 ## Skill Format Compatibility
 
-MothX's skill format is fully compatible with the SkillHub / ClawHub standard:
+MothX's skill format is fully compatible with the 源盾 / SkillHub / ClawHub standard:
 
 ```
 skill-name/
@@ -13230,14 +13353,22 @@ Configure the global skills directory in `settings.json`:
 {
   "skillsDir": "~/.mothx/skills",
   "skillHub": {
-    "defaultMarket": "skillhub.cn",
+    "defaultMarket": "yuandun",
     "defaultInstallScope": "project",
-    "officialHandles": ["user_0064faa7"]
+    "officialHandles": ["user_0064faa7"],
+    "markets": [
+      { "id": "yuandun", "name": "源盾", "enabled": true, "apiURL": "https://yuandun.gitee.com" },
+      { "id": "skillhub.cn", "name": "SkillHub.cn", "enabled": true },
+      { "id": "clawhub.ai", "name": "ClawHub.ai", "enabled": true }
+    ]
   }
 }
 ```
 
 `officialHandles` controls the accounts aggregated in the SkillHub.cn Official tab.
+The 源盾 market ships with `https://yuandun.gitee.com` as its default `apiURL`;
+override it only when using a mirror. 源盾 is ordered before SkillHub.cn and is the
+default market.
 Project skills load automatically without extra configuration.
 
 ---

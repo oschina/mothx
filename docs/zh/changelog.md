@@ -1,8 +1,10 @@
 # 更新日志
 
-## v1.3.105-pre-4
+## v1.3.107
 
 ### ✨ 新功能
+
+- **源盾已成为默认 SkillHub 市场。** MothX 新增源盾原生客户端，支持搜索、详情、文件、安全审计与下载，并在市场顺序中优先于 SkillHub.cn 与 ClawHub.ai，同时迁移旧的 `skillhub.cn` 默认值。该市场通过 ACP、Serve、TUI、Web UI 与 Desktop 统一投影；Web UI 与 Desktop 还获得新的市场布局与右侧详情抽屉。下载时使用 `X-Client-Source: MothX` 标识 MothX，带 `X-Skill-SHA256` 的归档会在解压前校验。安全审计中的疑似结果改用琥珀色警告样式，与确认风险保持区分。
 
 - **新增 `mothx maintenance` 检查与压缩会话数据库。** `status` 报告转录/工具记录计数、数据库大小与可回收空闲页；`vacuum` 执行 SQLite VACUUM 并报告结果，`--dry-run` 可预览。该命令不会删除消息，也不会按保留期清理工具执行记录；定时维护任务仍是唯一会限制终态工具记录并回填搜索索引的路径。
 
@@ -26,9 +28,9 @@
 
 - **新增腾讯元宝搜索后端。** `webSearch.backend` 现在可选择 `deepseek`（官方 Search/Fetch API）或 `yuanbao`（腾讯元宝 SearchPro，`POST /SearchPro`）。元宝后端发送 `{"Query": ...}`，把返回的 `Pages` 归一化为标题、URL、站点、时间、分数与正文摘要，并使用 `webSearch.token` 或 `${TENCENTCLOUD_WSA_APIKEY}` 鉴权；元宝目前只提供搜索，因此 `web_fetch` 仅在 DeepSeek 后端可用。
 
-- **内置的 Windows BusyBox 现在要求 Windows 10 及以上。** `busybox-windows-x86.exe` 与 `busybox-windows-x86_64.exe` 改用该 fork 的 UTF-8 配置重新构建（x86_64 用 `mingw64u_defconfig`，x86 用 `mingw32w_defconfig`），带有 UTF-8 应用程序清单（`activeCodePage=UTF-8`）以及 `FEATURE_UTF8_INPUT`、`FEATURE_UTF8_CONSOLE`、`FEATURE_UTF8_AUTODETECT`、`FEATURE_UTF8_CHILD_ENV` 与 `UNICODE_SUPPORT`。非 ASCII 的 `sh -c` 命令文本现在以 UTF-8 传入 argv，不再被降级为系统 ANSI 代码页（简体中文 Windows 上为 GBK），子进程也保持 UTF-8 环境基线。由于构建时设置了 `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`，在 Windows 7/8 上 BusyBox 会拒绝启动；此时 `bash` 工具会像「BusyBox 不可用」一样自动回退到 PowerShell，命令仍可执行（只是没有 UTF-8 基线）。MothX 的支持范围仍标注为 Windows 10/11。
-
 ### ⚡ 性能
+
+- **打开与列出会话不再重扫整库。** 当前数据库只读取一次迁移账本，打开时不再开启写事务或持有写锁；每次打开复用 EventStore 检查结果；执行事实、列表元数据与消息计数改为批量读取；级联、导出与统计投影不再逐个打开会话；搜索改为一次只读扫描，同时保持 compaction 与 content override 的语义。
 
 - **用户背景图模式降低大面积毛玻璃成本。** 背景图生效时，应用表面遮罩、控制/标题栏、输入框与首页快捷卡使用更小的模糊半径，在保持半透明可读性的同时降低持续的 GPU 合成成本。
 
@@ -49,23 +51,58 @@
 - **Electron 不再强制所有 Linux 打包桌面走软件渲染。** 存在 `DISPLAY`/`WAYLAND_DISPLAY` 时保留 GPU 合成(可用 `MOTHX_DESKTOP_DISABLE_GPU` 显式关闭),仅当 `/dev/shm` 缺失、不可写或小于 128MB 时才启用 `/tmp` 回退。ACP 事件也会按帧合并为一次 IPC 投递,诊断日志仅在日志面板打开时才跨 IPC 推送。
 
 - **Desktop 不再在悬停、切换主题或滚动露出内容时启动成片的过渡/动画。** Tailwind `duration-*` 不再和 `animate-in` 同时出现(此前任意悬停都会让会话行过渡所有继承属性);转录卡片不再在 `content-visibility` 滚动露出时重播入场动画;侧边栏滚动条保持恒定 8px 宽度;切换主题时会临时禁用继承颜色的过渡。
+
 - **长时间运行的 Desktop 窗口保持有界。** 实时转录只渲染末尾 300 条(可在本地继续展开),status/retry/compaction 通知就地更新而不再累积,会话/搜索/子代理/Run 状态缓存都有上限,进度轮询不会重叠,转录查找改用索引避免每个 chunk 全表扫描,超大工具输出在展示副本中截断,`desktop.log` 在启动间按 8MB 轮转。
 
 ### 🐛 问题修复
 
+- **卡住检测不再误判仅有推理输出的进展，并保留终止原因。** 产生推理输出的轮次现在也算进展，因此持续调用工具、但没有面向用户文本的推理模型不会再被判为卡住；既无文本也无推理的连续轮次仍会被静默循环守卫终止。`ErrAgentStuck` 现在携带静默轮次数，并通过 Run 结果与错误事件投影，Runtime `ErrorInfo` 与各适配器都可以说明循环守卫为何终止。
+
 - **部分应用过的会话列表迁移现在会自愈。** 有些数据库在 Run 索引被加入 v49 迁移体之前就记录了 schema 版本 49，此后已记录版本会被直接跳过，`idx_session_runs_session_status_started` 永远缺失。版本 50 用 `CREATE INDEX IF NOT EXISTS` 重新声明该索引，这些数据库下次启动时收敛，新库保持不变。
 
 - **后台 Responses 任务在挂接期间收到停止时不再记为失败。** 并发 WAL 读可能让停止操作在后台 coordinator 挂接 Agent 之前把 Run 标为 cancelling。此前该分支会落入默认 `failed` 终态，并可能遗留 provider 侧任务；现在保留 `cancelled`，并显式取消远端 Responses 任务。
+
+## v1.3.106
+
+### 🐛 问题修复
+
+- **Desktop 聊天与首页背景不再渲染画布点阵。** 移除了装饰性点阵覆盖层，使背景图与表面处理在两种视图中保持干净。
+
+## v1.3.105
+
+### 🐛 问题修复
+
+- **Desktop 隐藏窗口样式切换并统一平台默认值。** macOS 主机在 `desktop-store.json` 加载前即解析为 macOS 窗体，Windows/Linux 主机解析为 Windows 11 窗体；手动切换入口暂时隐藏在功能开关后，但保留实现以便后续恢复。
+
+## v1.3.105-pre-7
+
+### 🐛 问题修复
+
+- **在工具调用轮次结束的 Run 现在能进入终态。** 当 assistant 消息与工具结果已经提交时，终态 turn-end 被重新挂到更早的条目下，会被叶子围栏永久拒绝，导致 Run 停留在 terminalizing 且执行租约无法释放。现在 turn-end 锚定到管理器当前叶子，TUI 也会把未完成任务映射为规范的 `RunStateIncomplete` 状态。
+
+## v1.3.105-pre-6
+
+### ✨ 新功能
+
+- **Desktop 显示并查看子代理。** 会话头部现在显示当前会话的子代理数量与运行状态；点击可打开只读面板，列出全部子代理及其状态，并使用聊天窗口同一套消息、工具卡与思考块样式查看单个子代理的转录。ACP 新增 `mothx/subagent/list` 与 `mothx/subagent/messages` 只读投影及 `subagentPanel` 能力键，Desktop 不再只能依赖零散的 started/terminal 卡片。
+
+### 🐛 问题修复
+
+- **停止路径在 TUI/ACP 统一为共享 Runtime 决策，并修复竞态与后台终态。** ACP 的 `session/cancel` 现在在 `cancelMu` 下快照 Run ID，避免与 prompt 安装身份竞争；共享停止投影受有界 context 约束，不再阻塞 JSON-RPC 读循环。TUI 的中止/重置把 canonical stop 与终态写入移出 Bubble Tea 更新循环（退出时等待完成），避免 UI 卡顿。已被其他 owner 终态化的 canonical Run 会被本地执行收养（即使终态不同），并走完整终态广播，不再让会话永久 busy。恢复中的 Responses 后台任务被用户停止时现在记为 `cancelled` 而不是 `failed`。
+
+## v1.3.105-pre-5
+
+### 💥 行为变更
+
+- **内置的 Windows BusyBox 现在要求 Windows 10 及以上。** `busybox-windows-x86.exe` 与 `busybox-windows-x86_64.exe` 改用该 fork 的 UTF-8 配置重新构建（x86_64 用 `mingw64u_defconfig`，x86 用 `mingw32w_defconfig`），带有 UTF-8 应用程序清单（`activeCodePage=UTF-8`）以及 `FEATURE_UTF8_INPUT`、`FEATURE_UTF8_CONSOLE`、`FEATURE_UTF8_AUTODETECT`、`FEATURE_UTF8_CHILD_ENV` 与 `UNICODE_SUPPORT`。非 ASCII 的 `sh -c` 命令文本现在以 UTF-8 传入 argv，不再被降级为系统 ANSI 代码页（简体中文 Windows 上为 GBK），子进程也保持 UTF-8 环境基线。由于构建时设置了 `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`，在 Windows 7/8 上 BusyBox 会拒绝启动；此时 `bash` 工具会像「BusyBox 不可用」一样自动回退到 PowerShell，命令仍可执行（只是没有 UTF-8 基线）。MothX 的支持范围仍标注为 Windows 10/11。
+
+### 🐛 问题修复
 
 - **Windows 捕获输出在捕获边界统一归一化。** 子进程各自决定管道编码——Python、Java、C 运行库与 shell 内建命令常用 ANSI 代码页（简体中文 Windows 上为 GBK），而 Go、Rust、Node.js 及多数 CLI 写 UTF-8，同一条命令还可能混用两者。现在不再注入针对单一运行时的环境变量，而是由 `bash` 工具通过 `platform.DecodeProcessOutput` 归一化捕获到的 stdout/stderr：非合法 UTF-8 的字节用当前代码页解码，合法 UTF-8 直接信任，混合输出则按「最大非 ASCII 连续段」分别判定。`MOTHX_WIN_OUTPUT_ENCODING=utf-8` 可强制 UTF-8，设为数字（如 `936`）可强制该代码页。
 
 - **真正的 UTF-8 文本不再被误当作 GBK 重解码。** 两种编码在双字节序列上存在重叠，此前的「整块」启发式会对整段捕获只做一次判断，把真正的 UTF-8 文本重解码成无关的汉字（`Привет` → `袩褉懈胁械褌`，混有中文的行则变成 `涓枃`）。现在改为按非 ASCII 连续段分别判定，且仅当整条流没有更强的 UTF-8 证据时才可能翻转：只要 UTF-8 读法中存在 CJK 字符或任何 3/4 字节序列，就绝不再二次猜测；只有短的双字节片段才有资格翻转。字节本身与旧编码一致的情形（例如单个 GBK `写`）仍然照旧解码。
 
 - **内置资产变化时会刷新已解压的 Windows BusyBox。** 已解压的副本会按 SHA-256 与内置资产比对，不同则以原子方式替换，因此升级后的 MothX 不会继续运行旧 shell。若正在运行的 BusyBox 锁住可执行映像，则本次运行继续使用旧副本，并在下次启动时重试刷新。
-
-- **停止路径在 TUI/ACP 统一为共享 Runtime 决策，并修复竞态与后台终态。** ACP 的 `session/cancel` 现在在 `cancelMu` 下快照 Run ID，避免与 prompt 安装身份竞争；共享停止投影受有界 context 约束，不再阻塞 JSON-RPC 读循环。TUI 的中止/重置把 canonical stop 与终态写入移出 Bubble Tea 更新循环（退出时等待完成），避免 UI 卡顿。已被其他 owner 终态化的 canonical Run 会被本地执行收养（即使终态不同），并走完整终态广播，不再让会话永久 busy。恢复中的 Responses 后台任务被用户停止时现在记为 `cancelled` 而不是 `failed`。
-
-- **Desktop 显示并查看子代理。** 会话头部现在显示当前会话的子代理数量与运行状态；点击可打开只读面板，列出全部子代理及其状态，并使用聊天窗口同一套消息、工具卡与思考块样式查看单个子代理的转录。ACP 新增 `mothx/subagent/list` 与 `mothx/subagent/messages` 只读投影及 `subagentPanel` 能力键，Desktop 不再只能依赖零散的 started/terminal 卡片。
 
 ## v1.3.105-pre-1
 

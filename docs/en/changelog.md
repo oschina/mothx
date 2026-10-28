@@ -1,8 +1,10 @@
 # Changelog
 
-## v1.3.105-pre-4
+## v1.3.107
 
 ### ✨ New Features
+
+- **源盾 (Yuandun) is now the default SkillHub marketplace.** MothX adds a native 源盾 client for search, detail, files, security audit, and downloads, registers it ahead of SkillHub.cn and ClawHub.ai, and migrates the legacy `skillhub.cn` default. The market is projected through ACP, Serve, the TUI, the Web UI, and Desktop, which also gain a refreshed marketplace layout and a right-side detail drawer. Downloads identify MothX with `X-Client-Source: MothX`, and archives carrying `X-Skill-SHA256` are verified before extraction. Suspected (not confirmed) security findings use an amber warning tone so they stay distinct from risky results.
 
 - **`mothx maintenance` inspects and compacts the session database.** `status` reports transcript/tool-record counts, database size, and reclaimable free pages; `vacuum` runs SQLite VACUUM and reports the result, with `--dry-run` to preview. The command never deletes messages or prunes tool-execution records; the scheduled maintenance job remains the only path that can bound terminal tool records and backfill the search index.
 
@@ -26,9 +28,9 @@
 
 - **Tencent Yuanbao search backend added.** `webSearch.backend` selects `deepseek` (official Search/Fetch APIs) or `yuanbao` (Tencent Yuanbao SearchPro at `POST /SearchPro`). The Yuanbao backend sends `{"Query": ...}`, normalizes the returned `Pages` into title/URL/site/date/score/passage results, authenticates with `webSearch.token` or `${TENCENTCLOUD_WSA_APIKEY}`, and currently provides search only, so `web_fetch` remains available only with the DeepSeek backend.
 
-- **The embedded Windows BusyBox now requires Windows 10 or later.** `busybox-windows-x86.exe` and `busybox-windows-x86_64.exe` are rebuilt from the fork's UTF-8 configs (`mingw64u_defconfig` for x86_64, `mingw32w_defconfig` for x86) and carry a UTF-8 application manifest (`activeCodePage=UTF-8`) together with `FEATURE_UTF8_INPUT`, `FEATURE_UTF8_CONSOLE`, `FEATURE_UTF8_AUTODETECT`, `FEATURE_UTF8_CHILD_ENV` and `UNICODE_SUPPORT`. Non-ASCII `sh -c` command text now reaches argv as UTF-8 instead of being down-converted to the system ANSI code page (GBK on zh-CN Windows), and the child environment keeps the UTF-8 baseline. The build sets `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`, so on Windows 7/8 BusyBox refuses to start; the `bash` tool then falls back to PowerShell exactly as it does whenever BusyBox is unavailable, so commands keep working (without the UTF-8 baseline). MothX continues to document Windows 10/11 as its supported Windows floor.
-
 ### ⚡ Performance
+
+- **Opening and listing sessions no longer rescans the whole store.** A current database reads its migration ledger once and opens without a write transaction or writer lock; EventStore inspection is reused per open; execution facts, list metadata, and message counts are batched; cascade, export, and stats projections stop opening every session; and search uses one read-only scan that preserves compaction and content-override semantics.
 
 - **User background mode lowers large-area backdrop blur.** When a user background image is active, the app surface veil, control/titlebar surfaces, composer, and home quick cards use smaller blur radii, reducing continuous GPU compositing cost while keeping the semi-transparent surfaces readable.
 
@@ -49,23 +51,58 @@
 - **Electron no longer forces software rendering on every packaged Linux desktop.** GPU compositing is kept when `DISPLAY`/`WAYLAND_DISPLAY` exists (with an explicit `MOTHX_DESKTOP_DISABLE_GPU` escape hatch), and the `/dev/shm` fallback is applied only when that mount is missing, unwritable, or smaller than 128 MB. ACP events are also coalesced into one IPC delivery per frame, and live diagnostic logs cross IPC only while the log viewer is open.
 
 - **Desktop no longer starts transition/animation storms on hover, theme changes, or scroll reveals.** Tailwind `duration-*` no longer accompanies `animate-in` (which made every hovered sidebar row transition all inherited properties), transcript cards no longer replay entrance animations when `content-visibility` reveals them during scrolling, the sidebar scrollbar keeps a constant 8 px width, and theme switches temporarily suppress transitions on inherited colors.
+
 - **Long-lived Desktop windows stay bounded.** The live transcript renders a 300-item tail window (expandable locally), status/retry/compaction notices update in place instead of accumulating, session/search/subagent/run-status caches are capped, progress polling cannot overlap, transcript lookup uses an index instead of scanning every chunk, oversized tool output is capped in the display copy, and `desktop.log` rotates at 8 MB between launches.
 
 ### 🐛 Bug Fixes
 
+- **Stuck detection no longer stops reasoning-only progress, and the terminal error keeps its reason.** Turns that produce reasoning output now count as progress, so a reasoning model that keeps calling tools without user-facing text is no longer treated as stuck; the silent-turn guard still stops a loop with neither text nor reasoning. `ErrAgentStuck` now carries the silent-turn count and is projected through the Run result and error event, so Runtime `ErrorInfo` and every adapter can report why the loop guard stopped.
+
 - **A partially applied session-list migration now converges.** Some databases recorded schema version 49 before the Run index was added to that migration body, so `idx_session_runs_session_status_started` stayed missing forever: recorded versions are skipped, not re-inspected. Version 50 re-asserts the index with `CREATE INDEX IF NOT EXISTS`, converging those databases on the next start while leaving fresh ones unchanged.
 
 - **Stopping a Responses background task during attachment now stays cancelled.** Concurrent WAL reads can let a stop mark the Run cancelling before the background coordinator attaches its Agent. That path previously fell through to the default `failed` terminal status and could orphan the provider-side task. It now preserves `cancelled` and explicitly cancels the remote Responses task.
+
+## v1.3.106
+
+### 🐛 Bug Fixes
+
+- **Desktop chat and home backgrounds no longer render the canvas dot mesh.** The decorative dot overlay was removed so background images and surface treatments stay clean on both views.
+
+## v1.3.105
+
+### 🐛 Bug Fixes
+
+- **Desktop hides the window-style switch and aligns platform defaults.** macOS hosts now resolve to the macOS frame and Windows/Linux hosts to the Windows 11 frame before `desktop-store.json` loads, and the manual switch is hidden behind a feature flag while its implementation is retained for later reuse.
+
+## v1.3.105-pre-7
+
+### 🐛 Bug Fixes
+
+- **Runs that stop on a tool-call turn now reach a terminal state.** When the assistant payload and tool results were already committed, the terminal turn-end was re-parented under an earlier entry and rejected by the leaf fence, leaving the Run terminalizing and its execution lease unreleased. The turn-end now anchors at the manager's current leaf, and the TUI maps incomplete tasks to the canonical `RunStateIncomplete` state.
+
+## v1.3.105-pre-6
+
+### ✨ New Features
+
+- **Desktop shows and inspects sub-agents.** The chat header now reports how many sub-agents the session has and whether they are running; opening it shows a read-only panel listing every child with its status and renders one child's transcript with the ordinary chat message, tool-card, and reasoning styles. ACP adds the read-only `mothx/subagent/list` and `mothx/subagent/messages` projections plus the `subagentPanel` capability key, so Desktop no longer relies on isolated started/terminal cards.
+
+### 🐛 Bug Fixes
+
+- **Stop handling now projects one Runtime decision across TUI and ACP, with race and recovery fixes.** ACP `session/cancel` snapshots the Run ID under `cancelMu` instead of racing the prompt handler, and the shared stop projection is bounded so it cannot stall the JSON-RPC read loop. TUI abort/reset moves the canonical stop and terminal write off the Bubble Tea update loop (quit waits for completion), so the UI no longer freezes; a canonical Run terminalized by another owner is adopted locally even when the terminal state differs, with the full terminal broadcast, instead of leaving the session permanently busy. A stopped recovered Responses background task now terminalizes as `cancelled` rather than `failed`.
+
+## v1.3.105-pre-5
+
+### 💥 Behavior Changes
+
+- **The embedded Windows BusyBox now requires Windows 10 or later.** `busybox-windows-x86.exe` and `busybox-windows-x86_64.exe` are rebuilt from the fork's UTF-8 configs (`mingw64u_defconfig` for x86_64, `mingw32w_defconfig` for x86) and carry a UTF-8 application manifest (`activeCodePage=UTF-8`) together with `FEATURE_UTF8_INPUT`, `FEATURE_UTF8_CONSOLE`, `FEATURE_UTF8_AUTODETECT`, `FEATURE_UTF8_CHILD_ENV` and `UNICODE_SUPPORT`. Non-ASCII `sh -c` command text now reaches argv as UTF-8 instead of being down-converted to the system ANSI code page (GBK on zh-CN Windows), and the child environment keeps the UTF-8 baseline. The build sets `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`, so on Windows 7/8 BusyBox refuses to start; the `bash` tool then falls back to PowerShell exactly as it does whenever BusyBox is unavailable, so commands keep working (without the UTF-8 baseline). MothX continues to document Windows 10/11 as its supported Windows floor.
+
+### 🐛 Bug Fixes
 
 - **Captured Windows output is normalized at the capture boundary.** Child processes choose their pipe encoding independently — Python, Java, the C runtime and shell builtins often use the ANSI code page (GBK on zh-CN Windows) while Go, Rust, Node.js and most CLIs write UTF-8, and a single command can mix both. Rather than injecting a per-runtime environment variable, the `bash` tool now normalizes captured stdout/stderr through `platform.DecodeProcessOutput`: bytes that are not valid UTF-8 are decoded with the active code page, valid UTF-8 is trusted, and mixed output is resolved per maximal non-ASCII run. `MOTHX_WIN_OUTPUT_ENCODING=utf-8` forces UTF-8, and a numeric value such as `936` forces that code page.
 
 - **Genuine UTF-8 text is no longer re-read as GBK.** The two encodings overlap on two-byte sequences, and the previous whole-block heuristic could decide once for an entire capture, re-decoding real UTF-8 text into unrelated Han characters (`Привет` → `袩褉懈胁械褌`, and a mixed line into `涓枃`). Ambiguity is now resolved per non-ASCII run and only when the stream carries no stronger UTF-8 signal: a stream whose UTF-8 reading contains CJK characters or any 3- or 4-byte sequence is never second-guessed, and only short runs of two-byte pairs are eligible. Byte-identical legacy fragments (for example a lone GBK `写`) still decode as before.
 
 - **The extracted Windows BusyBox is refreshed when the embedded asset changes.** A previously extracted copy is compared with the embedded asset by SHA-256 and replaced atomically when they differ, so an upgraded MothX never keeps running an old shell. If a running BusyBox holds the executable image locked, the old copy is kept for that run and the refresh is retried on the next startup.
-
-- **Stop handling now projects one Runtime decision across TUI and ACP, with race and recovery fixes.** ACP `session/cancel` snapshots the Run ID under `cancelMu` instead of racing the prompt handler, and the shared stop projection is bounded so it cannot stall the JSON-RPC read loop. TUI abort/reset moves the canonical stop and terminal write off the Bubble Tea update loop (quit waits for completion), so the UI no longer freezes; a canonical Run terminalized by another owner is adopted locally even when the terminal state differs, with the full terminal broadcast, instead of leaving the session permanently busy. A stopped recovered Responses background task now terminalizes as `cancelled` rather than `failed`.
-
-- **Desktop shows and inspects sub-agents.** The chat header now reports how many sub-agents the session has and whether they are running; opening it shows a read-only panel listing every child with its status and renders one child's transcript with the ordinary chat message, tool-card, and reasoning styles. ACP adds the read-only `mothx/subagent/list` and `mothx/subagent/messages` projections plus the `subagentPanel` capability key, so Desktop no longer relies on isolated started/terminal cards.
 
 ## v1.3.105-pre-1
 

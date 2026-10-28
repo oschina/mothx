@@ -188,7 +188,7 @@ mothx/
 - [系统架构](architecture.md) — 核心组件、数据流
 - [工具系统](tools.md) — 内置工具指南
 - [技能系统](skills.md) — 可复用提示片段
-- [在线 Skill 市场](skillhub.md) — SkillHub / ClawHub 集成
+- [在线 Skill 市场](skillhub.md) — 源盾 / SkillHub / ClawHub 集成
 - [工作流模式](workflow.md) — JavaScript DSL 多 Agent 编排
 - [SDK 集成](sdk.md) — 在 Go 应用中嵌入 MothX Agent
 - [添加供应商](provider-guide.md) — 添加或定制 provider
@@ -1602,18 +1602,99 @@ Source: https://mothx.net/zh/changelog.md
 
 # 更新日志
 
-## v1.3.105-pre-4
+## v1.3.107
 
 ### ✨ 新功能
+
+- **源盾已成为默认 SkillHub 市场。** MothX 新增源盾原生客户端，支持搜索、详情、文件、安全审计与下载，并在市场顺序中优先于 SkillHub.cn 与 ClawHub.ai，同时迁移旧的 `skillhub.cn` 默认值。该市场通过 ACP、Serve、TUI、Web UI 与 Desktop 统一投影；Web UI 与 Desktop 还获得新的市场布局与右侧详情抽屉。下载时使用 `X-Client-Source: MothX` 标识 MothX，带 `X-Skill-SHA256` 的归档会在解压前校验。安全审计中的疑似结果改用琥珀色警告样式，与确认风险保持区分。
+
+- **新增 `mothx maintenance` 检查与压缩会话数据库。** `status` 报告转录/工具记录计数、数据库大小与可回收空闲页；`vacuum` 执行 SQLite VACUUM 并报告结果，`--dry-run` 可预览。该命令不会删除消息，也不会按保留期清理工具执行记录；定时维护任务仍是唯一会限制终态工具记录并回填搜索索引的路径。
 
 - **新增 Gitee/Moark 模型：`kimi-k3.1-pro` 与 `kimi-k3.1-pro-highspeed`**
   - 为 `gitee` 与 `moark` 新增 `kimi-k3.1-pro` 与 `kimi-k3.1-pro-highspeed`：默认开启思考，使用 Kimi 的 `low`/`high`/`max` 推理强度档位（MothX 的 `minimal`/`low` 映射为 `low`，`medium`/`high` 映射为 `high`，`xhigh`/`max` 映射为 `max`），支持 1M 上下文与文本+图片输入。两者均通过 `kimi` 思考格式使用经过验证的 `reasoning_effort` 参数。
 
+- **Gitee/Moark 新增模型：`MiniMax-M3.1-Flash`**
+  - 为 `gitee` 与 `moark` 新增 `MiniMax-M3.1-Flash`：通过标准 `reasoning_effort` 参数默认开启思考，支持 1M 上下文与文本+图片+视频输入；默认不发送 max_tokens。
+
 ### 💥 行为变更
+
+- **Gitee/Moark 模型列表已重新排序以便查找。** `gitee` 与 `moark` 预设现在优先列出 `deepseek-v4.1-flash-1017`、`deepseek-v4.1-flash`，随后是 `qwen3.8-flash`、`qwen3.8-max`、`glm-5.3-flash`、`glm-5.3`、`MiniMax-M3.1-Flash`、`step-3.7-flash` 与 `auto`，其余模型按自然字母顺序排列。由于预设顺序同时是未配置默认模型时的回退顺序，未显式配置的 Gitee/Moark 会话现在会默认使用 `deepseek-v4.1-flash-1017`。
+
+- **Serve 会话列表默认有界。** 未指定 `limit` 的 `/api/sessions` 现在只返回前 100 个会话，并附带 `total`、`limit`、`offset`、`hasMore`；可用 `limit`/`offset` 继续翻页。`scope=active` 与 `/api/sessions/active` 改为只投影内存会话池，不再加载全部历史；会话级 MCP 配置也改为按 ID 单查工作目录。
+
+- **会话存储维护已纳入定时任务，且不会删除转录消息。** MothX 现在会投影每日一次的 `mothx-maintenance:session-storage` 任务，永久保留所有 `entries`/`sub_entries` 转录行。该任务只可能清理早于 `maintenance.toolExecutionRetentionDays` 的已完成/已放弃 `tool_execution_records`（默认 `0`，永久保留），始终保留 running/interrupted/retry-requested 记录以免不确定的工具副作用失去围栏，每次运行 `PRAGMA optimize`，并可在开启 `maintenance.vacuumSessionStorage` 时执行 `VACUUM`。
+
+- **SQLite 启动完整性检查现在可显式关闭。** MothX 默认仍会在使用会话库前执行 `PRAGMA quick_check`。超大数据库可用 `MOTHX_SQLITE_QUICK_CHECK=off` 跳过这项固定开销；`mothx doctor` 仍会执行按需的只读完整性检查，并报告 `sessions.integrity`。
 
 - **非托管网页搜索改用 DeepSeek Search/Fetch。** 原先通过 `webSearch` 的 provider/type/model 配置注册的 provider 搜索工具已被替换为 DeepSeek 官方 `POST /v1/tools/search` 与 `POST /v1/tools/fetch` 支撑的本地 `web_search`、`web_fetch`。OpenAI Responses 的 provider 原生托管搜索保持不变；Anthropic Messages 在 `webSearch` 启用时使用其 provider 原生托管搜索。两者都优先于本地 `web_search`。`webSearch` 现在配置 `provider`、`baseUrl` 与 `token`（未设置 token 时回退到 provider API key）；两个工具均为只读，可在 plan 模式使用。
 
 - **新增腾讯元宝搜索后端。** `webSearch.backend` 现在可选择 `deepseek`（官方 Search/Fetch API）或 `yuanbao`（腾讯元宝 SearchPro，`POST /SearchPro`）。元宝后端发送 `{"Query": ...}`，把返回的 `Pages` 归一化为标题、URL、站点、时间、分数与正文摘要，并使用 `webSearch.token` 或 `${TENCENTCLOUD_WSA_APIKEY}` 鉴权；元宝目前只提供搜索，因此 `web_fetch` 仅在 DeepSeek 后端可用。
+
+### ⚡ 性能
+
+- **打开与列出会话不再重扫整库。** 当前数据库只读取一次迁移账本，打开时不再开启写事务或持有写锁；每次打开复用 EventStore 检查结果；执行事实、列表元数据与消息计数改为批量读取；级联、导出与统计投影不再逐个打开会话；搜索改为一次只读扫描，同时保持 compaction 与 content override 的语义。
+
+- **用户背景图模式降低大面积毛玻璃成本。** 背景图生效时，应用表面遮罩、控制/标题栏、输入框与首页快捷卡使用更小的模糊半径，在保持半透明可读性的同时降低持续的 GPU 合成成本。
+
+- **重复搜索复用未变化的 EventStore 投影。** 按物理日志指纹索引、带字节上限的缓存避免每次搜索都重放同一会话；追加或分段轮转会使缓存失效。
+
+- **重复搜索直接复用已算好的结果页。** 查询/分页结果缓存位于候选扫描之前，因此重复的 Desktop/WebUI 历史查询不再执行列表查询，也不重放任何会话内容。缓存条目按持久化的全库写入版本失效：SQLite 触发器会在会话行、legacy payload、EventStore 投影与项目归属写入时递增版本；追加、标题/绑定/工作目录变更、删除或另一进程的写入都会使结果页失效，而不会返回过期内容。
+
+- **会话列表不再在启动时扫描 EventStore。** 首条用户预览、最新标题与绑定元数据现在持久化到小型 SQLite 展示投影，随每个提交批次更新、随分叉复制、随事件投影重建，并由维护任务回填。列表与绑定读取优先使用投影行，缺失时仍回退到 canonical EventStore 扫描。
+
+- **Desktop 设置页不再因后台流式 chunk 整体重渲染。** 16 个设置面板现在只订阅自己展示的连接/偏好字段，不再订阅整个应用状态。
+
+- **会话内容搜索改为先通过派生 FTS5 索引缩小范围。** 搜索先向 trigram 全文索引查询候选会话，再只对候选做 canonical 重放校验；最终命中仍由重放决定，因此 compaction 丢弃的内容与 content override 的替换语义完全不变。索引与每次写入在同一事务内落库，随事件投影重建、随分叉复制，并在旧会话 attach 时回填；短查询、索引异常与尚未建索引的会话自动退回原全量扫描，搜索本身仍然只读。每日会话存储维护还会按最新优先回填最多 512 个尚未建索引的会话，因此历史会话不需要逐个打开也能被搜索到。
+
+- **Desktop 流式输出与长列表滚动不再重渲染整个外壳。** 渲染进程序列化状态通知,每帧最多提交一次;转录条目改为不可变替换,未变化的 Markdown/工具卡直接跳过渲染;侧边栏、状态栏、输入框与计划面板只订阅自己展示的状态切片;视口外的转录块可跳过布局与绘制;聊天自动跟随滚动与绘制 chunk 的提交合并。
+
+- **Desktop 首次任务列表不再逐个串行扫描会话。** ACP 列表行改用只做结构校验的 EventStore 投影,仅解析首条用户预览与最新标题/绑定,并用有界 worker 池预取当前页;真正打开会话时仍会校验全部 batch 摘要并 fail-closed。
+
+- **Electron 不再强制所有 Linux 打包桌面走软件渲染。** 存在 `DISPLAY`/`WAYLAND_DISPLAY` 时保留 GPU 合成(可用 `MOTHX_DESKTOP_DISABLE_GPU` 显式关闭),仅当 `/dev/shm` 缺失、不可写或小于 128MB 时才启用 `/tmp` 回退。ACP 事件也会按帧合并为一次 IPC 投递,诊断日志仅在日志面板打开时才跨 IPC 推送。
+
+- **Desktop 不再在悬停、切换主题或滚动露出内容时启动成片的过渡/动画。** Tailwind `duration-*` 不再和 `animate-in` 同时出现(此前任意悬停都会让会话行过渡所有继承属性);转录卡片不再在 `content-visibility` 滚动露出时重播入场动画;侧边栏滚动条保持恒定 8px 宽度;切换主题时会临时禁用继承颜色的过渡。
+
+- **长时间运行的 Desktop 窗口保持有界。** 实时转录只渲染末尾 300 条(可在本地继续展开),status/retry/compaction 通知就地更新而不再累积,会话/搜索/子代理/Run 状态缓存都有上限,进度轮询不会重叠,转录查找改用索引避免每个 chunk 全表扫描,超大工具输出在展示副本中截断,`desktop.log` 在启动间按 8MB 轮转。
+
+### 🐛 问题修复
+
+- **卡住检测不再误判仅有推理输出的进展，并保留终止原因。** 产生推理输出的轮次现在也算进展，因此持续调用工具、但没有面向用户文本的推理模型不会再被判为卡住；既无文本也无推理的连续轮次仍会被静默循环守卫终止。`ErrAgentStuck` 现在携带静默轮次数，并通过 Run 结果与错误事件投影，Runtime `ErrorInfo` 与各适配器都可以说明循环守卫为何终止。
+
+- **部分应用过的会话列表迁移现在会自愈。** 有些数据库在 Run 索引被加入 v49 迁移体之前就记录了 schema 版本 49，此后已记录版本会被直接跳过，`idx_session_runs_session_status_started` 永远缺失。版本 50 用 `CREATE INDEX IF NOT EXISTS` 重新声明该索引，这些数据库下次启动时收敛，新库保持不变。
+
+- **后台 Responses 任务在挂接期间收到停止时不再记为失败。** 并发 WAL 读可能让停止操作在后台 coordinator 挂接 Agent 之前把 Run 标为 cancelling。此前该分支会落入默认 `failed` 终态，并可能遗留 provider 侧任务；现在保留 `cancelled`，并显式取消远端 Responses 任务。
+
+## v1.3.106
+
+### 🐛 问题修复
+
+- **Desktop 聊天与首页背景不再渲染画布点阵。** 移除了装饰性点阵覆盖层，使背景图与表面处理在两种视图中保持干净。
+
+## v1.3.105
+
+### 🐛 问题修复
+
+- **Desktop 隐藏窗口样式切换并统一平台默认值。** macOS 主机在 `desktop-store.json` 加载前即解析为 macOS 窗体，Windows/Linux 主机解析为 Windows 11 窗体；手动切换入口暂时隐藏在功能开关后，但保留实现以便后续恢复。
+
+## v1.3.105-pre-7
+
+### 🐛 问题修复
+
+- **在工具调用轮次结束的 Run 现在能进入终态。** 当 assistant 消息与工具结果已经提交时，终态 turn-end 被重新挂到更早的条目下，会被叶子围栏永久拒绝，导致 Run 停留在 terminalizing 且执行租约无法释放。现在 turn-end 锚定到管理器当前叶子，TUI 也会把未完成任务映射为规范的 `RunStateIncomplete` 状态。
+
+## v1.3.105-pre-6
+
+### ✨ 新功能
+
+- **Desktop 显示并查看子代理。** 会话头部现在显示当前会话的子代理数量与运行状态；点击可打开只读面板，列出全部子代理及其状态，并使用聊天窗口同一套消息、工具卡与思考块样式查看单个子代理的转录。ACP 新增 `mothx/subagent/list` 与 `mothx/subagent/messages` 只读投影及 `subagentPanel` 能力键，Desktop 不再只能依赖零散的 started/terminal 卡片。
+
+### 🐛 问题修复
+
+- **停止路径在 TUI/ACP 统一为共享 Runtime 决策，并修复竞态与后台终态。** ACP 的 `session/cancel` 现在在 `cancelMu` 下快照 Run ID，避免与 prompt 安装身份竞争；共享停止投影受有界 context 约束，不再阻塞 JSON-RPC 读循环。TUI 的中止/重置把 canonical stop 与终态写入移出 Bubble Tea 更新循环（退出时等待完成），避免 UI 卡顿。已被其他 owner 终态化的 canonical Run 会被本地执行收养（即使终态不同），并走完整终态广播，不再让会话永久 busy。恢复中的 Responses 后台任务被用户停止时现在记为 `cancelled` 而不是 `failed`。
+
+## v1.3.105-pre-5
+
+### 💥 行为变更
 
 - **内置的 Windows BusyBox 现在要求 Windows 10 及以上。** `busybox-windows-x86.exe` 与 `busybox-windows-x86_64.exe` 改用该 fork 的 UTF-8 配置重新构建（x86_64 用 `mingw64u_defconfig`，x86 用 `mingw32w_defconfig`），带有 UTF-8 应用程序清单（`activeCodePage=UTF-8`）以及 `FEATURE_UTF8_INPUT`、`FEATURE_UTF8_CONSOLE`、`FEATURE_UTF8_AUTODETECT`、`FEATURE_UTF8_CHILD_ENV` 与 `UNICODE_SUPPORT`。非 ASCII 的 `sh -c` 命令文本现在以 UTF-8 传入 argv，不再被降级为系统 ANSI 代码页（简体中文 Windows 上为 GBK），子进程也保持 UTF-8 环境基线。由于构建时设置了 `FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED=y`，在 Windows 7/8 上 BusyBox 会拒绝启动；此时 `bash` 工具会像「BusyBox 不可用」一样自动回退到 PowerShell，命令仍可执行（只是没有 UTF-8 基线）。MothX 的支持范围仍标注为 Windows 10/11。
 
@@ -1624,10 +1705,6 @@ Source: https://mothx.net/zh/changelog.md
 - **真正的 UTF-8 文本不再被误当作 GBK 重解码。** 两种编码在双字节序列上存在重叠，此前的「整块」启发式会对整段捕获只做一次判断，把真正的 UTF-8 文本重解码成无关的汉字（`Привет` → `袩褉懈胁械褌`，混有中文的行则变成 `涓枃`）。现在改为按非 ASCII 连续段分别判定，且仅当整条流没有更强的 UTF-8 证据时才可能翻转：只要 UTF-8 读法中存在 CJK 字符或任何 3/4 字节序列，就绝不再二次猜测；只有短的双字节片段才有资格翻转。字节本身与旧编码一致的情形（例如单个 GBK `写`）仍然照旧解码。
 
 - **内置资产变化时会刷新已解压的 Windows BusyBox。** 已解压的副本会按 SHA-256 与内置资产比对，不同则以原子方式替换，因此升级后的 MothX 不会继续运行旧 shell。若正在运行的 BusyBox 锁住可执行映像，则本次运行继续使用旧副本，并在下次启动时重试刷新。
-
-- **停止路径在 TUI/ACP 统一为共享 Runtime 决策，并修复竞态与后台终态。** ACP 的 `session/cancel` 现在在 `cancelMu` 下快照 Run ID，避免与 prompt 安装身份竞争；共享停止投影受有界 context 约束，不再阻塞 JSON-RPC 读循环。TUI 的中止/重置把 canonical stop 与终态写入移出 Bubble Tea 更新循环（退出时等待完成），避免 UI 卡顿。已被其他 owner 终态化的 canonical Run 会被本地执行收养（即使终态不同），并走完整终态广播，不再让会话永久 busy。恢复中的 Responses 后台任务被用户停止时现在记为 `cancelled` 而不是 `failed`。
-
-- **Desktop 显示并查看子代理。** 会话头部现在显示当前会话的子代理数量与运行状态；点击可打开只读面板，列出全部子代理及其状态，并使用聊天窗口同一套消息、工具卡与思考块样式查看单个子代理的转录。ACP 新增 `mothx/subagent/list` 与 `mothx/subagent/messages` 只读投影及 `subagentPanel` 能力键，Desktop 不再只能依赖零散的 started/terminal 卡片。
 
 ## v1.3.105-pre-1
 
@@ -5913,6 +5990,34 @@ mothx pure --prune-unreferenced
 
 描述附件的数据库记录被归档后，其存储字节就再也无法寻址；删除会话、或内容已写完但记录写入失败，也会造成同样的残留。因此回收并不依赖重置：Runtime 在接受新附件时会顺手清扫私有存储（每进程每小时至多一次），并由自己的 cron 维护任务每日再执行一次，且只删除同时满足两个条件的目录——没有任何记录引用它，并且它最后一次写入已早于附件保留期外加 24 小时缓冲（默认保留 7 天，即共 8 天）。正是这个时间下限保证了回收不可能删掉“恢复归档后仍可用”的数据。`--prune-unreferenced` 会立即执行同一次清扫，并报告已回收与因太新而保留的数量；`channels/` 与 `knowledge-bases/` 永不受它影响。定时清扫由 `settings.json` 的可选 `maintenance` 字段控制（`reclaimAttachmentStorage`、`storageReconcileSchedule`），见[配置文档](configuration.md#maintenance后台维护)。
 
+### `maintenance` - 检查与压缩会话数据库
+
+会话存储维护永远不会删除转录消息。`status` 是只读的：报告数据库大小、转录与子代理条目数、工具执行记录数与可回收的空闲页。`vacuum` 执行 SQLite `VACUUM` 释放空闲页并报告前后状态；`--dry-run` 只预览可回收空间，不重写数据库。两个命令都不会清理任何工具执行记录。
+
+```
+mothx maintenance status [flags]
+mothx maintenance vacuum [flags]
+```
+
+| 标志 | 简写 | 默认值 | 描述 |
+|------|------|--------|------|
+| `--session-dir` | - | 已配置的会话目录 | 要检查或压缩的会话目录 |
+| `--dry-run` | - | false | 仅 `vacuum`：只报告可回收空闲页，不重写数据库 |
+
+示例：
+```bash
+# 查看数据库大小、转录计数与可回收空间
+mothx maintenance status
+
+# 预览 VACUUM 可回收的空间
+mothx maintenance vacuum --dry-run
+
+# 重写 sessions.db 并释放空闲页
+mothx maintenance vacuum
+```
+
+`VACUUM` 会重写整个数据库，需要与数据库大小相当的可用磁盘空间，并在整个重写期间持有 SQLite 写锁；请在其他 MothX 进程空闲时执行。Runtime 的定时维护任务也会执行同样的可选 VACUUM，并且只对终态工具执行幂等记录应用配置的保留期；两条路径都不会删除转录消息。详见[配置](configuration.md#maintenance)。
+
 ### `worktree` - 隔离 Git Worktree
 
 创建、列出、重置与删除由共享 Runtime 管理的隔离 git worktree。默认位于 `<data-dir>/worktrees`，注册在 sessions 数据库中，并由 TUI/CLI、ACP/Desktop 与子 Agent 共享。是否允许创建由 `settings.json` 的 `worktree.enabled` 控制；关闭创建后仍可列出、重置与删除已有 worktree。
@@ -6543,7 +6648,7 @@ MothX 使用两个配置文件:
 | `retry` | object | *(见下文)* | API 调用重试设置 |
 | `approval` | object | *(见下文)* | Bash 命令审批设置 |
 | `worktree` | object | *(见下文)* | 隔离 git worktree 设置 |
-| `maintenance` | object | *(见下文)* | Runtime 自有后台维护（附件存储回收） |
+| `maintenance` | object | *(见下文)* | Runtime 自有后台维护（附件回收与会话存储维护） |
 | `webSearch` | object | *(见下文)* | DeepSeek 网页搜索/抓取工具设置 |
 | `updateCheck` | bool | `true` | 启用 npm 版本更新检测通知 |
 
@@ -7174,16 +7279,21 @@ MothX 会自动搜索并加载以下文件:
 
 | 字段 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
-| `defaultMarket` | string | `"skillhub.cn"` | 打开市场时默认选择的市场 |
+| `defaultMarket` | string | `"yuandun"` | 打开市场时默认选择的市场；不可用时回退到首个已启用市场 |
 | `defaultInstallScope` | string | `"project"` | 默认安装位置：`project` 或 `global` |
 | `officialHandles` | string array | 内置官方 handle | 视为官方发布者的市场 handle |
-| `markets` | object array | 内置市场 | 自定义市场定义：`{ id, name, siteURL, apiURL, enabled, apiToken }` |
+| `markets` | object array | 内置市场 | 自定义市场定义：`{ id, name, siteURL, apiURL, enabled, apiToken }`；源盾（`id: "yuandun"`）默认使用 `https://yuandun.gitee.com` |
 
 ```json
 {
   "skillHub": {
-    "defaultMarket": "skillhub.cn",
-    "defaultInstallScope": "project"
+    "defaultMarket": "yuandun",
+    "defaultInstallScope": "project",
+    "markets": [
+      { "id": "yuandun", "name": "源盾", "enabled": true, "apiURL": "https://yuandun.gitee.com" },
+      { "id": "skillhub.cn", "name": "SkillHub.cn", "enabled": true },
+      { "id": "clawhub.ai", "name": "ClawHub.ai", "enabled": true }
+    ]
   }
 }
 ```
@@ -7535,11 +7645,17 @@ Runtime 自有的后台维护配置。它们不是用户自动化任务：MothX 
 |------|------|--------|------|
 | `reclaimAttachmentStorage` | bool | `true` | 回收已不再被任何持久记录引用的附件存储 |
 | `storageReconcileSchedule` | string | `@daily` | 该回收的频率（`@daily`、`@every 12h` 或 5 段 cron 表达式） |
+| `reclaimSessionStorage` | bool | `true` | 运行会话存储维护；它永远不会删除转录消息 |
+| `sessionStorageSchedule` | string | `@daily` | 会话存储维护的频率（`@daily`、`@every 12h` 或 5 段 cron 表达式） |
+| `toolExecutionRetentionDays` | int | `0` | 已完成/已放弃的工具执行幂等记录保留天数；`0` 表示永久保留 |
+| `vacuumSessionStorage` | bool | `false` | 清理后执行 `VACUUM` 释放空闲页 |
 
 ```json
 {
   "maintenance": {
-    "reclaimAttachmentStorage": false
+    "reclaimAttachmentStorage": false,
+    "toolExecutionRetentionDays": 90,
+    "vacuumSessionStorage": true
   }
 }
 ```
@@ -7547,6 +7663,8 @@ Runtime 自有的后台维护配置。它们不是用户自动化任务：MothX 
 回收只处理会话目录下 `artifacts/` 存储中同时满足两个条件的目录：（1）没有任何 `session_attachments` 行引用它，**且**（2）最后一次写入已早于附件保留期外加 24 小时缓冲（默认保留 7 天，即共 8 天）。无法读取会话数据库时一律不删（fail closed），不跟随符号链接，也只处理与自己生成的附件 ID 形状一致的目录，因此无关数据不会被当作可回收存储。正是这个时间下限，保证了回收不可能删掉“恢复 `mothx pure` 归档后仍可用”的数据。详见 [`mothx pure`](cli-reference.md#pure---归档会话数据库)。
 
 `storageReconcileSchedule` 写错时会回退到默认频率并输出 `[cron]` 日志；只改频率也只会更新计定任务的 schedule，运行次数与状态保持不变。关闭回收会在下次调度器启动时移除该计划任务；即使旧进程留下的任务行被触发，也会被拒绝而不是删任何东西。
+
+会话存储维护永久保留所有转录消息：不会删除 `entries`、`sub_entries`、compaction 条目、content override 或 EventStore 内容。它只可能清理早于 `toolExecutionRetentionDays` 的 `completed`/`abandoned` 工具执行幂等记录（默认 `0` 表示全部保留）；`running`、`interrupted`、`retry_requested` 记录始终保留，避免不确定的工具副作用失去围栏。每次运行都会执行 `PRAGMA optimize`，并为最多 512 个尚未建索引的会话补建派生内容搜索索引（最新的会话优先）；无法读取的存储会跳过并在下次重试。`vacuumSessionStorage` 额外重写数据库文件以释放空闲页，默认关闭，因为 `VACUUM` 会在整个重写期间持有 SQLite 写锁。
 
 ### 项目级允许规则（`allow.json`）
 
@@ -7787,6 +7905,7 @@ settings.json.bak_20260715-143000
 | `VIBECODING_DEBUG` | 启用 provider 级请求/响应调试输出 | `export VIBECODING_DEBUG=1` |
 | `VIBECODING_PPROF_ADDR` | 设置 `--debug` 启动的 pprof 监听地址 | `export VIBECODING_PPROF_ADDR=127.0.0.1:6061` |
 | `MOTHX_SQLITE_SYNCHRONOUS` | 会话库 SQLite 持久性级别：默认 `NORMAL`（WAL 推荐组合，提交不逐次 fsync）；设为 `FULL` 恢复每次提交 fsync | `export MOTHX_SQLITE_SYNCHRONOUS=FULL` |
+| `MOTHX_SQLITE_QUICK_CHECK` | 启动时 SQLite 完整性检查：默认开启；超大数据库可设为 `off` 跳过。`mothx doctor` 仍会执行按需的只读检查 | `export MOTHX_SQLITE_QUICK_CHECK=off` |
 | `VIBECODING_NO_UPDATE_CHECK` | 禁用版本更新检测 | `export VIBECODING_NO_UPDATE_CHECK=1` |
 | `VIBECODING_NPM_REGISTRY` | 覆盖 npm registry 地址 | `export VIBECODING_NPM_REGISTRY=https://registry.npmjs.org` |
 
@@ -9542,7 +9661,7 @@ mothx --session <session-file.db>
 
 ### 在线 Skill 市场
 
-MothX 兼容 SkillHub / ClawHub，支持：
+MothX 兼容源盾 / SkillHub / ClawHub，支持：
 
 - **技能安装**：一键安装在线技能
 - **Cron 基础设施**：定时执行技能
@@ -12761,7 +12880,7 @@ mothx serve init-config project  # 生成 .mothx/serve.json
 
 - **聊天界面**：SSE 流式输出，工具调用/结果渲染，计划卡片，以及 `plan`、`agent`、`yolo` 模式的会话运行时菜单。提交的运行会保留持久化会话历史；支持在 run 中传入图片、会话工具开关、技能和显式模式。运行时模式和能力修改会立即采用服务端返回的权威状态，会话列表刷新则作为尽力而为的后台同步；重连后输入区会正确反映服务端排队/运行状态。
 - **审批中心**：查看待处理工具审批，一次性批准或拒绝，持久化命令/路径放行规则，并查看会话审批审计历史。
-- **会话管理**：分页浏览，键盘快捷键，历史会话，运行时快照，能力开关及可安全重连恢复的审批状态。历史会话按最后使用时间倒序排列，最新回复的会话位于最上方；会话管理页面会显示最后回复时间。页面刷新后，活动 run 直到进入终态前仍会保持会话忙碌。
+- **会话管理**：分页浏览，键盘快捷键，历史会话，运行时快照，能力开关及可安全重连恢复的审批状态。历史会话按最后使用时间倒序排列，最新回复的会话位于最上方；会话管理页面会显示最后回复时间。页面刷新后，活动 run 直到进入终态前仍会保持会话忙碌。`GET /api/sessions` 默认有界：未指定 `limit` 时返回前 100 个会话以及 `total`、`limit`、`offset`、`hasMore`；`scope=active` 与 `/api/sessions/active` 只投影内存中的会话池，不再加载全部历史。
 - **Responses 后台运行**：当 `openai-responses` provider 启用 `responses.background` 时，Serve 会将支持的请求提交为远程后台任务，持久化 response lineage 与归档输出，轮询直到完成，在重启后恢复可恢复任务，并执行本地 function/custom tool 调用。经认证的 run API 支持 `GET /api/responses/runs/{localRunID}?session_id={sessionID}` 以及 `cancel`、`reconnect`、`abandon` 操作；详见[配置](configuration.md#responses-字段)。
 - **设置编辑**：Provider/Model 配置、Defaults、Web 搜索、MCP、上下文文件、压缩、沙箱、重试、审批、Provider 配置。保存 provider、app 或 Serve 配置后，相关状态与工具可用性会立即刷新，无需重启服务。MCP 设置用于编辑全局 `mcp.json`；聊天工具栏可为当前会话编辑项目级 MCP 配置。
 - **DeepSeek Web Search 回退**：启用后，共享 Runtime 会为没有原生托管搜索的 provider 注册本地 `web_search` 工具，后端可通过 `webSearch.backend` 选择 DeepSeek 官方 Search API 或腾讯元宝 SearchPro；DeepSeek 后端还会注册 `web_fetch`。OpenAI Responses 继续保持 provider 原生托管搜索；Anthropic Messages 在 `webSearch` 启用时使用其 provider 原生托管搜索。两者都优先于本地 `web_search` 函数。
@@ -12902,7 +13021,7 @@ MothX 的会话设计在不同运行模式下有所区别：
 - 进程崩溃（kill -9、panic）不丢失任何数据；
 - 操作系统崩溃或断电时，数据库不会损坏，但最近一次 checkpoint 之后（通常为秒级）的提交可能回退；缺失的 run 终态由租约过期 → 孤儿恢复路径收敛，会话不会永久停留在“运行中”。
 
-对断电敏感的部署（不稳定电源、部分网络盘等）可用环境变量 `MOTHX_SQLITE_SYNCHRONOUS=FULL` 恢复旧的每提交 fsync 行为；该变量按进程生效，新旧进程混布共享同一库文件是安全的。以 `--debug` 启动时，`/debug/vars` 端点的 `mothx_sqlite` 指标（busy 重试次数与退避总时长、事务 begin 次数/等待总时长/单次最大等待与按桶近似的 p50/p99、checkpoint 次数/失败与帧计数、每个已打开库的 WAL 大小与连接池等待计数）以及 `mothx_runtime_lease` 指标（租约围栏丢失次数与每库心跳健康）可用于观测跨进程写锁竞争与租约健康。完整设计与压测矩阵见 `docs/proposal/sqlite-write-pressure-reduction-proposal.md`。
+对断电敏感的部署（不稳定电源、部分网络盘等）可用环境变量 `MOTHX_SQLITE_SYNCHRONOUS=FULL` 恢复旧的每提交 fsync 行为；该变量按进程生效，新旧进程混布共享同一库文件是安全的。会话库使用前会在启动阶段执行 SQLite `quick_check`。超大数据库可用 `MOTHX_SQLITE_QUICK_CHECK=off` 跳过这项固定开销；`mothx doctor` 仍会执行按需的只读完整性检查，并报告 `sessions.integrity`。会话存储维护（`maintenance.reclaimSessionStorage`）永远不会删除转录消息：只有当 `toolExecutionRetentionDays` 配置大于 `0` 时才会清理已完成/已放弃的工具执行幂等记录，可选择执行 `VACUUM`，并会为最多 512 个会话补建派生搜索索引与列表展示投影。以 `--debug` 启动时，`/debug/vars` 端点的 `mothx_sqlite` 指标（busy 重试次数与退避总时长、事务 begin 次数/等待总时长/单次最大等待与按桶近似的 p50/p99、checkpoint 次数/失败与帧计数、每个已打开库的 WAL 大小与连接池等待计数）以及 `mothx_runtime_lease` 指标（租约围栏丢失次数与每库心跳健康）可用于观测跨进程写锁竞争与租约健康。完整设计与压测矩阵见 `docs/proposal/sqlite-write-pressure-reduction-proposal.md`。
 
 ## 会话操作
 
@@ -13064,15 +13183,17 @@ Source: https://mothx.net/zh/skillhub.md
 
 # 在线 Skill 市场集成
 
-MothX 兼容市面上的 Skill 市场（SkillHub / ClawHub），可以直接使用这些平台发布的技能包。
+MothX 兼容市面上的 Skill 市场（源盾 / SkillHub / ClawHub），可以直接使用这些平台发布的技能包。
 
 | 平台 | 地址 | 区域 |
 |------|------|------|
+| **源盾（Yuandun）** | [https://yuandun.gitee.com](https://yuandun.gitee.com/) | 中国 |
 | **SkillHub** | [https://skillhub.cn](https://skillhub.cn/) | 中国 |
 | **ClawHub** | [https://clawhub.ai](https://clawhub.ai/) | 海外 |
 
-MothX 内建了 TUI Skill 市场，可以浏览、搜索、查看详情并安装 SkillHub / ClawHub
-公开技能包。使用 `/skillhub` 打开。
+MothX 内建了 TUI Skill 市场，可以浏览、搜索、查看详情并安装源盾 / SkillHub / ClawHub
+公开技能包。使用 `/skillhub` 打开。源盾排在市场列表最前面，并作为默认市场。
+MothX 会为源盾请求带上 `X-Client-Source: MothX` 与 `User-Agent: MothX`，源盾用该头统计下载来源。
 
 本指南涵盖：
 
@@ -13093,14 +13214,14 @@ SkillHub / ClawHub adapter 和安全安装器，支持 Official、Browse、Searc
 
 | 按键 | 行为 |
 |------|------|
-| `Tab` / `Shift+Tab` | 切换 SkillHub.cn / ClawHub.ai |
+| `Tab` / `Shift+Tab` | 切换源盾 / SkillHub.cn / ClawHub.ai |
 | `[` / `]` | 切换 Browse / Search / Official |
 | `/` | 编辑搜索词，`Enter` 执行搜索 |
 | `Up` / `Down` | 选择 Skill |
-| `Left` / `Right` | SkillHub 页码或 ClawHub cursor 前后翻页 |
+| `Left` / `Right` | 游标市场（源盾 / ClawHub）或 SkillHub 页码翻页 |
 | `Enter` | 加载详情和文件清单 |
 | `d` | 打开可滚动的文件、安全报告和 evaluation 明细 |
-| `c` / `s` | 在 SkillHub.cn Browse 中切换分类 / 排序 |
+| `c` / `s` | 在源盾或 SkillHub.cn Browse 中切换分类 / 排序 |
 | `i` | 安装到当前 scope |
 | `u` | 更新有新版本的已安装 Skill |
 | `a` | 安装并在当前 session 激活 |
@@ -13109,12 +13230,14 @@ SkillHub / ClawHub adapter 和安全安装器，支持 Official、Browse、Searc
 | `Esc` | 关闭市场 |
 
 列表使用 `DL` 显示下载量，SkillHub.cn Browse 按下载量降序排列。
+源盾 Browse 使用市场游标分页，同样支持分类与排序切换。
 `[official]` 表示由配置的 Official 账号发布；`[certified]` 表示发布方已认证；
 `[verified]` 是市场返回的 Skill 认证字段；`[risk]` 表示存在可疑风险。这些标记会分开显示，
 因为账号来源不等同于平台认证。
 市场提供相应数据时，详情还会显示来源、分类、tags、安全扫描摘要、evaluation 状态和下载端点；
 `d` 明细视图会区分主下载来源和回退来源。
 SkillHub.cn Browse 支持分类过滤，以及下载量、star、安装量、score、更新时间降序切换。
+源盾 Browse 通过同一组快捷支持固定分类以及 COMPREHENSIVE / DOWNLOADS / STARS / LATEST 排序。
 已安装 Skill 有新版本时显示 `[update]`，按 `u` 更新；若该 Skill 已在当前 session 激活，
 更新后会重新加载其上下文。
 
@@ -13138,7 +13261,7 @@ session 的 agent，使下一次请求包含该技能。
 
 ## 技能格式兼容
 
-MothX 的技能格式与 SkillHub / ClawHub 标准完全一致：
+MothX 的技能格式与源盾 / SkillHub / ClawHub 标准完全一致：
 
 ```
 skill-name/
@@ -13233,15 +13356,21 @@ EOF
 {
   "skillsDir": "~/.mothx/skills",
   "skillHub": {
-    "defaultMarket": "skillhub.cn",
+    "defaultMarket": "yuandun",
     "defaultInstallScope": "project",
-    "officialHandles": ["user_0064faa7"]
+    "officialHandles": ["user_0064faa7"],
+    "markets": [
+      { "id": "yuandun", "name": "源盾", "enabled": true, "apiURL": "https://yuandun.gitee.com" },
+      { "id": "skillhub.cn", "name": "SkillHub.cn", "enabled": true },
+      { "id": "clawhub.ai", "name": "ClawHub.ai", "enabled": true }
+    ]
   }
 }
 ```
 
-`officialHandles` 控制 SkillHub.cn Official tab 聚合哪些账号。项目技能目录会自动加载，
-无需额外配置。
+`officialHandles` 控制 SkillHub.cn Official tab 聚合哪些账号。源盾默认使用
+`https://yuandun.gitee.com` 作为 `apiURL`，只有使用镜像时才需要覆盖。源盾排在
+SkillHub.cn 之前，并作为默认市场。项目技能目录会自动加载，无需额外配置。
 
 ---
 
