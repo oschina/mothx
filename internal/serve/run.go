@@ -111,6 +111,13 @@ type channelToolsResponse struct {
 
 type activeSessionManager interface {
 	ListActiveSessions() []openaiapi.ActiveSessionInfo
+	// ListActiveSessionsPage returns one bounded page plus the total number of
+	// sessions with messages. Callers must not load the full history to slice it.
+	ListActiveSessionsPage(limit, offset int) ([]openaiapi.ActiveSessionInfo, int, error)
+	// ListActivePoolSessions returns only this process's in-memory sessions.
+	ListActivePoolSessions() []openaiapi.ActiveSessionInfo
+	// GetSessionWorkDir resolves one session without listing the history.
+	GetSessionWorkDir(id string) (string, error)
 	DeleteActiveSession(id string) (bool, error)
 	GetSessionMessages(id string) ([]openaiapi.SessionMessageEntry, error)
 	GetSessionToolResult(id, toolCallID string) (*openaiapi.SessionToolResultDetail, error)
@@ -1246,7 +1253,9 @@ func (rt *channelRuntime) statusSnapshot(sessions activeSessionManager) serveSta
 			}
 		}
 		if sessionCount == 0 {
-			sessionCount = len(sessions.ListActiveSessions())
+			if _, total, err := sessions.ListActiveSessionsPage(1, 0); err == nil {
+				sessionCount = total
+			}
 		}
 	}
 	status := serveStatus{
@@ -1563,43 +1572,57 @@ func (rt *channelRuntime) handleSessions(sessions activeSessionManager) http.Han
 			return
 		}
 
-		limitStr := r.URL.Query().Get("limit")
-		offsetStr := r.URL.Query().Get("offset")
-		limit, _ := strconv.Atoi(limitStr)
-		offset, _ := strconv.Atoi(offsetStr)
-
-		// Paginated path: query the DB directly with LIMIT/OFFSET.
-		if limit > 0 {
-			srv, ok := sessions.(*openaiapi.Server)
-			if !ok {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server not available"})
-				return
-			}
-			dir := srv.SessionDir()
-			search := strings.TrimSpace(r.URL.Query().Get("search"))
-			result, total, err := rt.listPersistedSessions(dir, search, limit, offset)
-			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]any{"sessions": result, "total": total})
-			return
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		if limit <= 0 {
+			limit = openaiapi.DefaultSessionListLimit
+		}
+		if offset < 0 {
+			offset = 0
 		}
 
 		scope := r.URL.Query().Get("scope")
 		if scope == "" {
 			scope = "all"
 		}
-		list := sessions.ListActiveSessions()
 		switch scope {
 		case "all":
 		case "active":
-			list = filterActiveSessions(list)
+			list := sessions.ListActivePoolSessions()
+			total := len(list)
+			page := paginateSessionInfos(list, limit, offset)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"sessions": page, "total": total, "limit": limit, "offset": offset,
+				"hasMore": offset+len(page) < total,
+			})
+			return
 		default:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid scope: expected all or active"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"sessions": list})
+
+		var (
+			result []openaiapi.ActiveSessionInfo
+			total  int
+			err    error
+		)
+		if srv, ok := sessions.(*openaiapi.Server); ok {
+			if search := strings.TrimSpace(r.URL.Query().Get("search")); search != "" {
+				result, total, err = rt.listPersistedSessions(srv.SessionDir(), search, limit, offset)
+			} else {
+				result, total, err = srv.ListActiveSessionsPage(limit, offset)
+			}
+		} else {
+			result, total, err = sessions.ListActiveSessionsPage(limit, offset)
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"sessions": result, "total": total, "limit": limit, "offset": offset,
+			"hasMore": offset+len(result) < total,
+		})
 	}
 }
 
@@ -1833,7 +1856,7 @@ func (rt *channelRuntime) handleSessionByID(sessions activeSessionManager) http.
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "API server not ready"})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"sessions": filterActiveSessions(sessions.ListActiveSessions())})
+			writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions.ListActivePoolSessions()})
 			return
 		}
 		if len(parts) == 3 && parts[1] == "approvals" && r.Method == http.MethodPost {
@@ -2526,14 +2549,15 @@ func writeLifecycleError(w http.ResponseWriter, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
-func filterActiveSessions(list []openaiapi.ActiveSessionInfo) []openaiapi.ActiveSessionInfo {
-	active := make([]openaiapi.ActiveSessionInfo, 0, len(list))
-	for _, sess := range list {
-		if sess.Active {
-			active = append(active, sess)
-		}
+func paginateSessionInfos(list []openaiapi.ActiveSessionInfo, limit, offset int) []openaiapi.ActiveSessionInfo {
+	if offset >= len(list) {
+		return nil
 	}
-	return active
+	end := offset + limit
+	if end > len(list) {
+		end = len(list)
+	}
+	return list[offset:end]
 }
 
 func channelLabel(channelType, channelID string) string {

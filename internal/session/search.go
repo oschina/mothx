@@ -3,7 +3,11 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/oschina/mothx/internal/dao"
 	"github.com/oschina/mothx/internal/platform"
@@ -20,6 +24,197 @@ type sessionSearchProjection struct {
 	title   string
 	preview string
 	texts   []string
+}
+
+// sessionSearchContentReplays counts the sessions whose persisted content a
+// search replayed. Tests use it to pin that the FTS index narrows the replay
+// set instead of scanning every session; it carries no runtime meaning.
+var sessionSearchContentReplays atomic.Uint64
+
+// SessionSearchContentReplayCount reports the process-local number of session
+// content replays performed by search.
+func SessionSearchContentReplayCount() uint64 { return sessionSearchContentReplays.Load() }
+
+// sessionSearchProjectionLoads counts actual EventStore search-projection
+// reads. A cache hit must not increment it; tests use the counter to prove the
+// cache path is taken.
+var sessionSearchProjectionLoads atomic.Uint64
+
+// SessionSearchProjectionLoadCount reports how many times a search actually
+// read and replayed an EventStore projection.
+func SessionSearchProjectionLoadCount() uint64 { return sessionSearchProjectionLoads.Load() }
+
+// The EventStore search projection is the expensive part of verifying an FTS
+// candidate: it reads and replays the whole session. Cache it per physical log
+// fingerprint so repeated searches over unchanged sessions do not repeat that
+// work. Fingerprints are stat-only and change on every append/rotation, so a
+// cached projection can never outlive the bytes it came from.
+const (
+	maxSearchProjectionCacheEntries   = 128
+	maxSearchProjectionCacheBytes     = 32 << 20
+	maxSearchProjectionCacheEntrySize = 4 << 20
+)
+
+type sessionSearchProjectionCacheEntry struct {
+	fingerprint string
+	projection  sessionSearchProjection
+	bytes       int
+}
+
+type sessionSearchProjectionCache struct {
+	mu      sync.Mutex
+	entries map[string]sessionSearchProjectionCacheEntry
+	order   []string
+	bytes   int
+}
+
+var searchProjectionCache = &sessionSearchProjectionCache{entries: map[string]sessionSearchProjectionCacheEntry{}}
+
+func sessionSearchProjectionCacheKey(sessionDir, sessionID string) string {
+	return sessionDir + "\x00" + sessionID
+}
+
+func sessionSearchProjectionSize(projection sessionSearchProjection) int {
+	size := len(projection.title) + len(projection.preview)
+	for _, text := range projection.texts {
+		size += len(text)
+	}
+	return size
+}
+
+func (c *sessionSearchProjectionCache) get(key, fingerprint string) (sessionSearchProjection, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || entry.fingerprint != fingerprint {
+		return sessionSearchProjection{}, false
+	}
+	return entry.projection, true
+}
+
+func (c *sessionSearchProjectionCache) removeLocked(key string) {
+	entry, ok := c.entries[key]
+	if !ok {
+		return
+	}
+	delete(c.entries, key)
+	c.bytes -= entry.bytes
+	for i, existing := range c.order {
+		if existing == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
+}
+
+func (c *sessionSearchProjectionCache) put(key, fingerprint string, projection sessionSearchProjection) {
+	size := sessionSearchProjectionSize(projection)
+	if size > maxSearchProjectionCacheEntrySize {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.removeLocked(key)
+	for len(c.entries) >= maxSearchProjectionCacheEntries || c.bytes+size > maxSearchProjectionCacheBytes {
+		if len(c.order) == 0 {
+			return
+		}
+		c.removeLocked(c.order[0])
+	}
+	c.entries[key] = sessionSearchProjectionCacheEntry{fingerprint: fingerprint, projection: projection, bytes: size}
+	c.order = append(c.order, key)
+	c.bytes += size
+}
+
+// sessionSearchResultCache stores a completed query page behind the store-wide
+// write version. A cached page avoids both the candidate SQL pass and every
+// content replay, while the version makes invalidation exact instead of
+// time-based.
+const (
+	maxSearchResultCacheEntries = 64
+	maxSearchResultCacheBytes   = 8 << 20
+)
+
+type sessionSearchResultCacheEntry struct {
+	version int64
+	details []SessionDetail
+	total   int
+	bytes   int
+}
+
+type sessionSearchResultCache struct {
+	mu      sync.Mutex
+	entries map[string]sessionSearchResultCacheEntry
+	order   []string
+	bytes   int
+}
+
+var searchResultCache = &sessionSearchResultCache{entries: map[string]sessionSearchResultCacheEntry{}}
+
+var (
+	sessionSearchResultCacheHits   atomic.Uint64
+	sessionSearchResultCacheMisses atomic.Uint64
+)
+
+// SessionSearchResultCacheHits and SessionSearchResultCacheMisses are
+// process-local telemetry. Tests use them to prove a repeated query is served
+// from the cache and a write invalidates it; they carry no runtime meaning.
+func SessionSearchResultCacheHits() uint64   { return sessionSearchResultCacheHits.Load() }
+func SessionSearchResultCacheMisses() uint64 { return sessionSearchResultCacheMisses.Load() }
+
+func sessionSearchResultBytes(details []SessionDetail) int {
+	size := 0
+	for i := range details {
+		detail := details[i]
+		size += 160 + len(detail.ID) + len(detail.Path) + len(detail.Name) + len(detail.Cwd) +
+			len(detail.ChannelType) + len(detail.ChannelID) + len(detail.ParentSession) +
+			len(detail.ForkKind) + len(detail.ExpertID) + len(detail.Preview)
+	}
+	return size
+}
+
+func (c *sessionSearchResultCache) get(key string, version int64) (sessionSearchResultCacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || entry.version != version {
+		return sessionSearchResultCacheEntry{}, false
+	}
+	return entry, true
+}
+
+func (c *sessionSearchResultCache) removeLocked(key string) {
+	entry, ok := c.entries[key]
+	if !ok {
+		return
+	}
+	delete(c.entries, key)
+	c.bytes -= entry.bytes
+	for i, existing := range c.order {
+		if existing == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
+}
+
+func (c *sessionSearchResultCache) put(key string, version int64, details []SessionDetail, total int) {
+	size := sessionSearchResultBytes(details)
+	if size > maxSearchResultCacheBytes {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.removeLocked(key)
+	for len(c.entries) >= maxSearchResultCacheEntries || c.bytes+size > maxSearchResultCacheBytes {
+		if len(c.order) == 0 {
+			return
+		}
+		c.removeLocked(c.order[0])
+	}
+	c.entries[key] = sessionSearchResultCacheEntry{version: version, details: details, total: total, bytes: size}
+	c.order = append(c.order, key)
+	c.bytes += size
 }
 
 // sessionSearchScan is the shared result of one search pass. total and page are
@@ -50,14 +245,104 @@ func SearchAllDetailed(sessionDir, query string, limit, offset int) ([]SessionDe
 // legacy ListAll/ListAllDetailed WithSearch entry points. messagesOnly keeps
 // their historical candidate filter without introducing a second matcher.
 func searchAllDetailed(sessionDir, query string, limit, offset int, filter dao.SessionListFilter) ([]SessionDetail, int, error) {
+	if sessionDir == "" {
+		sessionDir = platform.SessionDir()
+	}
+	// Repeated pages of the same query are common (history traffic, WebUI
+	// polling, a user toggling back to the same filter). The store-wide write
+	// version makes a cached result safe: any write that could change the
+	// matched set bumps it, including writes from another process.
+	version, versionOK := readSessionSearchWriteVersion(sessionDir)
+	cacheKey := sessionSearchResultCacheKey(sessionDir, query, limit, offset, filter)
+	if versionOK {
+		if entry, ok := searchResultCache.get(cacheKey, version); ok {
+			sessionSearchResultCacheHits.Add(1)
+			return cloneSessionDetails(entry.details), entry.total, nil
+		}
+		sessionSearchResultCacheMisses.Add(1)
+	}
+
 	scan, err := scanSessionSearch(sessionDir, query, limit, offset, filter)
 	if err != nil {
 		return nil, 0, err
 	}
 	if len(scan.page) == 0 {
+		storeSessionSearchResult(cacheKey, version, versionOK, sessionDir, nil, scan.total)
 		return nil, scan.total, nil
 	}
-	return buildSearchDetails(sessionDir, scan), scan.total, nil
+	details := buildSearchDetails(sessionDir, scan)
+	storeSessionSearchResult(cacheKey, version, versionOK, sessionDir, details, scan.total)
+	return details, scan.total, nil
+}
+
+// storeSessionSearchResult caches a completed scan only while the write version
+// observed before the scan is still current. A write that committed mid-scan
+// may or may not be reflected in the result, so caching it would pin an
+// ambiguous page until the next write.
+func storeSessionSearchResult(cacheKey string, version int64, versionOK bool, sessionDir string, details []SessionDetail, total int) {
+	if !versionOK {
+		return
+	}
+	if current, ok := readSessionSearchWriteVersion(sessionDir); !ok || current != version {
+		return
+	}
+	searchResultCache.put(cacheKey, version, cloneSessionDetails(details), total)
+}
+
+func readSessionSearchWriteVersion(sessionDir string) (int64, bool) {
+	db, ok, err := openExistingSessionDB(sessionDir)
+	if err != nil || !ok {
+		return 0, false
+	}
+	version, found, err := dao.NewSessionStoreMetaDAO(db.Bun()).SearchWriteVersion(context.Background(), db.Bun())
+	if err != nil || !found {
+		return 0, false
+	}
+	return version, true
+}
+
+// sessionSearchResultCacheKey identifies one query page. Working directories
+// are sorted because resolveListCWDs derives them from an unordered DISTINCT
+// query; the same authorization scope must not miss merely because the rows
+// came back in a different order.
+func sessionSearchResultCacheKey(sessionDir, query string, limit, offset int, filter dao.SessionListFilter) string {
+	cwds := append([]string(nil), filter.CWDs...)
+	sort.Strings(cwds)
+	var b strings.Builder
+	writeSessionSearchKeyPart(&b, sessionDir)
+	writeSessionSearchKeyPart(&b, query)
+	writeSessionSearchKeyPart(&b, filter.CWD)
+	writeSessionSearchKeyPart(&b, filter.Search)
+	b.WriteString(strconv.FormatBool(filter.CWDs != nil))
+	b.WriteByte('|')
+	for _, cwd := range cwds {
+		writeSessionSearchKeyPart(&b, cwd)
+	}
+	writeSessionSearchKeyPart(&b, filter.ProjectID)
+	writeSessionSearchKeyPart(&b, strconv.FormatBool(filter.Ungrouped))
+	writeSessionSearchKeyPart(&b, strconv.FormatBool(filter.MessagesOnly))
+	writeSessionSearchKeyPart(&b, strconv.FormatBool(bool(filter.CWDFilter)))
+	writeSessionSearchKeyPart(&b, strconv.Itoa(limit))
+	writeSessionSearchKeyPart(&b, strconv.Itoa(offset))
+	return b.String()
+}
+
+// writeSessionSearchKeyPart length-prefixes each component so user text can
+// never manufacture a delimiter collision with another query's key.
+func writeSessionSearchKeyPart(b *strings.Builder, value string) {
+	b.WriteString(strconv.Itoa(len(value)))
+	b.WriteByte(':')
+	b.WriteString(value)
+	b.WriteByte('|')
+}
+
+func cloneSessionDetails(details []SessionDetail) []SessionDetail {
+	if details == nil {
+		return nil
+	}
+	cloned := make([]SessionDetail, len(details))
+	copy(cloned, details)
+	return cloned
 }
 
 // scanSessionSearch performs the single candidate + content pass. Cheap fields
@@ -113,11 +398,48 @@ func scanSessionSearch(sessionDir, query string, limit, offset int, filter dao.S
 		legacyIDs = append(legacyIDs, records[i].ID)
 	}
 
+	// The derived FTS index only narrows which sessions need a canonical replay.
+	// An indexed session with no FTS candidate cannot match on content; an
+	// unindexed session (backlog, failed backfill, or content with no text) always
+	// replays. Any FTS error degrades to the full replay path, so search
+	// correctness never depends on the accelerator.
+	if sessionSearchQueryIndexable(query) && len(legacyIDs)+len(eventStoreIDs) > 0 {
+		indexDAO := dao.NewSessionSearchIndexDAO(db.Bun())
+		ftsIDs, ftsErr := indexDAO.MatchSessionIDs(context.Background(), db.Bun(), query)
+		if ftsErr == nil {
+			indexed, indexErr := indexDAO.IndexedSessionIDs(context.Background(), db.Bun(), append(append([]string{}, legacyIDs...), eventStoreIDs...))
+			if indexErr == nil {
+				allowed := make(map[string]struct{}, len(ftsIDs))
+				for _, id := range ftsIDs {
+					if _, ok := indexed[id]; ok {
+						allowed[id] = struct{}{}
+					}
+				}
+				keep := func(ids []string) []string {
+					kept := ids[:0]
+					for _, id := range ids {
+						if _, ok := indexed[id]; !ok {
+							kept = append(kept, id)
+							continue
+						}
+						if _, ok := allowed[id]; ok {
+							kept = append(kept, id)
+						}
+					}
+					return kept
+				}
+				legacyIDs = keep(legacyIDs)
+				eventStoreIDs = keep(eventStoreIDs)
+			}
+		}
+	}
+
 	// One ordered, streaming query decodes the remaining legacy payload rows
 	// one session at a time. Replay applies content overrides and compaction
 	// before matching, exactly like GetMessages(), so text that is no longer part
 	// of the effective transcript cannot produce a hit.
 	if len(legacyIDs) > 0 {
+		sessionSearchContentReplays.Add(uint64(len(legacyIDs)))
 		contentMatched := make(map[string]struct{}, len(legacyIDs))
 		currentID := ""
 		var currentEntries []interface{}
@@ -165,6 +487,9 @@ func scanSessionSearch(sessionDir, query string, limit, offset int, filter dao.S
 	// is read once (never converged or repaired) and its projection is reused for
 	// detail filling. An unreadable or unhealthy store simply does not match on
 	// content; the cheap field match above still stands.
+	if len(eventStoreIDs) > 0 {
+		sessionSearchContentReplays.Add(uint64(len(eventStoreIDs)))
+	}
 	for _, id := range eventStoreIDs {
 		projection, ok := readEventStoreSearchProjection(context.Background(), sessionDir, id)
 		if !ok {
@@ -374,6 +699,14 @@ func (projection sessionSearchProjection) matches(needle string) bool {
 // committedEventBatches, never convergence, migration, or a lease. Any error or
 // unhealthy store reports false so the caller can degrade to cheap matching.
 func readEventStoreSearchProjection(ctx context.Context, sessionDir, sessionID string) (sessionSearchProjection, bool) {
+	key := sessionSearchProjectionCacheKey(sessionDir, sessionID)
+	fingerprint, fingerprintErr := eventStorePhysicalFingerprint(sessionDir, sessionID)
+	if fingerprintErr == nil && fingerprint != "" {
+		if projection, ok := searchProjectionCache.get(key, fingerprint); ok {
+			return projection, true
+		}
+	}
+	sessionSearchProjectionLoads.Add(1)
 	inspection, err := InspectEventStore(ctx, sessionDir, sessionID)
 	if err != nil {
 		return sessionSearchProjection{}, false
@@ -411,5 +744,11 @@ func readEventStoreSearchProjection(ctx context.Context, sessionDir, sessionID s
 	for i := range state.messages {
 		texts = append(texts, messageSearchTexts(state.messages[i])...)
 	}
-	return sessionSearchProjection{title: title, preview: replayPreview(state.messages), texts: texts}, true
+	projection := sessionSearchProjection{title: title, preview: replayPreview(state.messages), texts: texts}
+	if fingerprintErr == nil && fingerprint != "" {
+		if current, err := eventStorePhysicalFingerprint(sessionDir, sessionID); err == nil && current == fingerprint {
+			searchProjectionCache.put(key, fingerprint, projection)
+		}
+	}
+	return projection, true
 }

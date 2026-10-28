@@ -109,6 +109,13 @@
     background: rgb(var(--home-image-overlay-rgb) / var(--app-surface-veil, 0.52));
   }
 
+  /* Home quick cards carry a utility-layer backdrop-blur; this higher-
+     specificity rule lowers it only while a user background is active. */
+  .has-home-background .mx-spotlight-card,
+  .has-app-background .mx-spotlight-card {
+    backdrop-filter: blur(8px) saturate(1.2);
+  }
+
   /* macOS 原生红绿灯占据标题栏左上角约 78px。标题栏的 Tailwind 工具类
      `pl-3` 位于 utilities 层,会覆盖同名的组件层规则,因此这条让位规则
      必须留在 utilities 层,才能盖过 `pl-3` 的 12px 左内边距。切换到
@@ -676,6 +683,23 @@ html[data-window-style="win"] {
     border: 1px solid var(--app-titlebar-control-border);
     box-shadow: var(--app-titlebar-control-shadow);
     backdrop-filter: blur(10px) saturate(140%);
+  }
+
+  /* 用户背景图全局生效时,大面积毛玻璃是持续的 GPU 合成成本。保留半透明
+     底色以保证可读性,但降低模糊半径;无背景图时维持原效果。 */
+  .has-app-background .app-surface-veil,
+  .has-home-background .app-surface-veil {
+    backdrop-filter: blur(3px);
+  }
+  .has-app-background .app-control-surface,
+  .has-app-background .app-titlebar-surface,
+  .has-home-background .app-control-surface,
+  .has-home-background .app-titlebar-surface {
+    backdrop-filter: blur(5px);
+  }
+  .has-app-background .composer-card,
+  .has-home-background .composer-card {
+    backdrop-filter: blur(6px);
   }
 
   /* ---- 首页背景:纯色,不使用极光渐变 ---- */

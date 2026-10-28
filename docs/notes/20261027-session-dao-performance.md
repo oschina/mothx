@@ -1,7 +1,7 @@
 # 2026-10-27 session / DAO 性能治理进度
 
-> 状态：第一批、第二批（搜索、列表分页、连接模型）以及 quick_check 可显式关闭 + doctor 按需检查均已实现并通过最终验证。
-> 基线提交为 `342b6e97`；本文件描述的改动仍在工作区，尚未提交。
+> 状态：第一批、第二批（搜索、列表分页、连接模型）、第三批（会话内容 FTS5 索引）、第四批（会话存储维护）、第五批（Serve 分页）、第六批（列表展示投影）、第七批（查询级结果缓存）以及 quick_check 可显式关闭 + doctor 按需检查均已实现并通过最终验证（第三批起的改动尚在工作区）。
+> 基线提交为 `342b6e97`；会话/DAO 改动提交于 `cae95987`，Desktop 渲染与列表投影改动提交于 `a0aba5bc`、`e28047d4`。
 
 ## 1. 背景
 
@@ -41,9 +41,13 @@
     - `idx_entries_session_timestamp(session_id, timestamp)`
     - `idx_session_event_projections_session_timestamp(session_id, timestamp)`
     - `idx_session_runs_session_status_started(session_id, status, started_at)`
-  - `currentSchemaVersion = 49`。
+  - `currentSchemaVersion = 53`。
+  - 新增 v50 `converge_session_run_status_index`：重新声明 `idx_session_runs_session_status_started`。v49 的该索引是在版本已被部分数据库记录后才补进迁移体的；`applySchemaMigrations` 对已记录版本直接跳过，因此这些库永远缺该索引。v50 用 `CREATE INDEX IF NOT EXISTS` 让它们下次启动时收敛。
+  - 新增 v51 会话内容 FTS 索引，见 2.9。
+  - 新增 v52 `session_display_projection` 会话列表展示投影，见 2.12。
+  - 新增 v53 `session_store_meta` 全库搜索写入版本与触发器，见 2.13。
 - `internal/session/schema.go`：`busyRetryDatabase` 增加只读 `Query/QueryRow`，供迁移探测。
-- 注意：v49 尚未在任何真实库应用。新二进制**下次启动**会做一次性索引构建（本机 639MB 库副本实测三个索引各约 5–6ms 热缓存；冷盘会慢一些），期间短暂持有写锁。
+- 注意：本机真实库已记录 v49，但当时 v49 迁移体只包含前两个索引，导致 `idx_session_runs_session_status_started` 缺失；v50 会在新二进制**下次启动**时补建（本机 639MB 库副本实测三个索引各约 5–6ms 热缓存；冷盘会慢一些），期间短暂持有写锁。v51 创建 FTS5 虚拟表，不扫描存量内容；存量会话在 attach 时逐个会话回填。
 
 ### 2.3 会话列表 N+1（第一批）
 
@@ -57,7 +61,7 @@
   - `SessionPool.listDetails` 使用 `MessageCount()`。
   - `SetSessionTitle` / `SetSessionMetadata` 改用 `activeSessionInfo(id)`，不再全量列表后查找。
 
-### 2.4 搜索路径（第二批，已实现待 QA 最终签字）
+### 2.4 搜索路径（第二批）
 
 - `internal/session/search.go`
   - `SearchAllDetailed(sessionDir, query, limit, offset) (details, total, err)`：单遍、只读。
@@ -158,7 +162,7 @@ go test -race ./internal/acp -run 'TestListSessionsFiltersAllowedRootsBeforePagi
 (cd desktop && npm test -- --runInBand)
 ```
 
-Desktop 的 286 项测试全部通过。
+Desktop 的 307 项测试全部通过。
 
 搜索变异检验已补完：向 `search.go` 的 legacy 聚合路径注入 `OpenByIDExact` 后，
 `TestSearchAllDetailedSemantics` 按预期失败（报告打开了 60 个 session，要求 0）；
@@ -171,42 +175,188 @@ Desktop 的 286 项测试全部通过。
 - `internal/session/event_store_open_cost_test.go`
 - `internal/session/migrations_transaction_test.go`
 - `internal/session/migrations_index_test.go`
+- `internal/session/migrations_search_index_test.go`
+- `internal/session/migrations_display_projection_test.go`
+- `internal/session/display_projection_test.go`
+- `internal/session/search_index_test.go`
+- `internal/session/storage_maintenance_test.go`
+- `internal/serve/openaiapi/server_test.go`（扩展分页/内存池）
+- `internal/serve/config_test.go`（扩展默认分页）
+- `cmd/mothx/main_maintenance_test.go`
 - `internal/session/execution_facts_batch_test.go`
 - `internal/session/message_count_test.go`
 - `internal/session/search_test.go`
+- `internal/session/search_result_cache_test.go`
+- `internal/session/migrations_write_version_test.go`
 - `internal/agentruntime/execution_snapshot_test.go`（扩展）
 - `internal/serve/session_search_test.go`
 - `internal/serve/openaiapi/session_export_parents_test.go`
 - `internal/serve/openaiapi/server_test.go`（扩展）
 - `internal/acp/session_search_cleanup_test.go`
 
-## 4. 尚未完成（后续优化）
+### 2.9 会话内容 FTS5 索引（第三批）
 
-本轮计划项已完成，以下属于下一阶段：
+搜索此前对每个未命中 cheap 字段的会话重放整段内容。现在新增派生 FTS5
+（trigram）索引，把“哪些会话可能命中”和“最终是否命中”拆开：
 
-1. **FTS5 会话内容索引**：搜索不再依赖内容重放；需要 append 双写 + 回填策略。
-2. **保留策略与空间回收**：`entries`、`sub_entries`、`tool_execution_records` 保留策略与一次性 `VACUUM`（自动 vacuum 可选）。
-3. **搜索缓存**：当前搜索仍是一次只读全量内容扫描，但已无逐会话 open、无写事务，且 total 与 page 同源。
+- `internal/session/migrations.go`：v51 创建 `session_content_fts`
+  （`session_id`/`entry_id` UNINDEXED，`text` 使用 trigram tokenizer）与
+  `session_content_index_state`；`currentSchemaVersion = 51`。trigram 支持任意子串
+  （含 CJK）且大小写不敏感；不足 3 个字符的查询继续走全量重放，保持原语义。
+- `internal/dao/session_search_index.go`：唯一直接读写 FTS 的 DAO，负责插入、
+  按 `MATCH` 取候选 session、查询已索引集合、按会话删除，以及 FTS 短语转义。
+- 双写：legacy `writeEntry`/`writeEntries` 与 EventStore `CommitEventIntent`
+  在持久化事务内同步写索引；legacy fork 复制行时为子会话写索引；
+  `RebuildEventProjection` 同时重建索引；删除会话级联清理索引行与状态行。
+- 回填：`MigrateToEventStore` 在 attach 时对尚未建立索引的老会话做一次
+  best-effort 回填；新增 `BackfillSessionSearchIndex` 在每日会话存储维护任务中
+  按最新会话优先补建，单次最多 512 个会话（每个会话一个事务），
+  legacy 与 EventStore 分别从 canonical 内容读取；读不到内容的会话只计入
+  skipped 并留待下次，不会把不完整索引标记为完成。未回填或回填失败的会话
+  继续走原有重放路径，不会漏匹配。搜索本身仍然只读，不触发回填、不写事务。
+- 候选校验：FTS 只负责缩小候选集，最终匹配仍由 canonical replay 决定，因此
+  compaction 丢弃内容、content override 替换文本的语义完全不变；索引中出现
+  “已失效文本”只会多一次候选校验，不会产生假命中。
+- 降级：查询不足 3 个字符、FTS 出错、会话未索引时自动退回原全量扫描。
+- 投影缓存：EventStore 搜索投影按物理日志指纹缓存（stat-only，append/轮转即失效），
+  最多 128 条 / 32MB、单条不超过 4MB；重复搜索不再重放未变化会话。
 
-启动 quick_check 默认开启；更激进的“按干净关闭标记跳过”或后台检查仍可在未来评估。当前显式关闭后，`mothx doctor` 是推荐的按需完整性检查入口。由于当前机器数据库不再是原始 660MB，本轮不以 wall-clock 基准作为完成条件，而以 SQL LIMIT 读取行数测试作为分页性能回归门槛。
+本机实测：6 个会话、仅 1 个含目标子串时，单次搜索只 replay 1 个候选会话；
+2 字符查询按预期 replay 全部 6 个。
 
-## 5. 风险与注意事项
+### 2.10 会话存储维护（第四批）
 
-- 列表分页与连接池改动尚未提交；不要未经确认把无关的 `npm/`、`pypi/` 改动一起提交。
+产品约束：**旧消息永久保留**。因此本轮不实现任何针对 `entries` /
+`sub_entries` 的保留策略；它们只被计数，永不被删除。
+
+- `internal/config/settings.go`：`maintenance` 新增
+  `reclaimSessionStorage`（默认 true）、`sessionStorageSchedule`（默认 `@daily`）、
+  `toolExecutionRetentionDays`（默认 0 = 永久保留）与
+  `vacuumSessionStorage`（默认 false）。
+- `internal/agentruntime/maintenance_cron.go`：新增 Runtime 维护任务
+  `mothx-maintenance:session-storage`，复用共享 cron 的 claim/status/next-run
+  生命周期；任务仍从所有用户可见 cron 列表过滤。
+- `internal/agentruntime`：策略解析、禁用时拒绝陈旧任务。
+- `internal/session/storage_maintenance.go`：`MaintainSessionStorage` 只清理
+  `completed` / `abandoned` 且早于保留期的 `tool_execution_records`；
+  `running` / `interrupted` / `retry_requested` 永远保留，避免不确定的工具副作用
+  失去围栏。每次运行执行 `PRAGMA optimize` 并报告 transcript/tool 行数与
+  freelist 页数；`vacuumSessionStorage` 为 true 且存在空闲页时才执行 `VACUUM`。
+- `internal/dao/session_storage.go`：唯一 SQL 位置（清理、计数、PRAGMA、
+  VACUUM）。
+- 默认策略下任务只做 optimize 与统计，不删除任何消息或工具记录；要真正回收
+  空间需显式配置保留天数或开启 `VACUUM`。`VACUUM` 会长时间持有写锁，因此
+  默认关闭，且只在 cron 维护任务中执行，不在启动路径上运行。
+- 新增一次性入口 `mothx maintenance status` 与 `mothx maintenance vacuum [--dry-run]`：
+  status 只读统计数据库大小、转录/工具记录与空闲页；vacuum 只执行 VACUUM，
+  不按保留期删除工具记录，也绝不删除消息。
+
+测试覆盖：只清理到期的终态工具记录、保留所有 in-flight 状态、transcript
+行数与消息内容不变、retention 0 时全部保留、禁用策略拒绝执行、两个维护任务
+在共享 store 中各自只投影一次。
+
+### 2.11 Serve 会话列表分页（第五批）
+
+`ListActiveSessions` 此前每次调用都会加载全部历史详情，再用来返回一个小结果（`scope=active` 只需内存池），是最后一个随会话总数无界增长的请求路径。
+
+- `internal/serve/openaiapi`：新增
+  - `ListActiveSessionsPage(limit, offset)`：SQL LIMIT/OFFSET 取当前页，metadata/execution 仅批量读取该页 ID，并返回 total；
+  - `ListActivePoolSessions()`：只投影本进程内存池；
+  - `GetSessionWorkDir(id)`：按 ID 单查工作目录，供 MCP 配置等管理端点使用。
+- `internal/serve`：
+  - `/api/sessions` 未指定 `limit` 时默认 `DefaultSessionListLimit = 100`，响应增加 `total`、`limit`、`offset`、`hasMore`；Web UI 原本就使用 `limit=100`，外部调用方可继续用 `limit`/`offset` 翻页。
+  - `scope=active` 与 `/api/sessions/active` 改用内存池投影，不再加载全部历史。
+  - 会话级 MCP 配置改用 `GetSessionWorkDir(id)`，不再为了找一条会话列出全部历史。
+  - `status` 的兜底计数改用分页 total。
+- 测试：分页边界与 total/hasMore、active 池排除持久化历史、默认首页上限 100、最后一页不足一页。
+
+### 2.12 会话列表展示投影（第六批）
+
+Desktop 首次任务列表此前为每个 EventStore 会话重放结构投影，只为取首条用户预览、最新标题与绑定元数据。现在把这些字段持久化为派生 SQLite 投影，启动列表不再扫描 EventStore。
+
+- `internal/session/migrations.go`：v52 创建 `session_display_projection`
+  （`session_id` 主键，`preview`、`preview_seen`、`title`、`bindings_json`、
+  `updated_at`）；`currentSchemaVersion = 52`。
+- `internal/dao/session_display_projection.go`：批量读取、upsert、按会话删除、
+  查询尚未投影的 EventStore 会话。
+- 写入：
+  - `CommitEventIntent` 在提交事务内更新已存在的投影行；不会为缺少行的老会话
+    创建不完整投影。
+  - 新会话在第一条内容提交后由 `appendEventStoreEntriesLocked` 触发一次完整
+    投影；非空迁移导出完成后由 `MigrateToEventStore` 建行。
+  - EventStore fork 在复制完成后建行；`RebuildEventProjection` 同步重建；
+    删除会话级联清理。
+  - 每日会话存储维护按最新优先最多回填 512 个未投影会话。
+- 读取：
+  - `FillSessionDetailPreviews` 与 `LatestSessionBindings` 优先批量读取投影行；
+    缺失行仍回退到原 EventStore 扫描，因此旧会话在回填前保持正确。
+  - `preview_seen` 记录首条 user 消息是否已出现（即使文本为空），后续 user
+    消息不会错误替换预览。
+- 测试：迁移表结构、写入/更新/预览不覆盖、无 EventStore 字节时列表与绑定仍可
+  读取、fork、删除、回填幂等、维护任务报告。
+
+### 2.13 查询级结果缓存（第七批）
+
+EventStore 投影缓存只消除了“同一会话的重复重放”；每次搜索仍要执行完整的列表
+查询、cheap match、FTS 候选查询与聚合读取。历史列表的重复分页、WebUI 轮询以及
+用户来回切换过滤器都会重复付出这笔成本。现在把“查询 → 已算好的结果页”也缓存：
+
+- `internal/session/migrations.go`：v53 创建 `session_store_meta`
+  （`key`/`value`，`currentSchemaVersion = 53`），并创建 SQLite 触发器，在
+  `sessions`、`entries`、`session_event_projections`、`session_metadata` 的
+  INSERT/UPDATE/DELETE 中递增 `search_write_version`。选择触发器而不是调用点
+  计数器，是因为它同样覆盖另一进程的写入以及未来新增的 DAO 调用；只监听会改变
+  搜索结果的表，避免无关写入（例如运行状态、lease、附件）使缓存失效。
+- `internal/dao/session_store_meta.go`：唯一读取该版本的 DAO。触发器 SQL 属于
+  migration owner，runtime 只读版本值。
+- `internal/session/search.go`：
+  - 结果缓存键包含 sessionDir、query、limit/offset、CWD 授权集合、项目作用域、
+    messagesOnly 等过滤条件；CWD 集合排序后以长度前缀编码，避免不同顺序或分隔符
+    造成碰撞。缓存上限 64 页 / 8MB，按插入顺序淘汰。
+  - 命中时直接返回结果页，不再执行列表查询、FTS 候选查询或内容重放；命中结果
+    会复制一份，调用方修改返回值不会污染缓存。
+  - 未命中时先记录版本，扫描完成后再读一次；只有版本未变化才写入缓存。扫描期间
+    并发提交的写入会让结果处于“可能包含也可能不包含”的模糊状态，因此不缓存。
+  - 空结果页同样缓存；空页通常意味着“所有会话都重放过仍未命中”，是最值得复用
+    的结果。
+  - 版本行缺失、查询失败或旧库尚未迁移时自动退回无缓存路径，搜索正确性不依赖
+    缓存。
+- 测试：重复查询命中且内容重放为 0、空页命中、legacy 内容追加、标题写入、
+  工作目录更新、EventStore 追加、项目归属变更均会使缓存失效、不同 offset 不
+  共用缓存、迁移 v53 对每张受监听表的写入与父会话删除都递增版本。
+
+## 3. 后续可选优化
+
+本轮计划项已全部完成。以下不属于本轮验收条件：
+
+1. **更激进的启动 quick_check 跳过策略**：默认仍开启（fail-closed）；“按干净关闭
+   标记跳过”或后台检查可在未来评估。显式关闭后，`mothx doctor` 是推荐的按需
+   完整性检查入口。
+2. **极长转录的展示副本截断**：当前只限制 DOM/React 成本；进一步截断
+   ACP/Runtime 展示副本需要先提供按需取全量内容的契约，暂不实施。
+
+由于当前机器数据库不再是原始 660MB，本轮不以 wall-clock 基准作为完成条件，而以
+SQL LIMIT 读取行数测试作为分页性能回归门槛。
+
+## 4. 风险与注意事项
+
+- 列表分页与连接池改动已提交到 `cae95987`；后续提交仍应避免混入无关的 `npm/`、`pypi/` 版本同步改动。
 - 当前运行的 `mothx` 进程就是本助手自身；库大小/mtime 变化不代表测试写入。
-- v49 迁移只在**新二进制启动**时应用；应用前不要在同目录并发跑多个写入进程做大规模迁移。
+- v49–v53 迁移只在**新二进制启动**时应用；应用前不要在同目录并发跑多个写入进程做大规模迁移。v53 的触发器会随每次会话写入递增一行元数据，首次在超大库上启用时请避免同时进行批量导出。
+- 开启 `vacuumSessionStorage` 后，VACUUM 会重写整个 `sessions.db` 并长时间持有写锁；不要在高峰期或磁盘空间不足时启用。
 - 4 连接是进程内 WAL 读并发配置，不改变 SQLite 单写者和跨进程写锁语义。
 - 修改 `internal/session` 的持久化/入口路径后按 AGENTS.md 跑 `go test ./internal/architecture`。
 
-## 6. 恢复工作时的第一步
+## 5. 后续工作的第一步
 
-本轮计划项已完成。提交前可复核：
+本轮计划项（含查询级结果缓存）已完成。继续前可复核：
 
 ```bash
 cd /home/free/src/mothx
 git status --porcelain | grep -E "internal/|docs/notes"
 git diff --check
 go build ./...
+go test ./internal/session ./internal/dao ./internal/architecture -count=1
 ```
 
-下一步从第 4 节“尚未完成（后续优化）”开始。
+第 3 节只保留不属于本轮验收条件的可选优化。

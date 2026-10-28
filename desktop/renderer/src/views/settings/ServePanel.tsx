@@ -10,7 +10,7 @@ import { t } from '@/core/i18n';
 import { floatOr, integerOr, loadServe, saveServe, type ServeConfigView } from '@/core/manage-api';
 import { hasFeature } from '@/core/state';
 import { toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 interface ServeForm {
   listen: string;
@@ -153,8 +153,7 @@ function toPatch(form: ServeForm): Record<string, unknown> {
 }
 
 export function ServePanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supported = hasFeature('manageServeConfig');
   const [form, setForm] = useState<ServeForm | null>(null);
   const [saving, setSaving] = useState(false);

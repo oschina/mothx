@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/oschina/mothx/internal/dao"
 )
 
-const currentSchemaVersion = 49
+const currentSchemaVersion = 53
 
 type schemaMigration struct {
 	version int
@@ -745,6 +746,93 @@ var schemaMigrations = []schemaMigration{
 		} {
 			if _, err := tx.Exec(index.apply); err != nil {
 				return fmt.Errorf("create %s: %w", index.name, err)
+			}
+		}
+		return nil
+	}},
+	// Version 49's Run index was added to the migration body after that version
+	// had already been recorded on some development databases. Those databases
+	// hold a 49 ledger row but no idx_session_runs_session_status_started, and
+	// applySchemaMigrations skips recorded versions, so the ledger alone can
+	// never repair them. Re-assert the index under its own version: fresh
+	// databases already created it in 49, partial ones converge here, and both
+	// end up identical. Additive only: no existing index, column, or meaning
+	// changes.
+	{version: 50, name: "converge_session_run_status_index", apply: func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_session_runs_session_status_started ON session_runs(session_id, status, started_at)`); err != nil {
+			return fmt.Errorf("create idx_session_runs_session_status_started: %w", err)
+		}
+		return nil
+	}},
+	// Session content search used to replay every candidate transcript to decide
+	// whether a session matched. This derived index proposes candidate sessions
+	// from persisted message, compaction-summary, and content-override text; the
+	// canonical replay still makes the final match decision, so compaction and
+	// overrides keep their exact semantics. It is rebuildable at any time and its
+	// state row distinguishes "indexed, no content matches" from "not indexed
+	// yet" (which must keep the full replay path).
+	{version: 51, name: "create_session_content_fts", apply: func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS session_content_fts USING fts5(
+			session_id UNINDEXED,
+			entry_id UNINDEXED,
+			text,
+			tokenize='trigram'
+		)`); err != nil {
+			return fmt.Errorf("create session content fts: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS session_content_index_state (
+			session_id TEXT PRIMARY KEY,
+			updated_at TEXT NOT NULL
+		)`); err != nil {
+			return fmt.Errorf("create session content index state: %w", err)
+		}
+		return nil
+	}},
+	// List rows need only a session's first-user preview, latest title, and
+	// latest binding entries. Persisting that small derived projection here
+	// removes the EventStore scan from startup listing and bindings reads; the
+	// EventStore remains the owner of canonical content, and a missing row keeps
+	// the existing scan fallback. Additive only.
+	{version: 52, name: "create_session_display_projection", apply: func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS session_display_projection (
+			session_id TEXT PRIMARY KEY,
+			preview TEXT NOT NULL DEFAULT '',
+			preview_seen INTEGER NOT NULL DEFAULT 0,
+			title TEXT NOT NULL DEFAULT '',
+			bindings_json TEXT NOT NULL DEFAULT '{}',
+			updated_at TEXT NOT NULL
+		)`); err != nil {
+			return fmt.Errorf("create session display projection: %w", err)
+		}
+		return nil
+	}},
+	// Search now caches a query's matched page. A cache entry is only valid for
+	// as long as no search-visible row changed, so the store publishes one
+	// durable write version and database triggers bump it inside the same
+	// transaction as the write. Triggers are used instead of call-site counters
+	// because they also cover writes from another MothX process and future
+	// callers that persist through DAO without knowing about search. Only tables
+	// that can change a search result are watched: session identity/location/
+	// binding, legacy payload rows (title and content), EventStore projections
+	// (canonical event content), and project membership (a search scope filter).
+	{version: 53, name: "create_session_store_write_version", apply: func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS session_store_meta (
+			key TEXT PRIMARY KEY,
+			value INTEGER NOT NULL
+		)`); err != nil {
+			return fmt.Errorf("create session store meta: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO session_store_meta (key, value) VALUES (?, 0)`, dao.SessionStoreSearchWriteVersionKey); err != nil {
+			return fmt.Errorf("seed session store write version: %w", err)
+		}
+		bump := `UPDATE session_store_meta SET value = value + 1 WHERE key = '` + dao.SessionStoreSearchWriteVersionKey + `'`
+		for _, table := range []string{"sessions", "entries", "session_event_projections", "session_metadata"} {
+			for _, operation := range []string{"INSERT", "UPDATE", "DELETE"} {
+				name := "trg_session_store_version_" + table + "_" + strings.ToLower(operation)
+				statement := fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS %s AFTER %s ON %s BEGIN %s; END`, name, operation, table, bump)
+				if _, err := tx.Exec(statement); err != nil {
+					return fmt.Errorf("create %s: %w", name, err)
+				}
 			}
 		}
 		return nil

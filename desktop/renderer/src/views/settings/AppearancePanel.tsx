@@ -10,10 +10,10 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { desktop } from '@/core/api';
 import { setLocale, t } from '@/core/i18n';
-import { emit } from '@/core/state';
+import { emit, state } from '@/core/state';
 import { applyTheme, updateHomeBackground } from '@/core/theme';
 import { toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { shallowEqual, useAppSelector } from '@/hooks/useAppState';
 import { cn, basename } from '@/lib/utils';
 
 function SegToggle({
@@ -48,8 +48,21 @@ function SegToggle({
 }
 
 export function AppearancePanel() {
-  const appState = useAppState();
-  const store = appState.store;
+  const store = useAppSelector(
+    (state) => ({
+      theme: state.store.theme,
+      locale: state.store.locale,
+      homeLogoVisible: state.store.homeLogoVisible,
+      homeLogoImage: state.store.homeLogoImage,
+      homeBackgroundImage: state.store.homeBackgroundImage,
+      homeBackgroundScope: state.store.homeBackgroundScope,
+      homeBackgroundOpacity: state.store.homeBackgroundOpacity,
+      homeBackgroundFit: state.store.homeBackgroundFit,
+      homeBackgroundPosition: state.store.homeBackgroundPosition,
+      homeBackgroundBlur: state.store.homeBackgroundBlur,
+    }),
+    shallowEqual,
+  );
 
   const chooseBackground = async () => {
     const picked = await desktop.chooseHomeBackground(store.homeBackgroundImage);
@@ -61,7 +74,7 @@ export function AppearancePanel() {
   const chooseLogo = async () => {
     const picked = await desktop.chooseHomeLogo(store.homeLogoImage);
     if (!picked) return;
-    appState.store.homeLogoImage = picked;
+    state.store.homeLogoImage = picked;
     // The privileged chooser persists the selected path; the renderer only
     // mirrors it locally. A generic store patch cannot authorize a non-empty
     // image path.
@@ -70,14 +83,14 @@ export function AppearancePanel() {
   };
 
   const clearLogo = () => {
-    appState.store.homeLogoImage = '';
+    state.store.homeLogoImage = '';
     void desktop.storeSet({ homeLogoImage: '' });
     emit();
     toast(t('settings.homeLogoCleared'));
   };
 
   const setLogoVisible = (visible: boolean) => {
-    appState.store.homeLogoVisible = visible;
+    state.store.homeLogoVisible = visible;
     void desktop.storeSet({ homeLogoVisible: visible });
     emit();
   };
@@ -145,7 +158,7 @@ export function AppearancePanel() {
             onChange={(value) => {
               const locale = value === 'en' ? 'en' : 'zh';
               setLocale(locale);
-              appState.store.locale = locale;
+              state.store.locale = locale;
               void desktop.storeSet({ locale });
               // 触发全量重渲染(等价旧 location.reload,但保留运行状态)。
               emit();

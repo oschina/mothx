@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -195,6 +196,10 @@ func forkEventStoreSession(ctx context.Context, sessionDir string, options ForkO
 		if _, err := child.AppendSessionTitle(title, "auto"); err != nil {
 			return ForkResult{}, err
 		}
+	}
+	if _, err := ensureDisplayProjection(ctx, sessionDir, childID, "event_store"); err != nil {
+		// Derived list metadata; a later attach or maintenance pass retries.
+		log.Printf("[session] project forked session %s: %v", childID, err)
 	}
 
 	tx, err = db.BeginTx(ctx, nil)

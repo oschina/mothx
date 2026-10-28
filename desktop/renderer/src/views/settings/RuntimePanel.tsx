@@ -14,7 +14,7 @@ import { mergeDiagnosticLogs } from '@/core/diagnostic-logs';
 import { runDoctor, type DoctorCheck, type DoctorResult } from '@/core/manage-api';
 import { emit, state } from '@/core/state';
 import { toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 import { cn } from '@/lib/utils';
 
 function connLabel(connectionState: string): string {
@@ -56,8 +56,7 @@ function formatShortTime(iso: string): string {
 }
 
 export function RuntimePanel() {
-  const appState = useAppState();
-  const conn = appState.connection;
+  const conn = useAppSelector((state) => state.connection);
   const [doctor, setDoctor] = useState<DoctorResult | null>(null);
   const [doctorRunning, setDoctorRunning] = useState(false);
   const [logs, setLogs] = useState<DiagnosticLogEntry[]>([]);

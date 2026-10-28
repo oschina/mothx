@@ -210,6 +210,34 @@ mothx pure --prune-unreferenced
 
 描述附件的数据库记录被归档后，其存储字节就再也无法寻址；删除会话、或内容已写完但记录写入失败，也会造成同样的残留。因此回收并不依赖重置：Runtime 在接受新附件时会顺手清扫私有存储（每进程每小时至多一次），并由自己的 cron 维护任务每日再执行一次，且只删除同时满足两个条件的目录——没有任何记录引用它，并且它最后一次写入已早于附件保留期外加 24 小时缓冲（默认保留 7 天，即共 8 天）。正是这个时间下限保证了回收不可能删掉“恢复归档后仍可用”的数据。`--prune-unreferenced` 会立即执行同一次清扫，并报告已回收与因太新而保留的数量；`channels/` 与 `knowledge-bases/` 永不受它影响。定时清扫由 `settings.json` 的可选 `maintenance` 字段控制（`reclaimAttachmentStorage`、`storageReconcileSchedule`），见[配置文档](configuration.md#maintenance后台维护)。
 
+### `maintenance` - 检查与压缩会话数据库
+
+会话存储维护永远不会删除转录消息。`status` 是只读的：报告数据库大小、转录与子代理条目数、工具执行记录数与可回收的空闲页。`vacuum` 执行 SQLite `VACUUM` 释放空闲页并报告前后状态；`--dry-run` 只预览可回收空间，不重写数据库。两个命令都不会清理任何工具执行记录。
+
+```
+mothx maintenance status [flags]
+mothx maintenance vacuum [flags]
+```
+
+| 标志 | 简写 | 默认值 | 描述 |
+|------|------|--------|------|
+| `--session-dir` | - | 已配置的会话目录 | 要检查或压缩的会话目录 |
+| `--dry-run` | - | false | 仅 `vacuum`：只报告可回收空闲页，不重写数据库 |
+
+示例：
+```bash
+# 查看数据库大小、转录计数与可回收空间
+mothx maintenance status
+
+# 预览 VACUUM 可回收的空间
+mothx maintenance vacuum --dry-run
+
+# 重写 sessions.db 并释放空闲页
+mothx maintenance vacuum
+```
+
+`VACUUM` 会重写整个数据库，需要与数据库大小相当的可用磁盘空间，并在整个重写期间持有 SQLite 写锁；请在其他 MothX 进程空闲时执行。Runtime 的定时维护任务也会执行同样的可选 VACUUM，并且只对终态工具执行幂等记录应用配置的保留期；两条路径都不会删除转录消息。详见[配置](configuration.md#maintenance)。
+
 ### `worktree` - 隔离 Git Worktree
 
 创建、列出、重置与删除由共享 Runtime 管理的隔离 git worktree。默认位于 `<data-dir>/worktrees`，注册在 sessions 数据库中，并由 TUI/CLI、ACP/Desktop 与子 Agent 共享。是否允许创建由 `settings.json` 的 `worktree.enabled` 控制；关闭创建后仍可列出、重置与删除已有 worktree。

@@ -79,3 +79,36 @@ test('app background system keeps structural panels quiet and controls readable'
   assert.match(styles, /--app-surface-veil/, 'surface opacity must be configurable instead of a fixed white veil');
   assert.match(styles, /@layer utilities \{[\s\S]*?\.app-shell\.has-app-background \.app-surface-veil \{[\s\S]*?background: rgb\(var\(--home-image-overlay-rgb\) \/ var\(--app-surface-veil, 0\.52\)\)/, 'global background veil must override opaque structural background utilities');
 });
+
+test('Home quick-card spotlight measures once per frame instead of per pointer event', () => {
+  assert.match(home, /onPointerMove=\{handleSpotlightMove\}/, 'the card grid must own one delegated pointer handler');
+  assert.match(home, /requestAnimationFrame\(/, 'spotlight coordinates must be applied on a frame');
+  assert.match(home, /data-spotlight=""/, 'each card must carry the marker the delegated handler resolves');
+  assert.ok(
+    !/onPointerMove=\{\(event\) => \{\s*const rect = event\.currentTarget\.getBoundingClientRect\(\)/.test(home),
+    'cards must not force layout for every raw pointer move',
+  );
+});
+
+test('user background mode lowers large-area blur cost', () => {
+  assert.match(
+    styles,
+    /\.has-app-background \.app-surface-veil,[\s\S]*?backdrop-filter: blur\(3px\)/,
+    'the app surface veil must use a smaller blur when a user background is active',
+  );
+  assert.match(
+    styles,
+    /\.has-app-background \.app-control-surface,[\s\S]*?\.has-home-background \.app-titlebar-surface \{[\s\S]*?backdrop-filter: blur\(5px\)/,
+    'control and titlebar surfaces must use a smaller blur when a user background is active',
+  );
+  assert.match(
+    styles,
+    /\.has-app-background \.composer-card,[\s\S]*?backdrop-filter: blur\(6px\)/,
+    'the composer glass card must use a smaller blur when a user background is active',
+  );
+  assert.match(
+    styles,
+    /\.has-home-background \.mx-spotlight-card,[\s\S]*?backdrop-filter: blur\(8px\)/,
+    'home quick cards must reduce their utility-layer blur under a user background',
+  );
+});

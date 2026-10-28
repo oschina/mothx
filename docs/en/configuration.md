@@ -172,7 +172,7 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `retry` | object | *(see below)* | API call retry settings |
 | `approval` | object | *(see below)* | Bash command approval settings |
 | `worktree` | object | *(see below)* | Isolated git worktree settings |
-| `maintenance` | object | *(see below)* | Runtime-owned background housekeeping (attachment storage reclamation) |
+| `maintenance` | object | *(see below)* | Runtime-owned background housekeeping (attachment and session storage maintenance) |
 | `webSearch` | object | *(see below)* | DeepSeek web search/fetch tool settings |
 | `updateCheck` | bool | `true` | Enable npm-based update notifications |
 
@@ -1164,11 +1164,17 @@ Runtime-owned background housekeeping. These are not user automation tasks: Moth
 |-------|------|---------|-------------|
 | `reclaimAttachmentStorage` | bool | `true` | Reclaim attachment storage that no durable row references any more |
 | `storageReconcileSchedule` | string | `@daily` | Cadence of that reconciliation (`@daily`, `@every 12h`, or a 5-field cron expression) |
+| `reclaimSessionStorage` | bool | `true` | Run session-storage maintenance. It never deletes transcript messages |
+| `sessionStorageSchedule` | string | `@daily` | Cadence of session-storage maintenance (`@daily`, `@every 12h`, or a 5-field cron expression) |
+| `toolExecutionRetentionDays` | int | `0` | Keep completed/abandoned tool-execution idempotency records for this many days; `0` keeps them forever |
+| `vacuumSessionStorage` | bool | `false` | Run `VACUUM` after pruning to release free pages |
 
 ```json
 {
   "maintenance": {
-    "reclaimAttachmentStorage": false
+    "reclaimAttachmentStorage": false,
+    "toolExecutionRetentionDays": 90,
+    "vacuumSessionStorage": true
   }
 }
 ```
@@ -1176,6 +1182,8 @@ Runtime-owned background housekeeping. These are not user automation tasks: Moth
 Reclamation removes only directories under the session directory's `artifacts/` store that (a) no `session_attachments` row references **and** (b) were last written before the attachment retention window plus a 24-hour grace period (8 days by default with the 7-day retention). It fails closed when the sessions database cannot be read, never follows symbolic links, and ignores anything not shaped like its own generated attachment identifiers, so unrelated data is never interpreted as reclaimable storage. That floor is also what keeps reclamation from destroying anything a restored `mothx pure` archive could still serve. See [`mothx pure`](cli-reference.md#pure---archive-the-sessions-database).
 
 An invalid `storageReconcileSchedule` falls back to the default with a `[cron]` log line, and changing the cadence updates only the scheduled job's schedule - run counters and status are preserved. Turning reclamation off removes the scheduled job at the next scheduler start, and a stale job row that still fires is refused instead of deleting anything.
+
+Session-storage maintenance preserves every transcript message forever: it never deletes `entries`, `sub_entries`, compaction entries, content overrides, or EventStore content. It may prune only `completed`/`abandoned` `tool_execution_records` older than `toolExecutionRetentionDays` (default `0` keeps every record); `running`, `interrupted`, and `retry_requested` records are always kept so an uncertain tool side effect stays fenced. Every pass runs `PRAGMA optimize` and backfills the derived session-content search index for up to 512 not-yet-indexed sessions (newest first); unreadable stores are skipped and retried on the next run. `vacuumSessionStorage` additionally rewrites the database file to release free pages; it is off by default because `VACUUM` holds the SQLite writer for the duration of the rewrite.
 
 ### Project-Level Allow Rules (`allow.json`)
 

@@ -6,11 +6,10 @@ import { UnsupportedRow } from '@/components/manage-primitives';
 import { t } from '@/core/i18n';
 import { loadStats, type StatsPoint, type StatsSummary } from '@/core/manage-api';
 import { hasFeature } from '@/core/state';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 export function StatsPanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supported = hasFeature('manageStats');
   const [summary, setSummary] = useState<StatsSummary>({});
   const [points, setPoints] = useState<StatsPoint[]>([]);

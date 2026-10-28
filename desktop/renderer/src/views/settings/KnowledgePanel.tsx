@@ -36,7 +36,7 @@ import {
 import { desktop } from '@/core/api';
 import { hasFeature } from '@/core/state';
 import { confirmDanger, toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 function knowledgeBaseStatus(view: KnowledgeBaseView): string {
   const base = view.knowledgeBase;
@@ -427,8 +427,7 @@ function KnowledgeBaseEditor({
 }
 
 export function KnowledgePanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supported = hasFeature('manageKnowledgeBases');
   const [views, setViews] = useState<KnowledgeBaseView[] | null>(null);
   const [defaults, setDefaults] = useState<KnowledgeBaseDefaults | null>(null);

@@ -26,7 +26,7 @@ import {
 } from '@/core/manage-api';
 import { hasFeature } from '@/core/state';
 import { confirmDanger, promptModal, toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 import { cn } from '@/lib/utils';
 
 function displayName(item: ExpertSummary): string {
@@ -298,8 +298,7 @@ function ExpertEditor({
 }
 
 export function ExpertsPanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supported = hasFeature('manageExperts');  const [scope, setScope] = useState<ExpertScope>('global');
   const [listView, setListView] = useState<ExpertListView | null>(null);
   const [draft, setDraft] = useState<ExpertBundle | null>(null);

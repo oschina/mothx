@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -85,6 +86,40 @@ func TestArtifactSwitchesDefaultOffAndRoundTripIndependently(t *testing.T) {
 
 func (f *fakeActiveSessionManager) ListActiveSessions() []openaiapi.ActiveSessionInfo {
 	return append([]openaiapi.ActiveSessionInfo(nil), f.sessions...)
+}
+
+func (f *fakeActiveSessionManager) ListActiveSessionsPage(limit, offset int) ([]openaiapi.ActiveSessionInfo, int, error) {
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	total := len(f.sessions)
+	if offset >= total {
+		return nil, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return append([]openaiapi.ActiveSessionInfo(nil), f.sessions[offset:end]...), total, nil
+}
+
+func (f *fakeActiveSessionManager) ListActivePoolSessions() []openaiapi.ActiveSessionInfo {
+	active := make([]openaiapi.ActiveSessionInfo, 0, len(f.sessions))
+	for _, item := range f.sessions {
+		if item.Active {
+			active = append(active, item)
+		}
+	}
+	return active
+}
+
+func (f *fakeActiveSessionManager) GetSessionWorkDir(id string) (string, error) {
+	for _, item := range f.sessions {
+		if item.ID == id {
+			return item.WorkDir, nil
+		}
+	}
+	return "", openaiapi.ErrSessionNotFound
 }
 
 func (f *fakeActiveSessionManager) DeleteActiveSession(id string) (bool, error) {
@@ -1041,6 +1076,46 @@ func TestHandleSessions_ReturnsSessions(t *testing.T) {
 	}
 	if len(got.Sessions) != 1 || got.Sessions[0].ID != "s1" || got.Sessions[0].WorkDir != "/tmp/a" {
 		t.Fatalf("sessions = %#v", got.Sessions)
+	}
+}
+
+func TestHandleSessions_DefaultPageIsBounded(t *testing.T) {
+	rt := &channelRuntime{cfg: DefaultConfig()}
+	items := make([]openaiapi.ActiveSessionInfo, 150)
+	for i := range items {
+		items[i] = openaiapi.ActiveSessionInfo{ID: fmt.Sprintf("session-%03d", i), WorkDir: "/tmp/a"}
+	}
+	sessions := &fakeActiveSessionManager{sessions: items}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	w := httptest.NewRecorder()
+	rt.handleSessions(sessions).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var got struct {
+		Sessions []openaiapi.ActiveSessionInfo `json:"sessions"`
+		Total    int                           `json:"total"`
+		Limit    int                           `json:"limit"`
+		Offset   int                           `json:"offset"`
+		HasMore  bool                          `json:"hasMore"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got.Sessions) != openaiapi.DefaultSessionListLimit || got.Total != 150 ||
+		got.Limit != openaiapi.DefaultSessionListLimit || got.Offset != 0 || !got.HasMore {
+		t.Fatalf("default page = %#v, want a bounded first page with total and hasMore", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/sessions?limit=10&offset=145", nil)
+	w = httptest.NewRecorder()
+	rt.handleSessions(sessions).ServeHTTP(w, req)
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode final page: %v", err)
+	}
+	if len(got.Sessions) != 5 || got.Total != 150 || got.Offset != 145 || got.HasMore {
+		t.Fatalf("final page = %#v, want the remaining five rows", got)
 	}
 }
 

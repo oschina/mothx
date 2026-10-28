@@ -39,21 +39,30 @@ func TestSchedulerStartProjectsMaintenanceJobOnce(t *testing.T) {
 			maintenance = append(maintenance, job)
 		}
 	}
-	if len(maintenance) != 1 {
-		t.Fatalf("maintenance jobs = %#v, want exactly one across two schedulers on one store", maintenance)
+	if len(maintenance) != 2 {
+		t.Fatalf("maintenance jobs = %#v, want exactly one of each kind across two schedulers on one store", maintenance)
 	}
-	job := maintenance[0]
-	if job.ID != agentruntime.MaintenanceStorageReconcileJobID() || job.Schedule != agentruntime.MaintenanceStorageReconcileSchedule {
-		t.Fatalf("maintenance job = %#v, want the Runtime-owned identity and cadence", job)
+	expected := map[string]string{
+		agentruntime.MaintenanceStorageReconcileJobID(): agentruntime.MaintenanceStorageReconcileSchedule,
+		agentruntime.MaintenanceSessionStorageJobID():   agentruntime.MaintenanceSessionStorageSchedule,
 	}
-	if !job.Enabled || job.OneShot {
-		t.Fatalf("maintenance job = %#v, want a repeating enabled job", job)
-	}
-	if job.SessionID != "" {
-		t.Fatalf("maintenance job session = %q, want no session identity so it stays out of user listings", job.SessionID)
-	}
-	if job.NextRun.IsZero() || !job.NextRun.After(time.Now()) {
-		t.Fatalf("maintenance job next run = %s, want a future scheduled run", job.NextRun)
+	for _, job := range maintenance {
+		wantSchedule, ok := expected[job.ID]
+		if !ok {
+			t.Fatalf("unexpected maintenance job = %#v", job)
+		}
+		if job.Schedule != wantSchedule {
+			t.Fatalf("maintenance job %s schedule = %q, want %q", job.ID, job.Schedule, wantSchedule)
+		}
+		if !job.Enabled || job.OneShot {
+			t.Fatalf("maintenance job = %#v, want a repeating enabled job", job)
+		}
+		if job.SessionID != "" {
+			t.Fatalf("maintenance job session = %q, want no session identity so it stays out of user listings", job.SessionID)
+		}
+		if job.NextRun.IsZero() || !job.NextRun.After(time.Now()) {
+			t.Fatalf("maintenance job next run = %s, want a future scheduled run", job.NextRun)
+		}
 	}
 }
 
@@ -146,8 +155,8 @@ func TestUserVisibleJobsHidesMaintenanceFromEveryUserSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 2 {
-		t.Fatalf("stored jobs = %#v, want the user job plus the projected maintenance job", all)
+	if len(all) != 3 {
+		t.Fatalf("stored jobs = %#v, want the user job plus both projected maintenance jobs", all)
 	}
 
 	tool := NewCronTool(store, scheduler)
@@ -158,13 +167,23 @@ func TestUserVisibleJobsHidesMaintenanceFromEveryUserSurface(t *testing.T) {
 	if !strings.Contains(result.Text, "nightly digest") {
 		t.Fatalf("tool listing = %q, want the user job", result.Text)
 	}
-	if strings.Contains(result.Text, agentruntime.MaintenanceStorageReconcileJobName) ||
-		strings.Contains(result.Text, agentruntime.MaintenanceCronJobPrefix) {
-		t.Fatalf("tool listing exposed maintenance: %q", result.Text)
+	for _, name := range []string{
+		agentruntime.MaintenanceStorageReconcileJobName,
+		agentruntime.MaintenanceSessionStorageJobName,
+		agentruntime.MaintenanceCronJobPrefix,
+	} {
+		if strings.Contains(result.Text, name) {
+			t.Fatalf("tool listing exposed maintenance %q: %q", name, result.Text)
+		}
 	}
 
-	if _, err := tool.findJob("", agentruntime.MaintenanceStorageReconcileJobName); err == nil {
-		t.Fatal("a name lookup resolved a maintenance job; its result feeds delete/disable")
+	for _, name := range []string{
+		agentruntime.MaintenanceStorageReconcileJobName,
+		agentruntime.MaintenanceSessionStorageJobName,
+	} {
+		if _, err := tool.findJob("", name); err == nil {
+			t.Fatalf("a name lookup resolved maintenance job %q; its result feeds delete/disable", name)
+		}
 	}
 }
 
@@ -182,24 +201,39 @@ func TestDisabledMaintenancePolicyRemovesTheProjection(t *testing.T) {
 	off := NewSchedulerWithSessionDir(store, nil, time.Hour, sessionDir)
 	off.SetMaintenancePolicy(agentruntime.MaintenancePolicy{})
 	off.Start()
-	if _, err := store.Get(agentruntime.MaintenanceStorageReconcileJobID()); err == nil {
-		t.Fatal("a disabled policy still projected the maintenance job")
+	for _, id := range []string{
+		agentruntime.MaintenanceStorageReconcileJobID(),
+		agentruntime.MaintenanceSessionStorageJobID(),
+	} {
+		if _, err := store.Get(id); err == nil {
+			t.Fatalf("a disabled policy still projected maintenance job %s", id)
+		}
 	}
 	off.Stop()
 
 	on := NewSchedulerWithSessionDir(store, nil, time.Hour, sessionDir)
 	on.SetMaintenancePolicy(agentruntime.DefaultMaintenancePolicy())
 	on.Start()
-	if _, err := store.Get(agentruntime.MaintenanceStorageReconcileJobID()); err != nil {
-		t.Fatalf("enabled policy did not project the maintenance job: %v", err)
+	for _, id := range []string{
+		agentruntime.MaintenanceStorageReconcileJobID(),
+		agentruntime.MaintenanceSessionStorageJobID(),
+	} {
+		if _, err := store.Get(id); err != nil {
+			t.Fatalf("enabled policy did not project maintenance job %s: %v", id, err)
+		}
 	}
 	on.Stop()
 
 	restarted := NewSchedulerWithSessionDir(store, nil, time.Hour, sessionDir)
 	restarted.SetMaintenancePolicy(agentruntime.MaintenancePolicy{})
 	restarted.Start()
-	if _, err := store.Get(agentruntime.MaintenanceStorageReconcileJobID()); err == nil {
-		t.Fatal("turning maintenance off left the scheduled job behind")
+	for _, id := range []string{
+		agentruntime.MaintenanceStorageReconcileJobID(),
+		agentruntime.MaintenanceSessionStorageJobID(),
+	} {
+		if _, err := store.Get(id); err == nil {
+			t.Fatalf("turning maintenance off left scheduled job %s behind", id)
+		}
 	}
 	if _, err := store.Get("cron-keep"); err != nil {
 		t.Fatalf("removing maintenance disturbed an unrelated job: %v", err)

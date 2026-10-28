@@ -9,11 +9,10 @@ import { t } from '@/core/i18n';
 import { loadMemory, saveMemory } from '@/core/manage-api';
 import { hasFeature } from '@/core/state';
 import { toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 export function MemoryPanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supported = hasFeature('manageMemory');
   const [content, setContent] = useState('');
 

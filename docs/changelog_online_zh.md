@@ -6,6 +6,8 @@
 
 ### ✨ 新功能
 
+- **新增 `mothx maintenance` 检查与压缩会话数据库。** `status` 报告转录/工具记录计数、数据库大小与可回收空闲页；`vacuum` 执行 SQLite VACUUM 并报告结果，`--dry-run` 可预览。该命令不会删除消息，也不会按保留期清理工具执行记录；定时维护任务仍是唯一会限制终态工具记录并回填搜索索引的路径。
+
 - **新增 Gitee/Moark 模型：`kimi-k3.1-pro` 与 `kimi-k3.1-pro-highspeed`**
   - 为 `gitee` 与 `moark` 新增 `kimi-k3.1-pro` 与 `kimi-k3.1-pro-highspeed`：默认开启思考，使用 Kimi 的 `low`/`high`/`max` 推理强度档位（MothX 的 `minimal`/`low` 映射为 `low`，`medium`/`high` 映射为 `high`，`xhigh`/`max` 映射为 `max`），支持 1M 上下文与文本+图片输入。两者均通过 `kimi` 思考格式使用经过验证的 `reasoning_effort` 参数。
 
@@ -13,6 +15,10 @@
   - 为 `gitee` 与 `moark` 新增 `MiniMax-M3.1-Flash`：通过标准 `reasoning_effort` 参数默认开启思考，支持 1M 上下文与文本+图片+视频输入；默认不发送 max_tokens。
 
 ### 💥 行为变更
+
+- **Serve 会话列表默认有界。** 未指定 `limit` 的 `/api/sessions` 现在只返回前 100 个会话，并附带 `total`、`limit`、`offset`、`hasMore`；可用 `limit`/`offset` 继续翻页。`scope=active` 与 `/api/sessions/active` 改为只投影内存会话池，不再加载全部历史；会话级 MCP 配置也改为按 ID 单查工作目录。
+
+- **会话存储维护已纳入定时任务，且不会删除转录消息。** MothX 现在会投影每日一次的 `mothx-maintenance:session-storage` 任务，永久保留所有 `entries`/`sub_entries` 转录行。该任务只可能清理早于 `maintenance.toolExecutionRetentionDays` 的已完成/已放弃 `tool_execution_records`（默认 `0`，永久保留），始终保留 running/interrupted/retry-requested 记录以免不确定的工具副作用失去围栏，每次运行 `PRAGMA optimize`，并可在开启 `maintenance.vacuumSessionStorage` 时执行 `VACUUM`。
 
 - **SQLite 启动完整性检查现在可显式关闭。** MothX 默认仍会在使用会话库前执行 `PRAGMA quick_check`。超大数据库可用 `MOTHX_SQLITE_QUICK_CHECK=off` 跳过这项固定开销；`mothx doctor` 仍会执行按需的只读完整性检查，并报告 `sessions.integrity`。
 
@@ -24,6 +30,18 @@
 
 ### ⚡ 性能
 
+- **用户背景图模式降低大面积毛玻璃成本。** 背景图生效时，应用表面遮罩、控制/标题栏、输入框与首页快捷卡使用更小的模糊半径，在保持半透明可读性的同时降低持续的 GPU 合成成本。
+
+- **重复搜索复用未变化的 EventStore 投影。** 按物理日志指纹索引、带字节上限的缓存避免每次搜索都重放同一会话；追加或分段轮转会使缓存失效。
+
+- **重复搜索直接复用已算好的结果页。** 查询/分页结果缓存位于候选扫描之前，因此重复的 Desktop/WebUI 历史查询不再执行列表查询，也不重放任何会话内容。缓存条目按持久化的全库写入版本失效：SQLite 触发器会在会话行、legacy payload、EventStore 投影与项目归属写入时递增版本；追加、标题/绑定/工作目录变更、删除或另一进程的写入都会使结果页失效，而不会返回过期内容。
+
+- **会话列表不再在启动时扫描 EventStore。** 首条用户预览、最新标题与绑定元数据现在持久化到小型 SQLite 展示投影，随每个提交批次更新、随分叉复制、随事件投影重建，并由维护任务回填。列表与绑定读取优先使用投影行，缺失时仍回退到 canonical EventStore 扫描。
+
+- **Desktop 设置页不再因后台流式 chunk 整体重渲染。** 16 个设置面板现在只订阅自己展示的连接/偏好字段，不再订阅整个应用状态。
+
+- **会话内容搜索改为先通过派生 FTS5 索引缩小范围。** 搜索先向 trigram 全文索引查询候选会话，再只对候选做 canonical 重放校验；最终命中仍由重放决定，因此 compaction 丢弃的内容与 content override 的替换语义完全不变。索引与每次写入在同一事务内落库，随事件投影重建、随分叉复制，并在旧会话 attach 时回填；短查询、索引异常与尚未建索引的会话自动退回原全量扫描，搜索本身仍然只读。每日会话存储维护还会按最新优先回填最多 512 个尚未建索引的会话，因此历史会话不需要逐个打开也能被搜索到。
+
 - **Desktop 流式输出与长列表滚动不再重渲染整个外壳。** 渲染进程序列化状态通知,每帧最多提交一次;转录条目改为不可变替换,未变化的 Markdown/工具卡直接跳过渲染;侧边栏、状态栏、输入框与计划面板只订阅自己展示的状态切片;视口外的转录块可跳过布局与绘制;聊天自动跟随滚动与绘制 chunk 的提交合并。
 
 - **Desktop 首次任务列表不再逐个串行扫描会话。** ACP 列表行改用只做结构校验的 EventStore 投影,仅解析首条用户预览与最新标题/绑定,并用有界 worker 池预取当前页;真正打开会话时仍会校验全部 batch 摘要并 fail-closed。
@@ -34,6 +52,8 @@
 - **长时间运行的 Desktop 窗口保持有界。** 实时转录只渲染末尾 300 条(可在本地继续展开),status/retry/compaction 通知就地更新而不再累积,会话/搜索/子代理/Run 状态缓存都有上限,进度轮询不会重叠,转录查找改用索引避免每个 chunk 全表扫描,超大工具输出在展示副本中截断,`desktop.log` 在启动间按 8MB 轮转。
 
 ### 🐛 问题修复
+
+- **部分应用过的会话列表迁移现在会自愈。** 有些数据库在 Run 索引被加入 v49 迁移体之前就记录了 schema 版本 49，此后已记录版本会被直接跳过，`idx_session_runs_session_status_started` 永远缺失。版本 50 用 `CREATE INDEX IF NOT EXISTS` 重新声明该索引，这些数据库下次启动时收敛，新库保持不变。
 
 - **后台 Responses 任务在挂接期间收到停止时不再记为失败。** 并发 WAL 读可能让停止操作在后台 coordinator 挂接 Agent 之前把 Run 标为 cancelling。此前该分支会落入默认 `failed` 终态，并可能遗留 provider 侧任务；现在保留 `cancelled`，并显式取消远端 Responses 任务。
 

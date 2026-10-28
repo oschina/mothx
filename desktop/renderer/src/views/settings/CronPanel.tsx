@@ -21,11 +21,10 @@ import {
 } from '@/core/automation';
 import { hasFeature } from '@/core/state';
 import { toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 export function CronPanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supported = hasFeature('manageCron');
   const [jobs, setJobs] = useState<CronJobView[] | null>(null);
   const [draft, setDraft] = useState<CronJobView | null>(null);

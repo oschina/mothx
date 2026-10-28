@@ -794,6 +794,60 @@ func TestListActiveSessions(t *testing.T) {
 	}
 }
 
+func TestListActiveSessionsPage(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.pool.Stop()
+
+	for i := 0; i < 5; i++ {
+		mgr := session.New(t.TempDir(), srv.settings.GetSessionDir())
+		id := fmt.Sprintf("page-session-%d", i)
+		if err := mgr.InitWithID(id); err != nil {
+			t.Fatalf("init %s: %v", id, err)
+		}
+		if _, err := mgr.AppendMessage(provider.NewUserMessage("page body")); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+	}
+
+	first, total, err := srv.ListActiveSessionsPage(2, 0)
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if total != 5 || len(first) != 2 {
+		t.Fatalf("first page = %d rows total %d, want 2 of 5", len(first), total)
+	}
+	last, total, err := srv.ListActiveSessionsPage(2, 4)
+	if err != nil {
+		t.Fatalf("last page: %v", err)
+	}
+	if total != 5 || len(last) != 1 {
+		t.Fatalf("last page = %d rows total %d, want 1 of 5", len(last), total)
+	}
+	if first[0].ID == last[0].ID {
+		t.Fatalf("pagination repeated %s across pages", first[0].ID)
+	}
+}
+
+func TestListActivePoolSessionsExcludesPersistedHistory(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.pool.Stop()
+
+	history := session.New(t.TempDir(), srv.settings.GetSessionDir())
+	if err := history.InitWithID("history-only"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := history.AppendMessage(provider.NewUserMessage("history body")); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.pool.Put(&APISession{ID: "live-only", WorkDir: "/tmp/live"}); err != nil {
+		t.Fatal(err)
+	}
+	live := srv.ListActivePoolSessions()
+	if len(live) != 1 || live[0].ID != "live-only" || !live[0].Active {
+		t.Fatalf("active pool = %#v, want only the in-memory session", live)
+	}
+}
+
 func TestGetSessionMessagesReadsFromSessionDB(t *testing.T) {
 	srv := newTestServer(t)
 	defer srv.pool.Stop()

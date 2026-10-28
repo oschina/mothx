@@ -210,6 +210,34 @@ The command refuses to start while a session run is active in that directory, na
 
 Attachment storage becomes unreachable once the rows that described it are archived, and the same happens when a session is deleted or an intake fails after its content was written. Reclamation never relies on a reset: the Runtime sweeps the private store while accepting new attachments (at most once an hour per process) and once a day through its own cron maintenance job, and removes only directories that no row references **and** that were last written before the attachment retention window plus a 24-hour grace period - eight days by default with the 7-day retention. That floor is why reclamation can never destroy something a restored archive could still serve. `--prune-unreferenced` runs the same pass immediately and reports what it reclaimed and what it kept as too young; `channels/` and `knowledge-bases/` are never touched by it. The scheduled pass is configured by the optional `maintenance` section of `settings.json` (`reclaimAttachmentStorage`, `storageReconcileSchedule`); see [configuration](configuration.md#maintenance).
 
+### `maintenance` - Inspect and Compact the Session Database
+
+Session-storage maintenance never deletes transcript messages. `status` is read-only: it reports the database size, transcript and sub-agent entry counts, tool-execution record count, and reclaimable free pages. `vacuum` runs SQLite `VACUUM` to release free pages and reports the before/after state; `--dry-run` previews the reclaimable space without rewriting the database. No tool-execution record is pruned by either command.
+
+```
+mothx maintenance status [flags]
+mothx maintenance vacuum [flags]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--session-dir` | - | Configured session directory | Session directory to inspect or vacuum |
+| `--dry-run` | - | false | `vacuum` only: report reclaimable free pages without rewriting the database |
+
+Examples:
+```bash
+# Show database size, transcript counts, and reclaimable space
+mothx maintenance status
+
+# Preview what VACUUM would reclaim
+mothx maintenance vacuum --dry-run
+
+# Rewrite sessions.db and release free pages
+mothx maintenance vacuum
+```
+
+`VACUUM` rewrites the whole database, needs free disk space equal to its size, and holds the SQLite writer for the duration of the rewrite; run it while other MothX processes are idle. The scheduled Runtime maintenance job performs the same optional VACUUM and applies the configured retention only to terminal tool-execution idempotency records; transcript messages are preserved by both paths. See [configuration](configuration.md#maintenance).
+
 ### `worktree` - Isolated Git Worktrees
 
 Create, list, reset, and remove isolated git worktrees managed by the shared Runtime. Worktrees default to `<data-dir>/worktrees`, are registered in the sessions database, and are shared by TUI/CLI, ACP/Desktop, and sub-agents. Creation is controlled by `settings.json` `worktree.enabled`; disabling creation still allows listing, resetting, and removing existing worktrees.

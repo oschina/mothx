@@ -28,7 +28,7 @@ import { t } from '@/core/i18n';
 import { loadMcp, setMcpServers, type McpScope, type McpServerView } from '@/core/manage-api';
 import { hasFeature } from '@/core/state';
 import { toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 interface ServerDraft {
   name: string;
@@ -122,8 +122,8 @@ export interface McpPanelProps {
 
 export function McpPanel({ scope = 'global', sessionId }: McpPanelProps) {
   const formId = useId();
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
+  const activeSessionCwd = useAppSelector((state) => state.activeSessionCwd);
   const supported = hasFeature('manageMcp');
   const isProject = scope === 'project';
   const [servers, setServers] = useState<McpServerView[] | null>(null);
@@ -247,7 +247,7 @@ export function McpPanel({ scope = 'global', sessionId }: McpPanelProps) {
     <section className="flex flex-col gap-3">
       {isProject ? (
         <div className="rounded-lg border border-border bg-muted/30 px-3.5 py-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
-          {t('chat.projectMcpHint', { cwd: appState.activeSessionCwd || t('chat.projectMcpNoCwd') })}
+          {t('chat.projectMcpHint', { cwd: activeSessionCwd || t('chat.projectMcpNoCwd') })}
         </div>
       ) : null}
       <RowList>

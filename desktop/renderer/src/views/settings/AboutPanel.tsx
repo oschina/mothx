@@ -3,11 +3,10 @@
 import { Cpu } from 'lucide-react';
 
 import { RowItem, RowList } from '@/components/layout';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 export function AboutPanel() {
-  const appState = useAppState();
-  const info = appState.appInfo;
+  const info = useAppSelector((state) => state.appInfo);
   const detail = `v${info.version} · ${info.platform}/${info.arch} · ACP v1${info.runtimeBinary ? ` · ${info.runtimeBinary}` : ''}`;
   return (
     <RowList>

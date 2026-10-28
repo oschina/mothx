@@ -93,7 +93,7 @@ func prunePureArtifacts(out io.Writer, sessionDir string) error {
 	fmt.Fprintf(out, "Reclaimed %d unreferenced attachment %s (%s) older than %s\n",
 		reconciliation.Removed,
 		pureDirectoryWord(reconciliation.Removed),
-		formatPureBytes(reconciliation.Freed),
+		formatByteSize(reconciliation.Freed),
 		reconciliation.AgeFloor.Format(time.RFC3339),
 	)
 	if reconciliation.SkippedYoung > 0 {
@@ -164,7 +164,7 @@ func printPureReport(out io.Writer, sessionDir string, report session.ResetRepor
 		if entry.Directory {
 			name += string(filepath.Separator)
 		}
-		fmt.Fprintf(out, "  %-24s %s\n", name, formatPureBytes(entry.Bytes))
+		fmt.Fprintf(out, "  %-24s %s\n", name, formatByteSize(entry.Bytes))
 		if entry.Name == agentruntime.ArtifactStorageDirectoryName() {
 			artifactsReclaimed = true
 		}
@@ -177,7 +177,7 @@ func printPureReport(out io.Writer, sessionDir string, report session.ResetRepor
 	}
 }
 
-func formatPureBytes(bytes int64) string {
+func formatByteSize(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
 		return fmt.Sprintf("%d B", bytes)

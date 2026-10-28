@@ -55,8 +55,10 @@ type Settings struct {
 
 // MaintenanceSettings configures Runtime-owned housekeeping that is scheduled
 // through the shared cron lifecycle but is not a user automation task. Absent
-// means every default applies, and the defaults keep the previous behavior:
-// attachment storage reconciliation runs once a day.
+// means every default applies. Attachment storage reconciliation runs once a
+// day; session storage maintenance also runs once a day but keeps every
+// transcript message forever and, with the default retention of 0, deletes no
+// tool-execution records either.
 type MaintenanceSettings struct {
 	// ReclaimAttachmentStorage gates the private attachment-store reconciliation.
 	// nil/true = enabled, false = the scheduled job is removed and the work is
@@ -66,6 +68,22 @@ type MaintenanceSettings struct {
 	// (for example "@every 12h" or "0 4 * * *"). Empty uses the Runtime default,
 	// and an invalid value falls back to it with a cron log line.
 	StorageReconcileSchedule string `json:"storageReconcileSchedule,omitempty"`
+	// ReclaimSessionStorage gates Runtime-owned session-storage maintenance.
+	// nil/true = the scheduled job exists. It never removes transcript rows
+	// (`entries` / `sub_entries`); see ToolExecutionRetentionDays.
+	ReclaimSessionStorage *bool `json:"reclaimSessionStorage,omitempty"`
+	// SessionStorageSchedule overrides the cadence of session-storage maintenance.
+	// Empty uses the Runtime default, and an invalid value falls back to it.
+	SessionStorageSchedule string `json:"sessionStorageSchedule,omitempty"`
+	// ToolExecutionRetentionDays is how long a completed or abandoned
+	// tool-execution idempotency record is kept. 0/absent keeps every record
+	// forever. In-flight states (running, interrupted, retry_requested) are never
+	// pruned regardless of age, and transcript messages are never touched.
+	ToolExecutionRetentionDays int `json:"toolExecutionRetentionDays,omitempty"`
+	// VacuumSessionStorage opts into a VACUUM after pruning. The default is false:
+	// VACUUM rewrites the whole database file and can hold the writer lock for a
+	// long time on a large session store.
+	VacuumSessionStorage *bool `json:"vacuumSessionStorage,omitempty"`
 }
 
 // MarshalJSON keeps sparse settings files sparse. encoding/json does not omit
@@ -2173,6 +2191,46 @@ func (s *Settings) AttachmentStorageReclaimSchedule() string {
 		return ""
 	}
 	return strings.TrimSpace(s.Maintenance.StorageReconcileSchedule)
+}
+
+// IsSessionStorageReclaimEnabled reports whether Runtime-owned session-storage
+// maintenance is scheduled. It defaults to true, but with the default
+// ToolExecutionRetentionDays of 0 the job only runs PRAGMA optimize and reports
+// storage; it deletes no transcript message and no tool-execution record.
+func (s *Settings) IsSessionStorageReclaimEnabled() bool {
+	if s == nil || s.Maintenance == nil || s.Maintenance.ReclaimSessionStorage == nil {
+		return true
+	}
+	return *s.Maintenance.ReclaimSessionStorage
+}
+
+// SessionStorageReclaimSchedule returns the configured cadence for session
+// storage maintenance, or "" when the Runtime default applies.
+func (s *Settings) SessionStorageReclaimSchedule() string {
+	if s == nil || s.Maintenance == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.Maintenance.SessionStorageSchedule)
+}
+
+// ToolExecutionRetentionDays returns the configured retention for completed or
+// abandoned tool-execution records. Zero (the default) means keep forever.
+// Transcript rows are never governed by this value.
+func (s *Settings) ToolExecutionRetentionDays() int {
+	if s == nil || s.Maintenance == nil || s.Maintenance.ToolExecutionRetentionDays <= 0 {
+		return 0
+	}
+	return s.Maintenance.ToolExecutionRetentionDays
+}
+
+// IsSessionStorageVacuumEnabled reports whether session-storage maintenance may
+// VACUUM the database after pruning. Defaults to false because VACUUM rewrites
+// the whole file.
+func (s *Settings) IsSessionStorageVacuumEnabled() bool {
+	if s == nil || s.Maintenance == nil || s.Maintenance.VacuumSessionStorage == nil {
+		return false
+	}
+	return *s.Maintenance.VacuumSessionStorage
 }
 
 func (s *Settings) IsWebSearchEnabled() bool {

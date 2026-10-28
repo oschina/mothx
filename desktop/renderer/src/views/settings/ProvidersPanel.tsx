@@ -35,7 +35,7 @@ import {
 } from '@/core/manage-api';
 import { hasFeature } from '@/core/state';
 import { confirmDanger, promptModal, toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 import { cn } from '@/lib/utils';
 
 const API_CHOICES = ['openai-chat', 'openai-responses', 'anthropic-messages', 'google-gemini', 'google-vertex'];
@@ -222,8 +222,7 @@ function modelDraftDefaults(catalog: ProviderCatalog): ProviderModelView {
 }
 
 export function ProvidersPanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supportsWorkspace = hasFeature('manageProviderConfig');
   const supportsAny = hasFeature('manageProviders') || hasFeature('manageSettings');
 

@@ -41,14 +41,15 @@
   新增 `flushPendingEmits` 供测试/启动路径使用。
 - `hooks/useAppState.ts`：新增 `useAppSelector` + `shallowEqual`。
   App、Sidebar、StatusBar、TitleBar、Composer、HomeView、ChatView、HistoryView
-  只订阅自己展示的切片。
+  以及设置页 16 个面板只订阅自己展示的切片。
 - `core/bootstrap.ts`：移除重复 emit；store/appInfo 与 startup 列表并行加载。
 - `core/transcript.ts`：条目改为不可变替换；`TranscriptEntry` 与 `Markdown`
   使用 `memo`，未变化条目跳过渲染。
 - `ChatStream`：自动跟随滚动合并到 rAF；每个条目外包一层
   `.transcript-entry { content-visibility: auto }`，视口外跳过布局/绘制。
 - `Sidebar`：排序/搜索/FLIP 签名改为 `useMemo`；子组件不再逐个订阅全局 store。
-- `HomeView`：hero 鼠标视差改为按帧更新，避免每次 pointermove 强制布局。
+- `HomeView`：移除 hero 光晕/鼠标视差；快捷卡 spotlight 改为整个网格统一委托 + rAF 合并（每帧最多测量一次卡片），不再每次 pointermove 强制布局。
+- 用户背景图全局生效时降低大面积 `backdrop-filter` 半径（surface veil 3px、控制/标题栏 5px、composer 6px、首页快捷卡 8px），减少 GPU 合成成本；无背景图时保持原效果。
 
 ### 2.2 Electron main
 
@@ -108,9 +109,4 @@
 
 ## 6. 后续可选优化
 
-- 设置页各面板仍使用粗粒度 `useAppState`；后台任务流式时可进一步改为 selector。
-- 当前窗口化只限制 DOM/React 成本；极长任务的 `state.transcript` 字符串（尤其超大工具输出）仍会增长，必要时可在 Runtime 投影层截断展示副本。
-- 长期可把列表标题/预览/绑定持久化为 SQLite 展示投影，彻底消除启动时对
-  EventStore 的扫描；当前结构扫描 + 并行预取已是低风险折中。
-- 大面积 `backdrop-filter`（用户背景图全局作用时）仍是 GPU 成本；如仍有掉帧，
-  可限制在主内容区之外或降低 blur 半径。
+- 当前窗口化只限制 DOM/React 成本；极长任务的 `state.transcript` 字符串仍会增长。渲染层已把工具文本限制在 20k/40k；进一步截断 ACP/Runtime 展示副本需要先提供按需取全量内容的契约，否则会丢失可查看内容，暂不实施。

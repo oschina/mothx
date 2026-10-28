@@ -172,7 +172,7 @@ MothX 使用两个配置文件:
 | `retry` | object | *(见下文)* | API 调用重试设置 |
 | `approval` | object | *(见下文)* | Bash 命令审批设置 |
 | `worktree` | object | *(见下文)* | 隔离 git worktree 设置 |
-| `maintenance` | object | *(见下文)* | Runtime 自有后台维护（附件存储回收） |
+| `maintenance` | object | *(见下文)* | Runtime 自有后台维护（附件回收与会话存储维护） |
 | `webSearch` | object | *(见下文)* | DeepSeek 网页搜索/抓取工具设置 |
 | `updateCheck` | bool | `true` | 启用 npm 版本更新检测通知 |
 
@@ -1164,11 +1164,17 @@ Runtime 自有的后台维护配置。它们不是用户自动化任务：MothX 
 |------|------|--------|------|
 | `reclaimAttachmentStorage` | bool | `true` | 回收已不再被任何持久记录引用的附件存储 |
 | `storageReconcileSchedule` | string | `@daily` | 该回收的频率（`@daily`、`@every 12h` 或 5 段 cron 表达式） |
+| `reclaimSessionStorage` | bool | `true` | 运行会话存储维护；它永远不会删除转录消息 |
+| `sessionStorageSchedule` | string | `@daily` | 会话存储维护的频率（`@daily`、`@every 12h` 或 5 段 cron 表达式） |
+| `toolExecutionRetentionDays` | int | `0` | 已完成/已放弃的工具执行幂等记录保留天数；`0` 表示永久保留 |
+| `vacuumSessionStorage` | bool | `false` | 清理后执行 `VACUUM` 释放空闲页 |
 
 ```json
 {
   "maintenance": {
-    "reclaimAttachmentStorage": false
+    "reclaimAttachmentStorage": false,
+    "toolExecutionRetentionDays": 90,
+    "vacuumSessionStorage": true
   }
 }
 ```
@@ -1176,6 +1182,8 @@ Runtime 自有的后台维护配置。它们不是用户自动化任务：MothX 
 回收只处理会话目录下 `artifacts/` 存储中同时满足两个条件的目录：（1）没有任何 `session_attachments` 行引用它，**且**（2）最后一次写入已早于附件保留期外加 24 小时缓冲（默认保留 7 天，即共 8 天）。无法读取会话数据库时一律不删（fail closed），不跟随符号链接，也只处理与自己生成的附件 ID 形状一致的目录，因此无关数据不会被当作可回收存储。正是这个时间下限，保证了回收不可能删掉“恢复 `mothx pure` 归档后仍可用”的数据。详见 [`mothx pure`](cli-reference.md#pure---归档会话数据库)。
 
 `storageReconcileSchedule` 写错时会回退到默认频率并输出 `[cron]` 日志；只改频率也只会更新计定任务的 schedule，运行次数与状态保持不变。关闭回收会在下次调度器启动时移除该计划任务；即使旧进程留下的任务行被触发，也会被拒绝而不是删任何东西。
+
+会话存储维护永久保留所有转录消息：不会删除 `entries`、`sub_entries`、compaction 条目、content override 或 EventStore 内容。它只可能清理早于 `toolExecutionRetentionDays` 的 `completed`/`abandoned` 工具执行幂等记录（默认 `0` 表示全部保留）；`running`、`interrupted`、`retry_requested` 记录始终保留，避免不确定的工具副作用失去围栏。每次运行都会执行 `PRAGMA optimize`，并为最多 512 个尚未建索引的会话补建派生内容搜索索引（最新的会话优先）；无法读取的存储会跳过并在下次重试。`vacuumSessionStorage` 额外重写数据库文件以释放空闲页，默认关闭，因为 `VACUUM` 会在整个重写期间持有 SQLite 写锁。
 
 ### 项目级允许规则（`allow.json`）
 

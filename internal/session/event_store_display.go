@@ -16,9 +16,10 @@ import (
 // the first user-message preview, the latest title, and the persisted binding
 // metadata. It is derived projection data, never replay authority.
 type eventStoreDisplayState struct {
-	Preview  string
-	Title    string
-	Bindings SessionBindings
+	Preview     string
+	PreviewSeen bool
+	Title       string
+	Bindings    SessionBindings
 }
 
 type eventStoreDisplayCacheEntry struct {
@@ -136,12 +137,11 @@ func loadEventStoreDisplayProjection(sessionDir, sessionID string) (eventStoreDi
 
 func eventStoreDisplayFromBatches(batches []EventBatch) eventStoreDisplayState {
 	state := eventStoreDisplayState{}
-	previewFound := false
 	for _, batch := range batches {
 		for _, event := range batch.Events {
 			switch EntryType(event.Kind) {
 			case EntryMessage:
-				if previewFound {
+				if state.PreviewSeen {
 					continue
 				}
 				var entry MessageEntry
@@ -160,7 +160,7 @@ func eventStoreDisplayFromBatches(batches []EventBatch) eventStoreDisplayState {
 				if text != "" {
 					state.Preview = util.TruncateWithSuffix(text, 60, "...")
 				}
-				previewFound = true
+				state.PreviewSeen = true
 			case EntrySessionInfo:
 				var entry SessionInfoEntry
 				if json.Unmarshal(event.Payload, &entry) == nil {

@@ -61,7 +61,7 @@ func (rt *channelRuntime) handleSessionMCPConfig(w http.ResponseWriter, r *http.
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "API server not ready"})
 		return
 	}
-	workDir, err := sessionWorkDir(sessions.ListActiveSessions(), id)
+	workDir, err := sessions.GetSessionWorkDir(id)
 	if err != nil {
 		if errors.Is(err, openaiapi.ErrSessionNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -71,21 +71,4 @@ func (rt *channelRuntime) handleSessionMCPConfig(w http.ResponseWriter, r *http.
 		return
 	}
 	rt.handleMCPConfigAtPath(w, r, filepath.Join(workDir, config.ProjectMCPPath()))
-}
-
-func sessionWorkDir(items []openaiapi.ActiveSessionInfo, id string) (string, error) {
-	var workDir string
-	for _, item := range items {
-		if item.ID != id {
-			continue
-		}
-		if workDir != "" && workDir != item.WorkDir {
-			return "", openaiapi.ErrActiveSessionIDAmbiguous
-		}
-		workDir = item.WorkDir
-	}
-	if workDir == "" {
-		return "", openaiapi.ErrSessionNotFound
-	}
-	return workDir, nil
 }

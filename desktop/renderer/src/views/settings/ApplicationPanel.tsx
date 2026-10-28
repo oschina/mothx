@@ -17,7 +17,7 @@ import {
 } from '@/core/manage-api';
 import { hasFeature } from '@/core/state';
 import { toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 interface ApplicationForm {
   defaultMode: string;
@@ -220,11 +220,10 @@ function toPatch(form: ApplicationForm): Record<string, unknown> {
 }
 
 export function ApplicationPanel() {
-  const appState = useAppState();
   const [form, setForm] = useState<ApplicationForm | null>(null);
   const [saving, setSaving] = useState(false);
   const supported = hasFeature('manageApplicationSettings');
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
 
   useEffect(() => {
     if (!ready) return;

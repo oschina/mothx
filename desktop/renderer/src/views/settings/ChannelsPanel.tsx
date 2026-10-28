@@ -11,11 +11,10 @@ import { t } from '@/core/i18n';
 import { loadChannels, saveChannels, type ChannelsConfigPatch, type ChannelsConfigView } from '@/core/manage-api';
 import { hasFeature, state } from '@/core/state';
 import { toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 export function ChannelsPanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supported = hasFeature('manageChannels');
   const [view, setView] = useState<ChannelsConfigView | null>(null);
   const [artifact, setArtifact] = useState(false);

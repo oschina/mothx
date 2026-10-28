@@ -96,12 +96,14 @@ func RebuildEventProjection(ctx context.Context, sessionDir, sessionID string, g
 		return err
 	}
 	projections := make([]dao.SessionEventProjectionRecord, 0)
+	entries := make([]interface{}, 0)
 	for _, batch := range batches {
-		batchProjections, err := eventProjectionRecords(batch)
+		batchProjections, batchEntries, err := eventProjectionRecords(batch)
 		if err != nil {
 			return err
 		}
 		projections = append(projections, batchProjections...)
+		entries = append(entries, batchEntries...)
 	}
 	return WriteRootDatabase(ctx, sessionDir, func(tx *dao.Tx) error {
 		if _, err := validateRuntimeLeaseBindingTxContext(ctx, tx, sessionDir, sessionID, binding.RunID, binding.Purpose); err != nil {
@@ -113,6 +115,21 @@ func RebuildEventProjection(ctx context.Context, sessionDir, sessionID string, g
 		}
 		if err := projectionDAO.InsertBatch(ctx, tx, projections); err != nil {
 			return fmt.Errorf("rebuild event projection: %w", err)
+		}
+		if err := dao.NewSessionSearchIndexDAO(nil).DeleteSession(ctx, tx, sessionID); err != nil {
+			return fmt.Errorf("clear session search index: %w", err)
+		}
+		if err := indexSessionSearchEntriesTx(ctx, tx, sessionID, entries); err != nil {
+			return fmt.Errorf("rebuild session search index: %w", err)
+		}
+		displayDAO := dao.NewSessionDisplayProjectionDAO(nil)
+		if err := displayDAO.DeleteSession(ctx, tx, sessionID); err != nil {
+			return fmt.Errorf("clear session display projection: %w", err)
+		}
+		if len(batches) > 0 {
+			if err := upsertDisplayProjectionTx(ctx, tx, sessionID, eventStoreDisplayFromBatches(batches)); err != nil {
+				return fmt.Errorf("rebuild session display projection: %w", err)
+			}
 		}
 		return nil
 	})
@@ -273,7 +290,7 @@ func CommitEventIntent(ctx context.Context, sessionDir string, spec EventIntentS
 	if committedBatch == nil || committedBatch.BatchID != spec.ID || committedBatch.SeqFrom != spec.SeqFrom || committedBatch.SeqTo != spec.SeqTo || committedBatch.Digest != spec.Digest {
 		return fmt.Errorf("event batch %s is not complete for commit", spec.ID)
 	}
-	projections, err := eventProjectionRecords(*committedBatch)
+	projections, entries, err := eventProjectionRecords(*committedBatch)
 	if err != nil {
 		return err
 	}
@@ -289,6 +306,12 @@ func CommitEventIntent(ctx context.Context, sessionDir string, spec EventIntentS
 		if err := dao.NewSessionEventProjectionDAO(nil).InsertBatch(ctx, tx, projections); err != nil {
 			return fmt.Errorf("persist event projection: %w", err)
 		}
+		if err := indexSessionSearchEntriesTx(ctx, tx, spec.SessionID, entries); err != nil {
+			return fmt.Errorf("index session search content: %w", err)
+		}
+		if err := updateDisplayProjectionTx(ctx, tx, spec.SessionID, entries); err != nil {
+			return fmt.Errorf("update session display projection: %w", err)
+		}
 		if err := dao.NewSessionDAO(nil).SetContentStore(ctx, tx, spec.SessionID, "event_store"); err != nil {
 			return fmt.Errorf("mark EventStore as canonical: %w", err)
 		}
@@ -299,16 +322,17 @@ func CommitEventIntent(ctx context.Context, sessionDir string, spec EventIntentS
 	})
 }
 
-func eventProjectionRecords(batch EventBatch) ([]dao.SessionEventProjectionRecord, error) {
+func eventProjectionRecords(batch EventBatch) ([]dao.SessionEventProjectionRecord, []interface{}, error) {
 	projections := make([]dao.SessionEventProjectionRecord, 0, len(batch.Events))
+	entries := make([]interface{}, 0, len(batch.Events))
 	for i, event := range batch.Events {
 		decoded, err := DecodeEventRecord(event)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		id, kind, parentID, timestamp := getEntryMetadata(decoded)
 		if id != event.EventID || kind != event.Kind {
-			return nil, fmt.Errorf("event projection metadata mismatch for %s", event.EventID)
+			return nil, nil, fmt.Errorf("event projection metadata mismatch for %s", event.EventID)
 		}
 		// The batch envelope carries the Run/Turn of the append, which is not the
 		// same thing for a turn boundary marker: one fenced append can legitimately
@@ -333,8 +357,9 @@ func eventProjectionRecords(batch EventBatch) ([]dao.SessionEventProjectionRecor
 			ParentID: parentID, RunID: runID, TurnID: turnID,
 			Timestamp: timestamp.UTC().Format(time.RFC3339Nano), BatchID: batch.BatchID,
 		})
+		entries = append(entries, decoded)
 	}
-	return projections, nil
+	return projections, entries, nil
 }
 
 // ReconcileEventIntents lets a fenced recovery owner settle event intents for

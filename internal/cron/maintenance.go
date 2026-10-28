@@ -48,9 +48,35 @@ func (s *Scheduler) ensureMaintenanceJob() {
 		return
 	}
 	policy := s.maintenancePolicy()
-	id := agentruntime.MaintenanceStorageReconcileJobID()
+	s.projectMaintenanceJob(
+		agentruntime.MaintenanceStorageReconcileJobID(),
+		agentruntime.MaintenanceStorageReconcileJobName,
+		policy.ReclaimAttachmentStorage,
+		policy.StorageReconcileSchedule,
+		agentruntime.MaintenanceStorageReconcileSchedule,
+	)
+	s.projectMaintenanceJob(
+		agentruntime.MaintenanceSessionStorageJobID(),
+		agentruntime.MaintenanceSessionStorageJobName,
+		policy.ReclaimSessionStorage,
+		policy.SessionStorageSchedule,
+		agentruntime.MaintenanceSessionStorageSchedule,
+	)
+}
+
+// projectMaintenanceJob projects one Runtime-owned job onto this scheduler's
+// store: enabled means the job exists on the configured cadence, disabled means
+// it is gone. Cron stays the sole owner of job lifecycle (claims, stale
+// recovery, status, next-run), the Runtime owns what the job does, and no
+// adapter has to know maintenance exists.
+//
+// An existing job keeps its run history, counters, and enabled flag; only its
+// schedule follows configuration. That keeps a paused job paused (an operator
+// choice) while making settings authoritative for cadence and for turning the
+// whole projection off.
+func (s *Scheduler) projectMaintenanceJob(id, name string, enabled bool, schedule, fallbackSchedule string) {
 	existing, err := s.store.Get(id)
-	if !policy.ReclaimAttachmentStorage {
+	if !enabled {
 		if err == nil {
 			if deleteErr := s.store.Delete(id); deleteErr != nil && !isMissingCronJobError(deleteErr) {
 				log.Printf("[cron] remove disabled maintenance job: %v", deleteErr)
@@ -61,20 +87,20 @@ func (s *Scheduler) ensureMaintenanceJob() {
 		return
 	}
 	if s.sessionDir == "" {
-		// Without a session directory there is no private store to reconcile, and
+		// Without a session directory there is no private store to maintain, and
 		// scheduling a job that could only fail would pollute the shared store.
 		return
 	}
-	schedule := strings.TrimSpace(policy.StorageReconcileSchedule)
+	schedule = strings.TrimSpace(schedule)
 	if schedule == "" {
-		schedule = agentruntime.MaintenanceStorageReconcileSchedule
+		schedule = fallbackSchedule
 	}
 	if err == nil {
 		if existing.Schedule == schedule {
 			return
 		}
 		updated := *existing
-		if !normalizeMaintenanceSchedule(&updated, schedule) {
+		if !normalizeMaintenanceSchedule(&updated, schedule, fallbackSchedule) {
 			return
 		}
 		if updateErr := s.store.Update(updated); updateErr != nil {
@@ -88,13 +114,13 @@ func (s *Scheduler) ensureMaintenanceJob() {
 	}
 	job := CronJob{
 		ID:       id,
-		Name:     agentruntime.MaintenanceStorageReconcileJobName,
+		Name:     name,
 		Prompt:   "Runtime-owned maintenance; never executed as an agent prompt.",
 		Schedule: schedule,
 		Mode:     "yolo",
 		Enabled:  true,
 	}
-	if !normalizeMaintenanceSchedule(&job, schedule) {
+	if !normalizeMaintenanceSchedule(&job, schedule, fallbackSchedule) {
 		return
 	}
 	if _, createErr := s.store.Create(job); createErr != nil {
@@ -108,13 +134,13 @@ func (s *Scheduler) ensureMaintenanceJob() {
 // falls back to the Runtime default when the configured value cannot be parsed.
 // The schedule grammar belongs to this package, so an invalid setting is reported
 // and corrected here instead of being validated a second time elsewhere.
-func normalizeMaintenanceSchedule(job *CronJob, schedule string) bool {
+func normalizeMaintenanceSchedule(job *CronJob, schedule, fallback string) bool {
 	job.Schedule = schedule
 	if err := NormalizeJobSchedule(job); err == nil {
 		return true
-	} else if schedule != agentruntime.MaintenanceStorageReconcileSchedule {
-		log.Printf("[cron] invalid maintenance schedule %q (%v); using %s", schedule, err, agentruntime.MaintenanceStorageReconcileSchedule)
-		job.Schedule = agentruntime.MaintenanceStorageReconcileSchedule
+	} else if schedule != fallback {
+		log.Printf("[cron] invalid maintenance schedule %q (%v); using %s", schedule, err, fallback)
+		job.Schedule = fallback
 		return NormalizeJobSchedule(job) == nil
 	}
 	return false

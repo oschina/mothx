@@ -10,13 +10,12 @@ import { t } from '@/core/i18n';
 import { loadEnv, saveEnv, type EnvView } from '@/core/manage-api';
 import { hasFeature } from '@/core/state';
 import { toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 type EnvDraft = { value: string; deleted: boolean; isNew: boolean; touched: boolean };
 
 export function EnvPanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supported = hasFeature('manageEnv');
   const [view, setView] = useState<EnvView | undefined>();
   const [drafts, setDrafts] = useState<Record<string, EnvDraft>>({});

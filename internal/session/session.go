@@ -903,6 +903,22 @@ func LatestSessionBindings(sessionDir string, sessionIDs []string) (map[string]S
 		}
 	}
 	if len(eventStoreIDs) > 0 {
+		resolved := make(map[string]struct{}, len(eventStoreIDs))
+		if projections, err := loadDisplayProjections(context.Background(), sessionDir, eventStoreIDs); err == nil {
+			for _, sessionID := range eventStoreIDs {
+				if state, ok := projections[sessionID]; ok {
+					result[sessionID] = state.Bindings
+					resolved[sessionID] = struct{}{}
+				}
+			}
+		}
+		missing := make([]string, 0, len(eventStoreIDs))
+		for _, sessionID := range eventStoreIDs {
+			if _, ok := resolved[sessionID]; !ok {
+				missing = append(missing, sessionID)
+			}
+		}
+		eventStoreIDs = missing
 		prefetchEventStoreDisplays(sessionDir, eventStoreIDs)
 	}
 	for _, sessionID := range eventStoreIDs {
@@ -2312,6 +2328,9 @@ var sessionChildTables = []string{
 	"session_channel_tools",
 	"session_event_projections",
 	"session_event_intents",
+	"session_content_index_state",
+	"session_content_fts",
+	"session_display_projection",
 	"entries",
 }
 
@@ -3102,9 +3121,40 @@ func FillSessionDetailPreviews(sessionDir string, details []SessionDetail) {
 		}
 		ids = append(ids, details[i].ID)
 	}
-	prefetchEventStoreDisplays(sessionDir, ids)
+	if len(ids) == 0 {
+		return
+	}
+	// Prefer the persisted display projection: it removes the EventStore scan
+	// from the common list path. Sessions without a row keep the scan fallback,
+	// and a row with empty fields is still authoritative (it was projected from
+	// complete content).
+	resolved := make(map[string]struct{}, len(ids))
+	if projections, err := loadDisplayProjections(context.Background(), sessionDir, ids); err == nil {
+		for i := range details {
+			if details[i].MessageCount == 0 || details[i].Preview != "" || details[i].Name != "" {
+				continue
+			}
+			state, ok := projections[details[i].ID]
+			if !ok {
+				continue
+			}
+			details[i].Preview = state.Preview
+			details[i].Name = state.Title
+			resolved[details[i].ID] = struct{}{}
+		}
+	}
+	missing := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := resolved[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	prefetchEventStoreDisplays(sessionDir, missing)
 	for i := range details {
 		if details[i].MessageCount == 0 || details[i].Preview != "" || details[i].Name != "" {
+			continue
+		}
+		if _, ok := resolved[details[i].ID]; ok {
 			continue
 		}
 		if state, ok := loadEventStoreDisplay(sessionDir, details[i].ID); ok {
@@ -3408,6 +3458,11 @@ func (m *Manager) writeEntry(entry interface{}) error {
 		if err != nil {
 			return err
 		}
+		if !m.subAgent {
+			if err := indexSessionSearchEntriesTx(context.Background(), tx, sessionID, []interface{}{entry}); err != nil {
+				return err
+			}
+		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit session entry: %w", err)
 		}
@@ -3464,6 +3519,15 @@ func (m *Manager) writeEntries(batch []MessageEntry) error {
 				parentIDVal = *batch[i].ParentID
 			}
 			if err := sessionDAO.InsertEntry(context.Background(), tx, m.entriesTable(), sessionID, batch[i].ID, string(EntryMessage), parentIDVal, batch[i].Timestamp.Format(time.RFC3339Nano), string(rows[i])); err != nil {
+				return err
+			}
+		}
+		if !m.subAgent {
+			entries := make([]interface{}, len(batch))
+			for i := range batch {
+				entries[i] = batch[i]
+			}
+			if err := indexSessionSearchEntriesTx(context.Background(), tx, sessionID, entries); err != nil {
 				return err
 			}
 		}

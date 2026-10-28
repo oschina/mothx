@@ -64,8 +64,11 @@ func TestMaintenancePolicyFromSettings(t *testing.T) {
 		t.Fatalf("nil settings policy = %#v, want the default", got)
 	}
 	if got := MaintenancePolicyFromSettings(&config.Settings{}); got.ReclaimAttachmentStorage == false ||
-		got.StorageReconcileSchedule != MaintenanceStorageReconcileSchedule {
-		t.Fatalf("empty settings policy = %#v, want enabled on the default cadence", got)
+		got.StorageReconcileSchedule != MaintenanceStorageReconcileSchedule ||
+		got.ReclaimSessionStorage == false ||
+		got.SessionStorageSchedule != MaintenanceSessionStorageSchedule ||
+		got.ToolExecutionRetention != 0 || got.VacuumSessionStorage {
+		t.Fatalf("empty settings policy = %#v, want both jobs enabled with transcript retention", got)
 	}
 
 	off := false
@@ -76,6 +79,58 @@ func TestMaintenancePolicyFromSettings(t *testing.T) {
 		StorageReconcileSchedule: "  @every 6h  ",
 	}}); got.StorageReconcileSchedule != "@every 6h" || !got.ReclaimAttachmentStorage {
 		t.Fatalf("schedule override policy = %#v, want the trimmed cadence with reclamation still enabled", got)
+	}
+
+	sessionOn, vacuumOn := true, true
+	got := MaintenancePolicyFromSettings(&config.Settings{Maintenance: &config.MaintenanceSettings{
+		ReclaimSessionStorage:      &sessionOn,
+		SessionStorageSchedule:     "  @every 12h  ",
+		ToolExecutionRetentionDays: 45,
+		VacuumSessionStorage:       &vacuumOn,
+	}})
+	if !got.ReclaimSessionStorage || got.SessionStorageSchedule != "@every 12h" ||
+		got.ToolExecutionRetention != 45*24*time.Hour || !got.VacuumSessionStorage {
+		t.Fatalf("session storage policy = %#v, want the explicit retention and vacuum", got)
+	}
+	sessionOff := false
+	if got := MaintenancePolicyFromSettings(&config.Settings{Maintenance: &config.MaintenanceSettings{
+		ReclaimSessionStorage: &sessionOff,
+	}}); got.ReclaimSessionStorage {
+		t.Fatalf("explicit false session policy = %#v, want maintenance disabled", got)
+	}
+}
+
+// TestRunMaintenanceCronJobHonorsDisabledSessionStoragePolicy covers the stale
+// job case for the new job: a persisted row must not prune anything when
+// configuration has switched session maintenance off.
+func TestRunMaintenanceCronJobHonorsDisabledSessionStoragePolicy(t *testing.T) {
+	root, _, _ := inputTestSession(t)
+	policy := DefaultMaintenancePolicy()
+	policy.ReclaimSessionStorage = false
+
+	handled, response, err := RunMaintenanceCronJob(context.Background(), root, MaintenanceSessionStorageJobID(), policy)
+	if err != nil || !handled {
+		t.Fatalf("disabled session maintenance run = handled:%v err:%v", handled, err)
+	}
+	if !strings.Contains(response, "disabled") {
+		t.Fatalf("response = %q, want an explicit skip reason", response)
+	}
+}
+
+// TestRunMaintenanceCronJobMaintainsSessionStorage exercises the success path
+// end to end: with the default policy nothing is pruned, and the response
+// explicitly reports that the transcript was preserved.
+func TestRunMaintenanceCronJobMaintainsSessionStorage(t *testing.T) {
+	root, _, _ := inputTestSession(t)
+
+	handled, response, err := RunMaintenanceCronJob(context.Background(), root, MaintenanceSessionStorageJobID(), DefaultMaintenancePolicy())
+	if err != nil || !handled {
+		t.Fatalf("session maintenance run = handled:%v err:%v", handled, err)
+	}
+	for _, want := range []string{"pruned 0 tool-execution records", "retention disabled", "preserved all", "backfilled 0 session search indexes", "projected 0 session list rows"} {
+		if !strings.Contains(response, want) {
+			t.Fatalf("response = %q, want %q", response, want)
+		}
 	}
 }
 

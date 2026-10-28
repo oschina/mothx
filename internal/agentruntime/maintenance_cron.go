@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/session"
 )
 
 // MaintenancePolicy is the resolved intent for Runtime-owned maintenance work.
@@ -20,6 +21,16 @@ type MaintenancePolicy struct {
 	// project for that reconciliation. It is validated where the schedule grammar
 	// lives (internal/cron), not here.
 	StorageReconcileSchedule string
+	// ReclaimSessionStorage gates Runtime-owned session-storage maintenance.
+	ReclaimSessionStorage bool
+	// SessionStorageSchedule is the schedule expression for that maintenance.
+	SessionStorageSchedule string
+	// ToolExecutionRetention bounds completed/abandoned tool-execution
+	// idempotency records. Zero keeps them forever. Transcript messages are
+	// never governed by this field.
+	ToolExecutionRetention time.Duration
+	// VacuumSessionStorage opts into VACUUM after pruning.
+	VacuumSessionStorage bool
 }
 
 // DefaultMaintenancePolicy is what applies when configuration says nothing: daily
@@ -28,6 +39,10 @@ func DefaultMaintenancePolicy() MaintenancePolicy {
 	return MaintenancePolicy{
 		ReclaimAttachmentStorage: true,
 		StorageReconcileSchedule: MaintenanceStorageReconcileSchedule,
+		ReclaimSessionStorage:    true,
+		SessionStorageSchedule:   MaintenanceSessionStorageSchedule,
+		ToolExecutionRetention:   0,
+		VacuumSessionStorage:     false,
 	}
 }
 
@@ -42,6 +57,12 @@ func MaintenancePolicyFromSettings(settings *config.Settings) MaintenancePolicy 
 	if schedule := settings.AttachmentStorageReclaimSchedule(); schedule != "" {
 		policy.StorageReconcileSchedule = schedule
 	}
+	policy.ReclaimSessionStorage = settings.IsSessionStorageReclaimEnabled()
+	if schedule := settings.SessionStorageReclaimSchedule(); schedule != "" {
+		policy.SessionStorageSchedule = schedule
+	}
+	policy.ToolExecutionRetention = time.Duration(settings.ToolExecutionRetentionDays()) * 24 * time.Hour
+	policy.VacuumSessionStorage = settings.IsSessionStorageVacuumEnabled()
 	return policy
 }
 
@@ -66,12 +87,25 @@ const (
 	// MaintenanceStorageReconcileJobName labels the projected job for logs and
 	// direct store inspection.
 	MaintenanceStorageReconcileJobName = "Reclaim unreferenced attachment storage"
+
+	// MaintenanceSessionStorageSchedule runs session-storage maintenance once a
+	// day. With the default retention of 0 it only runs PRAGMA optimize and
+	// reports storage; pruning and VACUUM are opt-in.
+	MaintenanceSessionStorageSchedule = "@daily"
+	// MaintenanceSessionStorageJobName labels the projected job.
+	MaintenanceSessionStorageJobName = "Maintain session storage"
 )
 
 // MaintenanceStorageReconcileJobID is the stable identity of the attachment
 // storage reconciliation job.
 func MaintenanceStorageReconcileJobID() string {
 	return MaintenanceCronJobPrefix + "artifact-storage"
+}
+
+// MaintenanceSessionStorageJobID is the stable identity of the session-storage
+// maintenance job.
+func MaintenanceSessionStorageJobID() string {
+	return MaintenanceCronJobPrefix + "session-storage"
 }
 
 // IsMaintenanceCronJobID reports whether a persisted job belongs to the
@@ -99,22 +133,66 @@ func RunMaintenanceCronJob(ctx context.Context, sessionDir, jobID string, policy
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if jobID != MaintenanceStorageReconcileJobID() {
+	switch jobID {
+	case MaintenanceStorageReconcileJobID():
+		if !policy.ReclaimAttachmentStorage {
+			// The scheduler normally removes the job when maintenance is disabled, but a
+			// row persisted by an older process must still not reclaim anything.
+			return true, "attachment storage reclamation is disabled by configuration", nil
+		}
+		reconciliation, err := ReconcileArtifactStorage(ctx, sessionDir, DefaultAttachmentPolicy(), time.Now().UTC())
+		if err != nil {
+			return true, "", err
+		}
+		return true, fmt.Sprintf(
+			"reclaimed %d unreferenced attachment directories (%d bytes) older than %s; kept %d too recent, %d referenced, %d unrecognized",
+			reconciliation.Removed, reconciliation.Freed, reconciliation.AgeFloor.Format(time.RFC3339),
+			reconciliation.SkippedYoung, reconciliation.SkippedReferenced, reconciliation.SkippedUnrecognized,
+		), nil
+	case MaintenanceSessionStorageJobID():
+		if !policy.ReclaimSessionStorage {
+			return true, "session storage maintenance is disabled by configuration", nil
+		}
+		result, err := session.MaintainSessionStorage(ctx, sessionDir, session.SessionStoragePolicy{
+			ToolExecutionRetention: policy.ToolExecutionRetention,
+			Vacuum:                 policy.VacuumSessionStorage,
+		}, time.Now().UTC())
+		if err != nil {
+			return true, "", err
+		}
+		backfill, err := session.BackfillSessionSearchIndex(ctx, sessionDir, session.DefaultSearchIndexBackfillBatch)
+		if err != nil {
+			return true, "", err
+		}
+		backfillResult := fmt.Sprintf("backfilled %d session search indexes (%d text rows, %d skipped)", backfill.Sessions, backfill.Rows, backfill.Failed)
+		if backfill.More {
+			backfillResult += "; more remain for the next run"
+		}
+		displayBackfill, err := session.BackfillSessionDisplayProjections(ctx, sessionDir, session.DefaultDisplayProjectionBackfillBatch)
+		if err != nil {
+			return true, "", err
+		}
+		displayResult := fmt.Sprintf("projected %d session list rows (%d skipped, %d failed)", displayBackfill.Sessions, displayBackfill.Skipped, displayBackfill.Failed)
+		if displayBackfill.More {
+			displayResult += "; more remain for the next run"
+		}
+		retention := "retention disabled; every tool-execution record is kept"
+		if policy.ToolExecutionRetention > 0 {
+			retention = fmt.Sprintf("tool-execution retention %s", policy.ToolExecutionRetention)
+		}
+		vacuum := "vacuum disabled"
+		switch {
+		case result.Vacuumed:
+			vacuum = "vacuumed"
+		case policy.VacuumSessionStorage:
+			vacuum = "nothing to vacuum"
+		}
+		return true, fmt.Sprintf(
+			"pruned %d tool-execution records (%s); preserved all %d transcript entries and %d sub-agent entries; %d tool records remain, %d free pages of %d; %s; %s; %s",
+			result.PrunedToolRecords, retention, result.Entries, result.SubEntries,
+			result.ToolRecords, result.FreelistPages, result.PageCount, vacuum, backfillResult, displayResult,
+		), nil
+	default:
 		return true, "", fmt.Errorf("unknown maintenance job %q", jobID)
 	}
-	if !policy.ReclaimAttachmentStorage {
-		// The scheduler normally removes the job when maintenance is disabled, but a
-		// row persisted by an older process must still not reclaim anything.
-		return true, "attachment storage reclamation is disabled by configuration", nil
-	}
-
-	reconciliation, err := ReconcileArtifactStorage(ctx, sessionDir, DefaultAttachmentPolicy(), time.Now().UTC())
-	if err != nil {
-		return true, "", err
-	}
-	return true, fmt.Sprintf(
-		"reclaimed %d unreferenced attachment directories (%d bytes) older than %s; kept %d too recent, %d referenced, %d unrecognized",
-		reconciliation.Removed, reconciliation.Freed, reconciliation.AgeFloor.Format(time.RFC3339),
-		reconciliation.SkippedYoung, reconciliation.SkippedReferenced, reconciliation.SkippedUnrecognized,
-	), nil
 }

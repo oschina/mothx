@@ -6,6 +6,8 @@ This file contains the changes for the **current version only**. The full histor
 
 ### ✨ New Features
 
+- **`mothx maintenance` inspects and compacts the session database.** `status` reports transcript/tool-record counts, database size, and reclaimable free pages; `vacuum` runs SQLite VACUUM and reports the result, with `--dry-run` to preview. The command never deletes messages or prunes tool-execution records; the scheduled maintenance job remains the only path that can bound terminal tool records and backfill the search index.
+
 - **New Gitee/Moark Models: `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed`**
   - Added `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed` to the `gitee` and `moark` providers: thinking is enabled by default with Kimi's `low`/`high`/`max` effort scale (MothX's `minimal`/`low` map to `low`, `medium`/`high` to `high`, and `xhigh`/`max` to `max`), a 1M context window, and text+image input. Both use the verified `reasoning_effort` parameter through the `kimi` thinking format.
 
@@ -13,6 +15,10 @@ This file contains the changes for the **current version only**. The full histor
   - Added `MiniMax-M3.1-Flash` to the `gitee` and `moark` providers: thinking is enabled by default through the standard `reasoning_effort` parameter, with a 1M context window and text+image+video input; no default max_tokens is sent.
 
 ### 💥 Behavior Changes
+
+- **The Serve session list is bounded by default.** `/api/sessions` without `limit` now returns the first 100 sessions plus `total`, `limit`, `offset`, and `hasMore`; pass `limit`/`offset` to page through history. `scope=active` and `/api/sessions/active` project only the in-memory session pool instead of loading all history, and per-session MCP configuration resolves its working directory by ID.
+
+- **Session storage maintenance is scheduled without deleting transcript messages.** MothX now projects a daily `mothx-maintenance:session-storage` job that preserves every `entries`/`sub_entries` transcript row forever. It may prune only completed/abandoned `tool_execution_records` older than `maintenance.toolExecutionRetentionDays` (default `0`, keep forever), always keeps running/interrupted/retry-requested records so uncertain tool side effects stay fenced, runs `PRAGMA optimize`, and optionally runs `VACUUM` when `maintenance.vacuumSessionStorage` is enabled.
 
 - **SQLite startup integrity checks are now explicitly opt-out.** MothX keeps running `PRAGMA quick_check` by default before using the session database. Very large databases can skip the fixed opening cost with `MOTHX_SQLITE_QUICK_CHECK=off`; `mothx doctor` still runs an on-demand read-only integrity check and reports `sessions.integrity`.
 
@@ -24,6 +30,18 @@ This file contains the changes for the **current version only**. The full histor
 
 ### ⚡ Performance
 
+- **User background mode lowers large-area backdrop blur.** When a user background image is active, the app surface veil, control/titlebar surfaces, composer, and home quick cards use smaller blur radii, reducing continuous GPU compositing cost while keeping the semi-transparent surfaces readable.
+
+- **Repeated searches reuse unchanged EventStore projections.** A fingerprint-keyed, byte-bounded cache avoids replaying the same EventStore session on every search; an append or segment rotation invalidates it.
+
+- **Repeated session searches reuse the completed page.** A query/page cache sits in front of the candidate scan, so a repeated Desktop/WebUI history query performs no list query and no content replay. Cache entries are keyed by the durable store-wide write version, which SQLite triggers bump on session, legacy payload, EventStore projection, and project-membership writes; an append, title/binding/cwd change, delete, or write from another process invalidates the page instead of serving stale results.
+
+- **Session list rows no longer scan the EventStore at startup.** First-user preview, latest title, and binding metadata are persisted in a small SQLite display projection, written with each committed batch, copied on fork, rebuilt with the event projection, and backfilled by maintenance. List and bindings reads use the row when present and fall back to the canonical EventStore scan when it is missing.
+
+- **Desktop settings panels no longer re-render on every background chunk.** All 16 settings panels now select only the connection/store fields they display instead of subscribing to the whole app state.
+
+- **Session content search now narrows work through a derived FTS5 index.** Searches ask a trigram full-text index for candidate sessions before replaying anything; the canonical replay still decides the final match, so compaction-discarded content and content overrides keep their exact semantics. The index is written in the same transaction as each append, rebuilt with the event projection, copied on fork, and backfilled when a pre-index session is attached. Short queries, index errors, and not-yet-indexed sessions fall back to the previous full scan, and search itself remains read-only. The daily session-storage maintenance pass also backfills up to 512 unindexed sessions, newest first, so existing history becomes searchable without opening every session.
+
 - **Desktop streaming and long-list scrolling no longer re-render the whole shell.** Renderer state notifications are coalesced into one commit per frame, transcript items are replaced immutably so unchanged Markdown/tool cards skip rendering, the sidebar/status bar/composer/plan panel subscribe only to the state slices they display, offscreen transcript blocks can skip layout/paint, and chat auto-scroll is coalesced with the commit that paints the chunk.
 
 - **The initial Desktop task list no longer scans every session sequentially.** ACP list rows now use a structural-only EventStore projection that decodes just the first user preview and latest title/bindings, and the page prefetches those projections with a bounded worker pool. Canonical session open still verifies every batch digest and fails closed.
@@ -34,6 +52,8 @@ This file contains the changes for the **current version only**. The full histor
 - **Long-lived Desktop windows stay bounded.** The live transcript renders a 300-item tail window (expandable locally), status/retry/compaction notices update in place instead of accumulating, session/search/subagent/run-status caches are capped, progress polling cannot overlap, transcript lookup uses an index instead of scanning every chunk, oversized tool output is capped in the display copy, and `desktop.log` rotates at 8 MB between launches.
 
 ### 🐛 Bug Fixes
+
+- **A partially applied session-list migration now converges.** Some databases recorded schema version 49 before the Run index was added to that migration body, so `idx_session_runs_session_status_started` stayed missing forever: recorded versions are skipped, not re-inspected. Version 50 re-asserts the index with `CREATE INDEX IF NOT EXISTS`, converging those databases on the next start while leaving fresh ones unchanged.
 
 - **Stopping a Responses background task during attachment now stays cancelled.** Concurrent WAL reads can let a stop mark the Run cancelling before the background coordinator attaches its Agent. That path previously fell through to the default `failed` terminal status and could orphan the provider-side task. It now preserves `cancelled` and explicitly cancels the remote Responses task.
 

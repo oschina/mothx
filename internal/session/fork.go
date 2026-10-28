@@ -296,6 +296,11 @@ func ForkSession(ctx context.Context, sessionDir string, options ForkOptions) (F
 		if err != nil {
 			return ForkResult{}, err
 		}
+		if entry, ok := decodeLegacySearchEntry(source.Type, data); ok {
+			if err := indexSessionSearchEntriesTx(ctx, tx, childID, []interface{}{entry}); err != nil {
+				return ForkResult{}, err
+			}
+		}
 		seqMap[source.Seq] = seq
 	}
 	for _, turn := range turns {

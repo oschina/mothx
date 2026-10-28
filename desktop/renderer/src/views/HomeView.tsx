@@ -1,6 +1,7 @@
 // 首页视图:hero、场景预设(办公/代码/创作)、快捷操作卡与 composer。
 // 纯色背景与用户背景图延续旧 renderer 的材质系统(index.css 组件层)。
 
+import { useEffect, useRef, type PointerEvent } from 'react';
 import { AlertCircle, Sparkles } from 'lucide-react';
 
 import { Composer } from '@/components/Composer';
@@ -48,6 +49,30 @@ export function HomeView() {
   const items = isZh ? preset.quickZh : preset.quickEn;
   const tags = isZh ? preset.tagZh : preset.tagEn;
   const prompts = isZh ? preset.promptsZh : preset.promptsEn;
+
+  // Coalesce the spotlight coordinates to one frame: per-pointer-move handlers
+  // measured the card and wrote CSS variables for every event, forcing layout
+  // as the pointer swept the grid. The frame callback still measures once, but
+  // only after the browser has batched the move.
+  const spotlightFrameRef = useRef(0);
+  const spotlightPointRef = useRef<{ element: HTMLElement; x: number; y: number } | null>(null);
+  useEffect(() => () => {
+    if (spotlightFrameRef.current) cancelAnimationFrame(spotlightFrameRef.current);
+  }, []);
+  const handleSpotlightMove = (event: PointerEvent<HTMLDivElement>) => {
+    const element = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-spotlight]');
+    if (!element) return;
+    spotlightPointRef.current = { element, x: event.clientX, y: event.clientY };
+    if (spotlightFrameRef.current) return;
+    spotlightFrameRef.current = requestAnimationFrame(() => {
+      spotlightFrameRef.current = 0;
+      const point = spotlightPointRef.current;
+      if (!point) return;
+      const rect = point.element.getBoundingClientRect();
+      point.element.style.setProperty('--mx', `${point.x - rect.left}px`);
+      point.element.style.setProperty('--my', `${point.y - rect.top}px`);
+    });
+  };
 
   const heroSlogan =
     conn.state === 'ready'
@@ -109,17 +134,16 @@ export function HomeView() {
             <div className="mt-[3px] text-[12px] leading-normal text-home-muted">{t(`preset.${activePreset}.desc`)}</div>
           </div>
 
-          <div className="mx-auto mb-5 grid w-full max-w-[640px] grid-cols-3 gap-2.5 max-[560px]:grid-cols-2">
+          <div
+            className="mx-auto mb-5 grid w-full max-w-[640px] grid-cols-3 gap-2.5 max-[560px]:grid-cols-2"
+            onPointerMove={handleSpotlightMove}
+          >
             {items.map((label, index) => (
               <button
                 key={label}
                 type="button"
+                data-spotlight=""
                 style={{ animationDelay: `${120 + index * 45}ms` }}
-                onPointerMove={(event) => {
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  event.currentTarget.style.setProperty('--mx', `${event.clientX - rect.left}px`);
-                  event.currentTarget.style.setProperty('--my', `${event.clientY - rect.top}px`);
-                }}
                 className="mx-rise mx-spotlight-card flex flex-col items-stretch rounded-[10px] border border-home-border bg-home-surface px-3 py-2.5 text-left text-[color-mix(in_srgb,var(--home-text)_90%,transparent)] backdrop-blur-[14px] backdrop-saturate-[1.4] transition-all hover:-translate-y-[3px] hover:border-home-accent hover:bg-home-solid hover:text-home-accent hover:shadow-[var(--glass-card-shadow-hover)]"
                 onClick={() => requestComposerReplace(prompts[index] ?? label)}
               >

@@ -9,11 +9,10 @@ import { t } from '@/core/i18n';
 import { loadSkills, setSkillEnabled, type SkillView } from '@/core/manage-api';
 import { hasFeature } from '@/core/state';
 import { toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 export function SkillsPanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supported = hasFeature('manageSkills');
   const [skills, setSkills] = useState<SkillView[] | null>(null);
 

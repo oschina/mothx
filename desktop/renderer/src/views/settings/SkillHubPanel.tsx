@@ -12,7 +12,7 @@ import { t } from '@/core/i18n';
 import { applicationLines, loadSkillHub, saveSkillHub, type SkillHubMarketView, type SkillHubView } from '@/core/manage-api';
 import { hasFeature } from '@/core/state';
 import { promptModal, toast } from '@/core/ui-host';
-import { useAppState } from '@/hooks/useAppState';
+import { useAppSelector } from '@/hooks/useAppState';
 
 interface MarketDraft extends SkillHubMarketView {
   token: string;
@@ -20,8 +20,7 @@ interface MarketDraft extends SkillHubMarketView {
 }
 
 export function SkillHubPanel() {
-  const appState = useAppState();
-  const ready = appState.connection.state === 'ready';
+  const ready = useAppSelector((state) => state.connection.state === 'ready');
   const supported = hasFeature('manageSkillHub');
   const [view, setView] = useState<SkillHubView | null>(null);
   const [defaultMarket, setDefaultMarket] = useState('');

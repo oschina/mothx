@@ -1159,6 +1159,136 @@ func (e *PoolFullError) Error() string {
 	return "session pool is at capacity"
 }
 
+// DefaultSessionListLimit is the page size used when an HTTP caller omits
+// limit. It matches the Web UI's own request and keeps an unfiltered history
+// listing bounded.
+const DefaultSessionListLimit = 100
+
+// ListActiveSessionsPage returns one persisted-session page plus the total
+// number of sessions with messages. Metadata and execution facts are read in
+// batches for exactly the page IDs, so cost is bounded by the page rather than
+// the size of the history.
+func (s *Server) ListActiveSessionsPage(limit, offset int) ([]ActiveSessionInfo, int, error) {
+	if limit <= 0 {
+		limit = DefaultSessionListLimit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if s == nil || s.settings == nil || s.cfg == nil {
+		if s == nil || s.pool == nil {
+			return nil, 0, nil
+		}
+		items := s.pool.listDetailsBase()
+		sortActiveSessionInfos(items)
+		total := len(items)
+		if offset >= total {
+			return nil, total, nil
+		}
+		end := min(offset+limit, total)
+		return items[offset:end], total, nil
+	}
+
+	sessionDir := s.settings.GetSessionDir()
+	details, err := session.ListAllDetailed(sessionDir,
+		session.WithMessagesOnly(), session.WithLimit(limit), session.WithOffset(offset))
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := session.CountWithMessages(sessionDir)
+	if err != nil {
+		return nil, 0, err
+	}
+	ids := make([]string, 0, len(details))
+	for _, detail := range details {
+		ids = append(ids, detail.ID)
+	}
+	metadataByID := map[string]session.SessionMetadata{}
+	if len(ids) > 0 {
+		metadata, metaErr := session.ListSessionMetadata(sessionDir, ids)
+		if metaErr != nil {
+			provider.DebugLogf("list session metadata: %v", metaErr)
+		} else {
+			metadataByID = metadata
+		}
+	}
+	executions := agentruntime.InspectSessionExecutions(sessionDir, ids)
+	result := make([]ActiveSessionInfo, 0, len(details))
+	for _, detail := range details {
+		item := activeSessionInfoFromDetail(detail)
+		if metadata, ok := metadataByID[item.ID]; ok {
+			item.ProjectID, item.Pinned = metadata.ProjectID, metadata.Pinned
+		}
+		execution, ok := executions[item.ID]
+		if !ok {
+			execution = agentruntime.UnknownSessionExecution(item.ID)
+		}
+		item.Execution = &execution
+		item.Running = execution.Running
+		result = append(result, item)
+	}
+	return result, total, nil
+}
+
+// ListActivePoolSessions projects only this process's in-memory session pool.
+// It is the bounded replacement for loading all persisted history merely to
+// filter it down to live sessions.
+func (s *Server) ListActivePoolSessions() []ActiveSessionInfo {
+	if s == nil || s.pool == nil {
+		return nil
+	}
+	items := s.pool.listDetailsBase()
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	var metadataByID map[string]session.SessionMetadata
+	var executions map[string]agentruntime.SessionExecutionSnapshot
+	if s.settings != nil {
+		sessionDir := s.settings.GetSessionDir()
+		if metadata, err := session.ListSessionMetadata(sessionDir, ids); err == nil {
+			metadataByID = metadata
+		}
+		executions = agentruntime.InspectSessionExecutions(sessionDir, ids)
+	}
+	for i := range items {
+		if metadata, ok := metadataByID[items[i].ID]; ok {
+			items[i].ProjectID, items[i].Pinned = metadata.ProjectID, metadata.Pinned
+		}
+		execution, ok := executions[items[i].ID]
+		if !ok {
+			execution = agentruntime.UnknownSessionExecution(items[i].ID)
+		}
+		items[i].Execution = &execution
+		items[i].Running = execution.Running
+	}
+	sortActiveSessionInfos(items)
+	return items
+}
+
+// GetSessionWorkDir resolves one session's working directory without listing
+// the rest of the history. It is the lookup path for per-session management
+// endpoints such as the MCP configuration view.
+func (s *Server) GetSessionWorkDir(id string) (string, error) {
+	item, err := s.activeSessionInfo(id)
+	if err != nil {
+		return "", err
+	}
+	return item.WorkDir, nil
+}
+
+func sortActiveSessionInfos(items []ActiveSessionInfo) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].LastUsed.Equal(items[j].LastUsed) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].LastUsed.After(items[j].LastUsed)
+	})
+}
+
 // ListActiveSessions returns persisted sessions from sessions.db, merged with
 // currently active API runtime state. Project/pin metadata and execution
 // snapshots are read in batches so the listing cost stays constant per request

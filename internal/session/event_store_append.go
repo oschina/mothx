@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 
 	"github.com/oschina/mothx/internal/dao"
@@ -94,7 +95,12 @@ func (m *Manager) MigrateToEventStore(ctx context.Context) error {
 	if converged {
 		// A converged Manager either loaded through the EventStore already or just
 		// exported the transcript in ConvergeEventStore. Either way there is no
-		// irreversible step left to take.
+		// irreversible step left to take. Fill the derived search index for
+		// sessions that predate it; a failure leaves canonical replay as the
+		// fallback rather than failing the attach.
+		if indexErr := m.ensureSearchIndex(ctx); indexErr != nil {
+			log.Printf("[session] backfill search index for %s: %v", sessionID, indexErr)
+		}
 		return nil
 	}
 	err := m.exportLegacyTranscript(ctx)
@@ -104,7 +110,16 @@ func (m *Manager) MigrateToEventStore(ctx context.Context) error {
 		// let a later call migrate; the transcript is never left half-flipped.
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if indexErr := m.ensureSearchIndex(ctx); indexErr != nil {
+		log.Printf("[session] backfill search index for %s: %v", sessionID, indexErr)
+	}
+	if _, displayErr := m.ensureDisplayProjection(ctx); displayErr != nil {
+		log.Printf("[session] backfill display projection for %s: %v", sessionID, displayErr)
+	}
+	return nil
 }
 
 // eventStoreConvergenceStillValid reports whether the EventStore bytes now on
@@ -683,6 +698,7 @@ func (m *Manager) appendEventStoreEntriesLocked(ctx context.Context, runID, turn
 		}
 		return ids, nil
 	}
+	hadEntries := len(m.entries) > 0
 	if m.eventStoreMode {
 		// Continue below; the in-memory entry chain is the local optimistic view.
 	} else if len(m.entries) != 0 {
@@ -773,6 +789,11 @@ func (m *Manager) appendEventStoreEntriesLocked(ctx context.Context, runID, turn
 			lastID := ids[len(ids)-1]
 			m.leafID = &lastID
 			m.eventStoreMode = true
+			if !hadEntries {
+				if _, err := ensureDisplayProjection(ctx, sessionDir, sessionID, "event_store"); err != nil {
+					log.Printf("[session] project new session %s: %v", sessionID, err)
+				}
+			}
 			return ids, nil
 		}
 	}
@@ -802,6 +823,13 @@ func (m *Manager) appendEventStoreEntriesLocked(ctx context.Context, runID, turn
 	lastID := ids[len(ids)-1]
 	m.leafID = &lastID
 	m.eventStoreMode = true
+	if !hadEntries {
+		// The first committed content is the only safe point to project a brand
+		// new session: the log is complete, so the row can never omit history.
+		if _, err := ensureDisplayProjection(ctx, sessionDir, sessionID, "event_store"); err != nil {
+			log.Printf("[session] project new session %s: %v", sessionID, err)
+		}
+	}
 	return ids, nil
 }
 

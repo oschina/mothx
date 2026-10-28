@@ -20,7 +20,7 @@ SELECT s.id,
 	) AS last_active_at
 FROM sessions AS s`
 
-// TestSessionListAggregatesUseIncrementalIndexes pins migration 49's whole
+// TestSessionListAggregatesUseIncrementalIndexes pins migrations 49/50's whole
 // purpose: the session list's MAX(timestamp) aggregates must be answered from a
 // (session_id, timestamp) index instead of walking every row of that session.
 //
@@ -91,8 +91,49 @@ func TestSessionListAggregatesUseIncrementalIndexes(t *testing.T) {
 			t.Fatalf("inspect index %s: %v", index, err)
 		}
 		if count != 1 {
-			t.Fatalf("index %s is missing after migration 49", index)
+			t.Fatalf("index %s is missing after migrations 49/50", index)
 		}
+	}
+}
+
+// TestSessionRunStatusIndexConvergesAfterPartialMigration49 reproduces a
+// database that recorded version 49 before the Run index was added to that
+// migration body: the ledger says 49, the index is absent, and every later open
+// skips the recorded version. Migration 50 must repair the index without
+// needing the 49 ledger row to change.
+func TestSessionRunStatusIndexConvergesAfterPartialMigration49(t *testing.T) {
+	db := fullyMigratedTestDatabase(t)
+	if _, err := db.Exec(`DROP INDEX idx_session_runs_session_status_started`); err != nil {
+		t.Fatalf("simulate partial migration 49: %v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version = 50`); err != nil {
+		t.Fatalf("forget migration 50: %v", err)
+	}
+	var recorded49 int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 49 AND name = 'add_session_list_aggregate_indexes'`).Scan(&recorded49); err != nil {
+		t.Fatalf("read migration 49 ledger row: %v", err)
+	}
+	if recorded49 != 1 {
+		t.Fatalf("migration 49 ledger rows = %d, want the partial database to keep recording it", recorded49)
+	}
+
+	if err := applySchemaMigrations(db); err != nil {
+		t.Fatalf("apply schema migrations: %v", err)
+	}
+
+	var indexCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_session_runs_session_status_started'`).Scan(&indexCount); err != nil {
+		t.Fatalf("inspect converged index: %v", err)
+	}
+	if indexCount != 1 {
+		t.Fatal("migration 50 did not recreate idx_session_runs_session_status_started on a partially migrated database")
+	}
+	var converged int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 50 AND name = 'converge_session_run_status_index'`).Scan(&converged); err != nil {
+		t.Fatalf("read migration 50 ledger row: %v", err)
+	}
+	if converged != 1 {
+		t.Fatal("migration 50 was not recorded after converging the Run index")
 	}
 }
 
