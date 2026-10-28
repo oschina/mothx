@@ -51,6 +51,9 @@
   --green-soft: #ecfdf5;
   --amber: #d97706;
   --amber-soft: rgba(217, 119, 6, 0.12);
+  --warning-bg: #fefce8;
+  --warning-border: #fde68a;
+  --warning-text: #a16207;
   --red: #dc2626;
   --red-soft: rgba(220, 38, 38, 0.1);
   --red-hover: #b91c1c;
@@ -167,6 +170,9 @@
   --green-soft: rgba(16, 185, 129, 0.12);
   --amber: #fbbf24;
   --amber-soft: rgba(245, 158, 11, 0.18);
+  --warning-bg: #2a2410;
+  --warning-border: #6b5518;
+  --warning-text: #fde68a;
   --red: #f87171;
   --red-soft: #2a1515;
   --red-hover: #fca5a5;
@@ -251,6 +257,9 @@ html[data-window-style="win"] {
   --color-success-soft: var(--green-soft);
   --color-warning: var(--amber);
   --color-warning-soft: var(--amber-soft);
+  --color-warning-bg: var(--warning-bg);
+  --color-warning-border: var(--warning-border);
+  --color-warning-text: var(--warning-text);
   --color-danger: var(--red);
   --color-danger-soft: var(--red-soft);
   --color-danger-hover: var(--red-hover);

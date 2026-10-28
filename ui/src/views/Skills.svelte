@@ -373,7 +373,7 @@
     switch (status) {
       case 'SAFE': return { key: 'securitySafe', tone: 'positive' };
       case 'RISKY': return { key: 'securityRisky', tone: 'warning' };
-      case 'SUSPECTED': return { key: 'securitySuspected', tone: 'warning' };
+      case 'SUSPECTED': return { key: 'securitySuspected', tone: 'suspected' };
       case 'AUDITING': return { key: 'securityAuditing', tone: '' };
       case 'NOT_AUDITED': return { key: 'securityNotAudited', tone: '' };
     }
@@ -481,7 +481,7 @@
                 {#each itemBadges.filter((badge) => badge.key !== 'risk') as badge}
                   <Badge variant={badge.variant}>{$t(`skills.badge.${badge.key}`)}</Badge>
                 {/each}
-                {#if security}<span class="skill-market-card-security" class:positive={security.tone === 'positive'} class:warning={security.tone === 'warning'}>{$t(`skills.${security.key}`)}</span>{/if}
+                {#if security}<span class="skill-market-card-security" class:positive={security.tone === 'positive'} class:warning={security.tone === 'warning'} class:suspected={security.tone === 'suspected'}>{$t(`skills.${security.key}`)}</span>{/if}
               </span>
             </button>
             <label class="skill-market-check" title={$t('skills.selectForBatch')}>
@@ -531,7 +531,7 @@
             </div>
             <p class="skills-summary">{detail.description || $t('skills.noDescription')}</p>
             <div class="skill-badges detail-badges">
-              {#if security}<span class:warning={security.tone === 'warning'} class:positive={security.tone === 'positive'}>{$t(`skills.${security.key}`)}</span>{/if}
+              {#if security}<span class:warning={security.tone === 'warning'} class:suspected={security.tone === 'suspected'} class:positive={security.tone === 'positive'}>{$t(`skills.${security.key}`)}</span>{/if}
               {#each badges(detail).filter((badge) => !security || badge !== 'risk') as badge}<span class:warning={badge === 'risk'} class:positive={badge === 'active' || badge === 'certified' || badge === 'verified'}>{$t(`skills.badge.${badge}`)}</span>{/each}
             </div>
             <aside class="skills-detail-side">

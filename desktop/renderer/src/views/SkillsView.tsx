@@ -58,7 +58,7 @@ function skillInitials(skill: Skill): string {
   return text ? text.slice(0, 1).toUpperCase() : '?';
 }
 
-function securityBadge(skill: Skill): { label: string; variant: 'success' | 'danger' | 'warning' | 'secondary' } | null {
+function securityBadge(skill: Skill): { label: string; variant: 'success' | 'danger' | 'suspected' | 'warning' | 'secondary' } | null {
   const report = skill.securityReports?.yuandun as { status?: string } | undefined;
   switch (skill.securityStatus || report?.status) {
     case 'SAFE':
@@ -66,7 +66,7 @@ function securityBadge(skill: Skill): { label: string; variant: 'success' | 'dan
     case 'RISKY':
       return { label: t('skills.securityRisky'), variant: 'danger' };
     case 'SUSPECTED':
-      return { label: t('skills.securitySuspected'), variant: 'danger' };
+      return { label: t('skills.securitySuspected'), variant: 'suspected' };
     case 'AUDITING':
       return { label: t('skills.securityAuditing'), variant: 'warning' };
     case 'NOT_AUDITED':
