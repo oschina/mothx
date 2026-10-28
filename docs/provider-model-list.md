@@ -106,40 +106,40 @@ Vendor `gitee` · BaseURL `https://api.moark.com/v1` · API `openai-chat` · API
 
 | 模型 | Context | MaxTokens | 推理 | 输入 | Prompt $/M | Completion $/M | Cache Read $/M | Cache Write $/M |
 |------|---------|-----------|------|------|-----------|----------------|----------------|-----------------|
-| `deepseek-v4.1-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `deepseek-v4.1-flash-1017` | 1M | - | **是** | text,image | - | - | - | - |
+| `deepseek-v4.1-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-flash` | 1M | - | **是** | text,image | - | - | - | - |
-| `glm-5.3-flash` | 1M | 131K | **是** | text,image | - | - | - | - |
-| `qwen3.8-max-0902` | 1M | 131K | **是** | text,image | - | - | - | - |
-| `glm-5.3` | 1M | 131K | **是** | text | - | - | - | - |
-| `kimi-k3` | 1M | 262K | **是** | text,image | - | - | - | - |
-| `kimi-k3.1-pro` | 1M | 262K | **是** | text,image | - | - | - | - |
-| `kimi-k3.1-pro-highspeed` | 1M | 262K | **是** | text,image | - | - | - | - |
-| `minimax-m3` | 1M | 128K | **是** | text,image | - | - | - | - |
-| `MiniMax-M3.1-Flash` | 1M | - | **是** | text,image,video | - | - | - | - |
-| `mimo-v2.5-pro` | 1M | 131K | **是** | text,image | - | - | - | - |
-| `deepseek-v4-flash` | 1M | 384K | **是** | text | - | - | - | - |
-| `deepseek-v4-pro` | 1M | 384K | **是** | text | - | - | - | - |
-| `qwen3.8-omni-flash` | 1M | 131K | **是** | text,image,audio,video | - | - | - | - |
-| `qwen3.5-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
-| `qwen3.6-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
-| `qwen3.7-plus` | 1M | 66K | **是** | text,image | - | - | - | - |
-| `qwen3.7-max` | 1M | 66K | **是** | text | - | - | - | - |
-| `auto` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-max` | 1M | - | **是** | text,image | - | - | - | - |
-| `qwen3.8-27b` | 1M | - | **是** | text,image,video | - | - | - | - |
+| `glm-5.3-flash` | 1M | 131K | **是** | text,image | - | - | - | - |
+| `glm-5.3` | 1M | 131K | **是** | text | - | - | - | - |
+| `MiniMax-M3.1-Flash` | 1M | - | **是** | text,image,video | - | - | - | - |
+| `step-3.7-flash` | 262K | 16K | 否 | text,image | - | - | - | - |
+| `auto` | 1M | - | **是** | text,image | - | - | - | - |
+| `deepseek-v4-flash` | 1M | 384K | **是** | text | - | - | - | - |
 | `deepseek-v4-flash-0731` | 1M | - | **是** | text | - | - | - | - |
+| `deepseek-v4-pro` | 1M | 384K | **是** | text | - | - | - | - |
 | `deepseek-v4-pro-0813` | 1M | - | **是** | text | - | - | - | - |
+| `ernie-5.0-thinking` | 131K | 66K | **是** | text | - | - | - | - |
+| `gemma-4-26b-a4b-it` | 131K | 33K | **是** | text,image | - | - | - | - |
+| `glm-5` | 200K | 33K | **是** | text | - | - | - | - |
+| `glm-5.1` | 200K | 131K | **是** | text | - | - | - | - |
 | `kimi-k2.5` | 262K | 262K | **是** | text,image,video | - | - | - | - |
 | `kimi-k2.6` | 262K | 262K | **是** | text,image,video | - | - | - | - |
 | `kimi-k2.7-code` | 262K | 262K | **是** | text | - | - | - | - |
+| `kimi-k3` | 1M | 262K | **是** | text,image | - | - | - | - |
+| `kimi-k3.1-pro` | 1M | 262K | **是** | text,image | - | - | - | - |
+| `kimi-k3.1-pro-highspeed` | 1M | 262K | **是** | text,image | - | - | - | - |
+| `mimo-v2.5-pro` | 1M | 131K | **是** | text,image | - | - | - | - |
 | `minimax-m2.7` | 262K | 131K | **是** | text | - | - | - | - |
-| `step-3.7-flash` | 262K | 16K | 否 | text,image | - | - | - | - |
-| `glm-5.1` | 200K | 131K | **是** | text | - | - | - | - |
-| `glm-5` | 200K | 33K | **是** | text | - | - | - | - |
-| `ernie-5.0-thinking` | 131K | 66K | **是** | text | - | - | - | - |
-| `gemma-4-26b-a4b-it` | 131K | 33K | **是** | text,image | - | - | - | - |
+| `minimax-m3` | 1M | 128K | **是** | text,image | - | - | - | - |
+| `qwen3.5-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
+| `qwen3.6-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
 | `qwen3.6-plus` | 66K | 66K | **是** | text,image | - | - | - | - |
+| `qwen3.7-max` | 1M | 66K | **是** | text | - | - | - | - |
+| `qwen3.7-plus` | 1M | 66K | **是** | text,image | - | - | - | - |
+| `qwen3.8-27b` | 1M | - | **是** | text,image,video | - | - | - | - |
+| `qwen3.8-max-0902` | 1M | 131K | **是** | text,image | - | - | - | - |
+| `qwen3.8-omni-flash` | 1M | 131K | **是** | text,image,audio,video | - | - | - | - |
 
 ---
 
@@ -712,40 +712,40 @@ Vendor `gitee` · BaseURL `https://ai.gitee.com/v1` · API `openai-chat` · API 
 
 | 模型 | Context | MaxTokens | 推理 | 输入 | Prompt $/M | Completion $/M | Cache Read $/M | Cache Write $/M |
 |------|---------|-----------|------|------|-----------|----------------|----------------|-----------------|
-| `deepseek-v4.1-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `deepseek-v4.1-flash-1017` | 1M | - | **是** | text,image | - | - | - | - |
+| `deepseek-v4.1-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-flash` | 1M | - | **是** | text,image | - | - | - | - |
-| `glm-5.3-flash` | 1M | 131K | **是** | text,image | - | - | - | - |
-| `qwen3.8-max-0902` | 1M | 131K | **是** | text,image | - | - | - | - |
-| `glm-5.3` | 1M | 131K | **是** | text | - | - | - | - |
-| `kimi-k3` | 1M | 262K | **是** | text,image | - | - | - | - |
-| `kimi-k3.1-pro` | 1M | 262K | **是** | text,image | - | - | - | - |
-| `kimi-k3.1-pro-highspeed` | 1M | 262K | **是** | text,image | - | - | - | - |
-| `minimax-m3` | 1M | 128K | **是** | text,image | - | - | - | - |
-| `MiniMax-M3.1-Flash` | 1M | - | **是** | text,image,video | - | - | - | - |
-| `mimo-v2.5-pro` | 1M | 131K | **是** | text,image | - | - | - | - |
-| `deepseek-v4-flash` | 1M | 384K | **是** | text | - | - | - | - |
-| `deepseek-v4-pro` | 1M | 384K | **是** | text | - | - | - | - |
-| `qwen3.8-omni-flash` | 1M | 131K | **是** | text,image,audio,video | - | - | - | - |
-| `qwen3.5-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
-| `qwen3.6-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
-| `qwen3.7-plus` | 1M | 66K | **是** | text,image | - | - | - | - |
-| `qwen3.7-max` | 1M | 66K | **是** | text | - | - | - | - |
-| `auto` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-max` | 1M | - | **是** | text,image | - | - | - | - |
-| `qwen3.8-27b` | 1M | - | **是** | text,image,video | - | - | - | - |
+| `glm-5.3-flash` | 1M | 131K | **是** | text,image | - | - | - | - |
+| `glm-5.3` | 1M | 131K | **是** | text | - | - | - | - |
+| `MiniMax-M3.1-Flash` | 1M | - | **是** | text,image,video | - | - | - | - |
+| `step-3.7-flash` | 262K | 16K | 否 | text,image | - | - | - | - |
+| `auto` | 1M | - | **是** | text,image | - | - | - | - |
+| `deepseek-v4-flash` | 1M | 384K | **是** | text | - | - | - | - |
 | `deepseek-v4-flash-0731` | 1M | - | **是** | text | - | - | - | - |
+| `deepseek-v4-pro` | 1M | 384K | **是** | text | - | - | - | - |
 | `deepseek-v4-pro-0813` | 1M | - | **是** | text | - | - | - | - |
+| `ernie-5.0-thinking` | 131K | 66K | **是** | text | - | - | - | - |
+| `gemma-4-26b-a4b-it` | 131K | 33K | **是** | text,image | - | - | - | - |
+| `glm-5` | 200K | 33K | **是** | text | - | - | - | - |
+| `glm-5.1` | 200K | 131K | **是** | text | - | - | - | - |
 | `kimi-k2.5` | 262K | 262K | **是** | text,image,video | - | - | - | - |
 | `kimi-k2.6` | 262K | 262K | **是** | text,image,video | - | - | - | - |
 | `kimi-k2.7-code` | 262K | 262K | **是** | text | - | - | - | - |
+| `kimi-k3` | 1M | 262K | **是** | text,image | - | - | - | - |
+| `kimi-k3.1-pro` | 1M | 262K | **是** | text,image | - | - | - | - |
+| `kimi-k3.1-pro-highspeed` | 1M | 262K | **是** | text,image | - | - | - | - |
+| `mimo-v2.5-pro` | 1M | 131K | **是** | text,image | - | - | - | - |
 | `minimax-m2.7` | 262K | 131K | **是** | text | - | - | - | - |
-| `step-3.7-flash` | 262K | 16K | 否 | text,image | - | - | - | - |
-| `glm-5.1` | 200K | 131K | **是** | text | - | - | - | - |
-| `glm-5` | 200K | 33K | **是** | text | - | - | - | - |
-| `ernie-5.0-thinking` | 131K | 66K | **是** | text | - | - | - | - |
-| `gemma-4-26b-a4b-it` | 131K | 33K | **是** | text,image | - | - | - | - |
+| `minimax-m3` | 1M | 128K | **是** | text,image | - | - | - | - |
+| `qwen3.5-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
+| `qwen3.6-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
 | `qwen3.6-plus` | 66K | 66K | **是** | text,image | - | - | - | - |
+| `qwen3.7-max` | 1M | 66K | **是** | text | - | - | - | - |
+| `qwen3.7-plus` | 1M | 66K | **是** | text,image | - | - | - | - |
+| `qwen3.8-27b` | 1M | - | **是** | text,image,video | - | - | - | - |
+| `qwen3.8-max-0902` | 1M | 131K | **是** | text,image | - | - | - | - |
+| `qwen3.8-omni-flash` | 1M | 131K | **是** | text,image,audio,video | - | - | - | - |
 
 ---
 

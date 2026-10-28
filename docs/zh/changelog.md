@@ -14,6 +14,8 @@
 
 ### 💥 行为变更
 
+- **Gitee/Moark 模型列表已重新排序以便查找。** `gitee` 与 `moark` 预设现在优先列出 `deepseek-v4.1-flash-1017`、`deepseek-v4.1-flash`，随后是 `qwen3.8-flash`、`qwen3.8-max`、`glm-5.3-flash`、`glm-5.3`、`MiniMax-M3.1-Flash`、`step-3.7-flash` 与 `auto`，其余模型按自然字母顺序排列。由于预设顺序同时是未配置默认模型时的回退顺序，未显式配置的 Gitee/Moark 会话现在会默认使用 `deepseek-v4.1-flash-1017`。
+
 - **Serve 会话列表默认有界。** 未指定 `limit` 的 `/api/sessions` 现在只返回前 100 个会话，并附带 `total`、`limit`、`offset`、`hasMore`；可用 `limit`/`offset` 继续翻页。`scope=active` 与 `/api/sessions/active` 改为只投影内存会话池，不再加载全部历史；会话级 MCP 配置也改为按 ID 单查工作目录。
 
 - **会话存储维护已纳入定时任务，且不会删除转录消息。** MothX 现在会投影每日一次的 `mothx-maintenance:session-storage` 任务，永久保留所有 `entries`/`sub_entries` 转录行。该任务只可能清理早于 `maintenance.toolExecutionRetentionDays` 的已完成/已放弃 `tool_execution_records`（默认 `0`，永久保留），始终保留 running/interrupted/retry-requested 记录以免不确定的工具副作用失去围栏，每次运行 `PRAGMA optimize`，并可在开启 `maintenance.vacuumSessionStorage` 时执行 `VACUUM`。

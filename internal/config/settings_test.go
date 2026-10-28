@@ -562,7 +562,7 @@ func TestRecordModelCompatFallbackPersists(t *testing.T) {
 	}
 	// The written model list keeps builtin metadata and ordering.
 	models := loaded.Providers["gitee"].Models
-	if len(models) < 2 || models[0].ID != "deepseek-v4.1-flash" || models[1].ID != "deepseek-v4.1-flash-1017" {
+	if len(models) < 2 || models[0].ID != "deepseek-v4.1-flash-1017" || models[1].ID != "deepseek-v4.1-flash" {
 		t.Fatalf("persisted model order = %#v, want builtin order preserved", modelIDs(models))
 	}
 	if persisted.ContextWindow != 1000000 {

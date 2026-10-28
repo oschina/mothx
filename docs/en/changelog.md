@@ -14,6 +14,8 @@
 
 ### 💥 Behavior Changes
 
+- **Gitee/Moark model lists are reordered for discoverability.** The `gitee` and `moark` presets now lead with `deepseek-v4.1-flash-1017` and `deepseek-v4.1-flash`, followed by `qwen3.8-flash`, `qwen3.8-max`, `glm-5.3-flash`, `glm-5.3`, `MiniMax-M3.1-Flash`, `step-3.7-flash`, and `auto`; the remaining models follow in natural alphabetical order. Because preset order is also the fallback when no default model is configured, an unconfigured Gitee/Moark session now defaults to `deepseek-v4.1-flash-1017`.
+
 - **The Serve session list is bounded by default.** `/api/sessions` without `limit` now returns the first 100 sessions plus `total`, `limit`, `offset`, and `hasMore`; pass `limit`/`offset` to page through history. `scope=active` and `/api/sessions/active` project only the in-memory session pool instead of loading all history, and per-session MCP configuration resolves its working directory by ID.
 
 - **Session storage maintenance is scheduled without deleting transcript messages.** MothX now projects a daily `mothx-maintenance:session-storage` job that preserves every `entries`/`sub_entries` transcript row forever. It may prune only completed/abandoned `tool_execution_records` older than `maintenance.toolExecutionRetentionDays` (default `0`, keep forever), always keeps running/interrupted/retry-requested records so uncertain tool side effects stay fenced, runs `PRAGMA optimize`, and optionally runs `VACUUM` when `maintenance.vacuumSessionStorage` is enabled.
