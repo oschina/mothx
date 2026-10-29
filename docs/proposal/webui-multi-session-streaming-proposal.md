@@ -1,6 +1,6 @@
 # WebUI 多 Session 并发执行与多流隔离方案设计
 
-> 状态: Proposal
+> 状态: Superseded（UI 布局与多 pane 部分由 `docs/proposal/webui-dynamic-workbench-layout-proposal.md` 承接；本文的 per-session 流隔离设计仍是其基础，保留作历史决策记录）
 > 日期: 2026-07-19
 > 目标版本: 待定
 
