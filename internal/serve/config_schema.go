@@ -13,6 +13,7 @@ type rawConfig struct {
 	Sandbox            *rawSandboxConfig        `json:"sandbox,omitempty"`
 	AllowedWorkDirs    *[]string                `json:"allowedWorkDirs,omitempty"`
 	Channels           *rawChannelConfig        `json:"channels,omitempty"`
+	Terminal           *rawTerminalConfig       `json:"terminal,omitempty"`
 	Session            *rawSessionConfig        `json:"session,omitempty"`
 	ToolVisibility     *rawToolVisibilityConfig `json:"toolVisibility,omitempty"`
 	Thinking           string                   `json:"thinking,omitempty"`
@@ -70,6 +71,18 @@ type rawSandboxConfig struct {
 type rawSessionConfig struct {
 	IdleTimeoutSeconds *int `json:"idleTimeoutSeconds,omitempty"`
 	MaxSessions        *int `json:"maxSessions,omitempty"`
+}
+
+// rawTerminalConfig mirrors TerminalConfig on the wire. Enabled stays a
+// pointer so "auto" (omitted) is distinct from an explicit false.
+type rawTerminalConfig struct {
+	Enabled              *bool    `json:"enabled,omitempty"`
+	Shell                string   `json:"shell,omitempty"`
+	MaxSessions          int      `json:"maxSessions,omitempty"`
+	MaxPerSession        int      `json:"maxPerSession,omitempty"`
+	ScrollbackBytes      int      `json:"scrollbackBytes,omitempty"`
+	MaxOutputBytesPerSec int      `json:"maxOutputBytesPerSec,omitempty"`
+	AllowedOrigins       []string `json:"allowedOrigins,omitempty"`
 }
 
 type rawToolVisibilityConfig struct {

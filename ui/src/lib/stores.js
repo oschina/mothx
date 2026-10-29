@@ -20,6 +20,7 @@ export const status = writable(null);
 export const capabilities = writable(null);
 export const channels = writable([]);
 export const sessions = writable([]);
+export const sessionsTotal = writable(0);
 export const sessionBindings = writable([]);
 // Server-resolved model catalog (GET /api/models/catalog). The server builds
 // it with the same provider-factory logic the TUI uses, so the WebUI picker
@@ -130,7 +131,9 @@ export const features = derived(status, ($s) => ({
   webSearch: $s?.features?.webSearch === true,
   browser: $s?.features?.browser === true,
   a2aMaster: $s?.features?.a2aMaster === true,
-  workflows: $s?.features?.workflows === true
+  workflows: $s?.features?.workflows === true,
+  terminal: $s?.features?.terminal === true,
+  terminalWarning: $s?.features?.terminalWarning || ''
 }));
 
 export const connectedChannels = derived(channels, ($c) =>
@@ -388,6 +391,7 @@ export async function refreshAll() {
   if (loaded.sessions?.ok) {
     const list = loaded.sessions.value?.sessions || [];
     sessions.set(sortSessions(list.map(normalizeSessionListEntry)));
+    sessionsTotal.set(Number(loaded.sessions.value?.total) || list.length);
   }
   if (loaded.bindings?.ok) sessionBindings.set(loaded.bindings.value?.bindings || []);
   if (loaded.cron?.ok) cronInfo.set(loaded.cron.value);
@@ -428,6 +432,7 @@ export async function refreshSessions() {
   // persisted project/pinned metadata as the Sessions view.
   const data = await request('/api/sessions?limit=100&offset=0');
   sessions.set(sortSessions((data?.sessions || []).map(normalizeSessionListEntry)));
+  sessionsTotal.set(Number(data?.total) || (data?.sessions || []).length);
   // Only subscribe sessions the socket has not subscribed yet — re-sending the
   // full list would make the server cancel and replay every subscription.
   syncRunSubscriptions();

@@ -32,6 +32,7 @@ import (
 	openaiapi "github.com/oschina/mothx/internal/serve/openaiapi"
 	"github.com/oschina/mothx/internal/session"
 	"github.com/oschina/mothx/internal/stats"
+	"github.com/oschina/mothx/internal/terminal"
 	webui "github.com/oschina/mothx/ui"
 )
 
@@ -79,6 +80,8 @@ type channelRuntime struct {
 	// owns the background index-job registry, so a fresh instance per request
 	// would hide a running scan from progress polling and start duplicate jobs.
 	knowledgeMu           sync.Mutex
+	terminals             *terminal.Manager
+	terminalShell         string
 	knowledgeService      *agentruntime.KnowledgeBaseService
 	nativeDirectoryPicker func(context.Context, string) (string, error)
 	deliveryCancel        context.CancelFunc
@@ -134,18 +137,20 @@ type activeSessionManager interface {
 }
 
 type featureStatus struct {
-	WebUI      bool `json:"webUI"`
-	OpenAIAPI  bool `json:"openaiAPI"`
-	Wechat     bool `json:"wechat"`
-	Feishu     bool `json:"feishu"`
-	MultiAgent bool `json:"multiAgent"`
-	Delegate   bool `json:"delegate"`
-	WebSearch  bool `json:"webSearch"`
-	Browser    bool `json:"browser"`
-	A2AMaster  bool `json:"a2aMaster"`
-	Workflows  bool `json:"workflows"`
-	Cron       bool `json:"cron"`
-	Memory     bool `json:"memory"`
+	WebUI           bool   `json:"webUI"`
+	OpenAIAPI       bool   `json:"openaiAPI"`
+	Wechat          bool   `json:"wechat"`
+	Feishu          bool   `json:"feishu"`
+	MultiAgent      bool   `json:"multiAgent"`
+	Delegate        bool   `json:"delegate"`
+	WebSearch       bool   `json:"webSearch"`
+	Browser         bool   `json:"browser"`
+	A2AMaster       bool   `json:"a2aMaster"`
+	Workflows       bool   `json:"workflows"`
+	Cron            bool   `json:"cron"`
+	Memory          bool   `json:"memory"`
+	Terminal        bool   `json:"terminal"`
+	TerminalWarning string `json:"terminalWarning,omitempty"`
 }
 
 type serveStatus struct {
@@ -429,7 +434,13 @@ func startChannels(cfg *Config, settings *config.Settings, version string) (*cha
 	identityMux := session.NewIdentityLocks()
 	dispatcher.SetIdentityLocks(identityMux)
 	deliveryCtx, deliveryCancel := context.WithCancel(context.Background())
-	rt := &channelRuntime{cfg: cfg, version: version, dispatcher: dispatcher, platforms: NewPlatformSupervisor(), cronStore: cronStore, cronStorePath: cronStorePath(settings), sessionDir: settings.GetSessionDir(), identityMux: identityMux, deliveryCancel: deliveryCancel, deliveryDone: make(chan struct{})}
+	terminalShell := settings.GetShell()
+	rt := &channelRuntime{cfg: cfg, version: version, dispatcher: dispatcher, platforms: NewPlatformSupervisor(), cronStore: cronStore, cronStorePath: cronStorePath(settings), sessionDir: settings.GetSessionDir(), identityMux: identityMux, deliveryCancel: deliveryCancel, deliveryDone: make(chan struct{}), terminals: terminal.New(managerConfigForConfig(cfg, terminalShell)), terminalShell: terminalShell}
+	if rt.terminals != nil {
+		rt.terminals.SetLogger(func(format string, args ...any) {
+			log.Printf("[terminal] "+format, args...)
+		})
+	}
 	dispatcher.SetRotateHandler(func(platform, userID string, force bool) error {
 		lifecycle := NewSessionLifecycleService(nil, dispatcher, rt.sessionDir, identityMux)
 		lifecycle.SetEventPublisher(rt.publishManagementEvent)
@@ -636,12 +647,23 @@ func (rt *channelRuntime) applyConfigUpdate(next *Config) error {
 	}
 	applyRuntimeFeatures(next)
 	previous := rt.configSnapshot()
+	previousTerminalEnabled := false
+	if previous != nil {
+		previousTerminalEnabled, _ = EffectiveTerminalEnabled(previous)
+	}
+	nextTerminalEnabled, _ := EffectiveTerminalEnabled(next)
 	if rt.dispatcher != nil {
 		if err := rt.dispatcher.ApplyConfig(buildConfigFromServeConfig(next)); err != nil {
 			return fmt.Errorf("apply channel dispatcher config: %w", err)
 		}
 	}
 	rt.setConfig(next)
+	// Limits/shell changes are reversible, so apply them immediately and
+	// restore them if the rest of the candidate config fails. Closing shells is
+	// irreversible and therefore waits for a committed update.
+	if rt.terminals != nil {
+		rt.terminals.UpdateConfig(managerConfigForConfig(next, rt.terminalShell))
+	}
 	rt.syncCronRuntime()
 	if err := rt.syncPlatformRuntime(previous, next); err != nil {
 		// A platform candidate can fail after the dispatcher accepted the
@@ -654,9 +676,15 @@ func (rt *channelRuntime) applyConfigUpdate(next *Config) error {
 				}
 			}
 			rt.setConfig(previous)
+			if rt.terminals != nil {
+				rt.terminals.UpdateConfig(managerConfigForConfig(previous, rt.terminalShell))
+			}
 			rt.syncCronRuntime()
 		}
 		return err
+	}
+	if rt.terminals != nil && previousTerminalEnabled && !nextTerminalEnabled {
+		rt.terminals.CloseAll()
 	}
 	return nil
 }
@@ -954,6 +982,9 @@ func (rt *channelRuntime) stop() {
 		rt.dispatcher.Close()
 	}
 	rt.publishManagementEvent("channel_status_changed", map[string]any{"state": "stopped"})
+	if rt.terminals != nil {
+		rt.terminals.Shutdown()
+	}
 }
 
 func (rt *channelRuntime) publishManagementEvent(eventType string, data any) {
@@ -993,6 +1024,9 @@ func (rt *channelRuntime) routes(configPath string) func(*openaiapi.Server, *htt
 		mux.HandleFunc("/api/channels/wechat/login", rt.handleWechatLogin(configPath))
 		mux.Handle("/ws/runs", srv.RunWebSocketHandler())
 		mux.Handle("/ws/logs", rt.handleLogs(sessions))
+		mux.HandleFunc("/api/terminals", rt.handleTerminals(sessions))
+		mux.HandleFunc("/api/terminals/", rt.handleTerminalByID)
+		mux.Handle("/ws/terminals/", http.HandlerFunc(rt.handleTerminalWebSocket))
 		mux.HandleFunc("/api/browse", rt.handleBrowse)
 		mux.HandleFunc("/api/select-directory", rt.handleSelectDirectory)
 		mux.HandleFunc("/api/skillhub/", rt.handleSkillHub(srv))
@@ -1280,19 +1314,22 @@ func featureStatusFromConfig(cfg *Config) featureStatus {
 	if cfg == nil {
 		return featureStatus{}
 	}
+	terminalEnabled, terminalWarning := EffectiveTerminalEnabled(cfg)
 	return featureStatus{
-		WebUI:      cfg.Features.WebUI,
-		OpenAIAPI:  cfg.Features.OpenAIAPI,
-		Wechat:     cfg.Features.Wechat,
-		Feishu:     cfg.Features.Feishu,
-		MultiAgent: cfg.Features.MultiAgent,
-		Delegate:   cfg.API.EnableDelegate,
-		WebSearch:  cfg.API.EnableWebSearch,
-		Browser:    cfg.API.EnableBrowser,
-		A2AMaster:  cfg.API.EnableA2AMaster,
-		Workflows:  cfg.API.EnableWorkflows,
-		Cron:       cfg.Features.Cron,
-		Memory:     cfg.Features.Memory,
+		WebUI:           cfg.Features.WebUI,
+		OpenAIAPI:       cfg.Features.OpenAIAPI,
+		Wechat:          cfg.Features.Wechat,
+		Feishu:          cfg.Features.Feishu,
+		MultiAgent:      cfg.Features.MultiAgent,
+		Delegate:        cfg.API.EnableDelegate,
+		WebSearch:       cfg.API.EnableWebSearch,
+		Browser:         cfg.API.EnableBrowser,
+		A2AMaster:       cfg.API.EnableA2AMaster,
+		Workflows:       cfg.API.EnableWorkflows,
+		Cron:            cfg.Features.Cron,
+		Memory:          cfg.Features.Memory,
+		Terminal:        terminalEnabled,
+		TerminalWarning: terminalWarning,
 	}
 }
 
@@ -2402,6 +2439,9 @@ func (rt *channelRuntime) handleSessionByID(sessions activeSessionManager) http.
 		if !deleted {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
 			return
+		}
+		if rt.terminals != nil {
+			rt.terminals.CloseSession(id)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
 	}

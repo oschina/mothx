@@ -7,6 +7,7 @@
   import { route, navigate } from '../lib/router.js';
   import { t } from '../lib/preferences.js';
   import { request, jsonBody, del } from '../lib/api.js';
+  import { openDraftInWorkbench } from '../lib/workbench/store.js';
   import PreferenceControls from './PreferenceControls.svelte';
   import Modal from './Modal.svelte';
   import {
@@ -267,6 +268,10 @@
 
   function openNewChat() {
     currentSession.set('');
+    const draftId = globalThis.crypto?.randomUUID
+      ? globalThis.crypto.randomUUID()
+      : `draft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    openDraftInWorkbench({ draftId, workDir: '' });
     navigate('/chat');
     closeSidebar();
   }

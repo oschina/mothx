@@ -1,15 +1,14 @@
 // Session runtime state manager for the Chat view.
 //
 // Owns the runtime snapshot lifecycle: loading (GET /runtime), PATCH updates
-// with optimistic apply + rollback, mode/display-mode switching, responses-run
-// polling/reconnect, and capability -> session-tool synchronization. All
-// server actions, the runtime store, and mirror-sync callbacks are injected,
-// so the manager is pure JS and unit-testable without Svelte.
+// with optimistic apply + rollback, mode/display-mode switching, and
+// capability -> session-tool synchronization. All server actions and the
+// canonical sessionRunStates writer are injected, so the manager is pure JS
+// and unit-testable without Svelte.
 //
-// Chat.svelte stays a thin adapter: it injects real store/API functions and
-// renders the state the manager publishes through onSnapshot.
+// ChatPane stays a thin adapter: it injects real store/API functions and
+// renders the snapshot the manager publishes into sessionRunStates.
 
-const RESPONSES_POLL_INTERVAL_MS = 1000;
 
 // Snapshot display-mode normalization: the UI collapses everything but 'code'
 // into 'work' (the expanded/runtime panel state is kept in the view).
@@ -31,27 +30,22 @@ export function enabledToolsFromCapabilities(snapshot) {
  *   runLifecycle(): number    — monotonic run lifecycle version owned by the view.
  *   isBusy(): boolean         — completion/runtime-busy state from the view.
  *   getSessionRuntime(id), patchSessionRuntime(id, patch),
- *   getResponsesRun(sessionID, localRunID), reconnectResponsesRun(sessionID, localRunID)
  *   getSessionTools(): object, setSessionTools(id, tools): void
  *   upsertSession(patch), refreshSessions(): Promise
- *   isActiveRunStatus(status): boolean
  *   onError(err), onSnapshot(next), onDisplayMode(mode),
- *   onNewSessionMode(mode), onPersist(id), onUpdatingChange(flag)
+ *   onNewSessionMode(mode), onUpdatingChange(flag)
  */
 export function createSessionRuntimeManager(deps) {
   // Guards against stale GETs: every PATCH bumps this; an in-flight load that
   // started before the mutation must not overwrite the authoritative response.
   let mutationVersion = 0;
   let updating = false;
-  let pollTimer = 0;
-  let pollReconnectKey = '';
 
   const currentSnapshot = () => deps.store.get();
 
-  function publish(next, persistSessionID) {
+  function publish(next) {
     deps.store.set(next);
     deps.onSnapshot(next);
-    if (persistSessionID) deps.onPersist(persistSessionID);
   }
 
   function syncToolsFromCapabilities(id, snapshot) {
@@ -108,12 +102,12 @@ export function createSessionRuntimeManager(deps) {
         ...(patch.mode ? { mode: patch.mode } : {}),
         ...(patch.displayMode ? { displayMode: patch.displayMode } : {})
       };
-      publish(optimistic, id);
+      publish(optimistic);
 
       try {
         const snapshot = await deps.patchSessionRuntime(id, patch);
         if (stillCurrent(id, snapshotMutationVersion, deps.runLifecycle())) {
-          publish(snapshot, id);
+          publish(snapshot);
           syncToolsFromCapabilities(id, snapshot);
         }
         // The PATCH response is authoritative; the mode controls must not stay
@@ -125,7 +119,7 @@ export function createSessionRuntimeManager(deps) {
         });
       } catch (err) {
         if (stillCurrent(id, snapshotMutationVersion, deps.runLifecycle())) {
-          publish(previous, id);
+          publish(previous);
           deps.onError(err);
         }
       } finally {
@@ -150,92 +144,9 @@ export function createSessionRuntimeManager(deps) {
       // in flight; the authoritative response re-derives it on success, and a
       // failure rolls it back to the previous snapshot's value.
       deps.onDisplayMode(next);
-      if (!deps.currentSession()) {
-        deps.onPersist('__new__');
-        return;
-      }
+      if (!deps.currentSession()) return;
       await this.update({ displayMode: next });
     },
 
-    // Poll the durable responses-run row while it is active. Reconnects once
-    // per (session, localRunID) pair; stops when the run leaves active status
-    // or the session/lifecycle changes (at which point a fresh snapshot load
-    // reconciles the final invocation state).
-    startResponsesRunPolling(sessionID, localRunID) {
-      if (!sessionID || !localRunID || pollTimer) return;
-      const pollingLifecycle = deps.runLifecycle();
-      const reconnectKey = `${sessionID}:${localRunID}`;
-      if (pollReconnectKey !== reconnectKey) {
-        pollReconnectKey = reconnectKey;
-        deps.reconnectResponsesRun(sessionID, localRunID)
-          .then((result) => {
-            const run = result?.run;
-            if (sessionID !== deps.currentSession()
-              || pollingLifecycle !== deps.runLifecycle()
-              || !run
-              || run.localRunId !== localRunID) return;
-            publish({
-              ...currentSnapshot(),
-              responsesRun: {
-                ...currentSnapshot()?.responsesRun,
-                localRunId: run.localRunId,
-                responseId: run.responseId,
-                state: run.state,
-                cancelRequested: run.cancelRequested
-              }
-            }, sessionID);
-          })
-          .catch(() => {
-            // The polling path still reports remote state; reconnect can fail
-            // while another coordinator owns the session runtime lock.
-          });
-      }
-      const poll = async () => {
-        if (sessionID !== deps.currentSession() || pollingLifecycle !== deps.runLifecycle()) {
-          this.stopResponsesRunPolling();
-          return;
-        }
-        const currentResponseRun = currentSnapshot()?.responsesRun;
-        if (!currentResponseRun || currentResponseRun.localRunId !== localRunID) {
-          this.stopResponsesRunPolling();
-          return;
-        }
-        try {
-          const run = await deps.getResponsesRun(sessionID, localRunID);
-          if (sessionID !== deps.currentSession() || pollingLifecycle !== deps.runLifecycle()) return;
-          if (run && run.localRunId === localRunID) {
-            publish({
-              ...currentSnapshot(),
-              responsesRun: {
-                ...currentSnapshot()?.responsesRun,
-                localRunId: run.localRunId,
-                responseId: run.responseId,
-                state: run.state,
-                cancelRequested: run.cancelRequested
-              }
-            }, sessionID);
-          }
-          if (!run || !deps.isActiveRunStatus(run.state)) {
-            this.stopResponsesRunPolling();
-            this.load(sessionID, pollingLifecycle);
-          }
-        } catch {
-          // Keep the last durable state visible; the next interval retries.
-        }
-      };
-      poll();
-      pollTimer = setInterval(poll, RESPONSES_POLL_INTERVAL_MS);
-    },
-
-    stopResponsesRunPolling() {
-      if (!pollTimer) return;
-      clearInterval(pollTimer);
-      pollTimer = 0;
-    },
-
-    // Component teardown: stop timers; nothing else is owned here.
-    destroy() {
-      this.stopResponsesRunPolling();
-    }
   };
 }

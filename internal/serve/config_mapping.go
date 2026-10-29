@@ -303,6 +303,15 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 	cronInterval := c.Cron.Interval
 	memoryStoreEnabled := c.Memory.Enabled
 	securitySmartApprovals := c.Security.SmartApprovals
+	terminal := rawTerminalConfig{
+		Enabled:              c.Terminal.Enabled,
+		Shell:                c.Terminal.Shell,
+		MaxSessions:          c.Terminal.MaxSessions,
+		MaxPerSession:        c.Terminal.MaxPerSession,
+		ScrollbackBytes:      c.Terminal.ScrollbackBytes,
+		MaxOutputBytesPerSec: c.Terminal.MaxOutputBytesPerSec,
+		AllowedOrigins:       append([]string(nil), c.Terminal.AllowedOrigins...),
+	}
 
 	features.WebUI = &webUIEnabled
 	features.OpenAIAPI = &openAIAPIEnabled
@@ -323,6 +332,7 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 		Sandbox:            &rawSandboxConfig{Enabled: &sandboxEnabled, Level: c.API.Sandbox.Level},
 		AllowedWorkDirs:    c.API.AllowedWorkDirs,
 		Session:            &rawSessionConfig{IdleTimeoutSeconds: &idleTimeoutSeconds, MaxSessions: &maxSessions},
+		Terminal:           &terminal,
 		ToolVisibility:     &rawToolVisibilityConfig{Mode: c.API.ToolVisibility.Mode, Detail: c.API.ToolVisibility.Detail},
 		Thinking:           c.API.DefaultThinkingLevel,
 		SystemPromptMode:   c.API.SystemPromptMode,

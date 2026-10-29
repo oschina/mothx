@@ -4,8 +4,10 @@
   import Sidebar from './components/Sidebar.svelte';
   import Topbar from './components/Topbar.svelte';
   import Banners from './components/Banners.svelte';
-  import { route, navigate } from './lib/router.js';
+  import { route, navigate, replaceNavigate } from './lib/router.js';
   import { refreshAll, connectLogs, disconnectLogs, connectRuns, disconnectRuns, currentSession, status, channels, serveConfig, isMobile, sidebarCollapsed } from './lib/stores.js';
+  import { startSessionStreamDispatcher, stopSessionStreamDispatcher } from './lib/session-stream.js';
+  import { hydrateWorkbench } from './lib/workbench/store.js';
   import { t } from './lib/preferences.js';
 
   const viewLoaders = {
@@ -29,6 +31,7 @@
   let viewLoading = false;
   let viewLoadFailed = false;
   let viewLoadGeneration = 0;
+  let loadedSection = '';
   let destroyed = false;
   $: gridTemplate = $isMobile
     ? 'minmax(0, 1fr)'
@@ -66,13 +69,26 @@
   function startApp() {
     if (appStarted) return;
     appStarted = true;
+    // Hydrate the workbench once, before any view action can mutate it. Chat is
+    // route-loaded later; re-reading localStorage there would drop layout state
+    // that has not reached the persistence debounce yet.
+    hydrateWorkbench();
     if (!window.location.hash) navigate('/chat');
     stopRouteSync = route.subscribe((nextRoute) => {
       syncSessionFromRoute(nextRoute);
-      loadRouteView(nextRoute.section);
+      // Hash changes inside one section (session/view tabs) must not remount
+      // the view: the workbench owns that navigation and a remount would drop
+      // unsaved pane state and re-hydrate layout from a stale localStorage copy.
+      if (nextRoute.section !== loadedSection) {
+        loadedSection = nextRoute.section;
+        loadRouteView(nextRoute.section);
+      }
     });
     stopSessionSync = currentSession.subscribe(syncRouteFromSession);
     connectLogs();
+    // The dispatcher owns the single /ws/runs consumer and the SSE fallback.
+    // It starts before the socket so no replayed event can be dropped.
+    startSessionStreamDispatcher();
     connectRuns();
     refreshAll();
   }
@@ -110,6 +126,7 @@
     stopSessionSync?.();
     disconnectLogs();
     disconnectRuns();
+    stopSessionStreamDispatcher();
   });
 
   function syncSessionFromRoute(nextRoute) {
@@ -124,7 +141,7 @@
     const routeSession = currentRoute.query?.session || '';
     const nextSession = sessionID || '';
     if (routeSession === nextSession) return;
-    navigate(nextSession ? `/chat?session=${encodeURIComponent(nextSession)}` : '/chat');
+    replaceNavigate(nextSession ? `/chat?session=${encodeURIComponent(nextSession)}` : '/chat');
   }
 </script>
 

@@ -2,7 +2,8 @@ import { derived, writable } from 'svelte/store';
 
 const storageKeys = {
   language: 'mothx.webui.language',
-  themeMode: 'mothx.webui.themeMode'
+  themeMode: 'mothx.webui.themeMode',
+  workbenchEnabled: 'mothx.webui.workbenchEnabled'
 };
 
 const dictionaries = {
@@ -517,6 +518,8 @@ const dictionaries = {
     'settings.app.sessionDir': 'Session 目录',
     'settings.app.shellPath': 'Shell 路径',
     'settings.app.shellPrefix': 'Shell 命令前缀',
+    'settings.app.workbench': '动态工作台布局',
+    'settings.app.workbenchHint': '关闭后回到单会话聊天布局；事件流仍由同一调度器处理。',
     'settings.app.enablePlanTool': 'Plan 工具',
     'settings.app.enableArtifact': 'TUI/CLI 制品发布',
     'settings.app.enableACPArtifact': 'Desktop (ACP) 制品发布',
@@ -726,6 +729,8 @@ const dictionaries = {
 		'chat.run.reconcileUnknown': '提交结果暂时无法确认，请稍后重新加载运行状态。',
 		'chat.run.reloadStatus': '重新确认运行状态',
     'chat.notice.stopped': '已停止请求。',
+    'chat.notice.attachmentsNeedReselect': '刷新后有 {count} 个附件未能恢复，请重新选择。',
+    'chat.error.sessionActive': '该会话已有正在执行的任务。',
     'chat.retry': '重试',
     'chat.forkFromMessage': '从此进度分叉',
     'chat.retry.confirm': '确认并重试',
@@ -1014,6 +1019,8 @@ const dictionaries = {
     'chat.esm.runningCount': '{running}/{total} 运行中',
     'chat.approval.center': '审批中心',
     'chat.approval.pending': '{pending} 个待审批 · 本会话已记录 {recorded} 条',
+    'chat.question.title': '提问',
+    'chat.question.pending': '{count} 个待回答',
     'chat.approval.close': '关闭',
     'chat.approval.request': '请求',
     'chat.approval.risk': '风险',
@@ -1079,6 +1086,42 @@ const dictionaries = {
     'settings.skillhub.bearerToken': 'Bearer Token',
     'settings.skillhub.enabled': '启用',
     'settings.skillhub.remove': '移除',
+    'workbench.tabs.label': '工作台标签',
+    'workbench.tab.close': '关闭标签',
+    'workbench.tab.closeOthers': '关闭其他标签',
+    'workbench.tab.closeRight': '关闭右侧标签',
+    'workbench.tab.overflow': '全部标签',
+    'workbench.empty.title': '没有打开的会话',
+    'workbench.empty.newTask': '新建任务',
+    'workbench.snapshot.focus': '聚焦',
+    'workbench.newTask': '新建任务',
+    'workbench.draft': '新任务',
+    'workbench.session': '会话',
+    'workbench.splitColumn': '向右分屏',
+    'workbench.splitRow': '向下分屏',
+    'workbench.closePane': '关闭窗格',
+    'workbench.reset': '重置布局',
+    'workbench.terminal': '终端',
+    'workbench.attention': '待处理',
+    'workbench.preset.single': '单窗格',
+    'workbench.preset.twoColumn': '左右两栏',
+    'workbench.preset.twoRow': '上下两栏',
+    'workbench.preset.quad': '四宫格',
+    'workbench.limit.pane': '最多只能同时显示 {limit} 个窗格',
+    'workbench.limit.tab': '当前工作台最多打开 {limit} 个标签',
+    'workbench.limit.generic': '无法完成该布局操作',
+    'workbench.backgroundNotice': '运行中的任务已在后台继续；可从侧边栏重新打开该会话',
+    'terminal.title': '终端',
+    'terminal.exited': '进程已退出',
+    'terminal.takenOver': '终端已被另一个客户端接管',
+    'terminal.reconnect': '重新连接',
+    'terminal.throttled': '终端输出受限（服务端反压）',
+    'terminal.lost': '终端已随 serve 重启而失效，请重新连接以创建新终端',
+    'terminal.sandboxWarning': '终端不受沙箱保护，继承 serve 进程的用户权限与环境变量',
+    'terminal.agentWarning.shared': '终端绑定当前会话目录，Agent 可能同时在此目录工作',
+    'terminal.agentWarning.local': 'Agent 正在此进程使用同一目录；终端与 Agent 会同时看到文件变化',
+    'terminal.agentWarning.external': '会话正在另一进程执行；终端与该进程共享同一目录，请避免冲突操作',
+    'terminal.warning.placeholderToken': '正在使用占位认证 token；暴露到非回环地址前请替换为真实 token',
     'settings.skillhub.saved': 'SkillHub 设置已保存。'
   },
   en: {
@@ -1592,6 +1635,8 @@ const dictionaries = {
     'settings.app.sessionDir': 'Session Dir',
     'settings.app.shellPath': 'Shell Path',
     'settings.app.shellPrefix': 'Shell Prefix',
+    'settings.app.workbench': 'Dynamic workbench layout',
+    'settings.app.workbenchHint': 'Turn off to return to the single-session chat layout; events still flow through the same scheduler.',
     'settings.app.enablePlanTool': 'Plan Tool',
     'settings.app.enableArtifact': 'TUI/CLI artifact publishing',
     'settings.app.enableACPArtifact': 'Desktop (ACP) artifact publishing',
@@ -1801,6 +1846,8 @@ const dictionaries = {
 		'chat.run.reconcileUnknown': 'The submission result could not be confirmed. Reload the run status and try again.',
 		'chat.run.reloadStatus': 'Re-check run status',
     'chat.notice.stopped': 'Request stopped.',
+    'chat.notice.attachmentsNeedReselect': '{count} attachment(s) could not be restored after the refresh. Please select them again.',
+    'chat.error.sessionActive': 'This session already has an active run.',
     'chat.retry': 'Retry',
     'chat.forkFromMessage': 'Fork from this progress',
     'chat.retry.confirm': 'Confirm and retry',
@@ -2089,6 +2136,8 @@ const dictionaries = {
     'chat.esm.runningCount': '{running}/{total} running',
     'chat.approval.center': 'Approval center',
     'chat.approval.pending': '{pending} pending · {recorded} recorded for this session',
+    'chat.question.title': 'Question',
+    'chat.question.pending': '{count} pending',
     'chat.approval.close': 'Close',
     'chat.approval.request': 'Request',
     'chat.approval.risk': 'risk',
@@ -2154,6 +2203,42 @@ const dictionaries = {
     'settings.skillhub.bearerToken': 'Bearer token',
     'settings.skillhub.enabled': 'Enabled',
     'settings.skillhub.remove': 'Remove',
+    'workbench.tabs.label': 'Workspace tabs',
+    'workbench.tab.close': 'Close tab',
+    'workbench.tab.closeOthers': 'Close other tabs',
+    'workbench.tab.closeRight': 'Close tabs to the right',
+    'workbench.tab.overflow': 'All tabs',
+    'workbench.empty.title': 'No session open',
+    'workbench.empty.newTask': 'New task',
+    'workbench.snapshot.focus': 'Focus',
+    'workbench.newTask': 'New task',
+    'workbench.draft': 'New task',
+    'workbench.session': 'Session',
+    'workbench.splitColumn': 'Split right',
+    'workbench.splitRow': 'Split down',
+    'workbench.closePane': 'Close pane',
+    'workbench.reset': 'Reset layout',
+    'workbench.terminal': 'Terminal',
+    'workbench.attention': 'Pending',
+    'workbench.preset.single': 'Single pane',
+    'workbench.preset.twoColumn': 'Two columns',
+    'workbench.preset.twoRow': 'Two rows',
+    'workbench.preset.quad': 'Quad',
+    'workbench.limit.pane': 'At most {limit} panes can be shown at once',
+    'workbench.limit.tab': 'The workbench can hold at most {limit} tabs',
+    'workbench.limit.generic': 'The layout change could not be completed',
+    'workbench.backgroundNotice': 'The running task continues in the background; reopen the session from the sidebar',
+    'terminal.title': 'Terminal',
+    'terminal.exited': 'process exited',
+    'terminal.takenOver': 'Terminal taken over by another client',
+    'terminal.reconnect': 'Reconnect',
+    'terminal.throttled': 'Terminal output is throttled by the server',
+    'terminal.lost': 'The terminal was lost with the serve process; reconnect to create a new one',
+    'terminal.sandboxWarning': 'Not sandboxed: the terminal inherits the serve process user and environment',
+    'terminal.agentWarning.shared': 'The terminal is bound to this session directory; the Agent may work there at the same time',
+    'terminal.agentWarning.local': 'The Agent is working in this directory from this process; the terminal and Agent will see each other\'s file changes',
+    'terminal.agentWarning.external': 'This session is running in another process; the terminal shares its directory, so avoid conflicting edits',
+    'terminal.warning.placeholderToken': 'Using the placeholder auth token; replace it with a real token before exposing this listener',
     'settings.skillhub.saved': 'SkillHub settings saved.'
   }
 };
@@ -2171,6 +2256,7 @@ function loadPreference(key, fallback, allowed) {
 
 export const language = writable(loadPreference(storageKeys.language, 'zh', ['zh', 'en']));
 export const themeMode = writable(loadPreference(storageKeys.themeMode, 'auto', ['light', 'dark', 'auto']));
+export const workbenchEnabled = writable(loadPreference(storageKeys.workbenchEnabled, '1', ['0', '1']));
 export const effectiveTheme = writable(resolveEffectiveTheme(loadPreference(storageKeys.themeMode, 'auto', ['light', 'dark', 'auto'])));
 
 export const t = derived(language, ($language) => {
@@ -2197,6 +2283,12 @@ export function setThemeMode(value) {
   themeMode.set(value);
   if (isBrowser) window.localStorage.setItem(storageKeys.themeMode, value);
   applyTheme(value);
+}
+
+export function setWorkbenchEnabled(value) {
+  const next = value ? '1' : '0';
+  workbenchEnabled.set(next);
+  if (isBrowser) window.localStorage.setItem(storageKeys.workbenchEnabled, next);
 }
 
 export function resolveEffectiveTheme(mode, prefersDark = mediaQuery?.matches) {

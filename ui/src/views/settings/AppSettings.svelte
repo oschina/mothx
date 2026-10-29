@@ -2,7 +2,7 @@
   import { settings, modelCatalog, setError, setNotice, clearBanners, refreshModelCatalog, resetSelectedModelToDefault, refreshAll, isMobile } from '../../lib/stores.js';
   import { postJSON, putJSON } from '../../lib/api.js';
   import { get } from 'svelte/store';
-  import { t } from '../../lib/preferences.js';
+  import { t, workbenchEnabled, setWorkbenchEnabled } from '../../lib/preferences.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
 
@@ -30,6 +30,13 @@
   let showModelPicker = false;
   let loadingDiscoveredModels = false;
   let modelTestStates = {};
+  let workbenchOn = false;
+  let lastWorkbenchOn = $workbenchEnabled !== '0';
+  $: workbenchOn = $workbenchEnabled !== '0';
+  $: if (workbenchOn !== lastWorkbenchOn) {
+    lastWorkbenchOn = workbenchOn;
+    setWorkbenchEnabled(workbenchOn);
+  }
 
   $: isProviderSettings = section === 'providers';
   $: syncFromStore($settings);
@@ -907,6 +914,7 @@
       <SettingsSwitch title={$t('settings.app.enableArtifact')} bind:checked={form.defaults.enableArtifact} />
       <SettingsSwitch title={$t('settings.app.enableACPArtifact')} bind:checked={form.defaults.enableACPArtifact} />
       <SettingsSwitch title={$t('settings.app.authored')} bind:checked={form.defaults.authored} />
+      <SettingsSwitch title={$t('settings.app.workbench')} description={$t('settings.app.workbenchHint')} bind:checked={workbenchOn} />
       <SettingsField label={$t('settings.app.updateCheck')}>
         <select bind:value={form.defaults.updateCheck} class="settings-select">
           <option value="">{$t('common.uninitialized')}</option>

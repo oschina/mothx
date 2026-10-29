@@ -38,7 +38,7 @@
     query = '';
     open = true;
     tick().then(() => {
-      if (open) input?.focus();
+      if (open) root?.querySelector('input')?.focus();
     });
   }
 

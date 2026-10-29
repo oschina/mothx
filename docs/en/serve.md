@@ -106,6 +106,8 @@ Security is controlled by three independent layers:
 Access `http://127.0.0.1:7872` to open the Web UI. When authentication is enabled, first sign in with an `api.auth.tokens` token. The Web UI provides:
 
 - **Chat Interface**: SSE streaming output, tool call/result rendering, plan cards, and a session runtime menu for `plan`, `agent`, and `yolo` modes. Submissions preserve persisted conversation history; optional images, session tool toggles, skills, and explicit mode can be sent with a run. Runtime mode and capability changes apply immediately from the server's authoritative response, while session-list refreshes remain best-effort. The composer reflects server-side queued/running states after reconnect.
+- **Dynamic Workbench**: `/chat` supports session tabs, up to four split panes, menu/drag splitting, persisted layout, and a single-pane mobile projection. Every pane owns its composer, model selection, draft, approvals, and trajectory view. Panes render the canonical `sessionRunStates` projection directly, and an all-tabs overflow menu keeps every open session reachable. Use `?workbench=0` or the "Dynamic workbench layout" setting to return to the single-session layout; events are always consumed by the same `session-stream` dispatcher.
+- **Interactive Terminal**: when `/api/status` reports `features.terminal`, the workbench toolbar can open an interactive PTY for the focused session's cwd (xterm.js over WebSocket). The terminal is a local shell with the serve process user's privileges, is not protected by the sandbox, and inherits the full serve process environment; it creates no Run, writes no transcript, and takes no Runtime lease. It is available on a loopback listener, or on a non-loopback listener when auth is enabled with a token; an unauthenticated non-loopback listener returns `terminal_unsafe`.
 - **Approval Center**: Review pending tool approvals, approve once or deny, persist command/path allow rules, and inspect the session approval audit history.
 - **Session Management**: Pagination, keyboard shortcuts, historical sessions, runtime snapshots, capability toggles, and reconnect-safe approval state. Historical sessions are sorted by last-used time with the most recently replied-to session at the top; the session-management page shows each session's last reply time. Active runs remain protected after a page refresh until they reach a terminal state. `GET /api/sessions` is bounded: without `limit` it returns the first 100 sessions plus `total`, `limit`, `offset`, and `hasMore`, and `scope=active`/`/api/sessions/active` project only the in-memory session pool instead of loading all history.
 - **Responses Background Runs**: When an `openai-responses` provider enables `responses.background`, Serve submits supported requests as remote background tasks, persists their response lineage and archived output, polls them through completion, resumes recoverable runs after restart, and executes local function/custom-tool calls. The authenticated run API supports `GET /api/responses/runs/{localRunID}?session_id={sessionID}` plus `cancel`, `reconnect`, and `abandon` actions; see [Configuration](configuration.md#responses-field).
@@ -115,6 +117,26 @@ Access `http://127.0.0.1:7872` to open the Web UI. When authentication is enable
 - **WebSocket streams**: `/ws/runs` and `/ws/logs` are Serve event streams used by the Web UI; they are not a separate messaging channel
 - **Settings**: Memory, WorkDir, Logs, SkillHub, environment, and MCP management are available in addition to provider and agent settings
 - **Serve Config**: Features, API, Cron, Memory, Security, Agent, Hooks, Channels, Lobster Mode
+
+### Terminal configuration
+
+The optional `terminal` section of `serve.json` controls the interactive terminal; omitting it keeps the automatic policy (loopback enabled; non-loopback enabled only with configured auth tokens):
+
+```json
+{
+  "terminal": {
+    "enabled": null,
+    "shell": "",
+    "maxSessions": 8,
+    "maxPerSession": 2,
+    "scrollbackBytes": 1048576,
+    "maxOutputBytesPerSec": 1048576,
+    "allowedOrigins": []
+  }
+}
+```
+
+An empty `allowedOrigins` means strict same-origin; reverse proxies or custom front ends must list their origin explicitly. The terminal status bar continuously shows that the shell is outside the sandbox and inherits the serve process user/environment, warns that it shares the focused session's cwd with a possibly running Agent (with a stronger notice when the canonical execution snapshot is local or in another process), surfaces the placeholder-auth-token warning reported by `/api/status`, and reports server-side output backpressure instead of treating it as a disconnect. A page reload reattaches the detached shell recorded for that tab instead of leaking it and creating a second terminal; once the shell exits or the id is lost, Reconnect creates a fresh terminal. Browser cookie sessions receive no `terminalToken` in the create response; only auth-disabled or Bearer-authenticated clients get one for non-browser WebSocket attach. Serve logs terminal lifecycle metadata only (`terminal_created`/`terminal_exited`/`terminal_killed` with id, session, cwd, and exit code), never input or output. Disabling the terminal closes existing shells and rejects new WebSocket attaches. On Linux the shell carries `Pdeathsig`, so it is terminated if the serve process dies; on Windows the backend uses ConPTY (Windows 10 1809+ or Windows 11) and older systems report `terminal_unsupported`. The terminal shares the serve auth token: holding the token is equivalent to owning that user's shell. That is the access boundary, not a UI toggle; use a separate OS user or container when stronger isolation is required instead of trimming terminal environment variables or relying on the sandbox.
 
 ### Screenshots
 

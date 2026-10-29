@@ -17,6 +17,7 @@ type Config struct {
 	Features    FeatureConfig           `json:"features"`
 	Channels    ChannelConfig           `json:"channels"`
 	WebUI       WebUIConfig             `json:"webUI"`
+	Terminal    TerminalConfig          `json:"terminal"`
 	LobsterMode bool                    `json:"lobsterMode,omitempty"`
 	Cron        channels.CronConfig     `json:"cron"`
 	Memory      channels.MemoryConfig   `json:"memory"`
@@ -62,6 +63,7 @@ func DefaultConfig() *Config {
 			Memory:     h.Memory.Enabled,
 		},
 		WebUI:    WebUIConfig{Enabled: true, Dir: "ui/dist"},
+		Terminal: defaultTerminalConfig(),
 		Cron:     h.Cron,
 		Memory:   h.Memory,
 		Security: h.Security,
@@ -135,6 +137,7 @@ func normalize(cfg *Config) {
 	if cfg.WebUI.Dir == "" {
 		cfg.WebUI.Dir = "ui/dist"
 	}
+	normalizeTerminalConfig(&cfg.Terminal)
 	if cfg.Agent.MaxTurns == 0 {
 		cfg.Agent = channels.DefaultConfig().Agent
 	}

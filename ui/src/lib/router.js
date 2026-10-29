@@ -20,6 +20,19 @@ export function navigate(path) {
   window.location.hash = target;
 }
 
+// replaceNavigate updates the hash without growing browser history. Tab focus
+// changes should not turn every pane click into a Back-button step.
+export function replaceNavigate(path) {
+  const target = normalise(path);
+  if (window.location.hash === target) {
+    route.set(parseHash());
+    return;
+  }
+  if (typeof window === 'undefined') return;
+  window.history.replaceState(null, '', target);
+  route.set(parseHash());
+}
+
 function parseHash() {
   const raw = (typeof window === 'undefined' ? '' : window.location.hash) || '#/chat';
   const clean = raw.startsWith('#') ? raw.slice(1) : raw;
