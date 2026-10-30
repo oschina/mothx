@@ -1602,6 +1602,24 @@ Source: https://mothx.net/zh/changelog.md
 
 # 更新日志
 
+## v1.3.108
+
+### ✨ 新功能
+
+- **Serve Web UI 新增动态多会话工作台。** `/chat` 现支持会话标签、最多 4 个窗格分屏（菜单/拖拽）、每个 pane 独立的 composer 与模型/草稿状态、布局持久化和移动端单窗格投影。应用级唯一的 `session-stream` 调度器是 `/ws/runs` 的唯一消费者并接管 SSE 回退，因此关闭一个 pane 不会中断其他后台会话的流。各 pane 直接渲染 canonical `sessionRunStates`，溢出的标签可通过“全部标签”菜单访问；审批与提问在所属 pane 的浮层中完成，后台待处理只显示标签与全局 attention 徽标，不会抢占焦点；超过 4 个窗格或标签上限的布局操作会被拒绝并提示原因。旧的单会话回退及其 `?workbench=0`/设置开关已移除，`/chat` 始终是工作台；只读 Plan dock 从焦点会话的最新 plan 消息派生，不新增存储、工具或后端端点。composer 文本在切换标签时保留；带 providerRef 的附件可跨刷新恢复，仅带 dataUrl 的附件在刷新后会提示重新选择。标签条内拖拽现在始终按同窗格重排处理，不再被误判为边缘分屏；第二个浏览器标签页会恢复共享的最近布局，并按 last-write-wins 保持可恢复。每个会话的滚动位置在切换标签后保留；关闭仍在运行的会话标签时会给出一次后台继续提示，而不是静默丢弃。 工作台标签条与 icon-only 工具条已收紧并适配明暗主题；composer 对齐 Desktop：折叠的模型+模式入口可展开 plan/agent/yolo/os 模式、Work/Code 显示模式与 provider/model/主角团选择，会话目录移到聊天头部。
+
+- **Serve 新增带认证的交互式终端。** `features.terminal` 通过 `/api/terminals` 与 `/ws/terminals/` 暴露由 `internal/terminal`（Unix 使用 creack/pty，Windows 使用 ConPTY）驱动的 xterm.js PTY 面板。终端绑定焦点会话的 cwd，继承 serve 进程环境，支持 resize/replay/takeover，并按“回环或已认证监听”策略授权；它不创建 Run、不写 transcript、不占 Runtime lease，也不在 sandbox 内运行。Linux 上 shell 还带有 `Pdeathsig`，不会在 serve 退出后残留；Windows 则提供仅在该平台运行的 ConPTY start/input/resize/exit 往返测试作为实机门禁。 终端配置（含显式 `enabled: false`、shell、资源上限与 allowedOrigins）在 `serve.json` 保存/重载后完整保留。状态栏会显示服务端输出反压，不再把它误判为断线；serve 只记录终端创建/退出/终止的生命周期元数据，不记录输入或输出。
+
+### 🐛 问题修复
+
+- **ESM 目标编辑不会被并发协调器写入覆盖，孤立 Run 也不再阻塞控制。** ESM 目标的所有读改写路径现在都在 `BEGIN IMMEDIATE` 事务内执行，worker 进度写入不会再把它在用户编辑提交前读到的旧 objective 写回。pause/resume/clear 同时允许一个没有有效 lease、等待恢复的 canonical Run，因此中断的本地准入不会让目标永久不可控制。终端控制还会把不支持平台报告为 `501 terminal_unsupported` 而不是 `terminal_disabled`，Unix PTY 的 build tag 也与受支持平台集合对齐，使 `aix` 等目标编译到显式的 `ErrUnsupported` 实现。
+
+- **交互终端生命周期无数据竞争，会跟随焦点，并持续显示安全边界。** PTY 读取/等待循环现在在创建时直接接收句柄，结束路径在锁内清空终端句柄，既消除了数据竞争，也消除了短命 shell 在启动期间退出时可能触发的空指针窗口；列出/附加终端时通过加锁的 `Size()` 读取尺寸，而不是访问未同步字段。切换工作台焦点会话时，现在会释放旧会话的 shell 并为新 cwd 创建终端，不再留下绑定到上一个会话的旧终端；终端 id 失效（如 serve 重启）后会停止重试，由“重新连接”按钮创建新 shell。终端状态栏现在持续标明 shell 不受沙箱保护、继承 serve 进程用户与环境变量，并展示 `/api/status` 上报的占位认证 token 警告；浏览器冒烟测试对提示与焦点重绑定均有断言。关闭活动 shell 时现在会在进程退出后立即返回，仅在宽限期后升级为 SIGKILL，不再每次都等待 2 秒；浏览器 cookie 会话不再收到长期 terminal token；被拒绝的配置更新在回滚前不会先应用终端限制或杀掉 shell；Windows ConPTY 包装现在保证句柄只关闭一次，并把 shell 加入 kill-on-close Job Object，终端关闭后遗留的后台子进程不会继续运行。
+
+- **交互终端的恢复、焦点与安全提示已补齐。** 终端 dock 会始终提示它与可能正在运行的 Agent 共享焦点会话 cwd，并在 canonical execution 快照为本地或另一进程执行时升级警告。页面刷新会重新 attach 该标签页记录的 detached shell，而不是泄漏旧终端再新建一个；shell 已退出或终端 id 失效后，“重新连接”会创建新终端。xterm 样式已加载，`@xterm/xterm`/`@xterm/addon-fit` 改为精确 pin；PTY read loop 在发布 exit 帧前等待 `cmd.Wait`，非零退出码不再被误报为 0。工作台新增 1000 步 property test，并据此修复 Draft trajectory 模式持久化、删除 group/应用预设后的焦点修复、分隔权重精确夹紧、分页会话标签对账、命令建议重复 DOM id 与移动端右键菜单目标。
+
+- **在 `/chat` 之外创建的新任务不会再因工作台重新挂载而丢失。** 工作台 hydration 改为应用启动时的一次性步骤，不再在懒加载的 Chat 视图每次挂载时重新读取 `localStorage`。此前从 Sidebar/Sessions 新建 Draft 后，若 300ms 持久化防抖尚未触发就切回 `/chat`，旧布局会覆盖内存中的新任务；现在应用启动后内存状态即权威，新开的页面仍会继承共享的最近布局。浏览器与单测均覆盖重新挂载和延迟 hydration 路径。
+
 ## v1.3.107
 
 ### ✨ 新功能
@@ -12878,7 +12896,9 @@ mothx serve init-config project  # 生成 .mothx/serve.json
 
 访问 `http://127.0.0.1:7872` 打开 Web UI。启用认证时，先使用 `api.auth.tokens` 中的 Token 登录。Web UI 提供：
 
-- **聊天界面**：SSE 流式输出，工具调用/结果渲染，计划卡片，以及 `plan`、`agent`、`yolo` 模式的会话运行时菜单。提交的运行会保留持久化会话历史；支持在 run 中传入图片、会话工具开关、技能和显式模式。运行时模式和能力修改会立即采用服务端返回的权威状态，会话列表刷新则作为尽力而为的后台同步；重连后输入区会正确反映服务端排队/运行状态。
+- **聊天界面**：SSE 流式输出，工具调用/结果渲染，计划卡片，以及将当前模型与 `plan`/`agent`/`yolo`/`os` 模式、Work/Code 显示模式合并的 composer 配置面板。提交的运行会保留持久化会话历史；支持在 run 中传入图片、会话工具开关、技能和显式模式。运行时模式和能力修改会立即采用服务端返回的权威状态，会话列表刷新则作为尽力而为的后台同步；重连后输入区会正确反映服务端排队/运行状态。
+- **动态工作台**：`/chat` 支持会话标签、最多 4 个窗格分屏、菜单/拖拽分屏、布局记忆与移动端单窗格投影；每个 pane 拥有独立 composer、模型选择、草稿、审批和轨迹视图。各 pane 直接渲染 canonical `sessionRunStates` 投影，标签溢出时可通过“全部标签”菜单访问所有会话；工作台工具条还提供只读 Plan dock，从焦点会话的最新 `plan` 消息派生，不新增存储、工具或后端端点。旧的单会话回退及其设置/查询开关已移除；事件流始终由同一个 `session-stream` 调度器消费。
+- **交互终端**：当 `/api/status` 的 `features.terminal` 为 true 时，工作台工具条可为当前会话 cwd 打开交互式 PTY（xterm.js + WebSocket）。终端等价于 serve 进程用户权限的本地 shell，不受 sandbox 保护，并完整继承 serve 进程环境变量；它不创建 Run、不写 transcript、不占 Runtime lease。只有回环监听、或已启用 auth 且配置了 token 的非回环监听可用；未认证的非回环监听返回 `terminal_unsafe`。`--unsafe` 会同时绑定所有网卡并关闭 auth，因此也会关闭终端；开发时请使用回环监听（`make ui-dev` 的后端现在绑定 `127.0.0.1:7872` 且不再传 `--unsafe`），或配置 auth token。
 - **审批中心**：查看待处理工具审批，一次性批准或拒绝，持久化命令/路径放行规则，并查看会话审批审计历史。
 - **会话管理**：分页浏览，键盘快捷键，历史会话，运行时快照，能力开关及可安全重连恢复的审批状态。历史会话按最后使用时间倒序排列，最新回复的会话位于最上方；会话管理页面会显示最后回复时间。页面刷新后，活动 run 直到进入终态前仍会保持会话忙碌。`GET /api/sessions` 默认有界：未指定 `limit` 时返回前 100 个会话以及 `total`、`limit`、`offset`、`hasMore`；`scope=active` 与 `/api/sessions/active` 只投影内存中的会话池，不再加载全部历史。
 - **Responses 后台运行**：当 `openai-responses` provider 启用 `responses.background` 时，Serve 会将支持的请求提交为远程后台任务，持久化 response lineage 与归档输出，轮询直到完成，在重启后恢复可恢复任务，并执行本地 function/custom tool 调用。经认证的 run API 支持 `GET /api/responses/runs/{localRunID}?session_id={sessionID}` 以及 `cancel`、`reconnect`、`abandon` 操作；详见[配置](configuration.md#responses-字段)。
@@ -12889,9 +12909,29 @@ mothx serve init-config project  # 生成 .mothx/serve.json
 - **设置**：除 provider 和 agent 设置外，还可管理 Memory、WorkDir、Logs、SkillHub、环境变量和 MCP
 - **服务配置**：Features，API，Cron，Memory，Security，Agent，Hooks，Channels，Lobster 模式
 
+### 终端配置
+
+`serve.json` 可选的 `terminal` 段控制交互终端；缺省即自动策略（回环可用；非回环但已配置 auth token 可用）：
+
+```json
+{
+  "terminal": {
+    "enabled": null,
+    "shell": "",
+    "maxSessions": 8,
+    "maxPerSession": 2,
+    "scrollbackBytes": 1048576,
+    "maxOutputBytesPerSec": 1048576,
+    "allowedOrigins": []
+  }
+}
+```
+
+`allowedOrigins` 为空表示严格同源；反向代理或自定义前端需要显式列出 origin。终端状态栏会持续显示 shell 不受沙箱保护、继承 serve 进程用户与环境变量，提示它与可能正在运行的 Agent 共享焦点会话 cwd（canonical execution 快照为本地或另一进程执行时显示更强警告），展示 `/api/status` 上报的占位认证 token 警告，并显示服务端输出反压，而不是把它当作断线。页面刷新会重新 attach 该标签页记录的 detached shell，而不是泄漏旧终端再新建一个；shell 已退出或 id 失效后，“重新连接”会创建新终端。浏览器 cookie 会话不会在创建响应中收到 `terminalToken`；只有 auth 关闭或使用 Bearer 认证的客户端才会拿到 token，用于非浏览器 WebSocket attach。serve 只记录终端生命周期元数据（`terminal_created`/`terminal_exited`/`terminal_killed`，含 id、session、cwd 与 exit code），不记录输入或输出。关闭终端功能会终止已有 shell 并拒绝新的 WebSocket attach。Linux 上 shell 带有 `Pdeathsig`，serve 进程退出时会被终止；Windows 使用 ConPTY（要求 Windows 10 1809+ 或 Windows 11），更老系统返回 `terminal_unsupported`。终端共享 serve 的认证 token：持有 token 即等同拥有该用户的 shell 权限，这是访问边界而不是 UI 开关；需要更强隔离时应使用独立 OS 用户或容器，而不是继续裁剪终端环境变量或依赖沙箱。
+
 ### 界面截图
 
-**聊天界面** — SSE 流式输出、工具调用/结果渲染、计划卡片与模式菜单：
+**聊天界面** — SSE 流式输出、工具调用/结果渲染、计划卡片与模型/模式合并配置：
 
 ![Web UI 聊天界面](assets/image/webui-chat.webp)
 
