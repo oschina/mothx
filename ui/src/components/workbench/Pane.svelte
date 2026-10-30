@@ -99,7 +99,9 @@
   on:dragend={() => { dragover = false; dropSide = ''; }}
   on:drop={drop}
 >
-  <TabStrip groupId={group?.id} tabs={view?.tabs || []} selectedTabId={view?.selectedTabId || ''} onSelect={onSelectTab} onClose={onCloseTab} {onCloseOthers} {onCloseRight} {onDragStartTab} />
+  {#if (view?.tabs || []).length > 0}
+    <TabStrip groupId={group?.id} tabs={view?.tabs || []} selectedTabId={view?.selectedTabId || ''} onSelect={onSelectTab} onClose={onCloseTab} {onCloseOthers} {onCloseRight} {onDragStartTab} />
+  {/if}
   <div class="wb-pane-body">
     {#if selectedTab}
       {@render pane(group?.id, selectedTab)}

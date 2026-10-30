@@ -230,9 +230,22 @@
 <style>
   .mcp-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .mcp-save-wrap { margin-left: auto; }
-  .mcp-loading, .mcp-empty { padding: 40px 18px; color: var(--text-muted); font-size: 13px; }
-  .mcp-empty { display: grid; justify-items: center; gap: 10px; background: color-mix(in srgb, var(--bg) 98%, var(--overlay)); border: 1px solid var(--border); box-shadow: var(--modal-shadow); }
-  .mcp-empty strong { color: var(--text-secondary); }
+  .mcp-loading { padding: 40px 18px; color: var(--text-muted); font-size: 13px; }
+  .mcp-empty {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+    padding: 30px 18px;
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    box-shadow: none;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  .mcp-empty strong { color: var(--text); font-size: 13px; }
+  .mcp-empty span { max-width: 480px; line-height: 1.55; text-align: center; }
   .mcp-server-list { display: grid; gap: 12px; }
   .mcp-server-card { padding: 14px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-secondary); }
   .mcp-server-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }

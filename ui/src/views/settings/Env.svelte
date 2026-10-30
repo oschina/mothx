@@ -7,7 +7,7 @@
   import { Input } from '$lib/components/ui/input/index.js';
   import { Plus, Save, Trash2 } from '@lucide/svelte';
   import { Badge } from '$lib/components/ui/badge/index.js';
-  import SettingsSection from './SettingsSection.svelte';
+  import { Card, CardContent } from '$lib/components/ui/card/index.js';
   import SettingsField from './SettingsField.svelte';
 
   let variables = [];
@@ -97,13 +97,27 @@
   }
 </script>
 
-<SettingsSection title={$t('settings.env.title')} description={$t('settings.env.hint')}>
+<Card class="settings-card settings-save-card">
+  <CardContent class="settings-save-content">
+    <div class="settings-save-lead">
+      <h2 class="settings-save-title">{$t('settings.env.title')}</h2>
+      <p class="settings-save-hint">{$t('settings.env.hint')}</p>
+    </div>
+    <Button type="button" variant="outline" size="sm" onclick={save} disabled={loading || saving || !dirty}>
+      <Save size={14} aria-hidden="true" />
+      <span>{saving ? $t('common.saving') : $t('common.save')}</span>
+    </Button>
+  </CardContent>
+</Card>
+
+<Card class="settings-card">
+  <CardContent>
   <div class="env-heading">
     <div>
       <h2 class="settings-save-title">{$t('settings.env.variables')}</h2>
       <p class="settings-save-hint">{$t('settings.env.editHint')}</p>
     </div>
-    <Badge variant={dirty ? 'default' : 'secondary'}>
+    <Badge variant={dirty ? 'warning' : 'secondary'}>
       {names.length} {$t('settings.env.count')}
     </Badge>
   </div>
@@ -165,13 +179,8 @@
     {/if}
   {/if}
 
-  <div class="settings-form-actions env-save-actions">
-    <Button type="button" variant="outline" size="sm" onclick={save} disabled={loading || saving || !dirty}>
-      <Save size={14} aria-hidden="true" />
-      <span>{saving ? $t('common.saving') : $t('common.save')}</span>
-    </Button>
-  </div>
-</SettingsSection>
+  </CardContent>
+</Card>
 
 <style>
   .env-heading {

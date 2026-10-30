@@ -5,6 +5,7 @@
   import { Button } from '$lib/components/ui/button/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
   import { Switch } from '$lib/components/ui/switch/index.js';
+  import { Card, CardContent } from '$lib/components/ui/card/index.js';
   import { Plus, Save, Trash2 } from '@lucide/svelte';
   import SettingsSection from './SettingsSection.svelte';
   import SettingsField from './SettingsField.svelte';
@@ -103,17 +104,24 @@
   }
 </script>
 
-<SettingsSection title={$t('settings.workdir.title')} description={$t('settings.workdir.mainHint')}>
-  <div class="settings-form-grid">
-    <SettingsField label={$t('settings.workdir.default')} className="full" hint={$t('settings.workdir.defaultHint')}>
-      <Input bind:value={defaultWorkDir} onkeydown={handleKeydown} placeholder="/home/user/projects" />
-    </SettingsField>
-  </div>
-  <div class="settings-form-actions">
+<Card class="settings-card settings-save-card">
+  <CardContent class="settings-save-content">
+    <div class="settings-save-lead">
+      <h2 class="settings-save-title">{$t('settings.workdir.title')}</h2>
+      <p class="settings-save-hint">{$t('settings.workdir.mainHint')}</p>
+    </div>
     <Button type="button" variant="outline" size="sm" onclick={save}>
       <Save size={14} aria-hidden="true" />
       <span>{$t('common.save')}</span>
     </Button>
+  </CardContent>
+</Card>
+
+<SettingsSection title={$t('settings.workdir.default')} description={$t('settings.workdir.defaultHint')}>
+  <div class="settings-form-grid">
+    <SettingsField label="" className="full">
+      <Input bind:value={defaultWorkDir} onkeydown={handleKeydown} placeholder="/home/user/projects" />
+    </SettingsField>
   </div>
 </SettingsSection>
 
@@ -147,10 +155,6 @@
     <Button type="button" variant="outline" size="sm" onclick={addAllowed}>
       <Plus size={14} aria-hidden="true" />
       <span>{$t('common.add')}</span>
-    </Button>
-    <Button type="button" variant="outline" size="sm" onclick={save}>
-      <Save size={14} aria-hidden="true" />
-      <span>{$t('common.save')}</span>
     </Button>
   </div>
 </SettingsSection>

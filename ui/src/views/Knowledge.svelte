@@ -20,6 +20,7 @@
   import { setError, setNotice } from '../lib/stores.js';
   import { t } from '../lib/preferences.js';
   import DirBrowser from '../components/DirBrowser.svelte';
+  import { Brain } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import * as Card from '$lib/components/ui/card';
 
@@ -258,19 +259,19 @@
 </script>
 
 <section class="page knowledge-page">
-  <div class="page-toolbar">
-    <div>
-      <h1>{$t('knowledge.title')}</h1>
-      <p class="muted">{$t('knowledge.subtitle')}</p>
-    </div>
-    <Button onclick={() => openEditor(null)}>{$t('knowledge.new')}</Button>
+  <div class="page-toolbar end">
+    {#if editing || bases.length > 0}
+      <Button onclick={() => openEditor(null)}>{$t('knowledge.new')}</Button>
+    {/if}
   </div>
 
   {#if loading}
     <p class="empty">{$t('common.loading')}</p>
   {:else if !editing && bases.length === 0}
-    <div class="empty-state">
-      <p class="empty">{$t('knowledge.empty')}</p>
+    <div class="knowledge-empty">
+      <span class="knowledge-empty-icon" aria-hidden="true"><Brain size={22} /></span>
+      <strong>{$t('knowledge.empty')}</strong>
+      <p>{$t('knowledge.emptyHint')}</p>
       <Button onclick={() => openEditor(null)}>{$t('knowledge.new')}</Button>
     </div>
   {:else}
@@ -480,6 +481,31 @@
 />
 
 <style>
+  .knowledge-empty {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    max-width: 480px;
+    margin: clamp(24px, 8vh, 72px) auto 0;
+    padding: 30px 24px;
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+    background: var(--bg);
+    text-align: center;
+  }
+  .knowledge-empty-icon {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 4px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+  }
+  .knowledge-empty strong { color: var(--text); font-size: 14px; font-weight: 600; }
+  .knowledge-empty p { margin: 0 0 6px; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
   .knowledge-grid {
     display: grid;
     grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);

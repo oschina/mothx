@@ -27,6 +27,7 @@
     Settings2,
     Sparkles,
     Timer,
+    UsersRound,
     X
   } from '@lucide/svelte';
 
@@ -67,7 +68,7 @@
   const primaryNav = [
     { key: 'chat', path: '/chat', label: 'nav.newChat', icon: 'edit', accent: true },
     { key: 'sessions', path: '/sessions', label: 'nav.sessions', icon: 'clock' },
-    { key: 'experts', path: '/experts', label: 'nav.experts', icon: 'skills' },
+    { key: 'experts', path: '/experts', label: 'nav.experts', icon: 'experts' },
     { key: 'skills', path: '/skills', label: 'nav.skills', icon: 'skills' },
     { key: 'knowledge', path: '/knowledge', label: 'nav.knowledge', icon: 'knowledge' },
     { key: 'stats', path: '/stats', label: 'nav.stats', icon: 'chart' },
@@ -476,7 +477,7 @@
           title={$t(item.label)}
           on:click={() => onNavClick(item)}
         >
-          {#if item.icon === 'clock'}<Clock3 class="ico" size={15} aria-hidden="true" />{:else if item.icon === 'skills'}<Sparkles class="ico" size={15} aria-hidden="true" />{:else if item.icon === 'knowledge'}<Brain class="ico" size={15} aria-hidden="true" />{:else if item.icon === 'chart'}<ChartNoAxesColumn class="ico" size={15} aria-hidden="true" />{:else}<Timer class="ico" size={15} aria-hidden="true" />{/if}
+          {#if item.icon === 'clock'}<Clock3 class="ico" size={15} aria-hidden="true" />{:else if item.icon === 'skills'}<Sparkles class="ico" size={15} aria-hidden="true" />{:else if item.icon === 'experts'}<UsersRound class="ico" size={15} aria-hidden="true" />{:else if item.icon === 'knowledge'}<Brain class="ico" size={15} aria-hidden="true" />{:else if item.icon === 'chart'}<ChartNoAxesColumn class="ico" size={15} aria-hidden="true" />{:else}<Timer class="ico" size={15} aria-hidden="true" />{/if}
           <span class="label">{$t(item.label)}</span>
         </button>
       {/each}
@@ -556,7 +557,7 @@
       <button type="button" class="rail-action" aria-label={$t('projects.new')} title={$t('projects.new')} on:click={createProject}>+</button>
       <div class="rail-divider"></div>
       {#each primaryNav.slice(1) as item}
-        <button type="button" class="rail-action" class:active={isActive(item)} disabled={!isFeatureEnabled(item)} aria-label={$t(item.label)} title={$t(item.label)} on:click={() => onNavClick(item)}>{item.icon === 'clock' ? '◷' : item.icon === 'skills' ? '✦' : item.icon === 'knowledge' ? '⧉' : item.icon === 'chart' ? '▥' : item.icon === 'timer' ? '◴' : '⚙'}</button>
+        <button type="button" class="rail-action" class:active={isActive(item)} disabled={!isFeatureEnabled(item)} aria-label={$t(item.label)} title={$t(item.label)} on:click={() => onNavClick(item)}>{item.icon === 'clock' ? '◷' : item.icon === 'skills' ? '✦' : item.icon === 'experts' ? '◎' : item.icon === 'knowledge' ? '⧉' : item.icon === 'chart' ? '▥' : item.icon === 'timer' ? '◴' : '⚙'}</button>
       {/each}
       <div class="rail-spacer"></div>
       {#each secondaryNav as item}
@@ -570,9 +571,15 @@
       <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <path d="M4 19V5M4 19h16M7.5 16v-4M12 16V8M16.5 16v-7"></path>
       </svg>
-      <span class="stat-value" title={$t('sidebar.stats.requests')}>{formatStat(summaryStats.totalRequests)}</span>
+      <span class="stat-pair">
+        <span class="stat-label">{$t('sidebar.stats.requests')}</span>
+        <span class="stat-value">{formatStat(summaryStats.totalRequests)}</span>
+      </span>
       <span class="stat-divider" aria-hidden="true"></span>
-      <span class="stat-value" title={$t('sidebar.stats.tokens')}>{formatStat(summaryStats.totalTokens)}</span>
+      <span class="stat-pair">
+        <span class="stat-label">{$t('sidebar.stats.tokens')}</span>
+        <span class="stat-value">{formatStat(summaryStats.totalTokens)}</span>
+      </span>
     </button>
     <PreferenceControls />
   </div>
@@ -600,7 +607,7 @@
     <button
       type="button"
       class="sidebar-overlay"
-      aria-label="Close menu"
+      aria-label={$t('common.close')}
       transition:fade={{ duration: 200 }}
       on:click={closeSidebar}
     ></button>

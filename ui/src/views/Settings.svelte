@@ -68,7 +68,7 @@
           <Button
             variant={activeKey === item.key ? 'secondary' : 'ghost'}
             size="sm"
-            class="settings-nav-item"
+            class={`settings-nav-item${activeKey === item.key ? ' active' : ''}`}
             onclick={() => open(item.key)}
           >
             <svelte:component this={item.icon} size={16} aria-hidden="true" />

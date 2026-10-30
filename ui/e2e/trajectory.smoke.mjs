@@ -169,8 +169,8 @@ try {
   await waitFor(cdp, `document.querySelector('.side-search-inline') !== null`);
   await waitFor(cdp, `document.querySelector('.side-search-inline input') === document.activeElement`);
   await cdp.call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-  await waitFor(cdp, `document.querySelector('.chat-session-menu-toggle') !== null`);
-  await evaluate(cdp, `document.querySelector('.chat-session-menu-toggle')?.click()`);
+  await waitFor(cdp, `document.querySelector('.wb-toolbar [data-action="menu"]') !== null`);
+  await evaluate(cdp, `document.querySelector('.wb-toolbar [data-action="menu"]')?.click()`);
   await waitFor(cdp, `document.querySelector('.mobile-drawer') !== null`);
   assert.equal(await evaluate(cdp, `getComputedStyle(document.querySelector('.mobile-drawer')).width`), '304px');
   await evaluate(cdp, `document.querySelector('.sidebar-overlay')?.click()`);

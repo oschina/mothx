@@ -4,6 +4,7 @@
   import { shortID, scheduleLabel, formatDateTime } from '../lib/format.js';
   import { t } from '../lib/preferences.js';
   import Modal from '../components/Modal.svelte';
+  import { RefreshCw } from '@lucide/svelte';
 
   let form = { name: '', prompt: '', schedule: '', oneshot: false, mode: 'yolo' };
   let lastLoadedSession = '';
@@ -97,11 +98,16 @@
 
 <section class="page">
   <div class="page-toolbar">
-    <div class="status-tag" class:muted={disabled}>
-      {disabled ? $t('common.disabledState') : info?.running ? $t('common.running') : $t('common.idle')}
-      {#if info?.path}<span class="hint">{info.path}</span>{/if}
+    <div class="cron-status">
+      <span class={`status-tag${disabled ? ' muted' : ''}`}>
+        {disabled ? $t('common.disabledState') : info?.running ? $t('common.running') : $t('common.idle')}
+      </span>
+      {#if info?.path}<span class="cron-status-path" title={info.path}>{info.path}</span>{/if}
     </div>
-    <button type="button" class="ghost" on:click={refreshCurrentCron}>{$t('common.refresh')}</button>
+    <button type="button" class="cron-refresh" on:click={refreshCurrentCron}>
+      <RefreshCw size={14} aria-hidden="true" />
+      {$t('common.refresh')}
+    </button>
   </div>
 
   <div class="page-body">

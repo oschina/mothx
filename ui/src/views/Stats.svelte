@@ -10,6 +10,7 @@
     isMobile
   } from '../lib/stores.js';
   import { t } from '../lib/preferences.js';
+  import { RefreshCw } from '@lucide/svelte';
 
   let range = 'week';
   let loading = false;
@@ -214,7 +215,7 @@
       : { top: 18, right: 18, bottom: 38, left: 54 };
     const chartWidth = Math.max(1, width - padding.left - padding.right);
     const chartHeight = Math.max(1, height - padding.top - padding.bottom);
-    const maxValue = Math.max(...values);
+    const maxValue = niceCeil(Math.max(...values));
     const gridLines = 5;
 
     ctx.strokeStyle = color('--border-subtle', '#e5e7eb');
@@ -230,27 +231,32 @@
       const value = maxValue - (maxValue / gridLines) * i;
       ctx.fillStyle = textMuted;
       ctx.textAlign = 'right';
-      ctx.fillText(formatCompact(value), padding.left - 8, y + 4);
+      ctx.fillText(formatAxisTick(value), padding.left - 8, y + 4);
     }
 
-    const gap = values.length > 80 ? 0 : 1;
-    const minBarWidth = values.length > 90 ? 2 : 6;
-    const barWidth = Math.max(minBarWidth, (chartWidth - gap * (values.length - 1)) / values.length);
-    const primary = color('--primary', '#3b82f6');
-    const accent = color('--accent', '#60a5fa');
+    // Keep bars proportional to their day slot but cap the width so a short
+    // range reads as distinct columns instead of one solid block.
+    const slotWidth = chartWidth / values.length;
+    const dense = values.length > 60;
+    const barWidth = dense
+      ? Math.max(2, slotWidth - 1)
+      : Math.min(30, Math.max(6, slotWidth * 0.6));
+    const accent = color('--accent', '#22c55e');
+    const accentDeep = shadeHex(accent, 0.72);
     for (let i = 0; i < values.length; i += 1) {
       const barHeight = values[i] > 0 ? (values[i] / maxValue) * chartHeight : 0;
       if (barHeight <= 0) continue;
-      const x = padding.left + i * (barWidth + gap);
+      const slotStart = padding.left + i * slotWidth;
+      const x = slotStart + (slotWidth - barWidth) / 2;
       if (x > width - padding.right) break;
       const y = padding.top + chartHeight - barHeight;
       const drawWidth = Math.min(barWidth, width - padding.right - x);
       const gradient = ctx.createLinearGradient(x, y, x, padding.top + chartHeight);
-      gradient.addColorStop(0, primary);
-      gradient.addColorStop(1, accent);
+      gradient.addColorStop(0, accent);
+      gradient.addColorStop(1, accentDeep);
       ctx.fillStyle = gradient;
       ctx.beginPath();
-      const radius = Math.min(3, drawWidth / 3);
+      const radius = Math.min(4, drawWidth / 2);
       if (ctx.roundRect && barHeight > radius * 2) {
         ctx.roundRect(x, y, drawWidth, barHeight, [radius, radius, 0, 0]);
       } else {
@@ -264,10 +270,40 @@
     const labelCount = Math.min(6, labels.length);
     const labelStep = Math.max(1, Math.floor(labels.length / labelCount));
     for (let i = 0; i < labels.length; i += labelStep) {
-      const x = padding.left + i * (barWidth + gap) + barWidth / 2;
+      const x = padding.left + i * slotWidth + slotWidth / 2;
       if (x > width - padding.right + 8) break;
       ctx.fillText(axisLabel(labels[i]), x, height - padding.bottom + 20);
     }
+  }
+
+  // Round the axis maximum to a 1/2/2.5/5/10 step so five grid lines land on
+  // readable values instead of arbitrary fractions.
+  function niceCeil(value) {
+    const n = Number(value || 0);
+    if (!(n > 0)) return 1;
+    const exponent = Math.floor(Math.log10(n));
+    const base = Math.pow(10, exponent);
+    const fraction = n / base;
+    const step = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 2.5 ? 2.5 : fraction <= 5 ? 5 : 10;
+    return step * base;
+  }
+
+  // Compact, unit-stable axis ticks: avoids mixing "3.8亿" and "7500.6万"
+  // on the same scale while staying locale-aware.
+  function formatAxisTick(value) {
+    const n = Number(value || 0);
+    return new Intl.NumberFormat(undefined, {
+      notation: 'compact',
+      maximumFractionDigits: n >= 100000000 ? 1 : 0
+    }).format(n);
+  }
+
+  function shadeHex(hex, factor) {
+    const match = /^#([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+    if (!match) return hex;
+    const value = parseInt(match[1], 16);
+    const channel = (shift) => Math.max(0, Math.min(255, Math.round(((value >> shift) & 255) * factor)));
+    return `rgb(${channel(16)}, ${channel(8)}, ${channel(0)})`;
   }
 
   function axisLabel(label) {
@@ -315,8 +351,8 @@
       <option value="month">{$t('stats.range.month')}</option>
       <option value="all">{$t('stats.range.all')}</option>
     </select>
-    <button type="button" class="ghost" on:click={loadStats} disabled={loading}>
-      {#if loading}<span class="spinner sm"></span> {$t('common.loading')}{:else}{$t('common.refresh')}{/if}
+    <button type="button" class="stats-refresh" on:click={loadStats} disabled={loading}>
+      {#if loading}<span class="spinner sm"></span> {$t('common.loading')}{:else}<RefreshCw size={14} aria-hidden="true" /> {$t('common.refresh')}{/if}
     </button>
   </div>
 
@@ -356,41 +392,43 @@
       </div>
     </div>
 
-    <div class="card stats-rank">
-      <div class="card-head">
-        <h3>{$t('stats.providers')}</h3>
-        <span class="hint">{$t('common.count', { count: byProvider.length })}</span>
+    <div class="stats-side">
+      <div class="card stats-rank">
+        <div class="card-head">
+          <h3>{$t('stats.providers')}</h3>
+          <span class="hint">{$t('common.count', { count: formatNumber(byProvider.length) })}</span>
+        </div>
+        <div class="rank-list">
+          {#each byProvider.slice(0, 8) as item}
+            <div class="rank-row">
+              <span>{item.vendor || item.label || '-'}</span>
+              <strong>{formatCompact(item.totalTokens)}</strong>
+              <div><span style={`width: ${percent(item.totalTokens, maxProvider)}`}></span></div>
+            </div>
+          {/each}
+          {#if byProvider.length === 0}
+            <p class="empty">{$t('stats.empty')}</p>
+          {/if}
+        </div>
       </div>
-      <div class="rank-list">
-        {#each byProvider.slice(0, 8) as item}
-          <div class="rank-row">
-            <span>{item.vendor || item.label || '-'}</span>
-            <strong>{formatCompact(item.totalTokens)}</strong>
-            <div><span style={`width: ${percent(item.totalTokens, maxProvider)}`}></span></div>
-          </div>
-        {/each}
-        {#if byProvider.length === 0}
-          <p class="empty">{$t('stats.empty')}</p>
-        {/if}
-      </div>
-    </div>
 
-    <div class="card stats-rank">
-      <div class="card-head">
-        <h3>{$t('stats.models')}</h3>
-        <span class="hint">{$t('common.count', { count: byModel.length })}</span>
-      </div>
-      <div class="rank-list">
-        {#each byModel.slice(0, 8) as item}
-          <div class="rank-row">
-            <span>{item.model || item.label || '-'}</span>
-            <strong>{formatCompact(item.totalTokens)}</strong>
-            <div><span style={`width: ${percent(item.totalTokens, maxModel)}`}></span></div>
-          </div>
-        {/each}
-        {#if byModel.length === 0}
-          <p class="empty">{$t('stats.empty')}</p>
-        {/if}
+      <div class="card stats-rank">
+        <div class="card-head">
+          <h3>{$t('stats.models')}</h3>
+          <span class="hint">{$t('common.count', { count: formatNumber(byModel.length) })}</span>
+        </div>
+        <div class="rank-list">
+          {#each byModel.slice(0, 8) as item}
+            <div class="rank-row">
+              <span>{item.model || item.label || '-'}</span>
+              <strong>{formatCompact(item.totalTokens)}</strong>
+              <div><span style={`width: ${percent(item.totalTokens, maxModel)}`}></span></div>
+            </div>
+          {/each}
+          {#if byModel.length === 0}
+            <p class="empty">{$t('stats.empty')}</p>
+          {/if}
+        </div>
       </div>
     </div>
   </div>
@@ -398,7 +436,7 @@
   <div class="card">
     <div class="card-head">
       <h3>{$t('stats.recent')}</h3>
-      <span class="hint">{$t('common.count', { count: recent.total || 0 })}</span>
+      <span class="hint">{$t('common.count', { count: formatNumber(recent.total || 0) })}</span>
     </div>
     {#if $isMobile}
       <div class="stats-cards">

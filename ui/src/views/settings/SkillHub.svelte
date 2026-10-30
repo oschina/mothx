@@ -7,7 +7,6 @@
   import { Switch } from '$lib/components/ui/switch/index.js';
   import { Card, CardContent } from '$lib/components/ui/card/index.js';
   import { Plus, Save, Trash2 } from '@lucide/svelte';
-  import SettingsSection from './SettingsSection.svelte';
   import SettingsField from './SettingsField.svelte';
 
   let form = { defaultMarket: 'yuandun', defaultInstallScope: 'project', officialHandles: [], markets: [] };
@@ -51,7 +50,21 @@
   }
 </script>
 
-<SettingsSection title="SkillHub" description={$t('settings.skillhub.hint')}>
+<Card class="settings-card settings-save-card">
+  <CardContent class="settings-save-content">
+    <div class="settings-save-lead">
+      <h2 class="settings-save-title">SkillHub</h2>
+      <p class="settings-save-hint">{$t('settings.skillhub.hint')}</p>
+    </div>
+    <Button type="button" variant="outline" size="sm" onclick={save}>
+      <Save size={14} aria-hidden="true" />
+      <span>{$t('settings.skillhub.save')}</span>
+    </Button>
+  </CardContent>
+</Card>
+
+<Card class="settings-card">
+  <CardContent>
   <div class="settings-form-grid">
     <SettingsField label={$t('settings.skillhub.defaultMarket')}>
       <Input bind:value={form.defaultMarket} />
@@ -111,13 +124,8 @@
     </div>
   </div>
 
-  <div class="settings-form-actions">
-    <Button type="button" variant="outline" size="sm" onclick={save}>
-      <Save size={14} aria-hidden="true" />
-      <span>{$t('settings.skillhub.save')}</span>
-    </Button>
-  </div>
-</SettingsSection>
+  </CardContent>
+</Card>
 
 <style>
   .markets-section { margin-top: 16px; }

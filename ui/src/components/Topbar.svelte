@@ -10,6 +10,7 @@
   const titles = {
     chat: 'nav.newChat',
     sessions: 'nav.sessions',
+    experts: 'nav.experts',
     skills: 'nav.skills',
     knowledge: 'knowledge.title',
     stats: 'nav.stats',
@@ -20,6 +21,7 @@
   const subtitles = {
     chat: 'topbar.chat.subtitle',
     sessions: 'topbar.sessions.subtitle',
+    experts: 'topbar.experts.subtitle',
     skills: 'topbar.skills.subtitle',
     knowledge: 'knowledge.subtitle',
     stats: 'topbar.stats.subtitle',

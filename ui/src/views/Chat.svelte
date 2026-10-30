@@ -25,7 +25,7 @@
     focusedSessionId
   } from '../lib/workbench/store.js';
   import { collectTabs, countLeaves, findSessionTab, findTab } from '../lib/workbench/model.js';
-  import { currentSession, sessions, sessionsTotal, features, isMobile, setNotice } from '../lib/stores.js';
+  import { currentSession, sessions, sessionsTotal, features, isMobile, setNotice, sidebarOpen } from '../lib/stores.js';
   import { route, replaceNavigate, navigate } from '../lib/router.js';
   import { setVisibleSessions } from '../lib/session-stream.js';
   import { getSessionState, isCompletionActive, isSessionRuntimeBusy } from '../lib/session-runs.js';
@@ -383,6 +383,7 @@
       onReset={handleReset}
       onToggleTerminal={handleToggleTerminal}
       onAttention={handleAttention}
+      onMenu={() => sidebarOpen.update((value) => !value)}
       {pane}
     >
     </Workbench>

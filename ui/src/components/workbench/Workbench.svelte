@@ -32,6 +32,7 @@
   export let onReset = () => {};
   export let onToggleTerminal = () => {};
   export let onAttention = () => {};
+  export let onMenu = () => {};
   export let pane;
   let planOpen = false;
 
@@ -91,11 +92,18 @@
   }
 </script>
 
-<div class="wb-root">
+<div class="wb-root" class:wb-mobile={mobile}>
   <header class="wb-toolbar">
+    {#if mobile}
+      <button type="button" class="wb-tool wb-tool-menu" data-action="menu" onclick={onMenu} title={$t('sidebar.menu') || 'Menu'} aria-label={$t('sidebar.menu') || 'Menu'}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <span class="wb-tool-divider"></span>
+    {/if}
     <button type="button" class="wb-tool wb-tool-new" data-action="new-task" onclick={onNewTask} title={$t('workbench.newTask') || 'New task'} aria-label={$t('workbench.newTask') || 'New task'}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
     </button>
+    {#if !mobile}
     <span class="wb-tool-divider"></span>
     <div class="wb-preset-group" role="group" aria-label={$t('workbench.layout') || 'Layout'}>
       {#each BUILTIN_PRESETS as preset (preset.id)}
@@ -130,6 +138,7 @@
     <button type="button" class="wb-tool" data-action="reset" onclick={onReset} title={$t('workbench.reset') || 'Reset layout'} aria-label={$t('workbench.reset') || 'Reset layout'}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v5h5"/><path d="M5.3 9a8 8 0 1 1 .7 5"/></svg>
     </button>
+    {/if}
     <span class="wb-tool-spacer"></span>
     {#if focusedSessionId}
       <button type="button" class="wb-tool" class:active={planOpen} data-action="plan" onclick={() => (planOpen = !planOpen)} title={$t('workbench.plan') || 'Plan'} aria-label={$t('workbench.plan') || 'Plan'}>
@@ -154,17 +163,19 @@
       <div class="wb-panes">
       {#if mobile || !splitPossible}
         <section class="wb-single">
-          <TabStrip
-            groupId={focusedGroupId}
-            tabs={allTabs}
-            selectedTabId={focusedTab?.id || ''}
-            groupOfTab={(tabId) => findTab(state, tabId)?.groupId || focusedGroupId}
-            onSelect={(groupId, tabId) => onSelectTab(findTab(state, tabId)?.groupId || groupId, tabId)}
-            onClose={onCloseTab}
-            {onCloseOthers}
-            {onCloseRight}
-            {onDragStartTab}
-          />
+          {#if allTabs.length > 0}
+            <TabStrip
+              groupId={focusedGroupId}
+              tabs={allTabs}
+              selectedTabId={focusedTab?.id || ''}
+              groupOfTab={(tabId) => findTab(state, tabId)?.groupId || focusedGroupId}
+              onSelect={(groupId, tabId) => onSelectTab(findTab(state, tabId)?.groupId || groupId, tabId)}
+              onClose={onCloseTab}
+              {onCloseOthers}
+              {onCloseRight}
+              {onDragStartTab}
+            />
+          {/if}
           <div class="wb-single-body">
             {#if focusedTab}
               {@render pane(focusedGroupId, focusedTab)}
@@ -208,10 +219,15 @@
 
 <style>
   .wb-root { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; }
-  .wb-toolbar { display: flex; align-items: center; gap: 1px; padding: 2px 6px; min-height: 28px; border-bottom: 1px solid var(--moth-border-subtle); background: var(--moth-surface-page); overflow-x: auto; scrollbar-width: none; }
+  .wb-toolbar { display: flex; align-items: center; gap: 1px; padding: 2px 6px; min-height: 30px; border-bottom: 1px solid var(--moth-border-subtle); background: var(--moth-surface-page); overflow-x: auto; scrollbar-width: none; }
   .wb-toolbar::-webkit-scrollbar { display: none; }
-  .wb-tool { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--moth-text-secondary); cursor: pointer; flex: 0 0 auto; transition: background-color var(--moth-motion-fast) ease, color var(--moth-motion-fast) ease; }
-  .wb-tool svg { width: 14px; height: 14px; }
+  .wb-tool { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--moth-text-secondary); cursor: pointer; flex: 0 0 auto; transition: background-color var(--moth-motion-fast) ease, color var(--moth-motion-fast) ease; }
+  .wb-tool svg { width: 15px; height: 15px; }
+  .wb-tool-menu { color: var(--moth-text-primary); }
+  .wb-mobile .wb-toolbar { min-height: 42px; padding: 4px 8px; gap: 4px; border-bottom-color: var(--border); }
+  .wb-mobile .wb-tool { width: 34px; height: 34px; border-radius: 8px; }
+  .wb-mobile .wb-tool svg { width: 18px; height: 18px; }
+  .wb-mobile .wb-tool-divider { margin: 0 4px; }
   .wb-tool:hover:not(:disabled) { background: var(--moth-surface-hover); color: var(--moth-text-primary); }
   .wb-tool:disabled { opacity: .35; cursor: default; }
   .wb-tool.active { background: var(--moth-surface-active); color: var(--moth-text-primary); box-shadow: inset 0 0 0 1px var(--moth-border-subtle); }

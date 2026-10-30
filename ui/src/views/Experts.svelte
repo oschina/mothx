@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { currentSession, sessions, setError, setNotice, clearBanners, refreshSessions } from '../lib/stores.js';
   import { request, patchJSON, postJSON } from '../lib/api.js';
+  import { shortID } from '../lib/format.js';
   import { navigate } from '../lib/router.js';
   import { language, t } from '../lib/preferences.js';
   import SearchSelect from './settings/SearchSelect.svelte';
@@ -26,10 +27,12 @@
   $: sessionID = selectedSession || $currentSession || '';
   $: selectedSessionInfo = $sessions.find((item) => item.id === sessionID) || null;
   $: sessionBusy = Boolean(selectedSessionInfo?.execution?.busy || selectedSessionInfo?.running);
-  $: sessionOptions = ($sessions || []).map((item) => ({
-    value: item.id,
-    label: `${item.id} · ${item.title || item.name || item.id}`
-  }));
+  // Session titles often mirror the ID for untitled sessions; fall back to the
+  // preview so the picker never shows "id · id".
+  $: sessionOptions = ($sessions || []).map((item) => {
+    const name = item.title && item.title !== item.id ? item.title : (item.preview || '');
+    return { value: item.id, label: name ? `${shortID(item.id)} · ${name}` : shortID(item.id) };
+  });
   $: boundID = state?.expert?.id || '';
   $: teamBound = state?.sessionId === sessionID && state?.expert?.expertType === 'team';
   $: selectedSummary = experts.find((item) => item.id === selectedID) || null;
@@ -224,11 +227,7 @@
 </script>
 
 <section class="page experts-page">
-  <div class="page-toolbar">
-    <div>
-      <h1>{$t('experts.title')}</h1>
-      <p class="muted">{$t('experts.subtitle')}</p>
-    </div>
+  <div class="page-toolbar end">
     <div class="experts-toolbar-actions">
       <label class="experts-session-select">
         <span>{$t('experts.session')}</span>
@@ -259,7 +258,7 @@
       <div class="experts-current" aria-live="polite">
         <span class="experts-current-label">{$t('experts.current')}</span>
         <strong>{localized(state.expert.displayName) || state.expert.id}</strong>
-        <Badge variant={isTeam(state.expert) ? 'default' : 'secondary'}>{$t(`experts.type.${state.expert.expertType}`)}</Badge>
+        <Badge variant="secondary">{$t(`experts.type.${state.expert.expertType}`)}</Badge>
         {#if sessionBusy}<Badge variant="outline">{$t('experts.sessionBusy')}</Badge>{/if}
         <Button type="button" variant="outline" size="sm" disabled={actionLoading || sessionBusy} onclick={unbind}>
           <Link2Off size={15} aria-hidden="true" />
@@ -293,7 +292,7 @@
                   <small>{item.id} · {$t(`experts.type.${item.expertType}`)}</small>
                   <small>{item.source}</small>
                 </span>
-                {#if item.id === boundID}<Badge variant="default">{$t('experts.boundBadge')}</Badge>{/if}
+                {#if item.id === boundID}<Badge variant="success">{$t('experts.boundBadge')}</Badge>{/if}
                 {#if item.invalid}<Badge variant="destructive">{$t('experts.invalid')}</Badge>{/if}
               </button>
             {/each}
@@ -309,7 +308,7 @@
               <h2>{localized(detail.displayName) || detail.id}</h2>
               <p>{detail.categoryId || $t('experts.uncategorized')}</p>
             </div>
-            <Badge variant={isTeam(detail) ? 'default' : 'secondary'}>{$t(`experts.type.${detail.expertType}`)}</Badge>
+            <Badge variant="secondary">{$t(`experts.type.${detail.expertType}`)}</Badge>
           </div>
           {#if detail.invalid}
             <p class="experts-invalid">{detail.reason || $t('experts.invalid')}</p>
@@ -320,7 +319,7 @@
             {/if}
             <div class="experts-actions">
               {#if boundID === selectedID}
-                <Badge variant="default">{$t('experts.alreadyBound')}</Badge>
+                <Badge variant="success">{$t('experts.alreadyBound')}</Badge>
               {:else}
                 <Button type="button" disabled={actionLoading || sessionBusy || selectedSummary?.invalid} onclick={bindOrSwitch}>
                   {#if actionLoading}<span class="spinner sm"></span>{/if}
@@ -373,7 +372,7 @@
   .experts-session-select :global(.experts-session-search-menu) { max-height: 300px; }
   .experts-current { border: 1px solid var(--border); background: var(--panel-bg); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
   .experts-current-label, .experts-kicker { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
-  .experts-workbench { display: grid; grid-template-columns: minmax(250px, .82fr) minmax(0, 1.4fr); gap: 16px; min-width: 0; }
+  .experts-workbench { display: grid; grid-template-columns: minmax(250px, .82fr) minmax(0, 1.4fr); gap: 16px; min-width: 0; align-items: start; }
   .experts-list, .experts-detail { min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-bg); }
   .experts-section-heading { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
   .experts-section-heading h2, .experts-detail h2 { font-size: 16px; }

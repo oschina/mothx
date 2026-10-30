@@ -200,7 +200,7 @@
               {s.title || s.preview || shortID(s.id)}
             </button>
             <div class="session-card-meta">
-              <Badge variant={isRunning(s) ? 'default' : 'secondary'} class="session-card-status"><span class:running={isRunning(s)} class="session-status-dot"></span>{s.channelLabel || $t('sessions.local')} · {statusLabel(s)}</Badge>
+              <Badge variant="secondary" class={`session-card-status${isRunning(s) ? ' running' : ''}`}><span class:running={isRunning(s)} class="session-status-dot"></span>{s.channelLabel || $t('sessions.local')} · {statusLabel(s)}</Badge>
               <span class="session-card-time" title={formatDateTime(s.lastUsed)}><span class="session-meta-label">{$t('sessions.lastReply')}</span>{formatDateTime(s.lastUsed) || '—'}</span>
               <span class="session-card-count"><span class="session-meta-label">{$t('sessions.messageCount')}</span>{s.messageCount || 0}</span>
             </div>
@@ -265,7 +265,7 @@
                   </div>
                 </td>
                 <td class="wd" title={s.workDir || ''}>{s.workDir || '—'}</td>
-                <td><Badge variant={isRunning(s) ? 'default' : 'secondary'} class="session-status-badge"><span class:running={isRunning(s)} class="session-status-dot"></span>{s.channelLabel || $t('sessions.local')} · {statusLabel(s)}</Badge></td>
+                <td><Badge variant="secondary" class={`session-status-badge${isRunning(s) ? ' running' : ''}`}><span class:running={isRunning(s)} class="session-status-dot"></span>{s.channelLabel || $t('sessions.local')} · {statusLabel(s)}</Badge></td>
                 <td class="last-reply" title={formatDateTime(s.lastUsed)}>{formatDateTime(s.lastUsed) || '—'}</td>
                 <td class="num">{s.messageCount || 0}</td>
                 <td class="actions">

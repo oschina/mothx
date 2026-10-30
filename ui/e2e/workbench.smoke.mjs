@@ -566,7 +566,7 @@ try {
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.composer-display-group button').length`), 2, 'display mode must live in the merged config panel');
   await evaluate(cdp, `document.querySelector('.composer-config-toggle').click()`);
   await waitFor(cdp, `document.querySelector('.composer-config-panel') === null`);
-  assert.equal(await evaluate(cdp, `document.querySelector('.wb-tabstrip')?.textContent.includes('session-e2e-a') === true`), true);
+  assert.equal(await evaluate(cdp, `document.querySelector('.wb-tabstrip')?.textContent.includes('Session A') === true`), true);
 
   // Read-only Plan dock: the latest plan message is projected without new
   // storage, and the dock sits beside the pane area on desktop.
@@ -675,13 +675,13 @@ try {
   // Composer drafts survive tab switches. ChatPane is unmounted when another
   // tab becomes selected, so this exercises the shared draft store instead of
   // local component state.
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tab-label')].find((tab) => tab.textContent.includes('session-e2e-a')).click())()`);
-  await waitFor(cdp, `document.querySelector('.wb-tab-text')?.textContent.includes('session-e2e-a') === true`);
+  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tab-label')].find((tab) => tab.textContent.includes('Session A')).click())()`);
+  await waitFor(cdp, `document.querySelector('.wb-tab-text')?.textContent.includes('Session A') === true`);
   await evaluate(cdp, `(() => { const textarea = document.querySelector('.wb-pane-body textarea, .wb-single-body textarea'); textarea.value = 'unsent draft'; textarea.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   await waitFor(cdp, `document.querySelector('.wb-pane-body textarea, .wb-single-body textarea')?.value === 'unsent draft'`);
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tab-label')].find((tab) => tab.textContent.includes('session-e2e-b')).click())()`);
+  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tab-label')].find((tab) => tab.textContent.includes('Session B')).click())()`);
   await waitFor(cdp, `document.querySelector('.wb-pane-body textarea, .wb-single-body textarea')?.value === ''`);
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tab-label')].find((tab) => tab.textContent.includes('session-e2e-a')).click())()`);
+  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tab-label')].find((tab) => tab.textContent.includes('Session A')).click())()`);
   await waitFor(cdp, `document.querySelector('.wb-pane-body textarea, .wb-single-body textarea')?.value === 'unsent draft'`);
   await assertChatPanesFill(cdp, 'after switching back to the long tab', { expectScroll: true });
   await evaluate(cdp, `(() => { const textarea = document.querySelector('.wb-pane-body textarea, .wb-single-body textarea'); textarea.value = ''; textarea.dispatchEvent(new Event('input', { bubbles: true })); })()`);
@@ -753,7 +753,7 @@ try {
 
   // A background question must not steal the focused pane: it only raises the
   // tab/attention badges until the user focuses its owner.
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tab-label')].find((tab) => tab.textContent.includes('session-e2e-a')).click())()`);
+  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tab-label')].find((tab) => tab.textContent.includes('Session A')).click())()`);
   await waitFor(cdp, `document.querySelector('.wb-pane-active')?.dataset.selectedTab === 'session:session-e2e-a'`);
   await evaluate(cdp, `fetch('/api/e2e/question', { method: 'POST' }).then((response) => response.json())`);
   await waitFor(cdp, `document.querySelectorAll('.wb-tab-pending').length >= 1 && (document.querySelector('.wb-attention')?.textContent || '').includes('1')`);
@@ -833,13 +833,17 @@ try {
     const bar = document.querySelector('.wb-toolbar');
     return { height: bar.getBoundingClientRect().height, scrollWidth: bar.scrollWidth, clientWidth: bar.clientWidth };
   })()`);
-  assert.ok(mobileToolbar.height <= 31, `mobile workbench toolbar must stay compact (${mobileToolbar.height}px)`);
+  // Mobile keeps a touch-sized bar (but still compact) because layout presets
+  // and split controls are hidden there; desktop stays icon-dense.
+  assert.ok(mobileToolbar.height <= 44, `mobile workbench toolbar must stay compact (${mobileToolbar.height}px)`);
   assert.ok(mobileToolbar.scrollWidth <= mobileToolbar.clientWidth + 1, 'mobile workbench toolbar must fit without horizontal scrolling');
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-pane').length`), 0);
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-split-handle').length`), 0);
   await waitFor(cdp, `document.querySelectorAll('.wb-tab').length >= 1`);
   // Overflowing tabs stay reachable through the explicit overflow menu.
-  for (const expected of [3, 4, 5]) {
+  // Tabs now show conversation titles instead of 16-char IDs, so more tabs are
+  // needed before the strip overflows at phone width.
+  for (const expected of [3, 4, 5, 6, 7, 8]) {
     await evaluate(cdp, `document.querySelector('[data-action="new-task"]').click()`);
     await waitFor(cdp, `document.querySelectorAll('.wb-tab').length === ${expected}`);
   }
@@ -881,7 +885,9 @@ try {
   await evaluate(cdp, `(() => { const textarea = document.querySelector('textarea'); textarea.value = 'draft hello'; textarea.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   await waitFor(cdp, `document.querySelector('.send-btn')?.disabled === false`);
   await evaluate(cdp, `document.querySelector('.send-btn').click()`);
-  await waitFor(cdp, `document.querySelectorAll('.wb-tab').length === 2 && [...document.querySelectorAll('.wb-tab-text')].some((element) => element.textContent.includes('session-e2e-draft'))`);
+  // The draft tab is now labeled from the allocated session's title/preview
+  // rather than its raw ID, so assert the replacement by tab composition.
+  await waitFor(cdp, `document.querySelectorAll('.wb-tab').length === 2 && !(document.querySelector('.wb-tabstrip')?.textContent || '').match(/新任务|New task/)`);
   await waitFor(cdp, `document.body.textContent.includes('send accepted')`);
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-tab').length`), 2, 'draft tab must be atomically replaced');
   assert.equal(await evaluate(cdp, `(document.querySelector('.wb-tabstrip')?.textContent || '').includes('新任务') || (document.querySelector('.wb-tabstrip')?.textContent || '').includes('New task')`), false, 'draft tab must be gone');

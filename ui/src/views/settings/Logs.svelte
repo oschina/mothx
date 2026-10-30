@@ -35,7 +35,7 @@
 <div class="logs-page">
   <div class="logs-toolbar">
     <Input class="logs-filter" bind:value={filter} placeholder={$t('logs.filter')} />
-    <Badge variant={$logsConnected ? 'default' : 'secondary'}>
+    <Badge variant={$logsConnected ? 'success' : 'secondary'}>
       {$logsConnected ? $t('common.connected') : $t('common.disconnected')}
     </Badge>
     {#if $logsConnected}
@@ -61,6 +61,11 @@
 
   <div class="logs-frame">
     <div class="log-list">
+      <div class="log-line log-head">
+        <span class="ts">{$t('logs.time')}</span>
+        <span class="type">{$t('logs.type')}</span>
+        <span>{$t('logs.message')}</span>
+      </div>
       {#each filtered as item, idx (idx)}
         <div class="log-line">
           <span class="ts">{formatTime(item.timestamp)}</span>

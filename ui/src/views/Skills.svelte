@@ -259,7 +259,7 @@
     try { const data = await request(`/api/skillhub/showcase/${encodeURIComponent(kind)}?${sessionParams({ market })}`); items = data?.items || []; total = Number(data?.total || items.length); selected = null; detail = null; } catch (err) { setError(err); } finally { loading = false; }
   }
   function toggleBatch(item) { const next = new Set(selectedBatch); const key = `${item.market}:${item.id}`; if (next.has(key)) next.delete(key); else next.add(key); selectedBatch = next; }
-  async function installBatch() { const chosen = items.filter((item) => selectedBatch.has(`${item.market}:${item.id}`)); if (!chosen.length || !sessionID || !targetDir) return; actionLoading = true; try { await postJSON('/api/skillhub/skillset', { skills: chosen.map((item) => ({ market: item.market, id: item.id, version: item.version || '', scope, targetDir })), sessionId: sessionID, targetDir, scope }); selectedBatch = new Set(); setNotice('Selected skills installed.'); await loadResults(); } catch (err) { setError(err); } finally { actionLoading = false; } }
+  async function installBatch() { const chosen = items.filter((item) => selectedBatch.has(`${item.market}:${item.id}`)); if (!chosen.length || !sessionID || !targetDir) return; actionLoading = true; try { await postJSON('/api/skillhub/skillset', { skills: chosen.map((item) => ({ market: item.market, id: item.id, version: item.version || '', scope, targetDir })), sessionId: sessionID, targetDir, scope }); selectedBatch = new Set(); setNotice($t('skills.batchInstalled')); await loadResults(); } catch (err) { setError(err); } finally { actionLoading = false; } }
   async function loadFileContent(file) { if (!detail || !file?.path) return; try { const data = await request(`/api/skillhub/content/${encodeURIComponent(detail.market)}/${encodeURIComponent(detail.id)}?${sessionParams({ path: file.path, version: detail.version || '' })}`); file.content = data?.content || ''; detail = { ...detail }; } catch (err) { setError(err); } }
   async function install(activate = false, overwrite = false) {
     if (!detail) return;
@@ -441,7 +441,7 @@
       <div class="skills-section-head">
         <strong>{$t('skills.results')}</strong>
         <span class="loading-row">{#if loading}<span class="spinner sm"></span>{$t('common.loading')}{:else}{$t('common.items', { count: total })}{/if}</span>
-        <Button type="button" size="sm" disabled={selectedBatch.size === 0 || actionLoading || !sessionID || !targetDir} onclick={installBatch}>
+        <Button type="button" size="sm" variant={selectedBatch.size > 0 ? 'default' : 'outline'} disabled={selectedBatch.size === 0 || actionLoading || !sessionID || !targetDir} onclick={installBatch}>
           {#if actionLoading}<span class="spinner sm"></span> {/if}
           {$t('skills.installSelected', { count: selectedBatch.size })}
         </Button>

@@ -32,7 +32,7 @@
           <tr>
             <td>{$t(row.label)}</td>
             <td>
-              <Badge variant={$features[row.key] ? 'default' : 'secondary'}>
+              <Badge variant={$features[row.key] ? 'success' : 'secondary'}>
                 {$features[row.key] ? $t('common.enabled') : $t('common.disabled')}
               </Badge>
             </td>

@@ -576,7 +576,7 @@
         <h3>Feishu</h3>
         <span class="hint">{$t('settings.channels.feishuHint')}</span>
       </div>
-      <Badge variant={statusFor('feishu').connected ? 'default' : 'secondary'}>
+      <Badge variant={statusFor('feishu').connected ? 'success' : 'secondary'}>
         {statusLabel('feishu')}
       </Badge>
     </div>
@@ -625,7 +625,7 @@
         <h3>WeChat</h3>
         <span class="hint">{$t('settings.channels.wechatHint')}</span>
       </div>
-      <Badge variant={statusFor('wechat').connected ? 'default' : 'secondary'}>
+      <Badge variant={statusFor('wechat').connected ? 'success' : 'secondary'}>
         {statusLabel('wechat')}
       </Badge>
     </div>
@@ -796,7 +796,7 @@
           {/if}
         </p>
         <div class="qr-status">
-          <Badge variant={wechatLogin?.state === 'confirmed' ? 'default' : (wechatLogin?.state === 'error' || wechatLogin?.state === 'cancelled' ? 'destructive' : 'secondary')}>
+          <Badge variant={wechatLogin?.state === 'confirmed' ? 'success' : (wechatLogin?.state === 'error' || wechatLogin?.state === 'cancelled' ? 'destructive' : 'secondary')}>
             {$t(`settings.channels.wechatState.${wechatLogin?.state || 'idle'}`)}
           </Badge>
           {#if wechatLogin?.userId}

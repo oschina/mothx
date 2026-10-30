@@ -2469,7 +2469,9 @@
 
 <section class="chat-view">
   <SessionHeader
-    title={activeSession?.title || (sessionID ? shortID(sessionID) : '')}
+    title={activeSession?.title && activeSession.title !== sessionID
+      ? activeSession.title
+      : (activeSession?.preview || (sessionID ? shortID(sessionID) : ''))}
     channelLabel={activeSession?.channelLabel || ''}
     sessionID={sessionID}
     workDir={sessionID ? activeSessionWorkDir : ''}
@@ -2531,7 +2533,6 @@
             <article class="msg user">
               <div class="meta">
                 <strong>{$t('chat.you')}</strong>
-                <span>{shortID(sessionID)}</span>
               </div>
               <p>{msg.content}</p>
               {#if msg.images?.length}
@@ -3202,12 +3203,12 @@
         <div bind:this={skillPicker} class="skill-picker" aria-label={$t('chat.skills.active')}>
           <button type="button" class="skill-picker-toggle" disabled={!apiEnabled || busy} on:click={() => (showSkillPicker = !showSkillPicker)} aria-expanded={showSkillPicker}>
             <span>{$t('chat.skills.active')}</span>
-            <strong>{activeSkills.length ? `${activeSkills.length} active` : 'none active'}</strong>
+            <strong>{activeSkills.length ? $t('chat.skills.activeCount', { count: activeSkills.length }) : $t('chat.skills.noneActive')}</strong>
             <span class="runtime-chevron">⌄</span>
           </button>
           {#if showSkillPicker}
             <div class="skill-picker-menu">
-              <header><strong>{$t('chat.skills.project')}</strong><span>{activeSkills.length} {$t('chat.skills.active')} · {$t('chat.skills.pending', { count: availableSkills.length - activeSkills.length })}</span></header>
+              <header><strong>{$t('chat.skills.project')}</strong><span>{$t('chat.skills.activeCount', { count: activeSkills.length })} · {$t('chat.skills.pending', { count: availableSkills.length - activeSkills.length })}</span></header>
               {#if availableSkills.length === 0}
                 <p class="skill-picker-empty">{$t('chat.skills.none')}</p>
               {:else}
@@ -3215,7 +3216,7 @@
                   <label class:active={activeSkills.includes(skill.name)}>
                     <input type="checkbox" checked={activeSkills.includes(skill.name)} disabled={busy} on:change={(event) => toggleSkill(skill.name, event)} />
                     <span class="skill-name">{skill.name}</span>
-                    <em>{activeSkills.includes(skill.name) ? 'active' : 'pending'}</em>
+                    <em>{activeSkills.includes(skill.name) ? $t('common.active') : $t('common.pending')}</em>
                   </label>
                 {/each}
               {/if}
@@ -3279,7 +3280,7 @@
       </div>
       <div class="right">
         {#if busy && canStop}
-          <button type="button" class="stop-btn" disabled={stopSubmitting} on:click={stop} title={stopSubmitting ? 'Stopping…' : $t('common.stop')} aria-label={stopSubmitting ? 'Stopping…' : $t('common.stop')}>
+          <button type="button" class="stop-btn" disabled={stopSubmitting} on:click={stop} title={stopSubmitting ? $t('common.stopping') : $t('common.stop')} aria-label={stopSubmitting ? $t('common.stopping') : $t('common.stop')}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
           </button>
         {/if}

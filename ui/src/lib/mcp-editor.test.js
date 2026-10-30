@@ -9,7 +9,9 @@ const editorSource = await readFile(editorPath, 'utf8');
 const globalStyle = await readFile(stylePath, 'utf8');
 
 test('MCP editor uses theme tokens for its surfaces and controls', () => {
-  for (const token of ['--bg', '--bg-secondary', '--border', '--border-subtle', '--text-secondary', '--text-muted', '--modal-shadow', '--overlay']) {
+  // The empty state is an inline placeholder, not a modal: it deliberately
+  // uses flat surface tokens instead of --modal-shadow/--overlay.
+  for (const token of ['--bg-secondary', '--border', '--border-subtle', '--text', '--text-secondary', '--text-muted']) {
     assert.match(editorSource, new RegExp(`var\\(${token.replaceAll('-', '\\-')}\\)`), `editor should use ${token}`);
   }
   assert.doesNotMatch(editorSource, /background:\s*#[0-9a-f]{3,8}/i, 'editor should not hardcode background colors');

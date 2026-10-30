@@ -1,6 +1,8 @@
 <script>
   import { onMount, tick } from 'svelte';
   import { t } from '../../lib/preferences.js';
+  import { sessions } from '../../lib/stores.js';
+  import { shortID } from '../../lib/format.js';
   import { sessionRunStates, isCompletionActive, isSessionRuntimeBusy } from '../../lib/session-runs.js';
 
   export let groupId = '';
@@ -72,7 +74,11 @@
 
   function label(tab) {
     if (tab.kind === 'draft') return tab.workDir || $t('workbench.draft') || 'New task';
-    return tab.sessionId || $t('workbench.session') || 'Session';
+    const session = ($sessions || []).find((item) => item?.id === tab.sessionId);
+    // Untitled sessions often mirror their ID; prefer the user's first message
+    // so tabs and the header read as a conversation instead of a hex handle.
+    const name = session?.title && session.title !== tab.sessionId ? session.title : session?.preview;
+    return name || shortID(tab.sessionId) || $t('workbench.session') || 'Session';
   }
 
   // Read the store directly in markup so each tab's badge reacts to that

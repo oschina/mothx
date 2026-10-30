@@ -1,7 +1,6 @@
 <script>
-  import { MessageSquareText, Activity, Menu } from '@lucide/svelte';
+  import { MessageSquareText, Activity } from '@lucide/svelte';
   import { t } from '../../lib/preferences.js';
-  import { isMobile, sidebarOpen } from '../../lib/stores.js';
   import { Button } from '$lib/components/ui/button';
   import SessionLogDownload from './SessionLogDownload.svelte';
 
@@ -12,10 +11,6 @@
   export let view = 'chat';
   export let busy = false;
   export let onViewChange = () => {};
-
-  function toggleSidebar() {
-    sidebarOpen.update((value) => !value);
-  }
 
   function compactPath(path) {
     if (!path) return '';
@@ -28,20 +23,6 @@
 
 <header class="chat-session-header">
   <div class="chat-session-headline">
-    {#if $isMobile}
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        class="chat-session-menu-toggle"
-        aria-label={$t('sidebar.menu') || 'Menu'}
-        aria-expanded={$sidebarOpen}
-        title={$t('sidebar.menu') || 'Menu'}
-        onclick={toggleSidebar}
-      >
-        <Menu size={18} />
-      </Button>
-    {/if}
     <div class="chat-session-heading">
       <strong>{title || $t('chat.newSession')}</strong>
       {#if channelLabel}<span>{channelLabel}</span>{/if}

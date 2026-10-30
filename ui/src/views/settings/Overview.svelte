@@ -52,30 +52,42 @@
     </CardHeader>
     <CardContent>
       <dl class="overview-kv">
-        <dt>{$t('settings.runtime.version')}</dt>
-        <dd>{$health?.version || 'dev'}</dd>
-        <dt>{$t('settings.runtime.listen')}</dt>
-        <dd>{$status?.listen || '—'}</dd>
-        <dt>{$t('settings.runtime.sessions')}</dt>
-        <dd>{$status?.sessions ?? $health?.sessions ?? 0}</dd>
-        <dt>Cron</dt>
-        <dd>
-          {$cronInfo?.enabled === false
-            ? $t('common.disabledState')
-            : ($cronInfo?.running ? $t('common.running') : $t('common.idle'))}
-        </dd>
-        <dt>Memory</dt>
-        <dd>
-          {$memoryInfo?.enabled === false
-            ? $t('common.disabledState')
-            : ($memoryInfo?.path || $t('common.uninitialized'))}
-        </dd>
-        <dt>{$t('settings.runtime.api')}</dt>
-        <dd>
-          <Badge variant={$features.api ? 'default' : 'secondary'}>
-            {$features.api ? $t('common.enabled') : $t('common.disabled')}
-          </Badge>
-        </dd>
+        <div class="overview-kv-item">
+          <dt>{$t('settings.runtime.version')}</dt>
+          <dd>{$health?.version || 'dev'}</dd>
+        </div>
+        <div class="overview-kv-item">
+          <dt>{$t('settings.runtime.listen')}</dt>
+          <dd>{$status?.listen || '—'}</dd>
+        </div>
+        <div class="overview-kv-item">
+          <dt>{$t('settings.runtime.sessions')}</dt>
+          <dd>{$status?.sessions ?? $health?.sessions ?? 0}</dd>
+        </div>
+        <div class="overview-kv-item">
+          <dt>Cron</dt>
+          <dd>
+            {$cronInfo?.enabled === false
+              ? $t('common.disabledState')
+              : ($cronInfo?.running ? $t('common.running') : $t('common.idle'))}
+          </dd>
+        </div>
+        <div class="overview-kv-item">
+          <dt>Memory</dt>
+          <dd>
+            {$memoryInfo?.enabled === false
+              ? $t('common.disabledState')
+              : ($memoryInfo?.path || $t('common.uninitialized'))}
+          </dd>
+        </div>
+        <div class="overview-kv-item">
+          <dt>{$t('settings.runtime.api')}</dt>
+          <dd>
+            <Badge variant={$features.api ? 'success' : 'secondary'}>
+              {$features.api ? $t('common.enabled') : $t('common.disabled')}
+            </Badge>
+          </dd>
+        </div>
       </dl>
     </CardContent>
   </Card>
