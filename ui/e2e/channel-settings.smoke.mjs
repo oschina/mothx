@@ -246,6 +246,9 @@ try {
 
   await evaluate(cdp, `window.location.hash = '#/settings/serve'`);
   await waitFor(cdp, `document.querySelector('.settings-save-card button') !== null`);
+  // Wait for the fetched serve config to be applied to the form. Clicking the
+  // switch before that resolves can be overwritten by the late syncFromStore.
+  await waitFor(cdp, `[...document.querySelectorAll('.settings-field')].find((field) => field.textContent.includes('Web UI 目录'))?.querySelector('input')?.value === 'dist'`);
   await new Promise((resolve) => setTimeout(resolve, 100));
   await waitFor(cdp, `[...document.querySelectorAll('.settings-switch-row')].some((row) => row.textContent.includes('Bearer Token'))`);
   await evaluate(cdp, `(() => [...document.querySelectorAll('.settings-switch-row')]

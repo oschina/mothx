@@ -227,6 +227,7 @@
   let activeSkills = [];
   let showSkillPicker = false;
   let showToolMenu = false;
+  let showComposerConfig = false;
   let toolMenuBtn;
   let loadedSkillsKey = '';
   let historyLoadError = null;
@@ -263,7 +264,6 @@
   let runtimeUpdating = false;
   let approvalHistory = [];
   let runEventCursor = 0;
-  let runtimeControls;
   let skillPicker;
   let selectedProviderID = '';
   let providerID = '';
@@ -274,7 +274,6 @@
   let teamLoading = false;
   let teamApplying = false;
   let teamCatalogKey = '';
-  let showRuntimePanel = false;
   let showApprovalCenter = false;
   // Approvals the user explicitly closed. A closed request stays pending (the
   // agent is still waiting for it) but must not keep re-opening the center; any
@@ -380,9 +379,6 @@
   let prevSession = sessionID;
   onMount(() => {
     const handleRuntimeOutsidePointer = (event) => {
-      if (showRuntimePanel && runtimeControls && !runtimeControls.contains(event.target)) {
-        showRuntimePanel = false;
-      }
       if (showSkillPicker && skillPicker && !skillPicker.contains(event.target)) {
         showSkillPicker = false;
       }
@@ -640,15 +636,6 @@
   $: selectedApproval = (sessionRuntimeValue?.pendingApprovals || []).find((approval) => approval.approvalId === selectedApprovalID)
     || (approvalSessionID($activeApproval, '') === sessionID ? $activeApproval : null)
     || null;
-  $: runtimeActiveRun = sessionRuntimeValue?.execution?.activeRun || sessionRuntimeValue?.activeRun || (
-    sessionRuntimeValue?.responsesRun
-      ? {
-          runId: sessionRuntimeValue.responsesRun.localRunId,
-          status: sessionRuntimeValue.responsesRun.state,
-          responses: true
-        }
-      : null
-  );
   $: sessionToolKey = sessionID || '__new__';
   $: sessionTools = sessionToolsFor($sessionToolOptions, sessionToolKey, activeSession || $features);
   $: availableToolToggles = toolToggles.filter((item) => isToolToggleVisible(item, $features));
@@ -1536,12 +1523,6 @@
     } finally {
       stopSubmitting = false;
     }
-  }
-
-  function resetSession() {
-    resetSelectedModelToDefault();
-    newSessionMode = 'yolo';
-    currentSession.set('');
   }
 
   function handleChatScroll() {
@@ -2491,6 +2472,7 @@
     title={activeSession?.title || (sessionID ? shortID(sessionID) : '')}
     channelLabel={activeSession?.channelLabel || ''}
     sessionID={sessionID}
+    workDir={sessionID ? activeSessionWorkDir : ''}
     view={chatView}
     {busy}
     onViewChange={setChatView}
@@ -3069,48 +3051,6 @@
 
   <div class="composer">
     <div class="composer-card">
-      <div class="composer-controls">
-        <SearchSelect
-          value={providerID}
-          options={providerOptions}
-          placeholder={$t('chat.selectProvider')}
-          ariaLabel={$t('chat.selectProvider')}
-          disabled={!apiEnabled || providerOptions.length === 0}
-          className="provider-search-select"
-          menuClassName="provider-search-select-menu"
-          on:change={(event) => handleProviderChange(event.detail)}
-        />
-        <ModelPicker
-          value={selectedModelID}
-          options={providerModels}
-          placeholder={$t('chat.selectModel')}
-          ariaLabel={$t('chat.selectModel')}
-          disabled={!apiEnabled || providerModels.length === 0}
-          on:change={(event) => selectModel(event.detail)}
-        />
-        <SearchSelect
-          value={selectedTeamID}
-          options={teamExpertOptions}
-          placeholder={$t('chat.expertTeam.placeholder')}
-          ariaLabel={$t('chat.expertTeam.label')}
-          noOptionsLabel={$t('chat.expertTeam.empty')}
-          className="expert-team-search-select"
-          menuClassName="expert-team-search-select-menu"
-          disabled={!apiEnabled || busy || teamLoading || teamApplying}
-          on:change={(event) => selectTeamExpert(event.detail)}
-        />
-        {#if !isNewSession && teamSelectionChanged}
-          <Button
-            type="button"
-            variant={teamMustFork ? 'outline' : 'default'}
-            size="sm"
-            disabled={!teamCanApply && !teamMustFork}
-            onclick={applyTeamSelection}
-          >
-            {teamMustFork ? $t('chat.expertTeam.switchAction') : $t('chat.expertTeam.apply')}
-          </Button>
-        {/if}
-      </div>
       <div class="composer-row">
       {#if pendingAttachments.length > 0}
         <div class="composer-attachments">
@@ -3164,6 +3104,68 @@
         </div>
       {/if}
     </div>
+      {#if showComposerConfig}
+        <div id={`${paneId}-composer-config`} class="composer-controls composer-config-panel">
+          <div class="composer-config-modes">
+            <span class="composer-config-label">{$t('chat.runtime.agentMode')}</span>
+            <div class="composer-mode-group" role="group" aria-label={$t('chat.runtime.agentMode')}>
+              {#each ['plan', 'agent', 'yolo', 'os'] as mode}
+                <button type="button" class:active={runtimeMode === mode} disabled={runtimeUpdating || busy} on:click={() => runtimeManager.setMode(mode)}>{mode}</button>
+              {/each}
+            </div>
+            <span class="composer-config-label">{$t('chat.runtime.displayMode')}</span>
+            <div class="composer-display-group" role="group" aria-label={$t('chat.runtime.displayMode')}>
+              <button type="button" class:active={runtimeDisplayMode === 'work'} disabled={runtimeUpdating || busy} on:click={() => { workToolsExpanded = false; runtimeDisplayMode = 'work'; runtimeManager.setDisplayMode('work'); }}>{$t('chat.runtime.work')}</button>
+              <button type="button" class:active={runtimeDisplayMode === 'code'} disabled={runtimeUpdating || busy} on:click={() => { runtimeDisplayMode = 'code'; runtimeManager.setDisplayMode('code'); }}>{$t('chat.runtime.code')}</button>
+            </div>
+            {#if pendingApprovalCount}
+              <button type="button" class="composer-approval-link" on:click={() => (showApprovalCenter = true)}>{$t('chat.runtime.pendingApproval', { count: pendingApprovalCount })}</button>
+            {/if}
+          </div>
+          <div class="composer-config-selects">
+            <SearchSelect
+              value={providerID}
+              options={providerOptions}
+              placeholder={$t('chat.selectProvider')}
+              ariaLabel={$t('chat.selectProvider')}
+              disabled={!apiEnabled || providerOptions.length === 0}
+              className="provider-search-select"
+              menuClassName="provider-search-select-menu"
+              on:change={(event) => handleProviderChange(event.detail)}
+            />
+            <ModelPicker
+              value={selectedModelID}
+              options={providerModels}
+              placeholder={$t('chat.selectModel')}
+              ariaLabel={$t('chat.selectModel')}
+              disabled={!apiEnabled || providerModels.length === 0}
+              on:change={(event) => selectModel(event.detail)}
+            />
+            <SearchSelect
+              value={selectedTeamID}
+              options={teamExpertOptions}
+              placeholder={$t('chat.expertTeam.placeholder')}
+              ariaLabel={$t('chat.expertTeam.label')}
+              noOptionsLabel={$t('chat.expertTeam.empty')}
+              className="expert-team-search-select"
+              menuClassName="expert-team-search-select-menu"
+              disabled={!apiEnabled || busy || teamLoading || teamApplying}
+              on:change={(event) => selectTeamExpert(event.detail)}
+            />
+            {#if !isNewSession && teamSelectionChanged}
+              <Button
+                type="button"
+                variant={teamMustFork ? 'outline' : 'default'}
+                size="sm"
+                disabled={!teamCanApply && !teamMustFork}
+                onclick={applyTeamSelection}
+              >
+                {teamMustFork ? $t('chat.expertTeam.switchAction') : $t('chat.expertTeam.apply')}
+              </Button>
+            {/if}
+          </div>
+        </div>
+      {/if}
     <div class="composer-bar">
       <div class="left">
         <input
@@ -3183,52 +3185,20 @@
         >
           📎
         </button>
-        <div bind:this={runtimeControls} class="runtime-controls" aria-label={$t('chat.runtime.controls')}>
-          <button
-            type="button"
-            class:open={showRuntimePanel}
-            class="runtime-toggle"
-            aria-expanded={showRuntimePanel}
-            aria-controls={`${paneId}-runtime-panel`}
-            on:click={() => (showRuntimePanel = !showRuntimePanel)}
-          >
-            <span class="runtime-label">{$t('chat.runtime.mode')}</span>
-            <strong>{runtimeMode}</strong>
-            <span class="runtime-chevron" aria-hidden="true">⌄</span>
-            {#if pendingApprovalCount}<span class="runtime-badge">{pendingApprovalCount}</span>{/if}
-          </button>
-          {#if showRuntimePanel}
-            <section id={`${paneId}-runtime-panel`} class="runtime-panel">
-              <header>
-                <strong>{$t('chat.runtime.title')}</strong>
-                {#if sessionRuntimeValue?.execution}
-                  <span class:running={sessionRuntimeValue.execution.running} class="dot"></span>
-                  <span>{$t(`chat.execution.${sessionRuntimeValue.execution.state}`)}</span>
-                {:else if runtimeActiveRun}<span class="dot running"></span><span>{runtimeActiveRun.status}</span>{/if}
-              </header>
-              <p class="runtime-hint">{$t('chat.runtime.hint')}</p>
-              <div class="mode-switcher" role="group" aria-label={$t('chat.runtime.agentMode')}>
-                {#each ['plan', 'agent', 'yolo', 'os'] as mode}
-                  <button type="button" class:active={runtimeMode === mode} disabled={runtimeUpdating || busy} on:click={() => runtimeManager.setMode(mode)}>{mode}</button>
-                {/each}
-              </div>
-              <div class="display-mode" role="radiogroup" aria-label={$t('chat.runtime.displayMode')}>
-                <span>{$t('chat.runtime.displayMode')}</span>
-                <label>
-                  <input type="radio" name="runtime-display-mode" value="work" bind:group={runtimeDisplayMode} disabled={runtimeUpdating || busy} on:change={() => { workToolsExpanded = false; runtimeManager.setDisplayMode('work'); }} />
-                  {$t('chat.runtime.work')}
-                </label>
-                <label>
-                  <input type="radio" name="runtime-display-mode" value="code" bind:group={runtimeDisplayMode} disabled={runtimeUpdating || busy} on:change={() => runtimeManager.setDisplayMode('code')} />
-                  {$t('chat.runtime.code')}
-                </label>
-              </div>
-              {#if pendingApprovalCount}
-                <div class="approval-summary"><strong>{$t('chat.runtime.pendingApproval', { count: pendingApprovalCount })}</strong><button type="button" class="ghost sm" on:click={() => (showApprovalCenter = true)}>{$t('chat.runtime.reviewApprovals')}</button></div>
-              {/if}
-            </section>
-          {/if}
-        </div>
+        <button
+          type="button"
+          class="composer-config-toggle"
+          class:open={showComposerConfig}
+          aria-expanded={showComposerConfig}
+          aria-controls={showComposerConfig ? `${paneId}-composer-config` : undefined}
+          title={$t('chat.composerConfig') || 'Model and expert settings'}
+          on:click={() => (showComposerConfig = !showComposerConfig)}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>
+          <span class="composer-config-model">{activeModel?.name || selectedModelID || $t('chat.selectModel')}</span>
+          <span class="composer-config-mode">{runtimeMode}</span>
+          <span class="runtime-chevron" aria-hidden="true">⌄</span>
+        </button>
         <div bind:this={skillPicker} class="skill-picker" aria-label={$t('chat.skills.active')}>
           <button type="button" class="skill-picker-toggle" disabled={!apiEnabled || busy} on:click={() => (showSkillPicker = !showSkillPicker)} aria-expanded={showSkillPicker}>
             <span>{$t('chat.skills.active')}</span>
@@ -3328,16 +3298,7 @@
           {/if}
         </button>
       </div>
-      </div>
     </div>
-    {#if sessionID}
-      <div class="composer-session-info">
-        <span class="session-badge">{$t('chat.session')}</span>
-        <span class="session-id">{shortID(sessionID)}</span>
-        {#if activeSessionWorkDir}<span class="session-dir">{activeSessionWorkDir}</span>{/if}
-        <button type="button" class="ghost sm" on:click={resetSession}>{$t('chat.newSession')}</button>
-      </div>
-    {/if}
   </div>
 </section>
 

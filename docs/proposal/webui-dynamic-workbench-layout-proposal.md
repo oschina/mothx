@@ -1,6 +1,6 @@
 # Serve WebUI 动态工作台布局方案
 
-> Date: 2026-10-28 · Last revised: 2026-10-29 · Status: Implemented (W0–W4 implemented 2026-10-29; manual touch feel and 4-pane long-stream acceptance outstanding) · Owner: Serve WebUI (Svelte)
+> Date: 2026-10-28 · Last revised: 2026-10-29 · Status: Implemented (W0–W4, legacy-path cleanup, and the optional W3 Plan dock implemented 2026-10-29; touch/drag feel accepted 2026-10-29, 4-pane long-stream acceptance outstanding) · Owner: Serve WebUI (Svelte)
 > Related: `AGENTS.md`, `docs/proposal/webui-multi-session-streaming-proposal.md`, `docs/proposal/webui-project-session-management-proposal.md`, `docs/proposal/serve-pty-terminal-proposal.md`
 > Reference implementation: `/home/free/src/thinkrail`（`apps/web/src/shell/layout/`、`apps/web/src/shell/layoutState/`、`apps/web/src/shell/SPEC.md`）
 > 目标代码：`ui/`（Svelte 5 + Vite，构建后嵌入 Go binary，由 `mothx serve` 提供）
@@ -22,7 +22,7 @@
 - **响应式，而不是 PC-only。** 桌面按 1024px+ 工作，提供最多 4 pane 分屏；`isMobile`（≤900px）下渲染单 pane + 标签条，不做分屏/拖拽，保留现有 Sidebar 抽屉与聊天输入体验。移动端交互使用 Svelte 条件渲染，CSS 媒体查询只负责布局，遵循 AGENTS.md。
 - **每个 pane 的模型、provider、composer 草稿独立。** 模型选择不能继续做全局单值，否则两个 pane 会互相改模型/发送参数；草稿按 sessionId 保存在本地，切 tab 不丢。
 - **审批不埋。** 每个 pane 内联显示自己的 pending approval/question；同时提供全局 attention 徽标（标签角标 + 顶栏入口），一键定位到对应 pane/tab，但不新增阻塞确认。
-- **特性开关 + 只回退布局。** 灰度期用 `?workbench=1` / 设置开关 opt-in；GA 后默认开启，保留 `?workbench=0` 与设置里的关闭项一个版本。**W0 之后事件层不回退**：`session-stream.js` 始终是唯一 `$runEvents` 消费者，关闭开关只回到现有单 pane 布局。
+- **只回退布局，不保留旧路径。** 灰度期曾用 `?workbench=1` / 设置开关 opt-in；GA 后默认开启，并在 2026-10-29 的清理中移除了 `?workbench=0`、设置关闭项和单 pane 回退。**事件层始终不回退**：`session-stream.js` 仍是唯一 `$runEvents` 消费者；需要回退时只重置布局。
 
 ### 0.1 修订原则（2026-10-29）
 
@@ -30,7 +30,7 @@
 
 **易用性优先的具体取舍：**
 
-- 工作台 GA 后默认开启，提供 `?workbench=0` 与设置里的关闭项；灰度期才 opt-in。
+- 工作台 GA 后默认开启；旧 `?workbench=0` 与设置关闭项已在 2026-10-29 清理中移除，`/chat` 只有 Workbench 投影。
 - 布局是“我的工作区”：同一 origin 共享一份 last-layout，刷新、重启浏览器、新 tab 都恢复最近布局；不做 per-surface 隔离与 Web Locks 抢锁。
 - 移动端保留 Chat 可用性：`isMobile` 下渲染单 pane + 标签条，不做分屏/拖拽；不为“PC-only”牺牲手机聊天。
 - pane 内直接审批/提问；后台 tab 的 pending decision 通过标签/标题徽标与全局 attention 入口暴露，不新增阻塞确认。
@@ -67,12 +67,12 @@
 - W0 组件：`views/Chat.svelte` 已拆为薄 controller；`components/chat/ChatPane.svelte` 接收 `sessionId/active/viewMode`，支持 per-pane 模型、草稿、审批、轨迹和显式 session actions；`DraftPane.svelte` 直接复用完整 ChatPane composer，首次发送后由 `replaceDraftInWorkbench` 原子替换为 session tab；不保留第二套 composer 实现。
 - W1 布局模型：`model.js`（openSession/openDraft/replaceDraft/select/focus/close/move/split/remove/resize/setTabMode/setPreset/capturePreset/reconcile）、`normalize.js`（含顶层 `version` 往返修复）、`presets.js`、`store.js`、`persistence.js`、`index.js`；`moveTab` 跨 group 选择/移动缺陷已修复并有回归测试。
 - W1/W2 组件：`Workbench.svelte`/`SplitView.svelte`/`SplitHandle.svelte`/`Pane.svelte`/`TabStrip.svelte`/`EmptyPane.svelte` 使用 Svelte 5 snippet 递归渲染，支持标签选择/关闭、菜单分屏（移动选中标签到新 pane）、拖拽标签到 pane 四边分屏或中间移动、pointer/键盘 resize、4 叶上限、桌面最小 380px pane 回退单 pane、移动端单 pane + 合并标签条。
-- W1/W3 集成：`App.svelte` 不再在 section 内路由变化时重挂载视图；Sidebar 新对话打开 Draft 标签；`currentSession` 与 URL 焦点双向同步（焦点变化使用 `replaceNavigate`）；布局写入共享 `mothx.workbench.v1`，刷新恢复标签/焦点/比例；Settings > Defaults 增加“动态工作台布局”开关，`?workbench=0` 保留单会话回退。
+- W1/W3 集成：`App.svelte` 不再在 section 内路由变化时重挂载视图；Sidebar 新对话打开 Draft 标签；`currentSession` 与 URL 焦点双向同步（焦点变化使用 `replaceNavigate`）；布局写入共享 `mothx.workbench.v1`，刷新恢复标签/焦点/比例；Settings 中的“动态工作台布局”开关与 `?workbench=0` 回退已在 2026-10-29 清理中移除。
 - W3：每个 tab 显示 running 指示与 pending approval/question 数量；工具条全局 attention 入口可聚焦首个待处理 pane；预设 `single/two-column/two-row/quad` 已接入；trajectory 继续作为每个 tab 的 chat/trajectory 模式。
 - W4 代码减法：`ChatPane` 不再维护第二份 transcript/run/runtime 局部状态，也不再在切 tab 时搬运；视图全部由 `sessionRunStates` 经 `viewFromSessionState` 派生，所有显式写入走 `applySessionViewReducer`/`updateSessionState`。`persistLocalSessionState`/`restoreLocalSessionState`/`applyView`/`currentView` 已删除，`session-stream-boundary.test.js` 增加静态守卫。
 - W4 运行时清理：删除 `chat-runtime-state.js` 中无人调用的 responses-run 轮询（后台轮询已归 `session-stream.js`）和 `onPersist` 回调；`sessionStateStore` 的派生缓存随 pane 卸载清理。ChatPane 的命令建议/运行时面板 DOM id 增加 pane 前缀，lightbox 键盘监听只由焦点 pane 响应；e2e 断言分屏后 DOM id 全局唯一。
 - W4 标签溢出：标签条溢出时显示“全部标签”菜单，列出每个 tab 的运行/待处理状态并可直接聚焦；底部横向滚动仍保留。标签运行/待处理徽标改为直接订阅 `sessionRunStates`，审批完成后即时消失。
-- 测试：`npm test`（206 tests）通过；`npm run build` 通过；`ui/e2e/workbench.smoke.mjs` 覆盖已有会话发送、Draft 首次发送后原子替换为真实 session、双 session 标签、刷新恢复、切换标签保留未发送草稿、拖拽取消后清除落点预览、真实拖拽重排/跨 pane/右边缘分屏与预览一致性、双页面共享 last-layout 和 last-write-wins 恢复、分屏双 pane 同时渲染、关闭 pane、跨 pane 待处理徽标/attention/在所属 pane 完成审批、跨 pane 后台提问不抢占焦点且聚焦后可在所属 pane 回答、跨 pane DOM id 唯一性、键盘调分隔条与双击恢复 50/50、比例刷新恢复、per-tab chat/trajectory 模式刷新恢复、per-pane 模型独立选择与刷新恢复、四宫格预设与第 5 个拖拽分屏被拒绝并提示原因、移动端单 pane、标签溢出菜单、终端面板（安全/共享 cwd 提示、初始 resize、键盘输入回显、断线重连、页面刷新 reattach 且不新建 POST、宿主缩放 resize、关闭 DELETE）与 `?workbench=0` 回退。
+- 测试：`npm test`（206 tests）通过；`npm run build` 通过；`ui/e2e/workbench.smoke.mjs` 覆盖已有会话发送、Draft 首次发送后原子替换为真实 session、双 session 标签、刷新恢复、切换标签保留未发送草稿、拖拽取消后清除落点预览、真实拖拽重排/跨 pane/右边缘分屏与预览一致性、双页面共享 last-layout 和 last-write-wins 恢复、分屏双 pane 同时渲染、关闭 pane、跨 pane 待处理徽标/attention/在所属 pane 完成审批、跨 pane 后台提问不抢占焦点且聚焦后可在所属 pane 回答、跨 pane DOM id 唯一性、键盘调分隔条与双击恢复 50/50、比例刷新恢复、per-tab chat/trajectory 模式刷新恢复、per-pane 模型独立选择与刷新恢复、四宫格预设与第 5 个拖拽分屏被拒绝并提示原因、移动端单 pane、标签溢出菜单、终端面板（安全/共享 cwd 提示、初始 resize、键盘输入回显、断线重连、页面刷新 reattach 且不新建 POST、宿主缩放 resize、关闭 DELETE）；清理后额外断言 `?workbench=0` 被忽略且不存在 `.chat-single-host`。
 - 复盘修复（本轮）：composer 草稿改为按 `sessionId`/`draft:<draftId>` 保存文本、内存中的 dataUrl 附件和可持久化的 providerRef/attachmentId 引用。`DraftPane` 传入 `draftKey`，切换标签（组件卸载）不再丢输入；刷新后仅剩可恢复引用，dataUrl 附件以 `missing` 元数据提示重新选择，发送/清空会删除草稿。新增 `composer-drafts.test.js` 覆盖 LRU 上限、跨刷新、dataUrl 不落盘。
 - 复盘修复（本轮）：后台到达的审批在所属 pane 通过 attention 获得焦点后现在会自动弹出审批中心（之前只在 pending 首次到达且 pane 已激活时弹出，`selectedApprovalID` 已设置会让后续 focus 永远不打开）；e2e 的审批流程可稳定复现该竞态。
 - 复盘修复（本轮）：分隔条支持双击恢复 50/50 并持久化；拖拽被 Escape 取消时 `dragend` 会清除落点预览，避免预览残留；超限（>512KB）布局文档在 `JSON.parse` 前丢弃并回退单 pane；标签会话兜底文案与残留硬编码英文错误改用双语 i18n。
@@ -91,9 +91,17 @@
 - 复盘修复（本轮）：工作台 tab 对账只使用覆盖服务端 `total` 的完整分页；`/api/sessions` 默认只取前 100 条，之前会把超出该页的非焦点会话 tab 误判为已删除。`stores.js` 现在记录 `sessionsTotal`，`Chat.svelte` 在分页不完整时不做自动删除。
 - 复盘修复（本轮）：修复分屏后重复的 DOM id。命令建议项从全局 `chat-command-suggestion-${index}` 改为 `${paneId}-command-suggestion-${index}`，`aria-activedescendant` 同步使用 pane 前缀；移动端合并标签条的右键菜单现在按 tab 实际所属 group 执行“关闭其他/右侧”，不再错误作用于焦点 group；分隔条 `aria-valuenow` 改为真实权重而不是固定 50。
 
+- 复盘修复（本轮）：修复工作台/单 pane 宿主高度链路。`.wb-single-body`/`.wb-pane-body` 改为纵向 flex 容器，`.chat-view` 增加 `height: 100%`，`.chat-scroll` 增加 `min-height: 0`。新 Draft pane 现在撑满宿主；长历史只在 transcript 内滚动，composer 始终留在视口内。`workbench.smoke.mjs` 现在载入 30 轮历史，并断言初始加载、切回标签、分屏、Draft 四种状态下 chat view 高度等于宿主、composer 可见、长历史确实产生内部滚动。
+- 界面打磨：工作台标签条改为主题 token 驱动的软 pill 样式，含 active 页面底色/内描边/轻阴影、hover 过渡、隐藏滚动条、SVG 关闭按钮、运行脉冲点、明暗主题一致的 pending 徽章，以及统一的溢出菜单；标签条收紧到 31px（26px 标签，上下各 2px）。顶部工作台工具条改为 28px 高的 icon-only 紧凑按钮（预设布局用图标分段控件，分屏/关闭/重置/终端/待处理用带 tooltip 的图标），桌面和 390px 移动端都不再需要横向滚动；e2e 增加工具条/标签条高度、按钮宽度和溢出断言。
+- 界面打磨：会话目录从 composer 移到 `chat-session-header` 内、`chat-session-headline` 之后，作为紧凑目录 chip；不新增按钮，因为左侧已有全局新建对话入口。目录文本自动截断，完整路径保留在 title；新 Draft 继续使用 composer 内的目录选择器，不在 header 重复展示。header 内的 headline、目录 chip、下载工具和 chat/trajectory tabs 统一垂直居中（e2e 断言各元素中线偏差 ≤1px）。e2e 同时断言会话目录位于 header、紧跟 headline、不在 composer 内且没有重复的新建会话按钮。
+- 界面打磨（对齐 Desktop composer）：输入卡片不再常驻 provider/model/主角团选择行，也移除了独立的“模式”按钮。输入框位于卡片顶部，模型与模式合并进底部工具栏的 `composer-config-toggle`（显示当前模型 + mode 徽章），按需在输入框下方展开配置面板：面板顶部是 plan/agent/yolo/os 模式与 Work/Code 显示模式，下面是 provider/model/主角团选择；会话目录移到 `chat-session-header` 的 headline 后面，composer 内不再保留目录/新建会话按钮。桌面端折叠态卡片高度从 174px 降到 133px，移动端仍保持单卡片内换行布局；e2e 覆盖默认折叠、展开/收起、mode 徽章、面板内模式组以及折叠后仍可切换模型。
+- 清理（2026-10-29）：按 §11.3 删除 `?workbench=0`、Settings 中的“动态工作台布局”开关、`mothx.webui.workbenchEnabled` 偏好、`chat-single-host` 单 pane 回退和 `Chat.svelte` 的 `workbenchEnabled` 分支；同时删除不再使用的 `sessionRuntime`/`pendingApprovals` stores 与 runtime panel/mode switcher/display mode CSS。`/chat` 现在只有 Workbench 投影。e2e 断言 `?workbench=0` 被忽略、Workbench 仍渲染且不存在 `.chat-single-host`。
+- W3 可选 Plan 面板：新增 `components/workbench/PlanPanel.svelte`，从焦点会话 `sessionRunStates[sessionId].messages` 的最近一条 `role === 'plan'` 消息派生，无新存储/工具/后端端点。Workbench 工具条新增 Plan 图标按钮，桌面为右侧 320px dock，移动端为同区 overlay；空会话/无 plan 显示空态，Draft 不显示 Plan 入口。e2e 覆盖有 plan、空 plan、Draft 无入口，以及桌面 dock 不覆盖 pane 区域。
+- 复检（2026-10-29）：`go test ./...` 与 `cd ui && npm run e2e`（209 单测、构建、channel/trajectory/workbench 浏览器 smoke）通过；workbench smoke 覆盖 `?workbench=0` 被忽略、Plan dock 内容/空态/Draft 无入口/桌面 dock 几何，以及标签条、icon-only 工具条、composer 配置面板和 header 中线对齐的紧凑性断言。
+
 未完成 / 后续：
 
-- 仍需人工验收触摸板拖拽手感与 4-pane 长时流式性能；自动化已覆盖拖拽重排/跨 pane/边缘分屏结果、Escape 取消、多 tab last-write-wins 恢复、宽度矩阵（1024/1280/1440/1920 与 390/768）与徽标断言。跨 pane 审批与提问流程已由 `workbench.smoke.mjs` 自动化覆盖（后台提问只打徽标，聚焦所属 pane 后才显示浮层并可直接回答）。
+- 人工验收：触摸板/鼠标拖拽手感已于 2026-10-29 确认通过。仍需验收 4-pane 长时流式性能；自动化已覆盖拖拽重排/跨 pane/边缘分屏结果、Escape 取消、多 tab last-write-wins 恢复、宽度矩阵（1024/1280/1440/1920 与 390/768）与徽标断言。跨 pane 审批与提问流程已由 `workbench.smoke.mjs` 自动化覆盖（后台提问只打徽标，聚焦所属 pane 后才显示浮层并可直接回答）。
 - 复盘修复（严重）：`ChatPane.sendPrompt()` 原先声明 `let sessionID = paneSessionID`，在同作用域内引用外层同名 prop 触发 TDZ `ReferenceError`，导致 WebUI 任何一次发送都失败。现改为局部 `runSessionID` 并在函数体内统一使用；e2e 覆盖已有会话发送与 Draft 首次发送。
 - 复盘修复：路由焦点同步在 reset/close 后会保留陈旧的 `lastRouteSession`，使下一次显式打开同一 session 被当成重复路由而忽略；现无论 URL 是否已匹配都先更新 `lastRouteSession`。关闭 tab 后也总会把 `currentSession` 和路由投影到新的焦点。删除了 `currentSession -> openSession` 的重复副作用，避免关闭后又被陈旧状态重新打开；列表刷新只删除已确认消失的 session，焦点中或提交中的新 session 受保护。
 - 复盘修复：`ModelPicker` 把 `bind:this` 的组件实例当成 DOM input 调用 `focus()`，打开模型菜单时会抛 `TypeError`；现改为 `root.querySelector('input')?.focus()`。`ChatPane` 还会在 catalog/default 后到达时把无显式偏好的 session 从占位 `default` 切到设置默认模型，修复刷新后模型显示停留在 `default` 的问题；e2e 断言 A/B 两个 pane 的模型互不影响且刷新后恢复。
@@ -166,7 +174,7 @@ WebUI 不需要像“单 transcript 架构”那样先做一次会话投影重�
 6. 响应式窗口：每个 pane 最小 380px；宽度足够时按 frame 分屏（900–1024px 也允许 2 pane），不够时整体回退单 pane + 标签条；`isMobile`（≤900px）始终单 pane；窗口缩放不重写持久化比例。
 7. 不改变 serve 后端的会话/run 语义；不新增端点；不改变现有审批/提问/流式协议。
 8. 不显著增加首屏包体：不引入 React/DnD 库；新增纯 JS 模型 + Svelte 组件，按路由懒加载。
-9. 可回滚：GA 后默认开启，保留 `?workbench=0`/设置关闭项一个版本；关闭时回到现有单 pane 布局（Chat wrapper 保持 store-only），事件消费者仍是 `session-stream.js`，不得恢复第二套消费路径。
+9. 可回滚：GA 后默认开启；`?workbench=0`/设置关闭项已移除，回退只重置布局，事件消费者仍是 `session-stream.js`，不得恢复第二套消费路径。
 
 ### 2.2 非目标
 
@@ -331,7 +339,7 @@ ui/package.json                           # test 脚本显式覆盖 lib/workbenc
 
 - `lib/workbench/*` **禁止** import `views/Chat.svelte`、Svelte 组件、`lib/stores.js`、`lib/api.js`；只允许纯 JS 与自身类型。
 - `lib/workbench/store.js` 可以 import `lib/workbench/*`、`lib/persistence.js`；不 import Chat/API。
-- `lib/session-stream.js` 可以 import `lib/stores.js`（runEvents/sessions）、`lib/session-runs.js`、`lib/session-view.js`、`lib/api.js`；它是唯一把 socket 事件变成 session state 的地方，也是唯一允许消费 `$runEvents` 的模块。**W0 之后它应在 App 启动时始终运行**；`workbenchEnabled` 只控制布局渲染，不再控制事件消费者；**不保留旧 Chat 的 `$runEvents` 消费路径**。
+- `lib/session-stream.js` 可以 import `lib/stores.js`（runEvents/sessions）、`lib/session-runs.js`、`lib/session-view.js`、`lib/api.js`；它是唯一把 socket 事件变成 session state 的地方，也是唯一允许消费 `$runEvents` 的模块。**W0 之后它应在 App 启动时始终运行**；`workbenchEnabled` 已移除，不再控制事件消费者；**不保留旧 Chat 的 `$runEvents` 消费路径**。
 - SSE fallback 的 observer 生命周期、`stopObserver` 和 `runEvents` cursor 归 `session-stream.js` 所有；`ChatPane` 不得在 `onDestroy` 里 abort `sessionRunStates[*].observer`，否则关闭一个 pane 会中止其他会话的流。
 - **隐藏 tab 也要有 runtime 轮询 owner。** responses-run 重连/轮询按 `sessionId` 注册在 `session-stream.js` 或共享 registry，不能只随 `ChatPane` 挂载启停；否则后台运行的重连会延迟到用户重新选中。
 - `components/workbench/*` 可以 import store、纯模型、`ChatPane`/`SessionSnapshot`、现有 UI 组件；不直接 fetch。
@@ -780,7 +788,7 @@ function applySessionStreamEvent(sessionId, item, visible, tr) {
 
 关键点：
 
-- `session-stream.js` 是**唯一**消费 `runEvents` 的地方；`App.svelte` 在 `startApp()` 中、`connectRuns()` 之前启动一次，`onDestroy` 停止。**W0 之后始终启动**；`workbenchEnabled` 只控制布局渲染，不再控制事件消费者。**不保留旧 Chat 的 `$runEvents` 消费路径**；回滚只回退布局。
+- `session-stream.js` 是**唯一**消费 `runEvents` 的地方；`App.svelte` 在 `startApp()` 中、`connectRuns()` 之前启动一次，`onDestroy` 停止。**W0 之后始终启动**；`workbenchEnabled` 已移除，不再控制事件消费者。**不保留旧 Chat 的 `$runEvents` 消费路径**；回滚只回退布局。
 - 启动顺序：首次启动从 0 归约当前 `runEvents` 缓冲区，之后严格按 `wsSeq` 去重；由 App 保证 dispatcher 只启动一次。
 - `visibleSessionIds` 由 workbench 通过 `setVisibleSessions(ids)` 显式更新；它只影响 effects，不影响事件归约。
 - SSE fallback（`/api/sessions/:id/stream`）仍由 `session-stream.js` 管理，按 session 注册 observer；不能由多个 `ChatPane` 各自开 SSE。**observer 的 abort/stopObserver 所有权也在这里**；`ChatPane` 的 `onDestroy` 不得清理全局 `sessionRunStates[*].observer`。
@@ -1187,12 +1195,12 @@ export function beginTabDrag(event, { tab, sourceGroupId, state, onPreview, onCo
 
 ### 8.9 工具面板：tty / todo(plan) / spec / logs
 
-先说结论：**v1 不包含 tty / todo / spec 可停靠面板**；本方案只做 session tab + 分屏。原因不是布局，而是数据/后端契约：
+先说结论：**v1 不包含 tty / todo / spec 可停靠面板**；本方案只做 session tab + 分屏。2026-10-29 已单独实现只读 Plan dock（非 v1 验收项）；tty/spec/logs 仍不在范围内。原因不是布局，而是数据/后端契约：
 
 | 面板 | 当前 WebUI 是否已有数据/能力 | 本方案处理 |
 | --- | --- | --- |
 | `tty` / interactive terminal | **没有。** WebUI 没有 PTY 端点；`bash` 工具的 stdout 只出现在 transcript / trajectory 里，不能输入、不能交互 | **v1 不做**。Go 后端的落点、API、WebSocket 协议与安全边界见 `docs/proposal/serve-pty-terminal-proposal.md` |
-| `todo` / `plan` | **有。** `internal/tools/plan.go` 产生 plan 消息；`sessionRunStates[id].messages` 里有 `kind: "plan"`；Chat 已有 TODO/plan 卡片；TUI 也有 sticky todo | **W3 可做只读 Plan 面板**：从当前 session 的最新 plan 消息派生；不新增存储、不新增工具 |
+| `todo` / `plan` | **有。** `internal/tools/plan.go` 产生 plan 消息；`sessionRunStates[id].messages` 里有 `kind: "plan"`；Chat 已有 TODO/plan 卡片；TUI 也有 sticky todo | **已实现（2026-10-29）只读 Plan dock**：`components/workbench/PlanPanel.svelte` 从焦点会话的最新 plan 消息派生；桌面右侧 320px dock，移动端 overlay；不新增存储、工具或端点 |
 | `spec` | **没有 MothX 等价物。** 没有 `pi-spec-graph`、spec frontmatter 索引或 spec 查询工具；`Library`/`Knowledge` 不是 spec graph | **v1 不做**。若需要，先定义 MothX 的 spec 工具/API，再谈面板；不要用通用文件树冒充 |
 | `trajectory` | **有。** `TrajectoryView.svelte` + `/api/sessions/:id/trajectory` + per-session `trajectoryState` | **W3 可做只读 Trajectory 面板**；也可以保持现在的 pane mode（Chat/Trajectory 切换） |
 | `logs` | **有。** `/ws/logs` + 诊断日志面板 | 可作为全局底部面板（W3）；不属于会话资源 |
@@ -1212,7 +1220,7 @@ export function beginTabDrag(event, { tab, sourceGroupId, state, onPreview, onCo
 **建议优先级：**
 
 1. v1：session tab + 分屏（本方案主体）。
-2. W3：`plan`（TODO）与 `trajectory` 的只读侧栏/底部面板，因为它们已有数据。
+2. W3：`plan`（TODO）只读 dock 已实现；`trajectory` 继续使用现有 pane mode，不另做 dock。
 3. 另立方案：interactive terminal（需要 PTY 后端）与 spec-graph（需要 MothX spec 工具/索引）。
 4. 不要把 tty/spec 作为布局阶段的“顺手加一个面板”塞进 v1；否则会把一个前端布局改造变成后端能力建设。
 
@@ -1291,41 +1299,41 @@ key = `mothx.workbench.v1`
 
 ## 11. 迁移与发布
 
-### 11.1 特性开关
+> 2026-10-29 清理执行：§11.3 条件已满足，旧 `?workbench` 开关、设置项与 `chat-single-host` 回退已移除。以下保留为发布记录。
 
-- 灰度期：URL `?workbench=1` opt-in，或 Settings > Appearance 的本地开关（不写服务端 settings）。
-- GA：默认开启；保留 `?workbench=0` 与设置关闭项一个版本；关闭时 `App.svelte` 继续渲染现有单 pane 布局（`Chat` wrapper 保持 store-only，事件仍由 `session-stream.js` 消费）。
-- `localStorage` 的 `mothx.workbench.enabled` 只作为本地偏好/诊断，不作为唯一灰度通道。
-- 开关切换不需要刷新；切换时把当前 `currentSession` 作为焦点 session 插入/聚焦。
-- **事件消费者不随开关切换。** W0 后 `session-stream.js` 始终运行；`workbenchEnabled` 只切换布局。若必须回滚到旧 Chat，显式停止 dispatcher 并清空/重建 `sessionRunStates`，不能两边同时消费同一 `wsSeq`。
+### 11.1 特性开关（已移除）
+
+- 灰度期曾使用 URL `?workbench=1` opt-in 或 Settings > Appearance 的本地开关；GA 后默认开启。
+- 2026-10-29 清理移除了 `?workbench=0`/`?workbench=1`、Settings 中的“动态工作台布局”开关、`mothx.webui.workbenchEnabled` 偏好和 `workbenchEnabled` 分支；`/chat` 只有 Workbench 投影。
+- **事件消费者始终唯一。** `session-stream.js` 是唯一 `$runEvents` 消费者；回退只重置布局，不恢复旧 Chat 消费路径。
 
 ### 11.2 路由与 Sidebar
 
-- `Sidebar.openSession(id)` 改为 `workbench.openSession(id)`；若开关关闭，回退 `currentSession.set(id)` + `navigate`。
+- `Sidebar.openSession(id)` 统一走 `workbench.openSession(id)`，不再有 `currentSession.set(id)` 单 pane 回退。
 - `Sessions.svelte`/`Experts.svelte` 的打开会话同样走统一入口；避免一个页面直接 set `currentSession`。
-- `App.svelte` 的 `syncSessionFromRoute` 在开关开启时调用 `workbench.openSession(routeSession)`（或 `focusSession`）；不存在则打开，不能直接 `currentSession.set`。
+- `App.svelte` 的 `syncSessionFromRoute` 始终调用 `workbench.openSession(routeSession)`（或 `focusSession`）；不存在则打开，不能直接 `currentSession.set`。
 - `syncRouteFromSession` 保留：焦点变化写 `?session=`；避免循环（比较当前值）。
-- 启动顺序：先 hydrate 布局，再订阅路由/焦点同步；否则初始 `/chat?session=...` 会被空焦点覆盖。前进/后退必须可逆地打开/聚焦 tab。
+- 启动顺序：先 hydrate 布局，再订阅路由/焦点同步；前进/后退必须可逆地打开/聚焦 tab。
 
-### 11.3 旧路径移除条件
+### 11.3 旧路径移除（已执行 2026-10-29）
 
-- `Chat.svelte` 已拆成 `ChatPane`，且所有 `$currentSession` 作为“操作目标”的用法已替换为 `sessionId`；
-- `session-stream.js` 是唯一 `$runEvents` 消费者（grep `runEventCursor`/`handleSessionStreamEvent` 只剩它）；
-- 每个 pane 的模型/provider/草稿/历史窗口都已 per-session；Draft tab 与 AttentionBell 已覆盖；
-- 桌面分屏与移动单 pane 都通过 `npm test`/`npm run e2e`；
-- 开关开启时行为验收通过；删除开关与旧分支，更新本提案状态。
+- `Chat.svelte` 已拆成 `ChatPane`，所有 `$currentSession` 作为“操作目标”的用法已替换为 `sessionId`。
+- `session-stream.js` 是唯一 `$runEvents` 消费者。
+- 每个 pane 的模型/provider/草稿/历史窗口都已 per-session；Draft tab 与 AttentionBell 已覆盖。
+- 桌面分屏与移动单 pane 通过 `npm test`/`npm run e2e`。
+- 已删除 `?workbench=0`/设置开关/`mothx.webui.workbenchEnabled`/`chat-single-host` 单 pane 回退；`workbench.smoke.mjs` 断言 `?workbench=0` 被忽略且不存在 `.chat-single-host`。
 
-### 11.4 发布节奏
+### 11.4 发布节奏（已完成到 Cleanup）
 
-1. **内部**：W0 完成（所有 pane 可交互）后，用 `?workbench=1` dogfood；Lite 不进入内部发布，只在另立实验分支验证。
-2. **Beta**：设置开关默认关闭；收集多 tab/审批/移动端/窗口缩放反馈。移动端先验证单 pane + 标签条，不开放分屏。
-3. **Stable**：桌面默认开启；保留一个版本的旧路径与 `?workbench=0`。
-4. **Cleanup**：移动端单 pane 验收通过后删除旧路径/开关/`sessionRuntime` 兼容/未使用 CSS；更新 `docs/{en,zh}/serve.md` 的 WebUI 章节与 changelog。
+1. **内部**：W0 完成（所有 pane 可交互）后 dogfood；Lite 不进入内部发布。
+2. **Beta**：收集多 tab/审批/移动端/窗口缩放反馈。
+3. **Stable**：桌面默认开启。
+4. **Cleanup（2026-10-29 已完成）**：删除旧路径/开关/未使用 CSS，更新 `docs/{en,zh}/serve.md` 与 changelog。
 
 ### 11.5 回滚
 
-- 用户：设置关闭或 `?workbench=0`，布局文档保留，回到单 pane 布局；`session-stream.js` 继续作为唯一事件消费者。
-- 开发：只回退 `Workbench`/布局层；`ChatPane`/`Chat` wrapper 保持 store-only。若必须完整回退 W0，则连 `session-stream.js` 和 store-only 改造一起 revert，不能只回退布局而让旧 Chat 重新消费事件。
+- 用户：重置布局或清空 `mothx.workbench.v1`；不再有单 pane 布局回退。
+- 开发：只回退 `Workbench`/布局层；`session-stream.js` 继续作为唯一事件消费者，不能恢复旧 Chat 消费路径。
 - 数据：localStorage key 保留；没有服务端迁移。
 
 ## 12. 测试计划

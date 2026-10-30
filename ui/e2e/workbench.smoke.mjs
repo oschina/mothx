@@ -17,6 +17,30 @@ const sessions = [
   { id: 'session-e2e-b', title: 'Session B', workDir: '/tmp/b', running: false, mode: 'yolo' },
 ];
 
+// A long transcript must stay inside the pane's scroll area so the composer is
+// always visible. Before the workbench body became a flex container, the chat
+// view sized itself to content and pushed the composer below the viewport.
+const longHistory = Array.from({ length: 30 }, (_, index) => [
+  { id: `history-user-${index}`, seq: index * 2 + 1, role: 'user', content: `history question ${index}` },
+  { id: `history-assistant-${index}`, seq: index * 2 + 2, role: 'assistant', content: `history answer ${index}\n\n${'long history paragraph '.repeat(12)}\n\n- one\n- two\n- three` },
+]).flat();
+longHistory.push({
+  id: 'plan-1',
+  seq: 61,
+  role: 'toolCall',
+  toolName: 'plan',
+  toolCallId: 'plan-call-1',
+  arguments: {
+    title: 'Polish WebUI workbench',
+    note: 'Read-only projection of the latest plan message.',
+    steps: [
+      { title: 'Align composer with Desktop', status: 'done' },
+      { title: 'Add the read-only plan dock', status: 'running' },
+      { title: 'Verify mobile projection', status: 'pending' },
+    ],
+  },
+});
+
 function json(res, status, value) {
   const body = JSON.stringify(value);
   res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
@@ -101,7 +125,10 @@ const server = createServer((req, res) => {
   }
   if (url.pathname === '/api/skillhub/installed') return json(res, 200, { installed: [], session: { activeSkills: [] } });
   if (url.pathname === '/api/experts') return json(res, 200, { experts: [] });
-  if (/^\/api\/sessions\/[^/]+\/messages$/.test(url.pathname)) return json(res, 200, { messages: [], hasMore: false });
+  if (/^\/api\/sessions\/[^/]+\/messages$/.test(url.pathname)) {
+    const sessionId = url.pathname.split('/')[3];
+    return json(res, 200, { messages: sessionId === 'session-e2e-a' ? longHistory : [], hasMore: false });
+  }
   if (/^\/api\/sessions\/[^/]+\/approvals\/[^/]+$/.test(url.pathname) && req.method === 'POST') {
     approvalResolved = true;
     const parts = url.pathname.split('/');
@@ -390,6 +417,46 @@ async function waitFor(cdp, expression) {
   throw new Error(`timed out waiting for ${expression}: ${JSON.stringify({ diagnostic, errors })}`);
 }
 
+// Every chat pane must fill its workbench host and keep the composer inside the
+// viewport. A long transcript may only grow the scroll area, never the pane.
+async function assertChatPanesFill(cdp, label, { expectScroll = false } = {}) {
+  const panes = await evaluate(cdp, `[...document.querySelectorAll('.wb-single-body, .wb-pane-body')].map((host) => {
+    const view = [...host.children].find((child) => child.classList?.contains('chat-view')) || host.querySelector('.chat-view');
+    const composer = host.querySelector('.composer');
+    const scroll = host.querySelector('.chat-scroll');
+    const viewRect = view?.getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    const composerRect = composer?.getBoundingClientRect();
+    return {
+      hostHeight: Math.round(hostRect.height),
+      viewHeight: viewRect ? Math.round(viewRect.height) : 0,
+      composerTop: composerRect ? Math.round(composerRect.top) : null,
+      composerBottom: composerRect ? Math.round(composerRect.bottom) : null,
+      scrollClient: scroll?.clientHeight ?? 0,
+      scrollHeight: scroll?.scrollHeight ?? 0,
+      viewportHeight: innerHeight,
+    };
+  })`);
+  assert.ok(panes.length >= 1, `${label}: no chat pane found`);
+  for (const [index, pane] of panes.entries()) {
+    assert.ok(pane.viewHeight > 0, `${label}: pane ${index} renders a chat view`);
+    assert.ok(
+      Math.abs(pane.viewHeight - pane.hostHeight) <= 1,
+      `${label}: pane ${index} chat view must fill its host (${pane.viewHeight} vs ${pane.hostHeight})`
+    );
+    assert.ok(
+      pane.composerTop !== null && pane.composerTop >= 0 && pane.composerBottom <= pane.viewportHeight + 1,
+      `${label}: pane ${index} composer must stay inside the viewport (${pane.composerTop}..${pane.composerBottom} of ${pane.viewportHeight})`
+    );
+  }
+  if (expectScroll) {
+    assert.ok(
+      panes.some((pane) => pane.scrollHeight > pane.scrollClient),
+      `${label}: long history must scroll inside the transcript instead of growing the pane`
+    );
+  }
+}
+
 async function startTabDrag(cdp, tabId) {
   await evaluate(cdp, `(() => { window.__e2eDrag = new DataTransfer(); window.__e2eDrag.setData('text/plain', ${JSON.stringify(tabId)}); })()`);
 }
@@ -438,7 +505,83 @@ try {
 
   await waitFor(cdp, `document.querySelector('.wb-toolbar') !== null`);
   await waitFor(cdp, `document.querySelectorAll('.chat-view').length === 1`);
+  await waitFor(cdp, `document.querySelector('.transcript')?.textContent.includes('history answer 29') === true`);
+  await assertChatPanesFill(cdp, 'initial long history', { expectScroll: true });
+  const toolbarSize = await evaluate(cdp, `(() => {
+    const bar = document.querySelector('.wb-toolbar');
+    const widths = [...bar.querySelectorAll('.wb-tool')].map((button) => button.getBoundingClientRect().width);
+    return { height: bar.getBoundingClientRect().height, scrollWidth: bar.scrollWidth, clientWidth: bar.clientWidth, maxButtonWidth: Math.max(...widths) };
+  })()`);
+  assert.ok(toolbarSize.height <= 31, `workbench toolbar must stay compact (${toolbarSize.height}px)`);
+  assert.ok(toolbarSize.maxButtonWidth <= 28, `workbench toolbar buttons must stay icon-sized (${toolbarSize.maxButtonWidth}px)`);
+  assert.ok(toolbarSize.scrollWidth <= toolbarSize.clientWidth + 1, 'workbench toolbar must not need horizontal scrolling at desktop width');
+  const tabChrome = await evaluate(cdp, `(() => {
+    const bar = document.querySelector('.wb-tabbar').getBoundingClientRect();
+    const tab = document.querySelector('.wb-tab').getBoundingClientRect();
+    return { bar: bar.height, tab: tab.height };
+  })()`);
+  assert.ok(tabChrome.bar <= 32, `tab strip must stay vertically compact (${tabChrome.bar}px)`);
+  assert.ok(tabChrome.tab <= 27, `tabs must not reintroduce vertical padding (${tabChrome.tab}px)`);
+  const composerSession = await evaluate(cdp, `(() => {
+    const info = document.querySelector('.chat-session-header .composer-session-info');
+    const header = info?.closest('.chat-session-header');
+    return {
+      insideHeader: Boolean(header),
+      afterHeadline: info?.previousElementSibling?.classList?.contains('chat-session-headline') === true,
+      inComposer: Boolean(document.querySelector('.composer .composer-session-info')),
+      hasNewSessionButton: Boolean(info?.querySelector('.session-new')),
+      headerHeight: header?.getBoundingClientRect().height ?? 0,
+      configCollapsed: document.querySelector('.composer-config-panel') === null,
+      hasConfigToggle: document.querySelector('.composer-config-toggle') !== null,
+      modeBadge: document.querySelector('.composer-config-mode')?.textContent?.trim() || '',
+      hasStandaloneRuntimeToggle: document.querySelector('.runtime-toggle') !== null,
+    };
+  })()`);
+  assert.ok(composerSession.insideHeader, 'session workdir must live in the chat session header');
+  assert.ok(composerSession.afterHeadline, 'session workdir must sit directly after the session headline');
+  assert.equal(composerSession.inComposer, false, 'session workdir must not render inside the composer');
+  assert.equal(composerSession.hasNewSessionButton, false, 'session workdir must not add a duplicate new-session button');
+  assert.ok(composerSession.headerHeight <= 60, `session workdir must not grow the header (${composerSession.headerHeight}px)`);
+  assert.ok(composerSession.hasConfigToggle, 'composer must expose a compact model/expert config toggle');
+  assert.equal(composerSession.configCollapsed, true, 'provider/model/expert controls must start collapsed');
+  assert.equal(composerSession.modeBadge, 'yolo', 'config toggle must show the current agent mode');
+  assert.equal(composerSession.hasStandaloneRuntimeToggle, false, 'agent mode must be merged into the config toggle, not a separate control');
+  const headerCenters = await evaluate(cdp, `(() => {
+    const header = document.querySelector('.chat-session-header');
+    const hr = header.getBoundingClientRect();
+    const center = hr.top + hr.height / 2;
+    return [...header.children]
+      .map((child) => ({ child, rect: child.getBoundingClientRect() }))
+      .filter((entry) => entry.rect.height > 0)
+      .map((entry) => ({ name: entry.child.className || entry.child.tagName, delta: Math.round((entry.rect.top + entry.rect.height / 2 - center) * 10) / 10 }));
+  })()`);
+  assert.ok(headerCenters.length >= 3, `session header must expose its aligned elements (${headerCenters.length})`);
+  for (const entry of headerCenters) {
+    assert.ok(Math.abs(entry.delta) <= 1, `${entry.name} must be vertically centered in the session header (offset ${entry.delta}px)`);
+  }
+  await evaluate(cdp, `document.querySelector('.composer-config-toggle').click()`);
+  await waitFor(cdp, `document.querySelector('.composer-config-panel') !== null`);
+  await waitFor(cdp, `document.querySelector('.composer-config-panel .model-search-select') !== null`);
+  await waitFor(cdp, `document.querySelectorAll('.composer-mode-group button').length === 4 && document.querySelector('.composer-mode-group button.active')?.textContent === 'yolo'`);
+  assert.equal(await evaluate(cdp, `document.querySelectorAll('.composer-display-group button').length`), 2, 'display mode must live in the merged config panel');
+  await evaluate(cdp, `document.querySelector('.composer-config-toggle').click()`);
+  await waitFor(cdp, `document.querySelector('.composer-config-panel') === null`);
   assert.equal(await evaluate(cdp, `document.querySelector('.wb-tabstrip')?.textContent.includes('session-e2e-a') === true`), true);
+
+  // Read-only Plan dock: the latest plan message is projected without new
+  // storage, and the dock sits beside the pane area on desktop.
+  await waitFor(cdp, `document.querySelector('.plan-card h3')?.textContent === 'Polish WebUI workbench'`);
+  await evaluate(cdp, `document.querySelector('[data-action="plan"]').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-plan-panel') !== null`);
+  await waitFor(cdp, `document.querySelector('.wb-plan-panel .todo-plan h3')?.textContent === 'Polish WebUI workbench'`);
+  assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-plan-panel .todo-plan li').length`), 3, 'plan dock must render every step');
+  assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-plan-panel .todo-plan li.done').length`), 1, 'plan dock must project completed steps');
+  assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-plan-panel .todo-plan li.running').length`), 1, 'plan dock must project the running step');
+  const planLayout = await evaluate(cdp, `(() => { const panel = document.querySelector('.wb-plan-panel').getBoundingClientRect(); const panes = document.querySelector('.wb-panes').getBoundingClientRect(); return { width: panel.width, left: panel.left, panesRight: panes.right }; })()`);
+  assert.ok(planLayout.width >= 280, `plan dock must keep a readable width (${planLayout.width}px)`);
+  assert.ok(planLayout.left >= planLayout.panesRight - 1, 'plan dock must sit beside the pane area, not overlay it on desktop');
+  await evaluate(cdp, `document.querySelector('.wb-plan-panel .wb-plan-close').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-plan-panel') === null`);
 
   // Sending from an existing session exercises the canonical composer path.
   // This guards the ChatPane refactor against local session-id shadowing and
@@ -452,7 +595,7 @@ try {
   // Terminal feature: open the PTY dock, verify the initial resize frame,
   // type into the shell, receive echoed output, survive a server-side socket
   // drop by reconnecting, resize the host, then close and delete the terminal.
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('Terminal') || button.textContent.includes('终端')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="terminal"]').click()`);
   await waitFor(cdp, `document.querySelector('.terminal-pane') !== null`);
   assert.ok(
     await evaluate(cdp, `(document.querySelector('.terminal-sandbox')?.textContent || '').trim().length > 0`),
@@ -501,8 +644,8 @@ try {
   await cdp.call('Page.reload');
   await new Promise((resolve) => setTimeout(resolve, 1000));
   await waitFor(cdp, `document.querySelector('.wb-toolbar') !== null`);
-  await waitFor(cdp, `(() => [...document.querySelectorAll('.wb-tool')].some((button) => button.textContent.includes('Terminal') || button.textContent.includes('终端')))()`);
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('Terminal') || button.textContent.includes('终端')).click())()`);
+  await waitFor(cdp, `document.querySelector('[data-action="terminal"]') !== null`);
+  await evaluate(cdp, `document.querySelector('[data-action="terminal"]').click()`);
   await waitFor(cdp, `document.querySelector('.terminal-pane') !== null`);
   await waitForState(() => terminalSeq === terminalPostsBeforeReload, 'page reload reattaches instead of creating a terminal');
   await waitForState(() => terminalConnections > connectionsBeforeReload, 'page reload reattaches the terminal websocket');
@@ -515,7 +658,7 @@ try {
   await waitForState(() => terminalSessions.includes('session-e2e-b'), 'terminal rebinds to the focused session');
   await waitForState(() => terminalDeletes > deletesBeforeSwitch, 'old terminal deleted on focus switch');
 
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('Terminal') || button.textContent.includes('终端')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="terminal"]').click()`);
   await waitFor(cdp, `document.querySelector('.terminal-pane') === null`);
   await waitForState(() => terminalDeletes >= 2, 'terminal delete on close');
 
@@ -523,6 +666,11 @@ try {
   // the focused pane; the first session stays rendered.
   await evaluate(cdp, `window.location.hash = '#/chat?session=session-e2e-b'`);
   await waitFor(cdp, `document.querySelectorAll('.wb-tab').length === 2`);
+  await evaluate(cdp, `document.querySelector('[data-action="plan"]').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-plan-panel .wb-plan-empty') !== null`);
+  assert.equal(await evaluate(cdp, `document.querySelector('.wb-plan-panel .todo-plan') === null`), true, 'a session without a plan must show the empty state');
+  await evaluate(cdp, `document.querySelector('.wb-plan-panel .wb-plan-close').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-plan-panel') === null`);
 
   // Composer drafts survive tab switches. ChatPane is unmounted when another
   // tab becomes selected, so this exercises the shared draft store instead of
@@ -535,6 +683,7 @@ try {
   await waitFor(cdp, `document.querySelector('.wb-pane-body textarea, .wb-single-body textarea')?.value === ''`);
   await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tab-label')].find((tab) => tab.textContent.includes('session-e2e-a')).click())()`);
   await waitFor(cdp, `document.querySelector('.wb-pane-body textarea, .wb-single-body textarea')?.value === 'unsent draft'`);
+  await assertChatPanesFill(cdp, 'after switching back to the long tab', { expectScroll: true });
   await evaluate(cdp, `(() => { const textarea = document.querySelector('.wb-pane-body textarea, .wb-single-body textarea'); textarea.value = ''; textarea.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   await waitFor(cdp, `document.querySelector('.wb-pane-body textarea, .wb-single-body textarea')?.value === ''`);
 
@@ -544,9 +693,10 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 1000));
   await waitFor(cdp, `document.querySelectorAll('.wb-tab').length === 2`);
 
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('Split right') || button.textContent.includes('右分屏')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="split-horizontal"]').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-pane').length === 2`);
   await waitFor(cdp, `document.querySelectorAll('.chat-view').length === 2`);
+  await assertChatPanesFill(cdp, 'split panes', { expectScroll: true });
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-split-handle').length >= 1`), true);
   assert.equal(await evaluate(cdp, `(() => { const ids = [...document.querySelectorAll('[id]')].map((el) => el.id); return ids.length === new Set(ids).size; })()`), true, 'duplicate DOM ids across panes');
 
@@ -563,13 +713,20 @@ try {
   await evaluate(cdp, `window.dispatchEvent(new DragEvent('dragend', { bubbles: true }))`);
   await waitFor(cdp, `document.querySelector('.wb-drop-left') === null && document.querySelector('.wb-pane-dragover') === null`);
 
-  // Per-pane model selection is independent and survives reload.
+  // Per-pane model selection is independent and survives reload. Provider/model
+  // controls are collapsed behind each pane's compact config toggle.
+  await evaluate(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-a"] .composer-config-toggle').click()`);
+  await evaluate(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-b"] .composer-config-toggle').click()`);
+  await waitFor(cdp, `document.querySelectorAll('.composer-config-panel .model-search-select input').length === 2`);
   const modelABefore = await evaluate(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-a"] .model-search-select input')?.value`);
   await evaluate(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-b"] .model-search-select input').focus()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-pane[data-selected-tab="session:session-e2e-b"] .model-search-select-option').length >= 2`);
   await evaluate(cdp, `(() => { const option = [...document.querySelectorAll('.wb-pane[data-selected-tab="session:session-e2e-b"] .model-search-select-option')].find((button) => button.textContent.includes('E2E Model 2')); option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); })()`);
   await waitFor(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-b"] .model-search-select input')?.value === 'E2E Model 2'`);
   assert.equal(await evaluate(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-a"] .model-search-select input')?.value`), modelABefore);
+  await evaluate(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-a"] .composer-config-toggle').click()`);
+  await evaluate(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-b"] .composer-config-toggle').click()`);
+  await waitFor(cdp, `document.querySelectorAll('.composer-config-panel').length === 0`);
 
   // Both panes stream independently: each transcript contains only its own
   // session's event, exactly once (the sole dispatcher must not double-write).
@@ -627,31 +784,31 @@ try {
   // Double-clicking the handle restores the 50/50 default and persists it.
   await evaluate(cdp, `document.querySelector('.wb-split-handle').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
   await waitFor(cdp, `(() => { const doc = JSON.parse(localStorage.getItem('mothx.workbench.v1')); return Math.abs(doc.frame.center.weights[0] - 0.5) < 0.001; })()`);
-  await waitFor(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-b"] .model-search-select input')?.value === 'E2E Model 2'`);
-  await waitFor(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-a"] .model-search-select input')?.value === ${JSON.stringify(modelABefore)}`);
+  await waitFor(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-b"] .composer-config-model')?.textContent === 'E2E Model 2'`);
+  await waitFor(cdp, `document.querySelector('.wb-pane[data-selected-tab="session:session-e2e-a"] .composer-config-model')?.textContent === ${JSON.stringify(modelABefore)}`);
   await evaluate(cdp, `(() => { const pane = document.querySelector('.wb-pane-active'); [...pane.querySelectorAll('.chat-view-tab')].find((button) => button.textContent.includes('对话') || button.textContent.includes('Chat')).click(); })()`);
   await waitFor(cdp, `document.querySelector('.wb-pane-active .trajectory-view') === null`);
 
   // Closing the focused pane folds its tabs back into the remaining pane.
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('Close pane') || button.textContent.includes('关闭窗格')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="close-pane"]').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-pane').length <= 1 && document.querySelectorAll('.chat-view').length === 1`);
 
   // Desktop width matrix: two-column split stays usable and never introduces
   // horizontal page overflow.
   await cdp.call('Emulation.setDeviceMetricsOverride', { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false });
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-preset')].find((button) => button.textContent.includes('左右两栏') || button.textContent.includes('Two columns')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="preset-two-column"]').click()`);
   await waitFor(cdp, `document.querySelector('.wb-single') !== null`);
   assert.equal(await evaluate(cdp, `document.documentElement.scrollWidth <= window.innerWidth + 1`), true, 'horizontal overflow at 1024px');
   for (const width of [1280, 1440, 1920]) {
     await cdp.call('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
-    await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-preset')].find((button) => button.textContent.includes('左右两栏') || button.textContent.includes('Two columns')).click())()`);
+    await evaluate(cdp, `document.querySelector('[data-action="preset-two-column"]').click()`);
     await waitFor(cdp, `document.querySelectorAll('.wb-pane').length === 2`);
     assert.equal(await evaluate(cdp, `document.documentElement.scrollWidth <= window.innerWidth + 1`), true, `horizontal overflow at ${width}px`);
   }
 
   // Presets reshape the same tabs into four leaves at a wide viewport.
   await cdp.call('Emulation.setDeviceMetricsOverride', { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false });
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-preset')].find((button) => button.textContent.includes('四宫格') || button.textContent.includes('Quad')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="preset-quad"]').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-pane').length === 4`);
   // A fifth pane is rejected with an explicit reason instead of a silent no-op.
   await evaluate(cdp, `(() => {
@@ -666,18 +823,24 @@ try {
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-pane').length`), 4);
   await evaluate(cdp, `document.querySelector('.banner-info .link-btn').click()`);
   await waitFor(cdp, `document.querySelector('.banner-info') === null`);
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-preset')].find((button) => button.textContent.includes('单窗格') || button.textContent.includes('Single pane')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="preset-single"]').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-pane').length === 0 && document.querySelector('.wb-single') !== null`);
 
   // Mobile projection: one pane plus a merged tab strip, no split handles.
   await cdp.call('Emulation.setDeviceMetricsOverride', { width: 390, height: 820, deviceScaleFactor: 2, mobile: true });
   await waitFor(cdp, `document.querySelector('.wb-single') !== null`);
+  const mobileToolbar = await evaluate(cdp, `(() => {
+    const bar = document.querySelector('.wb-toolbar');
+    return { height: bar.getBoundingClientRect().height, scrollWidth: bar.scrollWidth, clientWidth: bar.clientWidth };
+  })()`);
+  assert.ok(mobileToolbar.height <= 31, `mobile workbench toolbar must stay compact (${mobileToolbar.height}px)`);
+  assert.ok(mobileToolbar.scrollWidth <= mobileToolbar.clientWidth + 1, 'mobile workbench toolbar must fit without horizontal scrolling');
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-pane').length`), 0);
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-split-handle').length`), 0);
   await waitFor(cdp, `document.querySelectorAll('.wb-tab').length >= 1`);
   // Overflowing tabs stay reachable through the explicit overflow menu.
   for (const expected of [3, 4, 5]) {
-    await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('New task') || button.textContent.includes('新建任务')).click())()`);
+    await evaluate(cdp, `document.querySelector('[data-action="new-task"]').click()`);
     await waitFor(cdp, `document.querySelectorAll('.wb-tab').length === ${expected}`);
   }
   await waitFor(cdp, `document.querySelector('.wb-tab-overflow') !== null`);
@@ -690,26 +853,31 @@ try {
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-pane').length`), 0);
   assert.equal(await evaluate(cdp, `document.documentElement.scrollWidth <= window.innerWidth + 1`), true, 'horizontal overflow at 768px');
 
-  // Disabling the workbench keeps the legacy single-chat projection with no
-  // workbench toolbar, while still rendering the same ChatPane component.
+  // The legacy ?workbench=0 / single-session fallback is gone; the query is
+  // ignored and the workbench remains the only /chat projection.
   await cdp.call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await evaluate(cdp, `window.location.hash = '#/chat?session=session-e2e-a&workbench=0'`);
-  await waitFor(cdp, `document.querySelector('.wb-toolbar') === null && document.querySelector('.chat-view') !== null`);
+  await waitFor(cdp, `document.querySelector('.wb-toolbar') !== null && document.querySelector('.chat-view') !== null`);
+  assert.equal(await evaluate(cdp, `document.querySelector('.chat-single-host') === null`), true, 'legacy single-session host must be removed');
 
   // Draft -> real session replacement, appended last so it cannot perturb the
   // layout assertions above. The first send must allocate a session, keep the
   // target tab focused despite a stale /api/sessions refresh, and render the
   // server result.
-  await evaluate(cdp, `window.location.hash = '#/chat?workbench=1'`);
+  await evaluate(cdp, `window.location.hash = '#/chat'`);
   await waitFor(cdp, `document.querySelector('.wb-toolbar') !== null`);
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('Reset layout') || button.textContent.includes('重置布局')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="reset"]').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-tab').length === 0`);
   await evaluate(cdp, `(() => [...document.querySelectorAll('.session-tree-open')].find((button) => button.textContent.includes('Session A')).click())()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-tab').length === 1`);
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('New task') || button.textContent.includes('新建任务')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="new-task"]').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-tab').length === 2 && document.querySelector('.workdir-pill') !== null`);
+  await assertChatPanesFill(cdp, 'new draft tab');
+  assert.equal(await evaluate(cdp, `document.querySelector('[data-action="plan"]') === null`), true, 'draft tabs have no plan source and must not expose the plan dock');
   await evaluate(cdp, `document.querySelector('.workdir-pill').click()`);
   await waitFor(cdp, `document.querySelector('.workdir-pill')?.title === '/tmp/draft'`);
+  assert.equal(await evaluate(cdp, `document.querySelector('.chat-session-header .composer-session-info') === null`), true, 'draft must not duplicate the workdir selector in the header');
+  assert.equal(await evaluate(cdp, `document.querySelector('.composer .workdir-pill') !== null`), true, 'draft keeps the workdir selector in the composer');
   await evaluate(cdp, `(() => { const textarea = document.querySelector('textarea'); textarea.value = 'draft hello'; textarea.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   await waitFor(cdp, `document.querySelector('.send-btn')?.disabled === false`);
   await evaluate(cdp, `document.querySelector('.send-btn').click()`);
@@ -720,7 +888,7 @@ try {
 
   // Drag reorder and cross-pane drag must produce exactly the layout the drop
   // preview advertised. A two-column preset gives one tab per pane first.
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-preset')].find((button) => button.textContent.includes('左右两栏') || button.textContent.includes('Two columns')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="preset-two-column"]').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-pane').length === 2 && document.querySelectorAll('.wb-tab').length === 2`);
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-pane')[0]?.dataset.tabCount === '1' && document.querySelectorAll('.wb-pane')[1]?.dataset.tabCount === '1'`), true);
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-pane')[0]?.dataset.selectedTab.includes('session-e2e-a') === true`), true, 'two-column preset must keep the first tab in the left pane');
@@ -756,12 +924,12 @@ try {
 
   // Closing the now-empty right pane returns to the single-pane projection.
   await evaluate(cdp, `document.querySelectorAll('.wb-pane')[1].dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('Close pane') || button.textContent.includes('关闭窗格')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="close-pane"]').click()`);
   await waitFor(cdp, `document.querySelector('.wb-single') !== null && document.querySelectorAll('.wb-tab').length === 2`);
 
   // Dropping on the right edge must split horizontally and place the dragged
   // tab in the new right-hand pane, matching the edge preview.
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-preset')].find((button) => button.textContent.includes('左右两栏') || button.textContent.includes('Two columns')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="preset-two-column"]').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-pane').length === 2`);
   await startTabDrag(cdp, 'session:session-e2e-draft');
   await dragOverPaneAt(cdp, '.wb-pane', 0.99, 0.5);
@@ -777,7 +945,7 @@ try {
     const empty = [...document.querySelectorAll('.wb-pane')].find((pane) => pane.dataset.tabCount === '0');
     empty.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
   })()`);
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('Close pane') || button.textContent.includes('关闭窗格')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="close-pane"]').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-pane').length === 2 && document.querySelectorAll('.wb-tab').length === 2`);
   await startTabDrag(cdp, 'session:session-e2e-a');
   await dragOverPaneAt(cdp, '.wb-pane', 0.5, 0.5);
@@ -785,12 +953,12 @@ try {
   await dropOnPane(cdp, '.wb-pane');
   await waitFor(cdp, `document.querySelectorAll('.wb-pane')[0]?.dataset.tabCount === '2' && document.querySelectorAll('.wb-pane')[1]?.dataset.tabCount === '0'`);
   await evaluate(cdp, `document.querySelectorAll('.wb-pane')[1].dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-tool')].find((button) => button.textContent.includes('Close pane') || button.textContent.includes('关闭窗格')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="close-pane"]').click()`);
   await waitFor(cdp, `document.querySelector('.wb-single') !== null && document.querySelectorAll('.wb-tab').length === 2`);
 
   // Multi-tab contract: a new browser page restores the shared last layout, and
   // concurrent writers settle last-write-wins without corrupting recovery.
-  await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-preset')].find((button) => button.textContent.includes('左右两栏') || button.textContent.includes('Two columns')).click())()`);
+  await evaluate(cdp, `document.querySelector('[data-action="preset-two-column"]').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-pane').length === 2`);
   await waitFor(cdp, `(() => { try { return JSON.parse(localStorage.getItem('mothx.workbench.v1')).frame.center.kind === 'split'; } catch { return false; } })()`);
   const sharedBefore = await evaluate(cdp, `(() => {
@@ -811,7 +979,7 @@ try {
 
     // Write from the second page. Reloading the first page must recover the
     // later document rather than its own stale in-memory layout.
-    await evaluate(secondPage, `(() => [...document.querySelectorAll('.wb-preset')].find((button) => button.textContent.includes('单窗格') || button.textContent.includes('Single pane')).click())()`);
+    await evaluate(secondPage, `document.querySelector('[data-action="preset-single"]').click()`);
     await waitFor(secondPage, `document.querySelector('.wb-single') !== null`);
     await waitFor(cdp, `(() => { try { return JSON.parse(localStorage.getItem('mothx.workbench.v1')).frame.center.kind === 'group'; } catch { return false; } })()`);
     await cdp.call('Page.reload');
@@ -821,7 +989,7 @@ try {
 
     // Now the first page writes the newer layout; the second page reloads into
     // it. This is the last-write-wins direction in the other order.
-    await evaluate(cdp, `(() => [...document.querySelectorAll('.wb-preset')].find((button) => button.textContent.includes('左右两栏') || button.textContent.includes('Two columns')).click())()`);
+    await evaluate(cdp, `document.querySelector('[data-action="preset-two-column"]').click()`);
     await waitFor(cdp, `document.querySelectorAll('.wb-pane').length === 2`);
     await waitFor(cdp, `(() => { try { return JSON.parse(localStorage.getItem('mothx.workbench.v1')).frame.center.kind === 'split'; } catch { return false; } })()`);
     await secondPage.call('Page.reload');

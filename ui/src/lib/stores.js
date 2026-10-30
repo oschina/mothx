@@ -53,8 +53,6 @@ if (typeof window !== 'undefined') {
   });
 }
 export const selectedModel = writable('default');
-export const sessionRuntime = writable(null);
-export const pendingApprovals = derived(sessionRuntime, ($runtime) => $runtime?.pendingApprovals || []);
 export const activeApproval = writable(null);
 export const approvalHistory = writable([]);
 export const toolEvents = writable([]);

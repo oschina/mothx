@@ -8,12 +8,21 @@
   export let title = '';
   export let channelLabel = '';
   export let sessionID = '';
+  export let workDir = '';
   export let view = 'chat';
   export let busy = false;
   export let onViewChange = () => {};
 
   function toggleSidebar() {
     sidebarOpen.update((value) => !value);
+  }
+
+  function compactPath(path) {
+    if (!path) return '';
+    const normalized = String(path).replace(/[\\/]+$/, '');
+    const parts = normalized.split(/[\\/]/).filter(Boolean);
+    if (parts.length <= 2) return normalized || '/';
+    return `.../${parts.slice(-2).join('/')}`;
   }
 </script>
 
@@ -39,6 +48,11 @@
       {#if busy}<span class="chat-session-run-status"><span class="dot running"></span>{$t('common.running')}</span>{/if}
     </div>
   </div>
+  {#if workDir}
+    <div class="composer-session-info chat-session-workdir" title={workDir}>
+      <span class="session-dir"><span class="session-dir-icon" aria-hidden="true">📁</span>{compactPath(workDir)}</span>
+    </div>
+  {/if}
   <div class="chat-session-utilities">
     <SessionLogDownload {sessionID} compact />
   </div>

@@ -2,8 +2,7 @@ import { derived, writable } from 'svelte/store';
 
 const storageKeys = {
   language: 'mothx.webui.language',
-  themeMode: 'mothx.webui.themeMode',
-  workbenchEnabled: 'mothx.webui.workbenchEnabled'
+  themeMode: 'mothx.webui.themeMode'
 };
 
 const dictionaries = {
@@ -518,8 +517,6 @@ const dictionaries = {
     'settings.app.sessionDir': 'Session 目录',
     'settings.app.shellPath': 'Shell 路径',
     'settings.app.shellPrefix': 'Shell 命令前缀',
-    'settings.app.workbench': '动态工作台布局',
-    'settings.app.workbenchHint': '关闭后回到单会话聊天布局；事件流仍由同一调度器处理。',
     'settings.app.enablePlanTool': 'Plan 工具',
     'settings.app.enableArtifact': 'TUI/CLI 制品发布',
     'settings.app.enableACPArtifact': 'Desktop (ACP) 制品发布',
@@ -851,6 +848,7 @@ const dictionaries = {
     'chat.command.esmGuide': '为下一次监督任务添加指导',
     'chat.uploadImage': '上传图片',
     'chat.selectModel': '选择模型',
+    'chat.composerConfig': '模型与专家配置',
     'chat.selectProvider': '选择厂商',
     'chat.defaultModel': '默认模型',
     'chat.modality.text': '文本',
@@ -1087,6 +1085,9 @@ const dictionaries = {
     'settings.skillhub.enabled': '启用',
     'settings.skillhub.remove': '移除',
     'workbench.tabs.label': '工作台标签',
+    'workbench.layout': '布局',
+    'workbench.plan': '计划',
+    'workbench.plan.empty': '当前会话还没有计划',
     'workbench.tab.close': '关闭标签',
     'workbench.tab.closeOthers': '关闭其他标签',
     'workbench.tab.closeRight': '关闭右侧标签',
@@ -1635,8 +1636,6 @@ const dictionaries = {
     'settings.app.sessionDir': 'Session Dir',
     'settings.app.shellPath': 'Shell Path',
     'settings.app.shellPrefix': 'Shell Prefix',
-    'settings.app.workbench': 'Dynamic workbench layout',
-    'settings.app.workbenchHint': 'Turn off to return to the single-session chat layout; events still flow through the same scheduler.',
     'settings.app.enablePlanTool': 'Plan Tool',
     'settings.app.enableArtifact': 'TUI/CLI artifact publishing',
     'settings.app.enableACPArtifact': 'Desktop (ACP) artifact publishing',
@@ -1968,6 +1967,7 @@ const dictionaries = {
     'chat.command.esmGuide': 'Queue guidance for the next Supervisor Mode run',
     'chat.uploadImage': 'Upload image',
     'chat.selectModel': 'Select model',
+    'chat.composerConfig': 'Model and expert settings',
     'chat.selectProvider': 'Select provider',
     'chat.defaultModel': 'Default model',
     'chat.modality.text': 'Text',
@@ -2204,6 +2204,9 @@ const dictionaries = {
     'settings.skillhub.enabled': 'Enabled',
     'settings.skillhub.remove': 'Remove',
     'workbench.tabs.label': 'Workspace tabs',
+    'workbench.layout': 'Layout',
+    'workbench.plan': 'Plan',
+    'workbench.plan.empty': 'No plan yet for this session',
     'workbench.tab.close': 'Close tab',
     'workbench.tab.closeOthers': 'Close other tabs',
     'workbench.tab.closeRight': 'Close tabs to the right',
@@ -2256,7 +2259,6 @@ function loadPreference(key, fallback, allowed) {
 
 export const language = writable(loadPreference(storageKeys.language, 'zh', ['zh', 'en']));
 export const themeMode = writable(loadPreference(storageKeys.themeMode, 'auto', ['light', 'dark', 'auto']));
-export const workbenchEnabled = writable(loadPreference(storageKeys.workbenchEnabled, '1', ['0', '1']));
 export const effectiveTheme = writable(resolveEffectiveTheme(loadPreference(storageKeys.themeMode, 'auto', ['light', 'dark', 'auto'])));
 
 export const t = derived(language, ($language) => {
@@ -2283,12 +2285,6 @@ export function setThemeMode(value) {
   themeMode.set(value);
   if (isBrowser) window.localStorage.setItem(storageKeys.themeMode, value);
   applyTheme(value);
-}
-
-export function setWorkbenchEnabled(value) {
-  const next = value ? '1' : '0';
-  workbenchEnabled.set(next);
-  if (isBrowser) window.localStorage.setItem(storageKeys.workbenchEnabled, next);
 }
 
 export function resolveEffectiveTheme(mode, prefersDark = mediaQuery?.matches) {

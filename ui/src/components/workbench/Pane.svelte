@@ -112,7 +112,7 @@
 <style>
   .wb-pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; width: 100%; height: 100%; border: 1px solid transparent; }
   .wb-pane-active { border-color: rgba(80,140,255,.35); }
-  .wb-pane-body { flex: 1; min-height: 0; overflow: hidden; }
+  .wb-pane-body { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
   .wb-pane-dragover::after {
     content: '';
     position: absolute;

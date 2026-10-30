@@ -29,7 +29,7 @@
   import { route, replaceNavigate, navigate } from '../lib/router.js';
   import { setVisibleSessions } from '../lib/session-stream.js';
   import { getSessionState, isCompletionActive, isSessionRuntimeBusy } from '../lib/session-runs.js';
-  import { t, workbenchEnabled as workbenchPreference } from '../lib/preferences.js';
+  import { t } from '../lib/preferences.js';
 
   let mounted = false;
   let width = 0;
@@ -39,23 +39,16 @@
   let lastRouteSession = '';
   let knownSessionIDs = new Set();
 
-  $: workbenchEnabled = $route.query?.workbench === '1'
-    ? true
-    : $route.query?.workbench === '0'
-      ? false
-      : $workbenchPreference !== '0';
-  $: focusedSession = workbenchEnabled ? focusedSessionId($workbench) : $currentSession;
+  $: focusedSession = focusedSessionId($workbench);
   $: tabs = collectTabs($workbench);
 
   onMount(() => {
     mounted = true;
     const routeSession = $route.query?.session || '';
     lastRouteSession = routeSession;
-    if (workbenchEnabled) {
-      if (routeSession) openSessionInWorkbench(routeSession);
-      else if ($currentSession) openSessionInWorkbench($currentSession);
-      applyRouteViewMode(routeSession || $currentSession);
-    }
+    if (routeSession) openSessionInWorkbench(routeSession);
+    else if ($currentSession) openSessionInWorkbench($currentSession);
+    applyRouteViewMode(routeSession || $currentSession);
     return () => {
       mounted = false;
       setVisibleSessions([]);
@@ -66,7 +59,7 @@
 
   // Route -> workbench. The hash is the shareable entry point; focus changes
   // use replaceState below so clicking a pane does not grow history.
-  $: if (mounted && workbenchEnabled && $route.section === 'chat') {
+  $: if (mounted && $route.section === 'chat') {
     const routeSession = $route.query?.session || '';
     if (routeSession && routeSession !== lastRouteSession) {
       lastRouteSession = routeSession;
@@ -89,14 +82,14 @@
 
   // Focus changes write the URL; currentSession is updated by the action that
   // changed focus so a transient stale focus cannot race route-driven opens.
-  $: if (mounted && workbenchEnabled) syncRouteToFocus(focusedSession);
+  $: if (mounted) syncRouteToFocus(focusedSession);
 
-  $: if (mounted && workbenchEnabled) {
+  $: if (mounted) {
     setVisibleSessions(tabs.filter((tab) => tab.kind === 'session').map((tab) => tab.sessionId));
   }
 
   // Remove tabs for sessions deleted elsewhere after list refreshes.
-  $: if (mounted && workbenchEnabled) reconcileDeletedSessions($sessions || []);
+  $: if (mounted) reconcileDeletedSessions($sessions || []);
 
   function reconcileDeletedSessions(list) {
     const previous = knownSessionIDs;
@@ -335,8 +328,7 @@
   }
 </script>
 
-{#if workbenchEnabled}
-  <div class="chat-workbench-host" bind:this={host} bind:clientWidth={width}>
+<div class="chat-workbench-host" bind:this={host} bind:clientWidth={width}>
     {#snippet pane(groupId, tab)}
       {#if tab?.kind === 'session'}
         {#key tab.id}
@@ -374,7 +366,7 @@
       mobile={$isMobile}
       {width}
       {terminalOpen}
-      terminalSessionId={workbenchEnabled ? focusedSessionId($workbench) : ($currentSession || '')}
+      terminalSessionId={focusedSessionId($workbench)}
       terminalAvailable={$features?.terminal === true}
       onResize={handleResize}
       onSelectTab={handleSelectTab}
@@ -394,18 +386,8 @@
       {pane}
     >
     </Workbench>
-  </div>
-{:else}
-  <div class="chat-single-host">
-    <ChatPane
-      sessionId={$currentSession}
-      active={true}
-      viewMode={$route.query?.view}
-      onFocusSession={focusSession}
-    />
-  </div>
-{/if}
+</div>
 
 <style>
-  .chat-workbench-host, .chat-single-host { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+  .chat-workbench-host { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 </style>
