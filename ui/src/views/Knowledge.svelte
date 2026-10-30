@@ -661,11 +661,6 @@
     font: inherit;
     color: var(--muted-foreground);
   }
-  .empty-state {
-    display: grid;
-    gap: 12px;
-    justify-items: start;
-  }
   @media (max-width: 760px) {
     .knowledge-grid {
       grid-template-columns: minmax(0, 1fr);

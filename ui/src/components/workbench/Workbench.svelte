@@ -1,4 +1,5 @@
 <script>
+  import { onDestroy, onMount } from 'svelte';
   import SplitView from './SplitView.svelte';
   import Pane from './Pane.svelte';
   import TabStrip from './TabStrip.svelte';
@@ -10,6 +11,17 @@
   import { getSessionState, isCompletionActive, isSessionRuntimeBusy } from '../../lib/session-runs.js';
   import { sessionRunStates } from '../../lib/session-runs.js';
   import { t } from '../../lib/preferences.js';
+  import {
+    PLAN_MAX,
+    PLAN_MIN,
+    PLAN_SIZE_KEY,
+    TERMINAL_MIN,
+    TERMINAL_SIZE_KEY,
+    clampPlanWidth,
+    clampTerminalHeight,
+    readPanelSize,
+    writePanelSize
+  } from '../../lib/panel-sizes.js';
 
   export let state;
   export let mobile = false;
@@ -35,6 +47,140 @@
   export let onMenu = () => {};
   export let pane;
   let planOpen = false;
+
+  // Terminal dock height and plan panel width are local presentation state.
+  // They survive reloads but deliberately stay out of the shared workbench
+  // layout document.
+  let mainEl;
+  let bodyEl;
+  let mainHeight = 0;
+  let bodyWidth = 0;
+  let terminalHeight = readPanelSize(TERMINAL_SIZE_KEY, 320);
+  let planWidth = readPanelSize(PLAN_SIZE_KEY, 320);
+  let terminalDragging = false;
+  let planDragging = false;
+  let dragCleanup = null;
+
+  onMount(() => {
+    const measure = () => {
+      if (mainEl) {
+        mainHeight = mainEl.clientHeight;
+        terminalHeight = clampTerminalHeight(terminalHeight, mainHeight);
+      }
+      if (bodyEl) {
+        bodyWidth = bodyEl.clientWidth;
+        planWidth = clampPlanWidth(planWidth, bodyWidth);
+      }
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    if (observer && mainEl) observer.observe(mainEl);
+    if (observer && bodyEl) observer.observe(bodyEl);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  });
+
+  onDestroy(() => dragCleanup?.());
+
+  function beginDrag(axis, onMove, onEnd) {
+    dragCleanup?.();
+    document.body.classList.add(axis === 'row' ? 'wb-resizing-row' : 'wb-resizing-col');
+    const move = (event) => {
+      event.preventDefault();
+      onMove(event);
+    };
+    const finish = () => {
+      document.body.classList.remove('wb-resizing-row', 'wb-resizing-col');
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      window.removeEventListener('blur', finish);
+      dragCleanup = null;
+      onEnd();
+    };
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+    window.addEventListener('blur', finish);
+    dragCleanup = finish;
+  }
+
+  function startTerminalResize(event) {
+    if (event.button !== 0 || !mainEl) return;
+    event.preventDefault();
+    const rect = mainEl.getBoundingClientRect();
+    terminalDragging = true;
+    beginDrag(
+      'row',
+      (moveEvent) => {
+        terminalHeight = clampTerminalHeight(rect.bottom - moveEvent.clientY, rect.height);
+      },
+      () => {
+        terminalDragging = false;
+        writePanelSize(TERMINAL_SIZE_KEY, terminalHeight);
+      }
+    );
+  }
+
+  function startPlanResize(event) {
+    if (event.button !== 0 || !bodyEl) return;
+    event.preventDefault();
+    const rect = bodyEl.getBoundingClientRect();
+    planDragging = true;
+    beginDrag(
+      'col',
+      (moveEvent) => {
+        planWidth = clampPlanWidth(rect.right - moveEvent.clientX, rect.width);
+      },
+      () => {
+        planDragging = false;
+        writePanelSize(PLAN_SIZE_KEY, planWidth);
+      }
+    );
+  }
+
+  function terminalMax() {
+    return Math.max(TERMINAL_MIN, Math.floor((mainHeight || 0) * 0.6));
+  }
+
+  function planMax() {
+    return Math.max(PLAN_MIN, Math.min(PLAN_MAX, Math.floor((bodyWidth || 0) * 0.7)));
+  }
+
+  function handleTerminalResizeKey(event) {
+    const step = event.shiftKey ? 48 : 16;
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    terminalHeight = clampTerminalHeight(
+      terminalHeight + (event.key === 'ArrowUp' ? step : -step),
+      mainHeight
+    );
+    writePanelSize(TERMINAL_SIZE_KEY, terminalHeight);
+  }
+
+  function handlePlanResizeKey(event) {
+    const step = event.shiftKey ? 48 : 16;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    planWidth = clampPlanWidth(
+      planWidth + (event.key === 'ArrowLeft' ? step : -step),
+      bodyWidth
+    );
+    writePanelSize(PLAN_SIZE_KEY, planWidth);
+  }
+
+  function resetTerminalHeight() {
+    terminalHeight = clampTerminalHeight(Math.round((mainHeight || 0) * 0.4), mainHeight);
+    writePanelSize(TERMINAL_SIZE_KEY, terminalHeight);
+  }
+
+  function resetPlanWidth() {
+    planWidth = clampPlanWidth(320, bodyWidth);
+    writePanelSize(PLAN_SIZE_KEY, planWidth);
+  }
 
   $: focusedGroupId = state?.attention?.focusedGroupId || '';
   $: leaves = state ? collectLeaves(state.frame?.center) : [];
@@ -158,8 +304,8 @@
     {/if}
   </header>
 
-  <div class="wb-main" class:wb-terminal-open={terminalOpen && terminalSessionId}>
-    <div class="wb-body">
+  <div class="wb-main" class:wb-terminal-open={terminalOpen && terminalSessionId} bind:this={mainEl}>
+    <div class="wb-body" bind:this={bodyEl}>
       <div class="wb-panes">
       {#if mobile || !splitPossible}
         <section class="wb-single">
@@ -205,12 +351,44 @@
     {/if}
       </div>
       {#if planOpen && focusedSessionId}
-        <PlanPanel sessionId={focusedSessionId} {mobile} onClose={() => (planOpen = false)} />
+        {#if !mobile}
+          <div
+            class="wb-plan-resizer"
+            class:dragging={planDragging}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={$t('workbench.resize.plan')}
+            aria-valuemin={PLAN_MIN}
+            aria-valuemax={planMax()}
+            aria-valuenow={Math.round(planWidth)}
+            tabindex="0"
+            title={$t('workbench.resize.hint')}
+            onpointerdown={startPlanResize}
+            onkeydown={handlePlanResizeKey}
+            ondblclick={resetPlanWidth}
+          ></div>
+        {/if}
+        <PlanPanel sessionId={focusedSessionId} {mobile} width={planWidth} onClose={() => (planOpen = false)} />
       {/if}
     </div>
 
     {#if terminalOpen && terminalSessionId}
-      <div class="wb-terminal-dock">
+      <div
+        class="wb-dock-resizer"
+        class:dragging={terminalDragging}
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label={$t('workbench.resize.terminal')}
+        aria-valuemin={TERMINAL_MIN}
+        aria-valuemax={terminalMax()}
+        aria-valuenow={Math.round(terminalHeight)}
+        tabindex="0"
+        title={$t('workbench.resize.hint')}
+        onpointerdown={startTerminalResize}
+        onkeydown={handleTerminalResizeKey}
+        ondblclick={resetTerminalHeight}
+      ></div>
+      <div class="wb-terminal-dock" style={`height:${Math.round(terminalHeight)}px`}>
         <TerminalPane sessionId={terminalSessionId} active={true} />
       </div>
     {/if}
@@ -245,7 +423,53 @@
   .wb-panes { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
   .wb-single { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .wb-single-body { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
-  .wb-terminal-dock { height: 40%; min-height: 160px; max-height: 60%; border-top: 1px solid var(--moth-border-subtle); }
+  .wb-terminal-dock { min-height: 160px; max-height: 60%; }
+  .wb-dock-resizer {
+    position: relative;
+    flex: 0 0 8px;
+    cursor: row-resize;
+    touch-action: none;
+    background: var(--moth-surface-page);
+  }
+  .wb-dock-resizer::before {
+    content: '';
+    position: absolute;
+    right: 0;
+    bottom: 3px;
+    left: 0;
+    height: 1px;
+    background: var(--moth-border-subtle);
+    transition: bottom var(--moth-motion-fast) ease, height var(--moth-motion-fast) ease, background-color var(--moth-motion-fast) ease;
+  }
+  .wb-dock-resizer:hover::before,
+  .wb-dock-resizer.dragging::before {
+    bottom: 2px;
+    height: 3px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--moth-brand-primary) 32%, transparent);
+  }
+  .wb-dock-resizer:focus-visible { outline: 2px solid var(--moth-selection-indicator); outline-offset: -2px; }
+  .wb-plan-resizer {
+    position: relative;
+    flex: 0 0 7px;
+    cursor: col-resize;
+    touch-action: none;
+    border-left: 1px solid var(--moth-border-subtle);
+    background: var(--moth-surface-page);
+  }
+  .wb-plan-resizer::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 1px;
+    background: transparent;
+    transition: background-color var(--moth-motion-fast) ease;
+  }
+  .wb-plan-resizer:hover::after,
+  .wb-plan-resizer.dragging::after { background: color-mix(in srgb, var(--moth-brand-primary) 32%, transparent); }
+  .wb-plan-resizer:focus-visible { outline: 2px solid var(--moth-selection-indicator); outline-offset: -2px; }
 
   @media (prefers-reduced-motion: reduce) {
     .wb-tool { transition: none; }

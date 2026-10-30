@@ -4,6 +4,7 @@
 
   export let sessionId = '';
   export let mobile = false;
+  export let width = 320;
   export let onClose = () => {};
 
   $: state = sessionId ? $sessionRunStates?.[sessionId] : null;
@@ -20,7 +21,12 @@
   }
 </script>
 
-<aside class="wb-plan-panel" class:wb-plan-mobile={mobile} aria-label={$t('workbench.plan')}>
+<aside
+  class="wb-plan-panel"
+  class:wb-plan-mobile={mobile}
+  style={mobile ? '' : `flex: 0 0 ${Math.round(width)}px`}
+  aria-label={$t('workbench.plan')}
+>
   <header>
     <strong>{$t('workbench.plan')}</strong>
     <button type="button" class="wb-plan-close" on:click={onClose} title={$t('common.close')} aria-label={$t('common.close')}>
@@ -59,7 +65,6 @@
     flex: 0 0 320px;
     min-width: 0;
     min-height: 0;
-    border-left: 1px solid var(--moth-border-subtle);
     background: var(--moth-surface-page);
   }
   .wb-plan-panel header {
@@ -96,6 +101,7 @@
     bottom: 0;
     z-index: 20;
     width: min(86vw, 340px);
+    border-left: 1px solid var(--moth-border-subtle);
     box-shadow: -8px 0 24px rgba(0, 0, 0, .18);
   }
 </style>

@@ -7078,3 +7078,10 @@ textarea::placeholder {
 .settings-nav-item.active {
   box-shadow: inset 2px 0 color-mix(in srgb, var(--primary) 45%, transparent);
 }
+
+/* Keep the pointer shape while dragging a workbench separator, even when the
+   pointer leaves the 7px hit area. */
+body.wb-resizing-row,
+body.wb-resizing-row * { cursor: row-resize !important; user-select: none !important; }
+body.wb-resizing-col,
+body.wb-resizing-col * { cursor: col-resize !important; user-select: none !important; }

@@ -597,6 +597,10 @@ try {
   // drop by reconnecting, resize the host, then close and delete the terminal.
   await evaluate(cdp, `document.querySelector('[data-action="terminal"]').click()`);
   await waitFor(cdp, `document.querySelector('.terminal-pane') !== null`);
+  assert.equal(await evaluate(cdp, `document.querySelector('.wb-dock-resizer')?.getAttribute('role')`), 'separator');
+  const dockBeforeResize = await evaluate(cdp, `document.querySelector('.wb-terminal-dock')?.getBoundingClientRect().height`);
+  await evaluate(cdp, `document.querySelector('.wb-dock-resizer').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))`);
+  await waitFor(cdp, `document.querySelector('.wb-terminal-dock')?.getBoundingClientRect().height > ${dockBeforeResize} + 1`);
   assert.ok(
     await evaluate(cdp, `(document.querySelector('.terminal-sandbox')?.textContent || '').trim().length > 0`),
     'terminal shows the sandbox warning'
@@ -669,6 +673,10 @@ try {
   await evaluate(cdp, `document.querySelector('[data-action="plan"]').click()`);
   await waitFor(cdp, `document.querySelector('.wb-plan-panel .wb-plan-empty') !== null`);
   assert.equal(await evaluate(cdp, `document.querySelector('.wb-plan-panel .todo-plan') === null`), true, 'a session without a plan must show the empty state');
+  assert.equal(await evaluate(cdp, `document.querySelector('.wb-plan-resizer')?.getAttribute('role')`), 'separator');
+  const planWidthBeforeResize = await evaluate(cdp, `document.querySelector('.wb-plan-panel')?.getBoundingClientRect().width`);
+  await evaluate(cdp, `document.querySelector('.wb-plan-resizer').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))`);
+  await waitFor(cdp, `document.querySelector('.wb-plan-panel')?.getBoundingClientRect().width > ${planWidthBeforeResize} + 1`);
   await evaluate(cdp, `document.querySelector('.wb-plan-panel .wb-plan-close').click()`);
   await waitFor(cdp, `document.querySelector('.wb-plan-panel') === null`);
 
