@@ -219,6 +219,15 @@ func (s *Server) requireESMControlIdle(sessionID string, allowOwnedCoordinator b
 		return err
 	}
 	if snapshot.Busy && !ownedCoordinator {
+		// An orphaned/recovery-failed snapshot has no live lease: its canonical
+		// Run never terminalized and is waiting for the recovery coordinator.
+		// No agent is executing it, so it must not block an explicit pause,
+		// resume, or clear. A run that still owns a local process is rejected by
+		// the local IsRunning check above; a foreign live owner keeps a valid
+		// lease and remains busy here.
+		if snapshot.State == agentruntime.SessionExecutionOrphaned || snapshot.State == agentruntime.SessionExecutionRecoveryFailed {
+			return nil
+		}
 		return ErrESMControlRequiresIdle
 	}
 	return nil

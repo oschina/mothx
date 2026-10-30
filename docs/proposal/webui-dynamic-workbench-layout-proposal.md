@@ -1,6 +1,6 @@
 # Serve WebUI 动态工作台布局方案
 
-> Date: 2026-10-28 · Last revised: 2026-10-29 · Status: Implemented (W0–W4, legacy-path cleanup, and the optional W3 Plan dock implemented 2026-10-29; touch/drag feel accepted 2026-10-29, 4-pane long-stream acceptance outstanding) · Owner: Serve WebUI (Svelte)
+> Date: 2026-10-28 · Last revised: 2026-10-30 · Status: Implemented (W0–W4, legacy-path cleanup, and the optional W3 Plan dock implemented 2026-10-29; 2026-10-30 page-polish commit verified against the same acceptance suite; touch/drag feel accepted 2026-10-29, 4-pane long-stream acceptance outstanding) · Owner: Serve WebUI (Svelte)
 > Related: `AGENTS.md`, `docs/proposal/webui-multi-session-streaming-proposal.md`, `docs/proposal/webui-project-session-management-proposal.md`, `docs/proposal/serve-pty-terminal-proposal.md`
 > Reference implementation: `/home/free/src/thinkrail`（`apps/web/src/shell/layout/`、`apps/web/src/shell/layoutState/`、`apps/web/src/shell/SPEC.md`）
 > 目标代码：`ui/`（Svelte 5 + Vite，构建后嵌入 Go binary，由 `mothx serve` 提供）
@@ -57,7 +57,7 @@
 | Web UI mobile 约定 | `isMobile` 条件渲染负责移动交互，CSS 媒体查询只负责布局 |
 | 双语与门禁 | W4 同步 `docs/{en,zh}/serve.md` 与 changelog；`npm test`/`npm run build`/e2e 作为门禁 |
 
-## 0.3 实施进度（2026-10-29）
+## 0.3 实施进度（2026-10-30）
 
 已完成：
 
@@ -72,7 +72,7 @@
 - W4 代码减法：`ChatPane` 不再维护第二份 transcript/run/runtime 局部状态，也不再在切 tab 时搬运；视图全部由 `sessionRunStates` 经 `viewFromSessionState` 派生，所有显式写入走 `applySessionViewReducer`/`updateSessionState`。`persistLocalSessionState`/`restoreLocalSessionState`/`applyView`/`currentView` 已删除，`session-stream-boundary.test.js` 增加静态守卫。
 - W4 运行时清理：删除 `chat-runtime-state.js` 中无人调用的 responses-run 轮询（后台轮询已归 `session-stream.js`）和 `onPersist` 回调；`sessionStateStore` 的派生缓存随 pane 卸载清理。ChatPane 的命令建议/运行时面板 DOM id 增加 pane 前缀，lightbox 键盘监听只由焦点 pane 响应；e2e 断言分屏后 DOM id 全局唯一。
 - W4 标签溢出：标签条溢出时显示“全部标签”菜单，列出每个 tab 的运行/待处理状态并可直接聚焦；底部横向滚动仍保留。标签运行/待处理徽标改为直接订阅 `sessionRunStates`，审批完成后即时消失。
-- 测试：`npm test`（206 tests）通过；`npm run build` 通过；`ui/e2e/workbench.smoke.mjs` 覆盖已有会话发送、Draft 首次发送后原子替换为真实 session、双 session 标签、刷新恢复、切换标签保留未发送草稿、拖拽取消后清除落点预览、真实拖拽重排/跨 pane/右边缘分屏与预览一致性、双页面共享 last-layout 和 last-write-wins 恢复、分屏双 pane 同时渲染、关闭 pane、跨 pane 待处理徽标/attention/在所属 pane 完成审批、跨 pane 后台提问不抢占焦点且聚焦后可在所属 pane 回答、跨 pane DOM id 唯一性、键盘调分隔条与双击恢复 50/50、比例刷新恢复、per-tab chat/trajectory 模式刷新恢复、per-pane 模型独立选择与刷新恢复、四宫格预设与第 5 个拖拽分屏被拒绝并提示原因、移动端单 pane、标签溢出菜单、终端面板（安全/共享 cwd 提示、初始 resize、键盘输入回显、断线重连、页面刷新 reattach 且不新建 POST、宿主缩放 resize、关闭 DELETE）；清理后额外断言 `?workbench=0` 被忽略且不存在 `.chat-single-host`。
+- 测试：`npm test`（209 tests）通过；`npm run build` 通过；`ui/e2e/workbench.smoke.mjs` 覆盖已有会话发送、Draft 首次发送后原子替换为真实 session、双 session 标签、刷新恢复、切换标签保留未发送草稿、拖拽取消后清除落点预览、真实拖拽重排/跨 pane/右边缘分屏与预览一致性、双页面共享 last-layout 和 last-write-wins 恢复、分屏双 pane 同时渲染、关闭 pane、跨 pane 待处理徽标/attention/在所属 pane 完成审批、跨 pane 后台提问不抢占焦点且聚焦后可在所属 pane 回答、跨 pane DOM id 唯一性、键盘调分隔条与双击恢复 50/50、比例刷新恢复、per-tab chat/trajectory 模式刷新恢复、per-pane 模型独立选择与刷新恢复、四宫格预设与第 5 个拖拽分屏被拒绝并提示原因、移动端单 pane、标签溢出菜单、终端面板（安全/共享 cwd 提示、初始 resize、键盘输入回显、断线重连、页面刷新 reattach 且不新建 POST、宿主缩放 resize、关闭 DELETE）；清理后额外断言 `?workbench=0` 被忽略且不存在 `.chat-single-host`。
 - 复盘修复（本轮）：composer 草稿改为按 `sessionId`/`draft:<draftId>` 保存文本、内存中的 dataUrl 附件和可持久化的 providerRef/attachmentId 引用。`DraftPane` 传入 `draftKey`，切换标签（组件卸载）不再丢输入；刷新后仅剩可恢复引用，dataUrl 附件以 `missing` 元数据提示重新选择，发送/清空会删除草稿。新增 `composer-drafts.test.js` 覆盖 LRU 上限、跨刷新、dataUrl 不落盘。
 - 复盘修复（本轮）：后台到达的审批在所属 pane 通过 attention 获得焦点后现在会自动弹出审批中心（之前只在 pending 首次到达且 pane 已激活时弹出，`selectedApprovalID` 已设置会让后续 focus 永远不打开）；e2e 的审批流程可稳定复现该竞态。
 - 复盘修复（本轮）：分隔条支持双击恢复 50/50 并持久化；拖拽被 Escape 取消时 `dragend` 会清除落点预览，避免预览残留；超限（>512KB）布局文档在 `JSON.parse` 前丢弃并回退单 pane；标签会话兜底文案与残留硬编码英文错误改用双语 i18n。
@@ -92,12 +92,13 @@
 - 复盘修复（本轮）：修复分屏后重复的 DOM id。命令建议项从全局 `chat-command-suggestion-${index}` 改为 `${paneId}-command-suggestion-${index}`，`aria-activedescendant` 同步使用 pane 前缀；移动端合并标签条的右键菜单现在按 tab 实际所属 group 执行“关闭其他/右侧”，不再错误作用于焦点 group；分隔条 `aria-valuenow` 改为真实权重而不是固定 50。
 
 - 复盘修复（本轮）：修复工作台/单 pane 宿主高度链路。`.wb-single-body`/`.wb-pane-body` 改为纵向 flex 容器，`.chat-view` 增加 `height: 100%`，`.chat-scroll` 增加 `min-height: 0`。新 Draft pane 现在撑满宿主；长历史只在 transcript 内滚动，composer 始终留在视口内。`workbench.smoke.mjs` 现在载入 30 轮历史，并断言初始加载、切回标签、分屏、Draft 四种状态下 chat view 高度等于宿主、composer 可见、长历史确实产生内部滚动。
-- 界面打磨：工作台标签条改为主题 token 驱动的软 pill 样式，含 active 页面底色/内描边/轻阴影、hover 过渡、隐藏滚动条、SVG 关闭按钮、运行脉冲点、明暗主题一致的 pending 徽章，以及统一的溢出菜单；标签条收紧到 31px（26px 标签，上下各 2px）。顶部工作台工具条改为 28px 高的 icon-only 紧凑按钮（预设布局用图标分段控件，分屏/关闭/重置/终端/待处理用带 tooltip 的图标），桌面和 390px 移动端都不再需要横向滚动；e2e 增加工具条/标签条高度、按钮宽度和溢出断言。
+- 界面打磨：工作台标签条改为主题 token 驱动的软 pill 样式，含 active 页面底色/内描边/轻阴影、hover 过渡、隐藏滚动条、SVG 关闭按钮、运行脉冲点、明暗主题一致的 pending 徽章，以及统一的溢出菜单；标签条收紧到 31px（26px 标签，上下各 2px）。顶部工作台工具条：桌面 30px 高、26px icon-only 按钮（预设布局用图标分段控件，分屏/关闭/重置/终端/待处理用带 tooltip 的图标）；移动端 42px 高、34px 触控按钮，隐藏预设/重置并增加侧栏菜单入口。桌面与 390px 移动端都不需要横向滚动；e2e 断言桌面工具条 ≤31px、按钮 ≤28px，移动端 ≤44px 且无横向溢出。
 - 界面打磨：会话目录从 composer 移到 `chat-session-header` 内、`chat-session-headline` 之后，作为紧凑目录 chip；不新增按钮，因为左侧已有全局新建对话入口。目录文本自动截断，完整路径保留在 title；新 Draft 继续使用 composer 内的目录选择器，不在 header 重复展示。header 内的 headline、目录 chip、下载工具和 chat/trajectory tabs 统一垂直居中（e2e 断言各元素中线偏差 ≤1px）。e2e 同时断言会话目录位于 header、紧跟 headline、不在 composer 内且没有重复的新建会话按钮。
 - 界面打磨（对齐 Desktop composer）：输入卡片不再常驻 provider/model/主角团选择行，也移除了独立的“模式”按钮。输入框位于卡片顶部，模型与模式合并进底部工具栏的 `composer-config-toggle`（显示当前模型 + mode 徽章），按需在输入框下方展开配置面板：面板顶部是 plan/agent/yolo/os 模式与 Work/Code 显示模式，下面是 provider/model/主角团选择；会话目录移到 `chat-session-header` 的 headline 后面，composer 内不再保留目录/新建会话按钮。桌面端折叠态卡片高度从 174px 降到 133px，移动端仍保持单卡片内换行布局；e2e 覆盖默认折叠、展开/收起、mode 徽章、面板内模式组以及折叠后仍可切换模型。
 - 清理（2026-10-29）：按 §11.3 删除 `?workbench=0`、Settings 中的“动态工作台布局”开关、`mothx.webui.workbenchEnabled` 偏好、`chat-single-host` 单 pane 回退和 `Chat.svelte` 的 `workbenchEnabled` 分支；同时删除不再使用的 `sessionRuntime`/`pendingApprovals` stores 与 runtime panel/mode switcher/display mode CSS。`/chat` 现在只有 Workbench 投影。e2e 断言 `?workbench=0` 被忽略、Workbench 仍渲染且不存在 `.chat-single-host`。
 - W3 可选 Plan 面板：新增 `components/workbench/PlanPanel.svelte`，从焦点会话 `sessionRunStates[sessionId].messages` 的最近一条 `role === 'plan'` 消息派生，无新存储/工具/后端端点。Workbench 工具条新增 Plan 图标按钮，桌面为右侧 320px dock，移动端为同区 overlay；空会话/无 plan 显示空态，Draft 不显示 Plan 入口。e2e 覆盖有 plan、空 plan、Draft 无入口，以及桌面 dock 不覆盖 pane 区域。
 - 复检（2026-10-29）：`go test ./...` 与 `cd ui && npm run e2e`（209 单测、构建、channel/trajectory/workbench 浏览器 smoke）通过；workbench smoke 覆盖 `?workbench=0` 被忽略、Plan dock 内容/空态/Draft 无入口/桌面 dock 几何，以及标签条、icon-only 工具条、composer 配置面板和 header 中线对齐的紧凑性断言。
+- 界面统一（2026-10-30）：`c6cf28fb` 统一 Settings 保存栏/页头、统计图表、聊天标题与工具条、技能筛选和日志样式；工作台标签改为展示会话标题/预览而不是 16 位 ID，移动端工具条新增侧栏菜单并按触控尺寸布局，e2e 已同步标题与移动端断言。两个方案的门禁复检通过：`go test -count=1 ./...`、`npm test`（209）、`npm run build`、三个 e2e smoke。ESM 偶发失败另由 `internal/esm` 的事务化写入和 orphaned 执行快照的控制放行修复，不属于本方案但影响同一条复检结论。
 
 未完成 / 后续：
 
@@ -285,24 +286,20 @@ WebUI 不需要像“单 transcript 架构”那样先做一次会话投影重�
 
 ```text
 ui/src/lib/workbench/
-├── types.js              # JSDoc typedef：Frame/View/Attention/Tab/Draft/Preset/Result
 ├── model.js              # 纯操作：open/close/move/split/resize/focus/preset/draft
 ├── normalize.js          # decode/encode/normalize/reconcile
 ├── presets.js            # single/two-column/two-row/quad
 ├── store.js              # Svelte writable + hydrate/persist + focus
 ├── persistence.js        # localStorage 共享文档 / 校验 / 恢复最近布局
-└── index.js              # 桶导出
+└── index.js              # 桶导出 + JSDoc 类型
 
 ui/src/lib/session-stream.js      # 唯一 $runEvents 消费者（必须在 workbench 纯层之外）
-ui/src/lib/session-actions.js     # 显式 sessionId 的 send/stop/approve/answer/loadOlder
 ui/src/lib/session-store.js       # per-session derived store + forget
 ui/src/lib/session-prefs.js       # per-session model/provider 选择持久化
 ui/src/lib/composer-drafts.js     # text + 已上传附件引用；按 session/draft 保存
-ui/src/lib/attention.js           # 跨 pane 的 pending decision 投影
 
 ui/src/components/chat/
-├── ComposerPane.svelte       # ChatPane/DraftPane 共用的 composer/附件/模型选择
-├── ChatPane.svelte           # 可交互会话 pane
+├── ChatPane.svelte           # 可交互会话 pane（composer 仍在组件内）
 └── DraftPane.svelte           # 新会话草稿；首次发送后 replaceDraft
 
 ui/src/components/workbench/
@@ -311,11 +308,12 @@ ui/src/components/workbench/
 ├── Pane.svelte           # pane 容器 + 标签条 + 内容
 ├── TabStrip.svelte       # 标签、溢出、拖拽源、pending 徽标
 ├── SplitHandle.svelte    # 分隔条（pointer + keyboard）
-├── EmptyPane.svelte      # 空 pane：打开会话/新建草稿
+├── EmptyPane.svelte      # 空 pane：新建任务/打开会话提示
 ├── SessionSnapshot.svelte # W0 延期时的只读会话（降级形态，不默认发布）
-├── AttentionBell.svelte  # 全局 pending approval/question 入口
-└── DragLayer.svelte      # 拖拽预览/投放提示
+└── PlanPanel.svelte      # 2026-10-29 新增的只读 Plan dock
 ```
+
+实现收敛说明：计划中的 `types.js`（JSDoc typedef）并入 `index.js`/`model.js`；`session-actions.js` 的职责由 `ChatPane` 的显式 `sessionId` 动作承担；`attention.js` 由 `sessionRunStates` + 工具条 attention 入口投影。未创建独立的 `ComposerPane.svelte`（`ChatPane` 与 `DraftPane` 共用同一份 composer 实现）、`AttentionBell.svelte`（由工作台工具条的 attention 按钮替代）和 `DragLayer.svelte`（投放预览由 `Workbench` 本地状态管理）。
 
 修改：
 
@@ -346,7 +344,7 @@ ui/package.json                           # test 脚本显式覆盖 lib/workbenc
 - `components/workbench/*` 和 App 集成层在 pane 选择变化时调用 `session-stream.setVisibleSessions(ids)`；它只驱动 effects，不参与归约。
 - `ChatPane` 只通过显式 `sessionId` 和 `session-actions.js` 工作；不读 `currentSession` 作为目标，也不直接拼 provider content。
 - `ChatPane` 的模型/provider 从该 session 的 state/runtime 派生，选中变更写回该 session；禁止继续用全局 `selectedModel` 作为发送源。
-- `currentSession` 由 workbench store 派生/同步；Sidebar/Sessions/Experts/App 路由不再直接 `currentSession.set()`（除 workbench 内部）。
+- `currentSession` 是 workbench 焦点的共享投影。Sidebar/Sessions/Experts 仍以 `currentSession.set()` + `navigate()` 作为导航入口（不是工作台状态 owner），`Chat.svelte` 再把 route/currentSession 投影为 workbench focus；已删除 `currentSession -> openSession` 的重复副作用，避免关闭后又被陈旧状态重新打开。
 
 ### 4.4 数据流
 
@@ -1593,7 +1591,7 @@ Lite 不进入本方案验收，也不默认发布；仅当 W0 严重延期且�
 - [x] 900–1024px 在能容纳 2 个 ≥380px pane 时分屏；不足时整体回退单 pane + 标签条；390/768px 下单 pane + 标签条可用、无横向溢出。
 - [x] 审批/提问在所属 pane 显示；后台 pending 有 AttentionBell 入口；不会因另一个 pane 的 runtime 被覆盖。
 - [x] 关闭一个 pane 不中止其他 session 的 observer；同一 DOM 无重复固定 id；window 键盘只影响焦点 pane。
-- [x] 关闭特性开关后行为与旧版一致；移动端回到单 pane 布局，且不存在双事件消费者。
+- [x] 旧特性开关、`?workbench=0` 与 `chat-single-host` 单 pane 回退已删除；`/chat` 始终渲染 Workbench，移动端仍为单 pane 布局，且不存在双事件消费者。
 - [x] `cd ui && npm test && npm run build` 通过；有浏览器时 `npm run e2e` 通过。
 - [x] 双语 i18n 完整；无硬编码用户可见文案。
 - [x] 文档/changelog 更新；本提案状态改为 Implemented。

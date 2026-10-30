@@ -180,6 +180,11 @@ func (s *Store) Create(ctx context.Context, sessionID, objective string) (*Objec
 }
 
 // Edit updates the objective text for an unfinished objective.
+//
+// The read-modify-write runs in one BEGIN IMMEDIATE transaction: the ESM
+// coordinator mutates the same row from a background goroutine, so a plain
+// read followed by a full-row save could otherwise overwrite a concurrent
+// objective edit with the stale text it read before the edit committed.
 func (s *Store) Edit(ctx context.Context, sessionID, objective string) (*Objective, error) {
 	objective = strings.TrimSpace(objective)
 	if objective == "" {
@@ -189,20 +194,27 @@ func (s *Store) Edit(ctx context.Context, sessionID, objective string) (*Objecti
 	if err != nil {
 		return nil, err
 	}
-	current, err := getObjective(ctx, db.Bun(), sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if !IsUnfinishedStatus(current.Status) {
-		return current, ErrInvalidTransition
-	}
-	current.Objective = objective
-	current.BlockedCount, current.BlockedReason, current.BlockedRunID = 0, "", ""
-	current.CompletionReason, current.CompletionRunID, current.CompletionReview = "", "", ""
-	current.Phase, current.ProgressSummary, current.RemainingWork = PhaseWorker, "", []string{}
-	current.RejectionCount, current.RejectionRunID, current.RecoveryCount, current.RecoveryReason = 0, "", 0, ""
-	current.UpdatedAt = s.now().UTC()
-	if err := saveObjective(ctx, db.Bun(), current); err != nil {
+	var transitionCurrent *Objective
+	if err := db.RunInTx(ctx, nil, func(ctx context.Context, tx dao.Tx) error {
+		current, err := getObjective(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		if !IsUnfinishedStatus(current.Status) {
+			transitionCurrent = current
+			return ErrInvalidTransition
+		}
+		current.Objective = objective
+		current.BlockedCount, current.BlockedReason, current.BlockedRunID = 0, "", ""
+		current.CompletionReason, current.CompletionRunID, current.CompletionReview = "", "", ""
+		current.Phase, current.ProgressSummary, current.RemainingWork = PhaseWorker, "", []string{}
+		current.RejectionCount, current.RejectionRunID, current.RecoveryCount, current.RecoveryReason = 0, "", 0, ""
+		current.UpdatedAt = s.now().UTC()
+		return saveObjective(ctx, tx, current)
+	}); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			return transitionCurrent, ErrInvalidTransition
+		}
 		return nil, err
 	}
 	return s.Get(ctx, sessionID)
@@ -232,16 +244,23 @@ func (s *Store) setUserStatus(ctx context.Context, sessionID string, status Stat
 	if err != nil {
 		return nil, err
 	}
-	current, err := getObjective(ctx, db.Bun(), sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if !IsUnfinishedStatus(current.Status) {
-		return current, ErrInvalidTransition
-	}
-	current.Status = status
-	current.UpdatedAt = s.now().UTC()
-	if err := saveObjective(ctx, db.Bun(), current); err != nil {
+	var transitionCurrent *Objective
+	if err := db.RunInTx(ctx, nil, func(ctx context.Context, tx dao.Tx) error {
+		current, err := getObjective(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		if !IsUnfinishedStatus(current.Status) {
+			transitionCurrent = current
+			return ErrInvalidTransition
+		}
+		current.Status = status
+		current.UpdatedAt = s.now().UTC()
+		return saveObjective(ctx, tx, current)
+	}); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			return transitionCurrent, ErrInvalidTransition
+		}
 		return nil, err
 	}
 	return s.Get(ctx, sessionID)
@@ -252,17 +271,24 @@ func (s *Store) setRuntimeStatus(ctx context.Context, sessionID string, status S
 	if err != nil {
 		return nil, err
 	}
-	current, err := getObjective(ctx, db.Bun(), sessionID)
-	if err != nil {
+	var unchanged *Objective
+	if err := db.RunInTx(ctx, nil, func(ctx context.Context, tx dao.Tx) error {
+		current, err := getObjective(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		if current.Status != StatusActive {
+			unchanged = current
+			return nil
+		}
+		current.Status = status
+		current.UpdatedAt = s.now().UTC()
+		return saveObjective(ctx, tx, current)
+	}); err != nil {
 		return nil, err
 	}
-	if current.Status != StatusActive {
-		return current, nil
-	}
-	current.Status = status
-	current.UpdatedAt = s.now().UTC()
-	if err := saveObjective(ctx, db.Bun(), current); err != nil {
-		return nil, err
+	if unchanged != nil {
+		return unchanged, nil
 	}
 	return s.Get(ctx, sessionID)
 }
@@ -273,23 +299,35 @@ func (s *Store) Resume(ctx context.Context, sessionID string) (*Objective, error
 	if err != nil {
 		return nil, err
 	}
-	current, err := getObjective(ctx, db.Bun(), sessionID)
-	if err != nil {
+	var unchanged *Objective
+	var transitionCurrent *Objective
+	if err := db.RunInTx(ctx, nil, func(ctx context.Context, tx dao.Tx) error {
+		current, err := getObjective(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		switch current.Status {
+		case StatusActive:
+			unchanged = current
+			return nil
+		case StatusPaused, StatusBlocked, StatusUsageLimited:
+		default:
+			transitionCurrent = current
+			return ErrInvalidTransition
+		}
+		current.Status, current.BlockedCount, current.BlockedReason, current.BlockedRunID = StatusActive, 0, "", ""
+		current.CompletionReason, current.CompletionRunID, current.Phase = "", "", PhaseWorker
+		current.RejectionCount, current.RejectionRunID, current.RecoveryCount, current.RecoveryReason = 0, "", 0, ""
+		current.UpdatedAt = s.now().UTC()
+		return saveObjective(ctx, tx, current)
+	}); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			return transitionCurrent, ErrInvalidTransition
+		}
 		return nil, err
 	}
-	switch current.Status {
-	case StatusActive:
-		return current, nil
-	case StatusPaused, StatusBlocked, StatusUsageLimited:
-	default:
-		return current, ErrInvalidTransition
-	}
-	current.Status, current.BlockedCount, current.BlockedReason, current.BlockedRunID = StatusActive, 0, "", ""
-	current.CompletionReason, current.CompletionRunID, current.Phase = "", "", PhaseWorker
-	current.RejectionCount, current.RejectionRunID, current.RecoveryCount, current.RecoveryReason = 0, "", 0, ""
-	current.UpdatedAt = s.now().UTC()
-	if err := saveObjective(ctx, db.Bun(), current); err != nil {
-		return nil, err
+	if unchanged != nil {
+		return unchanged, nil
 	}
 	return s.Get(ctx, sessionID)
 }
@@ -305,25 +343,32 @@ func (s *Store) SetPhase(ctx context.Context, sessionID string, phase Phase) (*O
 	if err != nil {
 		return nil, err
 	}
-	current, err := getObjective(ctx, db.Bun(), sessionID)
-	if err != nil {
-		return nil, err
-	}
-	validTransition := false
-	switch phase {
-	case PhaseWorker:
-		validTransition = current.Status == StatusActive
-	case PhaseCritic, PhaseAudit:
-		validTransition = current.Status == StatusCompleteCandidate
-	case PhaseComplete:
-		validTransition = current.Status == StatusComplete
-	}
-	if !validTransition {
-		return current, ErrInvalidTransition
-	}
-	current.Phase = phase
-	current.UpdatedAt = s.now().UTC()
-	if err := saveObjective(ctx, db.Bun(), current); err != nil {
+	var transitionCurrent *Objective
+	if err := db.RunInTx(ctx, nil, func(ctx context.Context, tx dao.Tx) error {
+		current, err := getObjective(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		validTransition := false
+		switch phase {
+		case PhaseWorker:
+			validTransition = current.Status == StatusActive
+		case PhaseCritic, PhaseAudit:
+			validTransition = current.Status == StatusCompleteCandidate
+		case PhaseComplete:
+			validTransition = current.Status == StatusComplete
+		}
+		if !validTransition {
+			transitionCurrent = current
+			return ErrInvalidTransition
+		}
+		current.Phase = phase
+		current.UpdatedAt = s.now().UTC()
+		return saveObjective(ctx, tx, current)
+	}); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			return transitionCurrent, ErrInvalidTransition
+		}
 		return nil, err
 	}
 	return s.Get(ctx, sessionID)
@@ -337,16 +382,23 @@ func (s *Store) RecordWorkerProgress(ctx context.Context, sessionID, summary str
 	if err != nil {
 		return nil, err
 	}
-	current, err := getObjective(ctx, db.Bun(), sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if current.Status != StatusActive {
-		return current, ErrInvalidTransition
-	}
-	current.Phase, current.ProgressSummary, current.RemainingWork = PhaseWorker, strings.TrimSpace(summary), remainingWork
-	current.RecoveryCount, current.RecoveryReason, current.UpdatedAt = 0, "", s.now().UTC()
-	if err := saveObjective(ctx, db.Bun(), current); err != nil {
+	var transitionCurrent *Objective
+	if err := db.RunInTx(ctx, nil, func(ctx context.Context, tx dao.Tx) error {
+		current, err := getObjective(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		if current.Status != StatusActive {
+			transitionCurrent = current
+			return ErrInvalidTransition
+		}
+		current.Phase, current.ProgressSummary, current.RemainingWork = PhaseWorker, strings.TrimSpace(summary), remainingWork
+		current.RecoveryCount, current.RecoveryReason, current.UpdatedAt = 0, "", s.now().UTC()
+		return saveObjective(ctx, tx, current)
+	}); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			return transitionCurrent, ErrInvalidTransition
+		}
 		return nil, err
 	}
 	return s.Get(ctx, sessionID)
@@ -514,17 +566,24 @@ func (s *Store) MarkCompleteFromAudit(ctx context.Context, sessionID, review str
 	if err != nil {
 		return nil, err
 	}
-	current, err := getObjective(ctx, db.Bun(), sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if current.Status != StatusCompleteCandidate {
-		return current, ErrInvalidTransition
-	}
-	current.Status, current.BlockedCount, current.BlockedReason, current.BlockedRunID = StatusComplete, 0, "", ""
-	current.CompletionReview, current.Phase, current.RemainingWork = review, PhaseComplete, []string{}
-	current.RejectionCount, current.RejectionRunID, current.UpdatedAt = 0, "", s.now().UTC()
-	if err := saveObjective(ctx, db.Bun(), current); err != nil {
+	var transitionCurrent *Objective
+	if err := db.RunInTx(ctx, nil, func(ctx context.Context, tx dao.Tx) error {
+		current, err := getObjective(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		if current.Status != StatusCompleteCandidate {
+			transitionCurrent = current
+			return ErrInvalidTransition
+		}
+		current.Status, current.BlockedCount, current.BlockedReason, current.BlockedRunID = StatusComplete, 0, "", ""
+		current.CompletionReview, current.Phase, current.RemainingWork = review, PhaseComplete, []string{}
+		current.RejectionCount, current.RejectionRunID, current.UpdatedAt = 0, "", s.now().UTC()
+		return saveObjective(ctx, tx, current)
+	}); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			return transitionCurrent, ErrInvalidTransition
+		}
 		return nil, err
 	}
 	return s.Get(ctx, sessionID)
@@ -607,15 +666,22 @@ func (s *Store) RecordCompletionReview(ctx context.Context, sessionID, review st
 	if err != nil {
 		return nil, err
 	}
-	current, err := getObjective(ctx, db.Bun(), sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if !IsUnfinishedStatus(current.Status) {
-		return current, ErrInvalidTransition
-	}
-	current.CompletionReview, current.UpdatedAt = review, s.now().UTC()
-	if err := saveObjective(ctx, db.Bun(), current); err != nil {
+	var transitionCurrent *Objective
+	if err := db.RunInTx(ctx, nil, func(ctx context.Context, tx dao.Tx) error {
+		current, err := getObjective(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		if !IsUnfinishedStatus(current.Status) {
+			transitionCurrent = current
+			return ErrInvalidTransition
+		}
+		current.CompletionReview, current.UpdatedAt = review, s.now().UTC()
+		return saveObjective(ctx, tx, current)
+	}); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			return transitionCurrent, ErrInvalidTransition
+		}
 		return nil, err
 	}
 	return s.Get(ctx, sessionID)
@@ -632,34 +698,42 @@ func (s *Store) FinishRun(ctx context.Context, sessionID, runID string) (*Object
 	if err != nil {
 		return nil, err
 	}
-	current, err := getObjective(ctx, db.Bun(), sessionID)
-	if err != nil {
+	var unchanged *Objective
+	if err := db.RunInTx(ctx, nil, func(ctx context.Context, tx dao.Tx) error {
+		current, err := getObjective(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		if current.Status != StatusActive {
+			unchanged = current
+			return nil
+		}
+		nextBlockedCount := current.BlockedCount
+		nextBlockedReason := current.BlockedReason
+		nextBlockedRunID := current.BlockedRunID
+		if current.BlockedCount > 0 && current.BlockedRunID != "" && current.BlockedRunID != runID {
+			nextBlockedCount = 0
+			nextBlockedReason = ""
+			nextBlockedRunID = ""
+		}
+		nextRejectionCount := current.RejectionCount
+		nextRejectionRunID := current.RejectionRunID
+		if current.RejectionCount > 0 && current.RejectionRunID != "" && current.RejectionRunID != runID {
+			nextRejectionCount = 0
+			nextRejectionRunID = ""
+		}
+		if nextBlockedCount == current.BlockedCount && nextRejectionCount == current.RejectionCount {
+			unchanged = current
+			return nil
+		}
+		current.BlockedCount, current.BlockedReason, current.BlockedRunID = nextBlockedCount, nextBlockedReason, nextBlockedRunID
+		current.RejectionCount, current.RejectionRunID, current.UpdatedAt = nextRejectionCount, nextRejectionRunID, s.now().UTC()
+		return saveObjective(ctx, tx, current)
+	}); err != nil {
 		return nil, err
 	}
-	if current.Status != StatusActive {
-		return current, nil
-	}
-	nextBlockedCount := current.BlockedCount
-	nextBlockedReason := current.BlockedReason
-	nextBlockedRunID := current.BlockedRunID
-	if current.BlockedCount > 0 && current.BlockedRunID != "" && current.BlockedRunID != runID {
-		nextBlockedCount = 0
-		nextBlockedReason = ""
-		nextBlockedRunID = ""
-	}
-	nextRejectionCount := current.RejectionCount
-	nextRejectionRunID := current.RejectionRunID
-	if current.RejectionCount > 0 && current.RejectionRunID != "" && current.RejectionRunID != runID {
-		nextRejectionCount = 0
-		nextRejectionRunID = ""
-	}
-	if nextBlockedCount == current.BlockedCount && nextRejectionCount == current.RejectionCount {
-		return current, nil
-	}
-	current.BlockedCount, current.BlockedReason, current.BlockedRunID = nextBlockedCount, nextBlockedReason, nextBlockedRunID
-	current.RejectionCount, current.RejectionRunID, current.UpdatedAt = nextRejectionCount, nextRejectionRunID, s.now().UTC()
-	if err := saveObjective(ctx, db.Bun(), current); err != nil {
-		return nil, err
+	if unchanged != nil {
+		return unchanged, nil
 	}
 	return s.Get(ctx, sessionID)
 }

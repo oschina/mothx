@@ -1,6 +1,6 @@
 # Serve PTY / Terminal 后端方案
 
-> Date: 2026-10-28 · Last revised: 2026-10-29 · Status: Implemented (T0–T4, Pdeathsig, and Windows kill-on-close Job Object implemented 2026-10-29; real-Windows runner execution outstanding) · Owner: Serve (Go)
+> Date: 2026-10-28 · Last revised: 2026-10-30 · Status: Implemented (T0–T4, Pdeathsig, and Windows kill-on-close Job Object implemented 2026-10-29; 2026-10-30 follow-up closed the 501 mapping and build-tag gaps; real-Windows runner execution outstanding) · Owner: Serve (Go)
 > Related: `AGENTS.md`, `docs/proposal/webui-dynamic-workbench-layout-proposal.md`
 > Scope: serve-only，独立于 WebUI 工作台 v1；不随布局方案一起实现。
 
@@ -243,7 +243,7 @@ Content-Type: application/json
 [0x03][JSON control bytes]              error/replay-done/closed(reason)
 ```
 
-- 服务端在 `cwd_changed` 时主动关闭旧终端，发送 `closed` 控制帧（reason=`cwd_changed`）；前端收到后按新 cwd 重新 `POST /api/terminals`，不静默保留旧 shell。
+- 服务端在 `cwd_changed` 时主动关闭旧终端，发送 `closed` 控制帧（reason=`cwd_changed`）；前端收到后按新 cwd 重新 `POST /api/terminals`，不静默保留旧 shell。**当前 serve 没有修改既有 session 工作目录的 HTTP 入口（`SetWorkDir` 仅由 ACP 使用），因此 serve 不会实际发出 `cwd_changed`；前端保留该帧处理以便未来接入。**
 
 - 允许客户端发送文本 JSON 作为兼容/调试（`{"type":"resize","cols":...}`），但主路径用二进制，避免 base64 33% 开销。
 - `x/net/websocket` 的 `websocket.Message.Receive/Send` 可收发 `[]byte`/`string`；用 `websocket.Message` 而不是 `websocket.JSON`。控制帧可以编码成 JSON 字节。
@@ -306,7 +306,7 @@ Content-Type: application/json
 - 单 attached client；新连接 takeover 旧连接。不要允许多个控制端同时输入（会造成不可预测的 shell 状态）；如果未来要“旁观”，加只读 watcher 模式，不写 PTY。
 - `channelRuntime.stop()` 调用 `terminals.Shutdown()`；`Run` 的 defer 链保证 serve 退出/信号取消时关闭所有 PTY。
 - 删除 session 的钩子在 `internal/serve/run.go` 的 `handleSessionByID`：`lifecycle.Delete` 成功且 `deleted=true` 后调用 `rt.terminals.CloseSession(id)`（当前约 2389 行）；`CloseSession` 必须幂等。
-- session 的 cwd 变更/fork 不自动迁移已有终端：cwd 变更走上面的 `CloseSession` + `cwd_changed` 重建；fork 生成新 session，旧 terminal 只属于原 session，不自动搬到新 session。
+- session 的 cwd 变更/fork 不自动迁移已有终端：fork 生成新 session，旧 terminal 只属于原 session，不自动搬到新 session。serve 目前没有 cwd 变更入口；一旦新增，必须在变更成功后调用 `CloseSession` 并以 `cwd_changed` 关闭旧终端。
 - terminal 不参与 Runtime lease：session 在别的进程运行时，本进程仍可开终端（同一个 cwd），这是产品选择；UI 必须在创建前提示“Agent 可能同时在此目录工作”，并在 session 被其他进程持有时显示更强警告。不要用 lease 阻塞用户终端；如果产品后续要求硬互斥，应在共享 Runtime policy 中定义，而不是在终端 manager 里另写一套。
 
 ## 8. 前端契约（供布局方案引用）
@@ -343,7 +343,7 @@ Content-Type: application/json
 - 非浏览器 `terminalToken`：绑定 terminalId + 创建客户端，terminal 关闭后失效；伪造/过期 token 拒绝；
 - 创建/attach/输入/resize/输出/exit；
 - 断开重连 replay；takeover 后旧连接收到 `terminal_takeover`；detached 不自动超时关闭；
-- `DELETE` 关闭；`DELETE session` 关闭该 session 的所有终端；cwd 变更后旧终端关闭并发送 `cwd_changed`，前端可按新 cwd 重建；
+- `DELETE` 关闭；`DELETE session` 关闭该 session 的所有终端；cwd 变更后旧终端关闭并发送 `cwd_changed`（当前 serve 无 cwd 变更入口，该断言待入口存在后补）；
 - `Shutdown` 关闭所有 PTY，等待子进程；
 - 达到 `MaxSessions` 时创建返回 409，不自动 LRU 淘汰；
 - 输出超过 `MaxOutputBytesPerSec` 时暂停 PTY read loop，不丢连接；
@@ -422,6 +422,9 @@ Content-Type: application/json
 - 复盘修复（本轮）：补齐 §6 的 Windows 终止语义。`conpty.Close()` 会关闭原始句柄且不可重复调用，而终端关闭路径会从 `requestStop`、`CloseWithReason` 和 `finish` 多次调用 `PTY.Close()`；Windows 包装现在用 `sync.Once` 保证只关闭一次，避免二次 `CloseHandle` 误关已被复用的句柄。创建 shell 时还会尝试把它加入 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object，使关闭终端时根 shell 遗留的后台子进程也一并终止；若 `OpenProcess`/`AssignProcessToJobObject` 被宿主 job 拒绝则安全降级为仅关闭 ConPTY，不影响终端创建。上述改动已通过 `GOOS=windows` 编译与测试二进制交叉编译，但 Job Object 的实际终止行为仍需 Windows 实机验证。
 
 - 提交前复检（2026-10-29）：`go test ./...`、`cd ui && npm test`（209 tests）、`npm run build`、`node e2e/workbench.smoke.mjs` 均通过；本地无真实 Windows runner，ConPTY 实机结果仍待外部证据。
+- 复盘修复（2026-10-30）：不支持平台现在返回文档规定的 `501 terminal_unsupported`，而不是误报 `403 terminal_disabled`；映射由 `terminalUnavailableStatus` 统一，并新增 `TestTerminalUnavailableStatus`。`pty_unix.go` 的 build tag 从 `!windows` 收敛为 creack/pty 支持的显式平台集合，与 `pty_unsupported.go` 互补；`GOOS=aix` 现在走 unsupported 实现（`Supported()==false`）而不是在依赖编译阶段失败，`GOOS=linux/windows/darwin/freebsd` 均通过。
+- 复盘修复（2026-10-30）：澄清 `cwd_changed` 契约。serve 没有 session cwd 变更入口，后端不会主动发送该帧；前端保留处理，未来新增 cwd 变更时必须调用 `CloseSession` 并以 `cwd_changed` 关闭旧终端。
+- 复检（2026-10-30）：`go test -count=1 ./internal/terminal ./internal/serve ./internal/architecture`、`GOOS=windows/darwin/freebsd go build ./...`、`npm test`（209）、`npm run build`、三个 e2e smoke 通过；并联手修复了 `TestCmdESMLifecycle` 的偶发失败（ESM 写入事务化 + orphaned 执行快照的控制放行），使全仓 `go test -count=1 ./...` 稳定通过。
 
 未完成 / 后续：
 

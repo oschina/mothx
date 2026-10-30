@@ -382,3 +382,22 @@ func TestTerminalWebSocketRoundTrip(t *testing.T) {
 		t.Fatalf("text resize = %dx%d, want 100x30", cols, rows)
 	}
 }
+
+func TestTerminalUnavailableStatus(t *testing.T) {
+	cases := []struct {
+		reason string
+		status int
+		code   string
+	}{
+		{reason: "unsafe", status: http.StatusForbidden, code: "terminal_unsafe"},
+		{reason: "unsupported", status: http.StatusNotImplemented, code: "terminal_unsupported"},
+		{reason: "disabled", status: http.StatusForbidden, code: "terminal_disabled"},
+		{reason: "", status: http.StatusForbidden, code: "terminal_disabled"},
+	}
+	for _, tc := range cases {
+		status, code := terminalUnavailableStatus(tc.reason)
+		if status != tc.status || code != tc.code {
+			t.Fatalf("reason %q: got (%d,%q), want (%d,%q)", tc.reason, status, code, tc.status, tc.code)
+		}
+	}
+}

@@ -24,6 +24,20 @@ const (
 	terminalFrameControl = 0x03
 )
 
+// terminalUnavailableStatus maps EffectiveTerminalEnabled's reason to the
+// documented HTTP status/code pair. Unsupported platforms must stay
+// distinguishable from an operator-configured disable.
+func terminalUnavailableStatus(reason string) (int, string) {
+	switch reason {
+	case "unsafe":
+		return http.StatusForbidden, "terminal_unsafe"
+	case "unsupported":
+		return http.StatusNotImplemented, "terminal_unsupported"
+	default:
+		return http.StatusForbidden, "terminal_disabled"
+	}
+}
+
 type terminalCreateRequest struct {
 	SessionID string `json:"sessionId"`
 	Cols      uint16 `json:"cols"`
@@ -63,11 +77,8 @@ func (rt *channelRuntime) handleTerminals(sessions activeSessionManager) http.Ha
 		case http.MethodPost:
 			enabled, reason := EffectiveTerminalEnabled(rt.configSnapshot())
 			if !enabled {
-				code := "terminal_disabled"
-				if reason == "unsafe" {
-					code = "terminal_unsafe"
-				}
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": code, "code": code})
+				status, code := terminalUnavailableStatus(reason)
+				writeJSON(w, status, map[string]string{"error": code, "code": code})
 				return
 			}
 			if sessions == nil {
@@ -110,11 +121,8 @@ func (rt *channelRuntime) handleTerminals(sessions activeSessionManager) http.Ha
 			// so a disable/unsafe transition cannot leave an orphaned shell behind.
 			if enabled, reason := EffectiveTerminalEnabled(rt.configSnapshot()); !enabled {
 				_ = rt.terminals.CloseByID(term.ID)
-				code := "terminal_disabled"
-				if reason == "unsafe" {
-					code = "terminal_unsafe"
-				}
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": code, "code": code})
+				status, code := terminalUnavailableStatus(reason)
+				writeJSON(w, status, map[string]string{"error": code, "code": code})
 				return
 			}
 			cols, rows := term.Size()

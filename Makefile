@@ -256,7 +256,7 @@ ui-build:
 ui-dev: build
 	@echo "Starting serve backend on 127.0.0.1:7872..."
 	@trap 'kill $${BACKEND_PID} 2>/dev/null; exit' INT TERM; \
-	./bin/$(BINARY_NAME) serve --unsafe --verbose & \
+	./bin/$(BINARY_NAME) serve --port 127.0.0.1:7872 --verbose & \
 	BACKEND_PID=$$!; \
 	for i in 1 2 3 4 5; do \
 		if curl -s http://127.0.0.1:7872/health >/dev/null 2>&1; then break; fi; \

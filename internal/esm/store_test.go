@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/oschina/mothx/internal/session"
@@ -360,5 +361,49 @@ func TestStoreRecordCompletionReviewWhileActive(t *testing.T) {
 	}
 	if obj.Status != StatusActive || obj.CompletionReview != "worker completion lacked tool-backed evidence" {
 		t.Fatalf("recorded review = %#v", obj)
+	}
+}
+
+// TestEditSurvivesConcurrentWorkerProgress guards the read-modify-write
+// boundary against a lost objective update. The ESM coordinator records worker
+// progress from a background goroutine while a user may edit the objective; if
+// either mutation reads outside its write transaction, the later save can
+// restore the text it read before the edit committed.
+func TestEditSurvivesConcurrentWorkerProgress(t *testing.T) {
+	ctx := context.Background()
+	store, sessionID := newTestStore(t)
+	if _, err := store.Create(ctx, sessionID, "initial objective"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		edited := fmt.Sprintf("edited objective %d", i)
+		var wg sync.WaitGroup
+		errs := make(chan error, 2)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if _, err := store.Edit(ctx, sessionID, edited); err != nil {
+				errs <- err
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := store.RecordWorkerProgress(ctx, sessionID, "worker progress", []string{"remaining work"}); err != nil {
+				errs <- err
+			}
+		}()
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Fatalf("iteration %d: %v", i, err)
+		}
+		obj, err := store.Get(ctx, sessionID)
+		if err != nil {
+			t.Fatalf("iteration %d: Get: %v", i, err)
+		}
+		if obj.Objective != edited {
+			t.Fatalf("iteration %d: objective = %q, want %q", i, obj.Objective, edited)
+		}
 	}
 }
