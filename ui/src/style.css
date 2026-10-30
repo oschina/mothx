@@ -3769,35 +3769,33 @@ button.trajectory-detail-divider:hover,
   display: flex;
   flex-direction: column;
   align-items: center;
-  border-top: 1px solid var(--moth-border-subtle);
-  background: var(--moth-surface-page);
-  padding: 12px var(--moth-layout-gutter) var(--moth-composer-clearance);
+  border-top: 0;
+  background: transparent;
+  padding: 0;
   position: relative;
   z-index: 50;
 }
 
-/* Input card — unified container with layered shadow (mothxwork-inspired) */
+/* Input card — a soft floating surface without a visible border ring. */
 .composer-card {
   display: grid;
   gap: 0;
   width: 100%;
   max-width: 980px;
   background: var(--moth-surface-page);
-  border: 1px solid var(--moth-border-strong);
+  border: 0;
   border-radius: 12px;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 5%, transparent);
-  transition: border-color 80ms ease-out, box-shadow 80ms ease-out;
+  box-shadow: 0 1px 6px color-mix(in srgb, var(--text) 10%, transparent);
+  transition: box-shadow 80ms ease-out;
 }
 .composer-card:hover {
-  border-color: var(--hover-border);
+  box-shadow: 0 1px 8px color-mix(in srgb, var(--text) 12%, transparent);
 }
 .composer-card:focus-within {
-  border-color: var(--hover-border);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent), 0 1px 8px color-mix(in srgb, var(--text) 10%, transparent);
 }
 .composer-card:has(textarea:disabled) {
   background: var(--bg-secondary);
-  border-color: var(--border-subtle);
   box-shadow: none;
 }
 
@@ -4660,7 +4658,7 @@ button.stop-btn:disabled {
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: 1fr; }
   .topbar { padding: 0 12px; }
-  .composer { padding: 10px 12px; }
+  .composer { padding: 0; }
   .page { padding: 12px; gap: 12px; }
   .page-toolbar .filter { min-width: 0; width: 100%; }
 
@@ -4687,7 +4685,7 @@ button.stop-btn:disabled {
   }
 
   /* Composer */
-  .composer { padding: 10px 12px 14px; }
+  .composer { padding: 0; }
   .composer-bar { gap: 6px; padding: 4px 10px 8px; }
   .composer-bar .left { flex-wrap: wrap; gap: 6px; }
   .composer-bar .right { flex-shrink: 0; align-self: flex-end; }
@@ -4745,7 +4743,7 @@ button.stop-btn:disabled {
   .msg-image-button, .msg-image-button img { width: 112px; height: 84px; }
 
   .composer {
-    padding: 8px 10px max(12px, calc(8px + env(safe-area-inset-bottom)));
+    padding: 0 0 max(0px, env(safe-area-inset-bottom));
   }
   .composer-card { border-radius: 10px; }
   .composer-controls {
@@ -6917,8 +6915,8 @@ button.stop-btn:disabled {
     padding-right: max(12px, env(safe-area-inset-right));
   }
   .composer {
-    padding-left: max(10px, env(safe-area-inset-left));
-    padding-right: max(10px, env(safe-area-inset-right));
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
   .msg {
     padding-left: max(12px, env(safe-area-inset-left));
