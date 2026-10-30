@@ -543,6 +543,23 @@ export async function getSessionToolResult(id, toolCallID) {
   );
 }
 
+// updateSessionPlan persists a user-edited plan as the session's canonical
+// latest plan. The server appends a plan tool call under the session mutation
+// lease, so the panel must not keep a client-local plan copy.
+export async function updateSessionPlan(id, plan) {
+  if (!id) throw new Error('session id required');
+  return request(`/api/sessions/${encodeURIComponent(id)}/plan`, {
+    method: 'PUT',
+    ...jsonBody({
+      title: String(plan?.title || '').trim(),
+      note: String(plan?.note || '').trim(),
+      steps: Array.isArray(plan?.steps)
+        ? plan.steps.map((step) => ({ title: String(step?.title || '').trim(), status: step?.status || 'pending' }))
+        : []
+    })
+  });
+}
+
 export async function getSessionSubAgents(id) {
   if (!id) return [];
   const data = await request(`/api/sessions/${encodeURIComponent(id)}/subagents`);

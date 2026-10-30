@@ -40,7 +40,8 @@ const {
   runCursors,
   runEvents,
   sessions,
-  syncRunSubscriptions
+  syncRunSubscriptions,
+  updateSessionPlan
 } = await import('./stores.js');
 
 function subscribedIDs(socket) {
@@ -174,4 +175,32 @@ test('runtime event bursts update history without issuing HTTP refreshes', (t) =
   const all = get(sessions);
   assert.equal(fetchCalls, 0, 'runtime snapshots must not cause HTTP refreshes');
   assert.equal(all.find((s) => s.id === 's1')?.execution?.state, 'external', 'the latest Runtime snapshot should win');
+});
+
+test('updateSessionPlan PUTs the trimmed canonical plan payload', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const calls = [];
+  globalThis.fetch = async (path, options) => {
+    calls.push({ path, options });
+    return new Response(JSON.stringify({ plan: { title: 'Plan', steps: [{ title: 'One', status: 'done' }] } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  };
+
+  const result = await updateSessionPlan('s 1', {
+    title: '  Plan  ',
+    note: '  note  ',
+    steps: [{ title: 'One', status: 'done' }]
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, '/api/sessions/s%201/plan');
+  assert.equal(calls[0].options.method, 'PUT');
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    title: 'Plan',
+    note: 'note',
+    steps: [{ title: 'One', status: 'done' }]
+  });
+  assert.equal(result?.plan?.title, 'Plan');
 });

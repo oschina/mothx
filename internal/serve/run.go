@@ -1938,6 +1938,40 @@ func (rt *channelRuntime) handleSessionByID(sessions activeSessionManager) http.
 			writeJSON(w, http.StatusOK, resolved)
 			return
 		}
+		if len(parts) == 2 && parts[1] == "plan" {
+			if r.Method != http.MethodPut {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var plan openaiapi.SessionTaskPlan
+			if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&plan); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_plan", "code": "invalid_plan", "message": err.Error()})
+				return
+			}
+			updater, ok := sessions.(interface {
+				UpdateSessionPlan(context.Context, string, openaiapi.SessionTaskPlan) (openaiapi.SessionTaskPlan, *openaiapi.SessionMessageEntry, error)
+			})
+			if !ok {
+				writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "plan editing is not supported"})
+				return
+			}
+			updated, entry, err := updater.UpdateSessionPlan(r.Context(), id, plan)
+			if err != nil {
+				switch {
+				case errors.Is(err, openaiapi.ErrSessionPlanBusy), errors.Is(err, session.ErrRuntimeLeaseBusy), errors.Is(err, session.ErrSessionRunActive):
+					writeJSON(w, http.StatusConflict, map[string]string{"error": "session_busy", "code": "session_busy"})
+				case errors.Is(err, openaiapi.ErrSessionPlanInvalid):
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_plan", "code": "invalid_plan", "message": err.Error()})
+				case errors.Is(err, openaiapi.ErrSessionNotFound):
+					writeJSON(w, http.StatusNotFound, map[string]string{"error": "session_not_found", "code": "session_not_found"})
+				default:
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "plan_update_failed", "code": "plan_update_failed", "message": err.Error()})
+				}
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"sessionId": id, "plan": updated, "entry": entry})
+			return
+		}
 		if len(parts) >= 2 && parts[1] == "esm" {
 			if handler, ok := sessions.(interface {
 				HandleESMAPI(http.ResponseWriter, *http.Request)

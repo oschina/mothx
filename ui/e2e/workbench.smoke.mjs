@@ -32,10 +32,10 @@ longHistory.push({
   toolCallId: 'plan-call-1',
   arguments: {
     title: 'Polish WebUI workbench',
-    note: 'Read-only projection of the latest plan message.',
+    note: 'Editable from the plan dock and persisted as a plan update.',
     steps: [
       { title: 'Align composer with Desktop', status: 'done' },
-      { title: 'Add the read-only plan dock', status: 'running' },
+      { title: 'Add the editable plan dock', status: 'running' },
       { title: 'Verify mobile projection', status: 'pending' },
     ],
   },
@@ -55,6 +55,7 @@ let terminalFrames = [];
 let terminalInput = '';
 let terminalDeletes = 0;
 let terminalSeq = 0;
+let planUpdate = null;
 const terminalSessions = [];
 const liveTerminals = new Map();
 
@@ -122,6 +123,26 @@ const server = createServer((req, res) => {
     const terminalId = decodeURIComponent(url.pathname.slice('/api/terminals/'.length));
     liveTerminals.delete(terminalId);
     return json(res, 200, { terminalId, closed: true });
+  }
+  if (/^\/api\/sessions\/[^/]+\/plan$/.test(url.pathname) && req.method === 'PUT') {
+    let raw = '';
+    req.on('data', (chunk) => { raw += chunk; });
+    req.on('end', () => {
+      let plan = {};
+      try { plan = JSON.parse(raw || '{}'); } catch {}
+      planUpdate = plan;
+      const sessionId = url.pathname.split('/')[3];
+      const entry = {
+        id: 'ui-plan-e2e-entry',
+        seq: 62,
+        role: 'toolCall',
+        toolCallId: 'ui-plan-e2e',
+        toolName: 'plan',
+        plan
+      };
+      json(res, 200, { sessionId, plan, entry });
+    });
+    return;
   }
   if (url.pathname === '/api/skillhub/installed') return json(res, 200, { installed: [], session: { activeSkills: [] } });
   if (url.pathname === '/api/experts') return json(res, 200, { experts: [] });
@@ -568,8 +589,8 @@ try {
   await waitFor(cdp, `document.querySelector('.composer-config-panel') === null`);
   assert.equal(await evaluate(cdp, `document.querySelector('.wb-tabstrip')?.textContent.includes('Session A') === true`), true);
 
-  // Read-only Plan dock: the latest plan message is projected without new
-  // storage, and the dock sits beside the pane area on desktop.
+  // Plan dock: the latest plan message is projected from the canonical
+  // transcript, and user edits are persisted as a new plan call.
   await waitFor(cdp, `document.querySelector('.plan-card h3')?.textContent === 'Polish WebUI workbench'`);
   await evaluate(cdp, `document.querySelector('[data-action="plan"]').click()`);
   await waitFor(cdp, `document.querySelector('.wb-plan-panel') !== null`);
@@ -580,6 +601,36 @@ try {
   const planLayout = await evaluate(cdp, `(() => { const panel = document.querySelector('.wb-plan-panel').getBoundingClientRect(); const panes = document.querySelector('.wb-panes').getBoundingClientRect(); return { width: panel.width, left: panel.left, panesRight: panes.right }; })()`);
   assert.ok(planLayout.width >= 280, `plan dock must keep a readable width (${planLayout.width}px)`);
   assert.ok(planLayout.left >= planLayout.panesRight - 1, 'plan dock must sit beside the pane area, not overlay it on desktop');
+
+  // Edit the plan: remove a step, add one, change its status, then save. The
+  // request body is the canonical update the server persists.
+  await evaluate(cdp, `document.querySelector('.wb-plan-panel .wb-plan-icon:not(.wb-plan-close)').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-plan-editor') !== null`);
+  assert.equal(await evaluate(cdp, `document.querySelectorAll('.plan-edit-step').length`), 3, 'plan editor must load every existing step');
+  await evaluate(cdp, `document.querySelectorAll('.plan-edit-remove')[1].click()`);
+  await waitFor(cdp, `document.querySelectorAll('.plan-edit-step').length === 2`);
+  await evaluate(cdp, `document.querySelector('.plan-edit-add').click()`);
+  await waitFor(cdp, `document.querySelectorAll('.plan-edit-step').length === 3`);
+  await evaluate(cdp, `(() => {
+    const title = document.querySelector('.plan-title-input');
+    title.value = 'Editable plan';
+    title.dispatchEvent(new Event('input', { bubbles: true }));
+    const steps = document.querySelectorAll('.plan-step-input');
+    steps[2].value = 'Ship editable plan';
+    steps[2].dispatchEvent(new Event('input', { bubbles: true }));
+    const status = document.querySelectorAll('.plan-edit-status select')[2];
+    status.value = 'done';
+    status.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await evaluate(cdp, `document.querySelector('.plan-edit-actions .plan-btn.primary').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-plan-editor') === null`);
+  await waitFor(cdp, `document.querySelector('.wb-plan-panel .todo-plan h3')?.textContent === 'Editable plan'`);
+  assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-plan-panel .todo-plan li').length`), 3, 'saved plan must render the edited step list');
+  assert.equal(planUpdate?.title, 'Editable plan');
+  assert.equal(planUpdate?.steps?.length, 3);
+  assert.equal(planUpdate?.steps?.[2]?.title, 'Ship editable plan');
+  assert.equal(planUpdate?.steps?.[2]?.status, 'done');
+
   await evaluate(cdp, `document.querySelector('.wb-plan-panel .wb-plan-close').click()`);
   await waitFor(cdp, `document.querySelector('.wb-plan-panel') === null`);
 
