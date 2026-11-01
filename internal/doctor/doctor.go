@@ -4,6 +4,7 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/oschina/mothx/internal/config"
 	database "github.com/oschina/mothx/internal/db"
@@ -44,11 +46,34 @@ type Response struct {
 	Version string  `json:"version"`
 	Summary string  `json:"summary"`
 	Checks  []Check `json:"checks"`
+	// Repairs is present only when the caller asked for a session-content repair.
+	// It records what each attempt changed (or why it deferred/failed) so the
+	// machine-readable output stays a faithful account of the side effects.
+	Repairs []SessionContentRepair `json:"repairs,omitempty"`
+}
+
+// Options configures one diagnosis run.
+type Options struct {
+	// CWD scopes project-level checks. An empty value means the process cwd.
+	CWD string
+	// Version overrides the reported CLI version (tests and ACP pass it in).
+	Version string
+	// RepairSessionContent adopts split session content before the checks run.
+	// "all" repairs every split session; any other value is treated as a session
+	// ID. An empty value performs no writes.
+	RepairSessionContent string
 }
 
 // Run performs all doctor checks for cwd. An empty cwd means the process cwd.
 // It does not print or mutate configuration, making it safe for ACP requests.
 func Run(cwd, version string) Response {
+	return RunWithOptions(Options{CWD: cwd, Version: version})
+}
+
+// RunWithOptions performs the checks and, when requested, repairs split session
+// content first so the reported checks describe the post-repair state.
+func RunWithOptions(opts Options) Response {
+	cwd, version := opts.CWD, opts.Version
 	if strings.TrimSpace(version) == "" {
 		version = appversion.Current()
 	}
@@ -65,21 +90,26 @@ func Run(cwd, version string) Response {
 	settings, settingsErr := config.LoadSettingsFor(cwd)
 	checks = append(checks, checkSettingsFiles(cwd, settingsErr))
 	checks = append(checks, checkConfigFiles(cwd, settingsErr)...)
+	var repairs []SessionContentRepair
 	if settingsErr != nil {
 		checks = append(checks, Check{ID: "provider.default", Status: StatusError, Title: "Default provider", Detail: "settings unavailable", Fix: "Fix settings.json syntax"})
 	} else {
 		checks = append(checks, checkProvider(settings)...)
 		checks = append(checks, checkConfiguredProviders(settings)...)
 		checks = append(checks, checkEnvironmentOverrides()...)
+		if strings.TrimSpace(opts.RepairSessionContent) != "" {
+			repairs = RepairSessionContent(context.Background(), settings, opts.RepairSessionContent)
+		}
 	}
 	checks = append(checks, checkSandbox(settings)...)
 	checks = append(checks, checkMCP(cwd)...)
 	checks = append(checks, checkSessions(settings))
 	checks = append(checks, checkSessionIntegrity(settings))
+	checks = append(checks, checkSessionContentStore(settings))
 	checks = append(checks, checkSkills(cwd, settings)...)
 	checks = append(checks, checkContext(cwd, settings)...)
 
-	result := Response{OK: true, Version: version, Checks: checks}
+	result := Response{OK: true, Version: version, Checks: checks, Repairs: repairs}
 	for _, check := range checks {
 		if check.Status == StatusError {
 			result.OK = false
@@ -380,6 +410,113 @@ func sessionIntegrityFix(err error) string {
 		return "Back up sessions.db, then restart MothX so startup can repair stale indexes; do not delete the database"
 	}
 	return "Back up sessions.db, unset MOTHX_SQLITE_QUICK_CHECK, then restart MothX so startup can repair stale indexes; do not delete the database"
+}
+
+// checkSessionContentStore reports sessions whose canonical EventStore is missing
+// content that only the legacy SQLite transcript still holds. This is the state a
+// mixed-build migration leaves behind; the repair adopts the delta instead of
+// deleting it. The check is strictly read-only.
+func checkSessionContentStore(settings *config.Settings) Check {
+	if settings == nil {
+		return Check{ID: "sessions.content_store", Status: StatusSkip, Title: "Session content store", Detail: "settings unavailable"}
+	}
+	dir := settings.GetSessionDir()
+	path := session.RootDatabasePath(dir)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return Check{ID: "sessions.content_store", Status: StatusSkip, Title: "Session content store", Detail: path + " (not created yet)"}
+	} else if err != nil {
+		return Check{ID: "sessions.content_store", Status: StatusError, Title: "Session content store", Detail: err.Error()}
+	}
+	splits, err := session.ListSplitContentStoreSessions(dir)
+	if err != nil {
+		return Check{
+			ID: "sessions.content_store", Status: StatusWarn, Title: "Session content store",
+			Detail: "could not inspect session content stores: " + err.Error(),
+			Fix:    "Back up the session directory and retry; do not delete sessions.db or the event-store directory",
+		}
+	}
+	if len(splits) == 0 {
+		return Check{ID: "sessions.content_store", Status: StatusOK, Title: "Session content store", Detail: "every migrated session is fully covered by the event log"}
+	}
+	var uncovered int64
+	ids := make([]string, 0, len(splits))
+	for i, split := range splits {
+		uncovered += split.UncoveredRows
+		if i < 5 {
+			ids = append(ids, split.SessionID)
+		}
+	}
+	detail := fmt.Sprintf("%d session(s), %d legacy row(s) not covered by the event log: %s", len(splits), uncovered, strings.Join(ids, ", "))
+	if len(splits) > len(ids) {
+		detail += fmt.Sprintf(" (+%d more)", len(splits)-len(ids))
+	}
+	return Check{
+		ID: "sessions.content_store", Status: StatusWarn, Title: "Session content store", Detail: detail,
+		Fix: "Quit every MothX process, back up the session directory, then run `mothx doctor --repair-session-content all` (the delta is adopted into the event log before anything is retired)",
+	}
+}
+
+// SessionContentRepair is the outcome of one split-store repair attempt.
+type SessionContentRepair struct {
+	SessionID      string `json:"sessionId"`
+	CWD            string `json:"cwd,omitempty"`
+	AdoptedEntries int    `json:"adoptedEntries"`
+	RetiredEntries int64  `json:"retiredEntries"`
+	Deferred       bool   `json:"deferred,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+// sessionContentRepairTimeout bounds one attempt. Adoption only appends a bounded
+// delta, so a wedged database must not hang the command forever.
+const sessionContentRepairTimeout = 5 * time.Minute
+
+// RepairSessionContent adopts the split-store delta of one session, or of every
+// split session when target is "all". It never deletes content: adoption appends
+// the uncovered rows to the canonical event log and only then retires the covered
+// duplicate. A session another process is running is reported as deferred, and a
+// failure in one session does not stop the rest.
+func RepairSessionContent(ctx context.Context, settings *config.Settings, target string) []SessionContentRepair {
+	if settings == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sessionDir := settings.GetSessionDir()
+	path := session.RootDatabasePath(sessionDir)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return []SessionContentRepair{{Error: err.Error()}}
+	}
+	target = strings.TrimSpace(target)
+	var candidates []session.SplitStoreSession
+	if target == "" || strings.EqualFold(target, "all") {
+		splits, err := session.ListSplitContentStoreSessions(sessionDir)
+		if err != nil {
+			return []SessionContentRepair{{Error: err.Error()}}
+		}
+		candidates = splits
+	} else {
+		candidates = []session.SplitStoreSession{{SessionID: target}}
+	}
+	repairs := make([]SessionContentRepair, 0, len(candidates))
+	for _, candidate := range candidates {
+		attemptCtx, cancel := context.WithTimeout(ctx, sessionContentRepairTimeout)
+		result, err := session.AdoptLegacyContentByID(attemptCtx, sessionDir, candidate.SessionID)
+		cancel()
+		repair := SessionContentRepair{
+			SessionID: candidate.SessionID, CWD: candidate.CWD,
+			AdoptedEntries: result.AdoptedEntries, RetiredEntries: result.RetiredEntries, Deferred: result.Deferred,
+		}
+		if err != nil {
+			repair.Error = err.Error()
+			repair.Deferred = false
+		}
+		repairs = append(repairs, repair)
+	}
+	return repairs
 }
 
 func checkSkills(cwd string, settings *config.Settings) []Check {

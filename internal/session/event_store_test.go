@@ -2637,8 +2637,12 @@ func TestMigrateToEventStoreDefersWhileAnotherOwnerRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := manager.MigrateToEventStore(context.Background()); err != nil {
+	outcome, err := manager.MigrateToEventStoreOutcome(context.Background())
+	if err != nil {
 		t.Fatalf("migrate while another owner runs the session = %v, want deferred no-op", err)
+	}
+	if outcome != MigrationDeferred {
+		t.Fatalf("migration outcome while another owner runs = %q, want %q", outcome, MigrationDeferred)
 	}
 	flipped, err := sessionUsesEventStore(context.Background(), mustOpenRootDB(t, sessionDir), sessionID)
 	if err != nil {
@@ -2922,6 +2926,10 @@ func TestMigrateSessionRefusesUnsupportedEntryType(t *testing.T) {
 // it. Two populations are covered: a session whose legacy payload duplicate
 // outlived the flip, and one flipped by a build predating the boundary remap
 // whose control rows still name deleted legacy sequences.
+//
+// The duplicate itself is *preserved* by the open: convergence has no content
+// lease and cannot prove no legacy writer is still appending, so the fenced
+// cleanup runs on the attach path (asserted at the end of this test).
 func TestOpenConvergesFlippedSessionWithoutBind(t *testing.T) {
 	sessionDir := t.TempDir()
 	const sessionID = "converge-on-open-session"
@@ -2971,6 +2979,9 @@ func TestOpenConvergesFlippedSessionWithoutBind(t *testing.T) {
 	if err := manager.MigrateToEventStore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// Aging the flip window lets the later attach retire the covered duplicate;
+	// inside the window the retirement deliberately waits.
+	elapseContentStoreRetireGraceForTest(t, sessionDir, sessionID)
 	eventBounds := markerBoundsForTest(t, sessionDir, sessionID)
 	if eventBounds.start == 0 || eventBounds.end <= eventBounds.start {
 		t.Fatalf("event-log marker bounds = %+v, want a closed interval above zero", eventBounds)
@@ -3000,9 +3011,9 @@ func TestOpenConvergesFlippedSessionWithoutBind(t *testing.T) {
 		t.Fatalf("staged bounds = %+v, want the legacy numbers %+v", staged, legacyBounds)
 	}
 
-	// Opening alone must retire the duplicate and replay the canonical log. No
-	// MigrateToEventStore follows, so the hook inside load() is the only thing
-	// that can make these assertions true.
+	// Opening alone must replay the canonical log and repair the control plane. It
+	// must not retire the duplicate: an open holds no content lease and cannot
+	// rule out a legacy writer still appending to `entries`.
 	reopened, err := Open(manager.GetFile())
 	if err != nil {
 		t.Fatal(err)
@@ -3013,8 +3024,8 @@ func TestOpenConvergesFlippedSessionWithoutBind(t *testing.T) {
 	if got := reopened.GetMessages(); !equalReplay(got, []string{"hello", "world"}) {
 		t.Fatalf("opened manager replay has %d messages, want [hello world]: %#v", len(got), textsOf(got))
 	}
-	if count := legacyTranscriptPayloadCount(t, sessionDir, sessionID); count != 0 {
-		t.Fatalf("opened session still holds %d legacy payload rows, want the duplicate removed by convergence", count)
+	if count := legacyTranscriptPayloadCount(t, sessionDir, sessionID); count == 0 {
+		t.Fatal("open retired the legacy payload duplicate; an open must not delete transcript rows it holds no lease for")
 	}
 	turns := conversationTurnBoundsForTest(t, sessionDir, sessionID)
 	if turns != eventBounds {
@@ -3022,6 +3033,14 @@ func TestOpenConvergesFlippedSessionWithoutBind(t *testing.T) {
 	}
 	if turns == legacyBounds {
 		t.Fatal("turn bounds were never translated out of the legacy sequence space")
+	}
+
+	// The attach path is the fenced writer: it retires the covered duplicate.
+	if _, err := reopened.MigrateToEventStoreOutcome(context.Background()); err != nil {
+		t.Fatalf("attach flipped session: %v", err)
+	}
+	if count := legacyTranscriptPayloadCount(t, sessionDir, sessionID); count != 0 {
+		t.Fatalf("attach left %d legacy payload rows, want the covered duplicate retired", count)
 	}
 
 	// Convergence must be a fixed point: reopening an already-converged session
@@ -3055,6 +3074,11 @@ func forceLegacyPayloadDuplicateForTest(t *testing.T, sessionDir, sessionID stri
 		t.Fatal(err)
 	}
 	db := mustOpenRootDB(t, sessionDir)
+	// Restaging must be idempotent: a previous attempt may still hold rows because
+	// retirement waits out the post-flip grace window.
+	if _, err := db.Bun().Exec("DELETE FROM entries WHERE session_id = ? AND type <> 'session'", sessionID); err != nil {
+		t.Fatal(err)
+	}
 	for _, batch := range batches {
 		for _, record := range batch.Events {
 			entry, err := DecodeEventRecord(record)
@@ -3114,6 +3138,17 @@ func markerBoundsForTest(t *testing.T, sessionDir, sessionID string) turnBounds 
 	return turnBounds{start: markers[0].Seq, end: markers[1].Seq}
 }
 
+// elapseContentStoreRetireGraceForTest clears the recorded flip time so the
+// post-flip grace window is over. Production ages the session by waiting; a test
+// only needs the derived condition, and 0 means "no flip time recorded".
+func elapseContentStoreRetireGraceForTest(t *testing.T, sessionDir, sessionID string) {
+	t.Helper()
+	db := mustOpenRootDB(t, sessionDir)
+	if _, err := db.Bun().Exec("UPDATE sessions SET content_store_flipped_at = 0 WHERE id = ?", sessionID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestReloadConvergesFlippedSessionWithoutDeadlock covers the two hazards that
 // live in the same call stack. Manager.Reload() owns m.mu, so it must reload
 // through the locked body: routing it back through load() would re-lock a
@@ -3155,8 +3190,10 @@ func TestReloadConvergesFlippedSessionWithoutDeadlock(t *testing.T) {
 	if got := manager.GetMessages(); !equalReplay(got, []string{"hello"}) {
 		t.Fatalf("reloaded replay = %#v, want [hello]", got)
 	}
-	if count := legacyTranscriptPayloadCount(t, sessionDir, sessionID); count != 0 {
-		t.Fatalf("reloaded session still holds %d legacy payload rows", count)
+	// Reload is an open: it adopts the canonical log but never retires the
+	// duplicate (that is a fenced write owned by attach/repair).
+	if count := legacyTranscriptPayloadCount(t, sessionDir, sessionID); count == 0 {
+		t.Fatal("reload retired the legacy payload duplicate; loads must stay read-only")
 	}
 	if err := CloseDatabases(); err != nil {
 		t.Fatal(err)

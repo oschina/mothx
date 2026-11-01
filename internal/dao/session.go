@@ -296,15 +296,47 @@ func (d *SessionDAO) SetContentStore(ctx context.Context, executor bun.IDB, sess
 	return err
 }
 
+// ContentStore reads the persisted canonical content-store selection of one
+// session ("sqlite" or "event_store"). It is the single authority for content
+// write routing: a Manager's in-memory mode is only a cache of this column, and
+// another Manager (in this process or another build) can change it at any time.
+func (d *SessionDAO) ContentStore(ctx context.Context, executor bun.IDB, sessionID string) (string, error) {
+	var store string
+	err := executor.NewSelect().Table("sessions").Column("content_store").Where("id = ?", sessionID).Limit(1).Scan(ctx, &store)
+	return store, err
+}
+
+// ContentStoreFlippedAt returns the unix time the session first selected the
+// EventStore, or 0 when no flip was ever recorded. It bounds how long the
+// covered legacy duplicate is retained after the flip.
+func (d *SessionDAO) ContentStoreFlippedAt(ctx context.Context, executor bun.IDB, sessionID string) (int64, error) {
+	var flippedAt int64
+	err := executor.NewSelect().Table("sessions").Column("content_store_flipped_at").Where("id = ?", sessionID).Limit(1).Scan(ctx, &flippedAt)
+	return flippedAt, err
+}
+
+// SetContentStoreFlipped selects the EventStore and records the first flip time.
+// Later calls keep the original timestamp: the grace window is measured from the
+// irreversible step, not from the last commit.
+func (d *SessionDAO) SetContentStoreFlipped(ctx context.Context, executor bun.IDB, sessionID string, now int64) error {
+	_, err := executor.NewUpdate().Table("sessions").
+		Set("content_store = ?", "event_store").
+		Set("content_store_flipped_at = CASE WHEN content_store_flipped_at = 0 THEN ? ELSE content_store_flipped_at END", now).
+		Where("id = ?", sessionID).
+		Exec(ctx)
+	return err
+}
+
 // FlipContentStoreOnLease selects the session's canonical content store, but
 // only while the caller still holds the exact lease identity that owns the
 // session. The single statement is atomic in SQLite, so a concurrent epoch
 // takeover makes it affect zero rows instead of writing over the new owner.
 // Unlike SetContentStore this is safe to call while a durable Run is active:
 // the authority is the lease fence, not an idle-session reservation.
-func (d *SessionDAO) FlipContentStoreOnLease(ctx context.Context, executor bun.IDB, sessionID, contentStore, ownerID string, epoch int64, tokenHash string) (int64, error) {
+func (d *SessionDAO) FlipContentStoreOnLease(ctx context.Context, executor bun.IDB, sessionID, contentStore, ownerID string, epoch int64, tokenHash string, now int64) (int64, error) {
 	result, err := executor.NewUpdate().Table("sessions").
 		Set("content_store = ?", contentStore).
+		Set("content_store_flipped_at = CASE WHEN content_store_flipped_at = 0 THEN ? ELSE content_store_flipped_at END", now).
 		Where("id = ?", sessionID).
 		Where("exists (select 1 from session_runtime_leases where session_runtime_leases.session_id = sessions.id and session_runtime_leases.owner_instance_id = ? and session_runtime_leases.epoch = ? and session_runtime_leases.lease_token_hash = ? and session_runtime_leases.state = ?)", ownerID, epoch, tokenHash, "active").
 		Exec(ctx)

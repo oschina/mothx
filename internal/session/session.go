@@ -27,6 +27,21 @@ const CurrentVersion = 3
 
 var ErrSessionModified = errors.New("session was modified by another process")
 
+// ErrSessionContentStoreChanged reports that the session's canonical content
+// store changed while this handle was open, so the entry could not be placed on
+// the transcript this handle knows. It is deliberately distinct from
+// ErrSessionModified: the legacy transcript was retired by a content-store
+// migration (this process, another Manager, or another build sharing the session
+// root), not written by a competing append, so retrying through the Runtime is
+// meaningful and the failure is not an ownership conflict.
+var ErrSessionContentStoreChanged = errors.New("session content store changed while the session was open")
+
+// errContentStoreFlipped is the internal signal writeEntry/writeEntries return
+// when the persisted content store is the EventStore while this handle appended
+// the legacy transcript. appendEntryLocked/AppendMessages adopt the canonical
+// view and retry exactly once instead of surfacing a conflict.
+var errContentStoreFlipped = errors.New("session content store flipped under this handle")
+
 // ErrSessionIDExists means a new session attempted to reuse an existing ID.
 // A duplicate must be rejected: updating the sessions row would merge the new
 // header with the old entries and create a forked conversation.
@@ -152,6 +167,13 @@ func (m *Manager) Reload() error {
 	if m.file == "" {
 		return fmt.Errorf("session manager is not initialized")
 	}
+	return m.reloadLocked(context.Background())
+}
+
+// reloadLocked re-reads this Manager's persisted session into memory. Reload is
+// the locking shell; the caller here already holds m.mu (writeEntry's content
+// store adoption and Reload both need the same body).
+func (m *Manager) reloadLocked(ctx context.Context) error {
 	oldHeader, oldEntries, oldLeaf, oldCwd := m.header, m.entries, m.leafID, m.cwd
 	m.header = nil
 	m.entries = nil
@@ -162,7 +184,7 @@ func (m *Manager) Reload() error {
 	m.eventStoreConvergedFingerprint = ""
 	// Reload owns m.mu, so it reloads through the locked body. Calling load()
 	// here would re-lock the non-reentrant mutex and hang the process.
-	if err := m.loadLocked(context.Background()); err != nil {
+	if err := m.loadLocked(ctx); err != nil {
 		m.header, m.entries, m.leafID, m.cwd = oldHeader, oldEntries, oldLeaf, oldCwd
 		return err
 	}
@@ -1067,6 +1089,111 @@ func sessionFileID(path string) string {
 	return ""
 }
 
+// persistedContentStoreLocked reports whether the session's *persisted*
+// content_store selected the EventStore. The caller holds m.mu.
+func (m *Manager) persistedContentStoreLocked(ctx context.Context) (bool, error) {
+	if m.header == nil || m.header.ID == "" {
+		return false, fmt.Errorf("session header is unavailable")
+	}
+	var usesEventStore bool
+	err := m.withDB(func(db *dao.Database) error {
+		uses, err := sessionUsesEventStore(ctx, db, m.header.ID)
+		usesEventStore = uses
+		return err
+	})
+	return usesEventStore, err
+}
+
+// resolveContentStoreLocked reports whether writes must go to the EventStore,
+// adopting the canonical view when the persisted content store changed under
+// this handle. The caller holds m.mu.
+//
+// The persisted column, not the in-memory mode, decides where content lives.
+// The read is skipped once this handle already writes the EventStore: a session
+// never moves back to the legacy store, so the hot path stays query-free while
+// the direction that can actually go stale — a handle loaded before another
+// Manager migrated the session — is re-checked before every legacy append.
+func (m *Manager) resolveContentStoreLocked(ctx context.Context) (bool, error) {
+	if m.eventStoreMode {
+		return true, nil
+	}
+	if m.subAgent {
+		// Sub-agent records live in the isolated sub_entries compatibility store
+		// and never select the root EventStore.
+		return false, nil
+	}
+	usesEventStore, err := m.persistedContentStoreLocked(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !usesEventStore {
+		return false, nil
+	}
+	// The session was migrated while this handle stayed on the legacy transcript.
+	// Adopt the committed log before writing so the next entry chains onto the
+	// canonical leaf instead of the retired SQLite one.
+	if err := m.reloadLocked(ctx); err != nil {
+		return false, fmt.Errorf("adopt session event store: %w", err)
+	}
+	if !m.eventStoreMode {
+		return false, ErrSessionContentStoreChanged
+	}
+	return true, nil
+}
+
+// appendEntryLocked persists one entry through the session's authoritative
+// content store and records it in the in-memory view. The caller holds m.mu.
+//
+// build runs after the store has been resolved for this attempt, so the entry
+// always chains onto the leaf of the transcript it is about to be written to
+// (adopting the EventStore changes that leaf). A store that flips between
+// resolution and the legacy leaf check is adopted and retried exactly once; the
+// failed attempt committed nothing because the leaf check runs before any insert
+// in the same transaction.
+func (m *Manager) appendEntryLocked(ctx context.Context, build func(parent *string) (interface{}, error)) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for attempt := 0; ; attempt++ {
+		usesEventStore, err := m.resolveContentStoreLocked(ctx)
+		if err != nil {
+			return "", err
+		}
+		entry, err := build(cloneLeafID(m.leafID))
+		if err != nil {
+			return "", err
+		}
+		id, _, _, _ := getEntryMetadata(entry)
+		if id == "" {
+			return "", fmt.Errorf("session entry has no ID")
+		}
+		if usesEventStore {
+			ids, err := m.appendEventStoreEntriesLocked(ctx, "", "", []interface{}{entry})
+			if err != nil {
+				return "", err
+			}
+			return ids[0], nil
+		}
+		if err := m.writeEntry(entry); err != nil {
+			if attempt == 0 && errors.Is(err, errContentStoreFlipped) {
+				continue
+			}
+			return "", err
+		}
+		m.entries = append(m.entries, entry)
+		m.leafID = &id
+		return id, nil
+	}
+}
+
+func cloneLeafID(leaf *string) *string {
+	if leaf == nil {
+		return nil
+	}
+	value := *leaf
+	return &value
+}
+
 // AppendMessage adds a message entry.
 func (m *Manager) AppendMessage(msg provider.Message) (string, error) {
 	msg, _ = provider.NormalizeMessage(msg)
@@ -1076,32 +1203,17 @@ func (m *Manager) AppendMessage(msg provider.Message) (string, error) {
 	if err := m.ensureInitializedLocked(); err != nil {
 		return "", err
 	}
-
-	id := GenerateID()
-	entry := MessageEntry{
-		EntryBase: EntryBase{
-			Type:      EntryMessage,
-			ID:        id,
-			ParentID:  m.leafID,
-			Timestamp: time.Now(),
-		},
-		Message: msg,
-	}
-	if m.eventStoreMode {
-		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
-		if err != nil {
-			return "", err
-		}
-		return ids[0], nil
-	}
-
-	if err := m.writeEntry(entry); err != nil {
-		return "", err
-	}
-
-	m.entries = append(m.entries, entry)
-	m.leafID = &id
-	return id, nil
+	return m.appendEntryLocked(context.Background(), func(parent *string) (interface{}, error) {
+		return MessageEntry{
+			EntryBase: EntryBase{
+				Type:      EntryMessage,
+				ID:        GenerateID(),
+				ParentID:  parent,
+				Timestamp: time.Now(),
+			},
+			Message: msg,
+		}, nil
+	})
 }
 
 // AppendMessages persists an ordered batch of conversation messages, folding
@@ -1124,31 +1236,60 @@ func (m *Manager) AppendMessages(msgs []provider.Message) ([]string, error) {
 	if err := m.ensureInitializedLocked(); err != nil {
 		return nil, err
 	}
-	if m.eventStoreMode {
-		entries := make([]interface{}, len(msgs))
-		parent := m.leafID
-		now := time.Now()
-		for i, msg := range msgs {
-			msg, _ = provider.NormalizeMessage(msg)
-			id := GenerateID()
-			entries[i] = MessageEntry{EntryBase: EntryBase{Type: EntryMessage, ID: id, ParentID: parent, Timestamp: now}, Message: msg}
-			entryID := id
-			parent = &entryID
+	ctx := context.Background()
+	// A flip between chunks cannot be retried safely: earlier chunks are already
+	// committed to the store this call started on. Only a flip before the first
+	// chunk (nothing committed yet) self-heals by adopting the EventStore.
+	for attempt := 0; ; attempt++ {
+		usesEventStore, err := m.resolveContentStoreLocked(ctx)
+		if err != nil {
+			return nil, err
 		}
-		return m.appendEventStoreEntriesLocked(context.Background(), "", "", entries)
+		if usesEventStore {
+			return m.appendEventStoreMessagesLocked(ctx, msgs)
+		}
+		ids, err := m.appendLegacyMessageChunksLocked(msgs)
+		if err == nil {
+			return ids, nil
+		}
+		if attempt == 0 && len(ids) == 0 && errors.Is(err, errContentStoreFlipped) {
+			continue
+		}
+		return nil, err
 	}
+}
 
+// appendEventStoreMessagesLocked chains a whole batch onto the canonical leaf
+// and commits it as one bounded EventStore append. The caller holds m.mu.
+func (m *Manager) appendEventStoreMessagesLocked(ctx context.Context, msgs []provider.Message) ([]string, error) {
+	entries := make([]interface{}, len(msgs))
+	parent := cloneLeafID(m.leafID)
+	now := time.Now()
+	for i, msg := range msgs {
+		msg, _ = provider.NormalizeMessage(msg)
+		id := GenerateID()
+		entries[i] = MessageEntry{EntryBase: EntryBase{Type: EntryMessage, ID: id, ParentID: parent, Timestamp: now}, Message: msg}
+		entryID := id
+		parent = &entryID
+	}
+	return m.appendEventStoreEntriesLocked(ctx, "", "", entries)
+}
+
+// appendLegacyMessageChunksLocked keeps the bounded legacy chunking contract and
+// returns the IDs of the chunks that committed. The caller holds m.mu.
+func (m *Manager) appendLegacyMessageChunksLocked(msgs []provider.Message) ([]string, error) {
 	ids := make([]string, 0, len(msgs))
 	for start := 0; start < len(msgs); start += maxEntriesPerTransaction {
 		end := min(start+maxEntriesPerTransaction, len(msgs))
 		chunk := msgs[start:end]
 		batch := make([]MessageEntry, len(chunk))
+		chunkIDs := make([]string, len(chunk))
 		now := time.Now()
-		parent := m.leafID
+		parent := cloneLeafID(m.leafID)
 		for i, msg := range chunk {
 			msg, _ = provider.NormalizeMessage(msg)
 			id := GenerateID()
-			ids = append(ids, id)
+			chunkIDs[i] = id
 			batch[i] = MessageEntry{
 				EntryBase: EntryBase{
 					Type:      EntryMessage,
@@ -1164,12 +1305,13 @@ func (m *Manager) AppendMessages(msgs []provider.Message) ([]string, error) {
 			parent = &entryID
 		}
 		if err := m.writeEntries(batch); err != nil {
-			return nil, err
+			return ids, err
 		}
 		for i := range batch {
 			m.entries = append(m.entries, batch[i])
 		}
-		lastID := ids[len(ids)-1]
+		ids = append(ids, chunkIDs...)
+		lastID := chunkIDs[len(chunkIDs)-1]
 		m.leafID = &lastID
 	}
 	return ids, nil
@@ -1183,33 +1325,18 @@ func (m *Manager) AppendModelChange(providerName, modelID string) (string, error
 	if err := m.ensureInitializedLocked(); err != nil {
 		return "", err
 	}
-
-	id := GenerateID()
-	entry := ModelChangeEntry{
-		EntryBase: EntryBase{
-			Type:      EntryModelChange,
-			ID:        id,
-			ParentID:  m.leafID,
-			Timestamp: time.Now(),
-		},
-		Provider: providerName,
-		ModelID:  modelID,
-	}
-	if m.eventStoreMode {
-		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
-		if err != nil {
-			return "", err
-		}
-		return ids[0], nil
-	}
-
-	if err := m.writeEntry(entry); err != nil {
-		return "", err
-	}
-
-	m.entries = append(m.entries, entry)
-	m.leafID = &id
-	return id, nil
+	return m.appendEntryLocked(context.Background(), func(parent *string) (interface{}, error) {
+		return ModelChangeEntry{
+			EntryBase: EntryBase{
+				Type:      EntryModelChange,
+				ID:        GenerateID(),
+				ParentID:  parent,
+				Timestamp: time.Now(),
+			},
+			Provider: providerName,
+			ModelID:  modelID,
+		}, nil
+	})
 }
 
 // AppendModeChange records a session execution mode change.
@@ -1220,30 +1347,17 @@ func (m *Manager) AppendModeChange(mode string) (string, error) {
 	if err := m.ensureInitializedLocked(); err != nil {
 		return "", err
 	}
-
-	id := GenerateID()
-	entry := ModeChangeEntry{
-		EntryBase: EntryBase{
-			Type:      EntryModeChange,
-			ID:        id,
-			ParentID:  m.leafID,
-			Timestamp: time.Now(),
-		},
-		Mode: mode,
-	}
-	if m.eventStoreMode {
-		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
-		if err != nil {
-			return "", err
-		}
-		return ids[0], nil
-	}
-	if err := m.writeEntry(entry); err != nil {
-		return "", err
-	}
-	m.entries = append(m.entries, entry)
-	m.leafID = &id
-	return id, nil
+	return m.appendEntryLocked(context.Background(), func(parent *string) (interface{}, error) {
+		return ModeChangeEntry{
+			EntryBase: EntryBase{
+				Type:      EntryModeChange,
+				ID:        GenerateID(),
+				ParentID:  parent,
+				Timestamp: time.Now(),
+			},
+			Mode: mode,
+		}, nil
+	})
 }
 
 // AppendThinkingLevelChange records a thinking level change.
@@ -1254,32 +1368,17 @@ func (m *Manager) AppendThinkingLevelChange(level string) (string, error) {
 	if err := m.ensureInitializedLocked(); err != nil {
 		return "", err
 	}
-
-	id := GenerateID()
-	entry := ThinkingLevelChangeEntry{
-		EntryBase: EntryBase{
-			Type:      EntryThinkingChange,
-			ID:        id,
-			ParentID:  m.leafID,
-			Timestamp: time.Now(),
-		},
-		ThinkingLevel: level,
-	}
-	if m.eventStoreMode {
-		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
-		if err != nil {
-			return "", err
-		}
-		return ids[0], nil
-	}
-
-	if err := m.writeEntry(entry); err != nil {
-		return "", err
-	}
-
-	m.entries = append(m.entries, entry)
-	m.leafID = &id
-	return id, nil
+	return m.appendEntryLocked(context.Background(), func(parent *string) (interface{}, error) {
+		return ThinkingLevelChangeEntry{
+			EntryBase: EntryBase{
+				Type:      EntryThinkingChange,
+				ID:        GenerateID(),
+				ParentID:  parent,
+				Timestamp: time.Now(),
+			},
+			ThinkingLevel: level,
+		}, nil
+	})
 }
 
 // AppendAdditionalDirectories records a complete replacement of the
@@ -1290,21 +1389,12 @@ func (m *Manager) AppendAdditionalDirectories(directories []string) (string, err
 	if err := m.ensureInitializedLocked(); err != nil {
 		return "", err
 	}
-	id := GenerateID()
-	entry := AdditionalDirectoriesEntry{EntryBase: EntryBase{Type: EntryAdditionalDirectories, ID: id, ParentID: m.leafID, Timestamp: time.Now()}, Directories: append([]string(nil), directories...)}
-	if m.eventStoreMode {
-		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
-		if err != nil {
-			return "", err
-		}
-		return ids[0], nil
-	}
-	if err := m.writeEntry(entry); err != nil {
-		return "", err
-	}
-	m.entries = append(m.entries, entry)
-	m.leafID = &id
-	return id, nil
+	return m.appendEntryLocked(context.Background(), func(parent *string) (interface{}, error) {
+		return AdditionalDirectoriesEntry{
+			EntryBase:   EntryBase{Type: EntryAdditionalDirectories, ID: GenerateID(), ParentID: parent, Timestamp: time.Now()},
+			Directories: append([]string(nil), directories...),
+		}, nil
+	})
 }
 
 // AppendCompaction records a context compaction.
@@ -1315,48 +1405,35 @@ func (m *Manager) AppendCompaction(summary, firstKeptEntryID string, tokensBefor
 	if err := m.ensureInitializedLocked(); err != nil {
 		return "", err
 	}
-
-	summaryVersion := 1
-	previousCompactionID := ""
-	if previous, ok := latestCompactionLocked(m.entries); ok {
-		previousCompactionID = previous.ID
-		if previous.SummaryVersion > 0 {
-			summaryVersion = previous.SummaryVersion + 1
-		} else {
-			summaryVersion = 2
+	// The version chain is derived from the transcript this attempt writes to,
+	// so it is computed after the content store has been resolved (adopting the
+	// EventStore changes the in-memory entries).
+	return m.appendEntryLocked(context.Background(), func(parent *string) (interface{}, error) {
+		summaryVersion := 1
+		previousCompactionID := ""
+		if previous, ok := latestCompactionLocked(m.entries); ok {
+			previousCompactionID = previous.ID
+			if previous.SummaryVersion > 0 {
+				summaryVersion = previous.SummaryVersion + 1
+			} else {
+				summaryVersion = 2
+			}
 		}
-	}
-
-	id := GenerateID()
-	entry := CompactionEntry{
-		EntryBase: EntryBase{
-			Type:      EntryCompaction,
-			ID:        id,
-			ParentID:  m.leafID,
-			Timestamp: time.Now(),
-		},
-		Summary:              summary,
-		FirstKeptEntry:       firstKeptEntryID,
-		TokensBefore:         tokensBefore,
-		SummaryVersion:       summaryVersion,
-		PreviousCompactionID: previousCompactionID,
-		LastSummarizedEntry:  lastSummarizedEntryIDLocked(m.entries, firstKeptEntryID),
-	}
-	if m.eventStoreMode {
-		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
-		if err != nil {
-			return "", err
-		}
-		return ids[0], nil
-	}
-
-	if err := m.writeEntry(entry); err != nil {
-		return "", err
-	}
-
-	m.entries = append(m.entries, entry)
-	m.leafID = &id
-	return id, nil
+		return CompactionEntry{
+			EntryBase: EntryBase{
+				Type:      EntryCompaction,
+				ID:        GenerateID(),
+				ParentID:  parent,
+				Timestamp: time.Now(),
+			},
+			Summary:              summary,
+			FirstKeptEntry:       firstKeptEntryID,
+			TokensBefore:         tokensBefore,
+			SummaryVersion:       summaryVersion,
+			PreviousCompactionID: previousCompactionID,
+			LastSummarizedEntry:  lastSummarizedEntryIDLocked(m.entries, firstKeptEntryID),
+		}, nil
+	})
 }
 
 // AppendContentOverride records an append-only replacement of a persisted
@@ -1375,47 +1452,33 @@ func (m *Manager) AppendContentOverride(targetEntryID string, msg provider.Messa
 	if err := m.ensureInitializedLocked(); err != nil {
 		return "", err
 	}
-
-	found := false
-	for _, entry := range m.entries {
-		if message, ok := entry.(MessageEntry); ok && message.ID == targetEntryID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return "", fmt.Errorf("content override target %s is not a message entry", targetEntryID)
-	}
 	msg, _ = provider.NormalizeMessage(msg)
-
-	id := GenerateID()
-	entry := ContentOverrideEntry{
-		EntryBase: EntryBase{
-			Type:      EntryContentOverride,
-			ID:        id,
-			ParentID:  m.leafID,
-			Timestamp: time.Now(),
-		},
-		TargetEntryID: targetEntryID,
-		Message:       cloneMessage(msg),
-		Reason:        reason,
-		Code:          code,
-	}
-	if m.eventStoreMode {
-		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
-		if err != nil {
-			return "", err
+	return m.appendEntryLocked(context.Background(), func(parent *string) (interface{}, error) {
+		// Validate against the transcript this attempt writes to: a store flip
+		// changes which entries are replayable.
+		found := false
+		for _, entry := range m.entries {
+			if message, ok := entry.(MessageEntry); ok && message.ID == targetEntryID {
+				found = true
+				break
+			}
 		}
-		return ids[0], nil
-	}
-
-	if err := m.writeEntry(entry); err != nil {
-		return "", err
-	}
-
-	m.entries = append(m.entries, entry)
-	m.leafID = &id
-	return id, nil
+		if !found {
+			return nil, fmt.Errorf("content override target %s is not a message entry", targetEntryID)
+		}
+		return ContentOverrideEntry{
+			EntryBase: EntryBase{
+				Type:      EntryContentOverride,
+				ID:        GenerateID(),
+				ParentID:  parent,
+				Timestamp: time.Now(),
+			},
+			TargetEntryID: targetEntryID,
+			Message:       cloneMessage(msg),
+			Reason:        reason,
+			Code:          code,
+		}, nil
+	})
 }
 
 func latestCompactionLocked(entries []interface{}) (CompactionEntry, bool) {
@@ -1471,21 +1534,13 @@ func (m *Manager) AppendSessionTitle(name, source string) (string, error) {
 	if err := m.ensureInitializedLocked(); err != nil {
 		return "", err
 	}
-	id := GenerateID()
-	entry := SessionInfoEntry{EntryBase: EntryBase{Type: EntrySessionInfo, ID: id, ParentID: m.leafID, Timestamp: time.Now()}, Name: name, Source: source}
-	if m.eventStoreMode {
-		ids, err := m.appendEventStoreEntriesLocked(context.Background(), "", "", []interface{}{entry})
-		if err != nil {
-			return "", err
-		}
-		return ids[0], nil
-	}
-	if err := m.writeEntry(entry); err != nil {
-		return "", err
-	}
-	m.entries = append(m.entries, entry)
-	m.leafID = &id
-	return id, nil
+	return m.appendEntryLocked(context.Background(), func(parent *string) (interface{}, error) {
+		return SessionInfoEntry{
+			EntryBase: EntryBase{Type: EntrySessionInfo, ID: GenerateID(), ParentID: parent, Timestamp: time.Now()},
+			Name:      name,
+			Source:    source,
+		}, nil
+	})
 }
 
 // ReplayState is the reconstructed conversation state after applying compactions.
@@ -2903,11 +2958,11 @@ func ListSessionMessagesBefore(sessionDir, sessionID string, beforeSeq int64, li
 }
 
 func sessionUsesEventStore(ctx context.Context, db *dao.Database, sessionID string) (bool, error) {
-	header, err := dao.NewSessionDAO(db.Bun()).Header(ctx, "sessions", sessionID)
+	store, err := dao.NewSessionDAO(db.Bun()).ContentStore(ctx, db.Bun(), sessionID)
 	if err != nil {
 		return false, err
 	}
-	return header.ContentStore == "event_store", nil
+	return store == "event_store", nil
 }
 
 func eventStoreSequencedMessages(ctx context.Context, sessionDir, sessionID string) ([]SequencedMessage, error) {
@@ -3401,6 +3456,41 @@ func (m *Manager) resolveEntryWriteTarget() (dbPath, sessionID string, err error
 	return dbPath, sessionID, nil
 }
 
+// entryContentStoreFlippedTx reports whether the session's persisted content
+// store moved to the EventStore. writeEntry/writeEntries call it only after a
+// leaf mismatch, so the extra read never touches the healthy path.
+func (m *Manager) entryContentStoreFlippedTx(tx *dao.Tx, sessionID string) (bool, error) {
+	store, err := dao.NewSessionDAO(nil).ContentStore(context.Background(), tx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	return store == "event_store", nil
+}
+
+// legacyLeafConflict turns a failed legacy leaf check into the right error:
+//
+//   - the persisted content store is the EventStore: the handle is stale and the
+//     payload it expected was retired by the migration. Report the internal
+//     retry signal so the caller adopts the canonical view instead of surfacing
+//     a conflict that never happened;
+//   - the transcript vanished while the store is still the legacy SQLite one:
+//     another build retired it out from under this handle. Report the typed
+//     transition error (never a silent re-root of the transcript);
+//   - otherwise it is a genuine optimistic-lock race.
+func (m *Manager) legacyLeafConflict(tx *dao.Tx, sessionID, expectedLeaf, currentLeaf string) error {
+	flipped, err := m.entryContentStoreFlippedTx(tx, sessionID)
+	if err != nil {
+		return fmt.Errorf("read session content store: %w", err)
+	}
+	if flipped {
+		return errContentStoreFlipped
+	}
+	if currentLeaf == "" && expectedLeaf != "" {
+		return fmt.Errorf("%w: the legacy transcript of session %s was retired while this handle was open (expected leaf %q); reopen the session before writing", ErrSessionContentStoreChanged, sessionID, expectedLeaf)
+	}
+	return fmt.Errorf("%w: expected leaf %q, current leaf %q; reopen the session before writing", ErrSessionModified, expectedLeaf, currentLeaf)
+}
+
 func (m *Manager) writeEntry(entry interface{}) error {
 	// Verify handle file or its database is writable to honor file permission settings
 	dbPath, sessionID, err := m.resolveEntryWriteTarget()
@@ -3435,7 +3525,7 @@ func (m *Manager) writeEntry(entry interface{}) error {
 				expectedLeaf = *parentID
 			}
 			if currentLeaf != expectedLeaf {
-				return fmt.Errorf("%w: expected leaf %q, current leaf %q; reopen the session before writing", ErrSessionModified, expectedLeaf, currentLeaf)
+				return m.legacyLeafConflict(tx, sessionID, expectedLeaf, currentLeaf)
 			}
 		}
 
@@ -3511,7 +3601,7 @@ func (m *Manager) writeEntries(batch []MessageEntry) error {
 			expectedLeaf = *batch[0].ParentID
 		}
 		if currentLeaf != expectedLeaf {
-			return fmt.Errorf("%w: expected leaf %q, current leaf %q; reopen the session before writing", ErrSessionModified, expectedLeaf, currentLeaf)
+			return m.legacyLeafConflict(tx, sessionID, expectedLeaf, currentLeaf)
 		}
 		for i := range batch {
 			var parentIDVal interface{}

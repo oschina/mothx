@@ -11,7 +11,7 @@ import (
 	"github.com/oschina/mothx/internal/dao"
 )
 
-const currentSchemaVersion = 53
+const currentSchemaVersion = 54
 
 type schemaMigration struct {
 	version int
@@ -815,6 +815,12 @@ var schemaMigrations = []schemaMigration{
 	// that can change a search result are watched: session identity/location/
 	// binding, legacy payload rows (title and content), EventStore projections
 	// (canonical event content), and project membership (a search scope filter).
+	{version: 54, name: "add_content_store_flip_time", apply: func(tx *sql.Tx) error {
+		// The flip time bounds how long the covered legacy duplicate is kept after
+		// a session selects the EventStore: retiring it immediately can delete the
+		// rows a build that still writes the legacy transcript is appending to.
+		return addColumnIfMissing(tx, "sessions", "content_store_flipped_at", "INTEGER NOT NULL DEFAULT 0")
+	}},
 	{version: 53, name: "create_session_store_write_version", apply: func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS session_store_meta (
 			key TEXT PRIMARY KEY,

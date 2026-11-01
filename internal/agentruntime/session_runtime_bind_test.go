@@ -93,8 +93,15 @@ func TestBindSessionMigratesLegacyTranscriptToEventStore(t *testing.T) {
 	if err := db.Bun().QueryRow("SELECT COUNT(*) FROM entries WHERE session_id = ? AND type <> 'session'", manager.GetHeader().ID).Scan(&payloadRows); err != nil {
 		t.Fatal(err)
 	}
+	if payloadRows == 0 {
+		t.Fatal("Runtime bind retired the covered duplicate inside the post-flip grace window")
+	}
+	retireAfterGraceForTest(t, sessionDir, manager)
+	if err := db.Bun().QueryRow("SELECT COUNT(*) FROM entries WHERE session_id = ? AND type <> 'session'", manager.GetHeader().ID).Scan(&payloadRows); err != nil {
+		t.Fatal(err)
+	}
 	if payloadRows != 0 {
-		t.Fatalf("legacy payload rows after Runtime bind = %d, want 0", payloadRows)
+		t.Fatalf("legacy payload rows after grace = %d, want 0", payloadRows)
 	}
 	header, err := dao.NewSessionDAO(db.Bun()).Header(context.Background(), "sessions", manager.GetHeader().ID)
 	if err != nil {

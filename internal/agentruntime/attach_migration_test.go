@@ -32,6 +32,24 @@ func attachedContentStore(t *testing.T, sessionDir, sessionID string) (string, i
 	return header.ContentStore, payloadRows
 }
 
+// retireAfterGraceForTest drives the fenced duplicate retirement the way
+// production does: once the post-flip grace window has elapsed, the next attach
+// retires the covered duplicate. Retirement is deliberately not part of the flip
+// while a build that still writes the legacy transcript may be appending to it.
+func retireAfterGraceForTest(t *testing.T, sessionDir string, manager *session.Manager) {
+	t.Helper()
+	db, err := session.OpenRootDB(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Bun().Exec("UPDATE sessions SET content_store_flipped_at = 0 WHERE id = ?", manager.GetHeader().ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.MigrateToEventStoreOutcome(context.Background()); err != nil {
+		t.Fatalf("retire legacy duplicate after grace: %v", err)
+	}
+}
+
 func attachMigratedSession(t *testing.T, workDir, sessionDir string, manager *session.Manager) *SessionRuntime {
 	t.Helper()
 	registry := tools.NewRegistry(workDir, sandbox.NewNoneSandbox())
@@ -66,8 +84,11 @@ func TestAttachSessionResourcesMigratesLegacyTranscriptToEventStore(t *testing.T
 	if store != "event_store" {
 		t.Fatalf("content store after attach = %q, want event_store", store)
 	}
-	if payloadRows != 0 {
-		t.Fatalf("legacy payload rows after attach = %d, want 0", payloadRows)
+	// The attach migrated the transcript; the covered duplicate is retired once
+	// the post-flip grace window has elapsed (a legacy writer may still append).
+	retireAfterGraceForTest(t, sessionDir, manager)
+	if _, payloadRows = attachedContentStore(t, sessionDir, manager.GetHeader().ID); payloadRows != 0 {
+		t.Fatalf("legacy payload rows after grace = %d, want 0", payloadRows)
 	}
 	if messages := manager.GetMessages(); len(messages) != 1 || messages[0].Content != "legacy before attach" {
 		t.Fatalf("migrated replay after attach = %#v", messages)
@@ -120,8 +141,10 @@ func TestBuilderBuildMigratesLegacyTranscriptToEventStore(t *testing.T) {
 	if store != "event_store" {
 		t.Fatalf("content store after build = %q, want event_store", store)
 	}
-	if payloadRows != 0 {
-		t.Fatalf("legacy payload rows after build = %d, want 0", payloadRows)
+	// Retirement is a post-grace attach step, not part of the flip itself.
+	retireAfterGraceForTest(t, sessionDir, manager)
+	if _, payloadRows = attachedContentStore(t, sessionDir, manager.GetHeader().ID); payloadRows != 0 {
+		t.Fatalf("legacy payload rows after grace = %d, want 0", payloadRows)
 	}
 	if messages := manager.GetMessages(); len(messages) != 1 || messages[0].Content != "legacy before build" {
 		t.Fatalf("migrated replay after build = %#v", messages)
@@ -202,8 +225,12 @@ func TestAttachSessionResourcesHealsStaleEventStoreBeforeExport(t *testing.T) {
 	if contentStore != "event_store" {
 		t.Fatalf("content store after healing attach = %q, want event_store", contentStore)
 	}
-	if payloadRows != 0 {
-		t.Fatalf("legacy payload rows after healing attach = %d, want 0", payloadRows)
+	if payloadRows == 0 {
+		t.Fatal("healing attach retired the covered duplicate inside the post-flip grace window")
+	}
+	retireAfterGraceForTest(t, sessionDir, manager)
+	if _, payloadRows = attachedContentStore(t, sessionDir, sessionID); payloadRows != 0 {
+		t.Fatalf("legacy payload rows after grace = %d, want 0", payloadRows)
 	}
 	if messages := manager.GetMessages(); len(messages) != 1 || messages[0].Content != "legacy before heal" {
 		t.Fatalf("replayed transcript after healing attach = %#v", messages)

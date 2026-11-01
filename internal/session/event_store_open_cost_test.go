@@ -198,9 +198,14 @@ func TestOpenConvergedEventStoreSessionSkipsLegacyCleanupWrite(t *testing.T) {
 // half: a flipped session is not necessarily a converged one. The crash window
 // between the content-store flip and cleanup leaves legacy payload rows behind,
 // and a session flipped by an older build keeps `conversation_turns` bounds that
-// name deleted legacy sequences. Opening such a session must still retire the
-// duplicate and translate the bounds, while paying only the single scan the open
+// name deleted legacy sequences. Opening such a session must still translate the
+// bounds and replay the canonical log, while paying only the single scan the open
 // already performed.
+//
+// Retiring the duplicate is deliberately *not* part of the open: an open holds no
+// content lease and cannot rule out a legacy writer still appending to `entries`,
+// so the fenced cleanup belongs to the attach path (covered by the second half of
+// this test).
 func TestOpenRemovesLegacyDuplicateAndRepairsTurnBoundsInOneScan(t *testing.T) {
 	sessionDir := t.TempDir()
 	const sessionID = "open-unconverged-heal"
@@ -247,6 +252,8 @@ func TestOpenRemovesLegacyDuplicateAndRepairsTurnBoundsInOneScan(t *testing.T) {
 	if err := manager.MigrateToEventStore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// Age the flip window: the attach half below retires the covered duplicate.
+	elapseContentStoreRetireGraceForTest(t, sessionDir, sessionID)
 	eventBounds := markerBoundsForTest(t, sessionDir, sessionID)
 	if err := CloseDatabases(); err != nil {
 		t.Fatal(err)
@@ -268,17 +275,29 @@ func TestOpenRemovesLegacyDuplicateAndRepairsTurnBoundsInOneScan(t *testing.T) {
 	}
 
 	before := EventStoreWriteStats().FullScans
-	if _, err := Open(manager.GetFile()); err != nil {
+	opened, err := Open(manager.GetFile())
+	if err != nil {
 		t.Fatalf("open un-converged session: %v", err)
 	}
 	if scanned := EventStoreWriteStats().FullScans - before; scanned > 1 {
 		t.Fatalf("healing an un-converged session performed %d whole-log scans, want at most 1", scanned)
 	}
-	if count := legacyTranscriptPayloadCount(t, sessionDir, sessionID); count != 0 {
-		t.Fatalf("open left %d legacy payload rows, want the duplicate removed", count)
+	if count := legacyTranscriptPayloadCount(t, sessionDir, sessionID); count == 0 {
+		t.Fatal("open retired the legacy payload duplicate; an open must not delete transcript rows it holds no lease for")
 	}
 	if bounds := conversationTurnBoundsForTest(t, sessionDir, sessionID); bounds != eventBounds {
 		t.Fatalf("turn bounds after open = %+v, want the event-log markers %+v", bounds, eventBounds)
+	}
+	// The attach path owns the fenced cleanup: with every legacy row covered by a
+	// committed projection, retiring the duplicate cannot lose content.
+	if _, err := opened.MigrateToEventStoreOutcome(context.Background()); err != nil {
+		t.Fatalf("attach un-converged session: %v", err)
+	}
+	if count := legacyTranscriptPayloadCount(t, sessionDir, sessionID); count != 0 {
+		t.Fatalf("attach left %d legacy payload rows, want the covered duplicate retired", count)
+	}
+	if bounds := conversationTurnBoundsForTest(t, sessionDir, sessionID); bounds != eventBounds {
+		t.Fatalf("turn bounds after attach = %+v, want the event-log markers %+v", bounds, eventBounds)
 	}
 	if err := CloseDatabases(); err != nil {
 		t.Fatal(err)

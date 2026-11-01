@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/oschina/mothx/internal/dao"
 )
@@ -18,6 +21,66 @@ import (
 // worst-case fairness envelope during migration.
 const maxEventStoreEntriesPerBatch = maxEntriesPerTransaction
 
+// ErrLegacyPayloadSplit reports a session whose EventStore is canonical while
+// its legacy transcript still holds rows the event log does not cover. Retiring
+// the duplicate cannot be done safely: the uncovered rows *are* content, and a
+// split-store repair has to adopt them (never delete them).
+var ErrLegacyPayloadSplit = errors.New("legacy transcript holds content the event log does not cover")
+
+// ErrLegacyPayloadRetireGrace reports a session that flipped recently: the
+// covered duplicate is kept until the grace window elapses.
+//
+// Retiring covered rows deletes the transcript a build that predates the
+// EventStore may still be appending to (its in-memory leaf would then address a
+// deleted row, which is exactly the false "session was modified" report). No
+// process can prove such a writer is gone, but one that is alive keeps writing,
+// and its next row is uncovered — which makes the retirement refuse from then on.
+// Waiting out the window therefore converts the dangerous race into the safe,
+// repairable split in the common case.
+var ErrLegacyPayloadRetireGrace = errors.New("legacy payload retirement is inside the post-flip grace window")
+
+// legacyPayloadRetireGrace is how long the covered duplicate is retained after a
+// session selects the EventStore. It is a variable so tests can drive both halves
+// of the window deterministically (the split-repair path also bypasses it).
+var legacyPayloadRetireGrace = 10 * time.Minute
+
+// splitStoreDetections counts split-store observations in this process. It is
+// diagnostic telemetry, never authority: a session with uncovered legacy rows
+// keeps serving from both stores until the fenced repair adopts the delta.
+var splitStoreDetections atomic.Uint64
+
+// SessionStoreSplitDetections reports how many split-store observations this
+// process made. Adapters and `mothx doctor` surface the condition through it;
+// the counter never authorizes a write or a deletion.
+func SessionStoreSplitDetections() uint64 { return splitStoreDetections.Load() }
+
+var splitStoreLogged sync.Map
+
+// recordSplitStore records one split-store observation. Logging is once per
+// session per process so a hot open path cannot flood the log.
+func recordSplitStore(sessionID string, uncovered int64) {
+	splitStoreDetections.Add(1)
+	if _, loaded := splitStoreLogged.LoadOrStore(sessionID, struct{}{}); loaded {
+		return
+	}
+	log.Printf("[session] %s: content store split detected: %d legacy transcript row(s) are not covered by the event log; both stores are kept until the delta is adopted, and legacy rows are never retired while the split exists", sessionID, uncovered)
+}
+
+// MigrationOutcome reports what MigrateToEventStore did.
+type MigrationOutcome string
+
+const (
+	// MigrationNotNeeded means the session already reads and writes the EventStore.
+	MigrationNotNeeded MigrationOutcome = "not_needed"
+	// MigrationAdopted means this call exported the legacy transcript (or flipped
+	// an empty session) and the session now uses the EventStore.
+	MigrationAdopted MigrationOutcome = "adopted"
+	// MigrationDeferred means another owner holds the session, or this process
+	// lost its lease mid-export: the legacy store remains authoritative and a
+	// later attach retries. It is not an error, but it must never be silent.
+	MigrationDeferred MigrationOutcome = "deferred"
+)
+
 // MigrateToEventStore is the single migration entry point for a session's
 // persisted content store. Every Runtime attach path (SessionRuntime.BindSession,
 // AttachSessionResources, and Builder.Build) calls exactly this method and does
@@ -26,8 +89,8 @@ const maxEventStoreEntriesPerBatch = maxEntriesPerTransaction
 //
 // It exports the legacy SQLite transcript once, under a session content lease.
 // The EventStore batch is committed and indexed before legacy payload rows are
-// removed, so a failed export leaves the old source intact while a successful
-// migration removes the duplicate payload copy.
+// retired, so a failed export leaves the old source intact while a successful
+// migration adopts the EventStore as canonical and drops the covered duplicate.
 //
 // Migration is opportunistic and must never contend with the Run a session
 // serves: an attach is not an execution, and an adapter must be able to open a
@@ -41,8 +104,8 @@ const maxEventStoreEntriesPerBatch = maxEntriesPerTransaction
 //
 // When another owner holds the session run — or this process loses its lease
 // mid-export — there is no safe window to take the irreversible step, so the
-// call returns nil having done nothing: the session keeps serving from its
-// self-consistent legacy store and a later attach (or the owner's own bind)
+// call returns MigrationDeferred and the session keeps serving from its
+// self-consistent legacy store; a later attach (or the owner's own bind)
 // migrates it. Only a genuinely unsafe session fails closed: an unhealthy or
 // corrupt EventStore, an entry type the store cannot replay, or a database error.
 //
@@ -52,6 +115,14 @@ const maxEventStoreEntriesPerBatch = maxEntriesPerTransaction
 // session has not been flipped yet, only this entry is entitled to take the
 // irreversible step, so `exportLegacyTranscript` follows.
 func (m *Manager) MigrateToEventStore(ctx context.Context) error {
+	_, err := m.MigrateToEventStoreOutcome(ctx)
+	return err
+}
+
+// MigrateToEventStoreOutcome is MigrateToEventStore with the explicit outcome.
+// "Deferred" is a legitimate result, not a failure, and adapters use it to log
+// that a session still serves the legacy store instead of assuming success.
+func (m *Manager) MigrateToEventStoreOutcome(ctx context.Context) (MigrationOutcome, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -60,16 +131,16 @@ func (m *Manager) MigrateToEventStore(ctx context.Context) error {
 	convergedOnOpen := m.eventStoreConverged
 	convergedFingerprint := m.eventStoreConvergedFingerprint
 	sessionDir, sessionID := "", ""
-	if convergedOnOpen && m.header != nil {
-		sessionDir = m.sessionDirOrDerive()
+	if m.header != nil {
 		sessionID = m.header.ID
+		sessionDir = m.sessionDirOrDerive()
 	}
 	m.mu.Unlock()
 	if subAgent {
-		return errors.New("sub-agent sessions use the isolated sub_entries compatibility store")
+		return MigrationNotNeeded, errors.New("sub-agent sessions use the isolated sub_entries compatibility store")
 	}
 	// When this Manager's open already converged onto the EventStore it adopted the
-	// committed log, removed any legacy payload duplicate, and repaired the turn
+	// committed log, retired any legacy payload duplicate, and repaired the turn
 	// boundaries. Re-converging here would re-inspect (and re-digest) the whole
 	// log for a conclusion the open already reached, which is exactly the
 	// duplicate bind-time scan this path must not pay.
@@ -86,13 +157,27 @@ func (m *Manager) MigrateToEventStore(ctx context.Context) error {
 	// empty and it converges again; that inspection is trivial.
 	if !convergedOnOpen || !eventStoreConvergenceStillValid(sessionDir, sessionID, convergedFingerprint) {
 		if err := m.ConvergeEventStore(ctx); err != nil {
-			return err
+			return MigrationNotNeeded, err
 		}
 	}
 	m.mu.Lock()
 	converged := m.eventStoreMode
 	m.mu.Unlock()
 	if converged {
+		// A session can be flipped without its legacy duplicate having been
+		// retired (a crash between the flip and the cleanup, or a build that
+		// predates the fenced cleanup). Retiring the covered rows is a write, so
+		// it happens here — where the attach path already acts on the session —
+		// and never as a bare open side effect. A missing lease or a split store
+		// is not an attach failure.
+		if _, err := m.retireLegacyPayload(ctx); err != nil &&
+			!errors.Is(err, ErrLegacyPayloadSplit) &&
+			!errors.Is(err, ErrLegacyPayloadRetireGrace) &&
+			!errors.Is(err, ErrRuntimeLeaseLost) &&
+			!errors.Is(err, ErrRuntimeLeaseBusy) &&
+			!errors.Is(err, ErrSessionRunActive) {
+			log.Printf("[session] retire legacy transcript of %s: %v", sessionID, err)
+		}
 		// A converged Manager either loaded through the EventStore already or just
 		// exported the transcript in ConvergeEventStore. Either way there is no
 		// irreversible step left to take. Fill the derived search index for
@@ -101,25 +186,28 @@ func (m *Manager) MigrateToEventStore(ctx context.Context) error {
 		if indexErr := m.ensureSearchIndex(ctx); indexErr != nil {
 			log.Printf("[session] backfill search index for %s: %v", sessionID, indexErr)
 		}
-		return nil
+		return MigrationNotNeeded, nil
 	}
 	err := m.exportLegacyTranscript(ctx)
 	if errors.Is(err, ErrRuntimeLeaseLost) || errors.Is(err, ErrSessionRunActive) {
 		// Another owner is running the session, or this process lost its lease
 		// during the export. Leave the still-authoritative legacy store in place and
 		// let a later call migrate; the transcript is never left half-flipped.
-		return nil
+		log.Printf("[session] event store migration of %s deferred: %v", sessionID, err)
+		bumpContentStoreCounter(ctx, sessionDir, dao.SessionStoreContentMigrationDeferredKey)
+		return MigrationDeferred, nil
 	}
 	if err != nil {
-		return err
+		return MigrationNotNeeded, err
 	}
+	bumpContentStoreCounter(ctx, sessionDir, dao.SessionStoreContentMigrationAdoptedKey)
 	if indexErr := m.ensureSearchIndex(ctx); indexErr != nil {
 		log.Printf("[session] backfill search index for %s: %v", sessionID, indexErr)
 	}
 	if _, displayErr := m.ensureDisplayProjection(ctx); displayErr != nil {
 		log.Printf("[session] backfill display projection for %s: %v", sessionID, displayErr)
 	}
-	return nil
+	return MigrationAdopted, nil
 }
 
 // eventStoreConvergenceStillValid reports whether the EventStore bytes now on
@@ -332,7 +420,22 @@ func (m *Manager) exportLegacyTranscript(ctx context.Context) error {
 	if err := m.flipSessionContentStore(ctx, sessionDir); err != nil {
 		return err
 	}
-	return m.convergeFlippedSession(ctx, sessionDir, nil)
+	if err := m.convergeFlippedSession(ctx, sessionDir, nil); err != nil {
+		return err
+	}
+	// The export is the one writer that holds a content lease and knows the
+	// legacy transcript it just adopted, so this is where the covered duplicate is
+	// retired. The delete re-checks coverage, so a row a legacy writer appended
+	// during the export survives (and is reported as a split store).
+	//
+	// Retiring the duplicate is hygiene, not correctness: the export already
+	// committed the canonical transcript and flipped the store, so a missing
+	// lease or a split store must not fail the attach. A later attach retries the
+	// fenced cleanup.
+	if _, err := retireLegacyPayloadRows(ctx, sessionDir, sessionID, false); err != nil {
+		log.Printf("[session] %s: retire legacy transcript after export: %v", sessionID, err)
+	}
+	return nil
 }
 
 // resolveEventStoreExportBinding returns the lease identity to write an export
@@ -487,13 +590,20 @@ func (m *Manager) applyEventStoreObservationLocked(observed eventStoreObservatio
 
 // convergeFlippedSession makes this Manager observe the EventStore as the
 // session's canonical content. It replays the committed events into the local
-// view and then removes the duplicated legacy payload rows. Both steps are
-// idempotent convergence of facts that are already committed, so neither takes
-// a lease or a reservation: the write fence for real content changes stays
-// inside AppendEventStoreEntries and the Runtime terminal transaction.
+// view and then reports, without touching it, whether the legacy payload
+// duplicate can be retired.
+//
+// Retiring the duplicate is deliberately not part of convergence. An open runs
+// while another owner may be executing the session and has no authority to
+// delete transcript rows, and a legacy writer (a build that predates the
+// EventStore) can still append to `entries` at any moment. Deleting covered rows
+// under such a writer breaks its leaf chain, and deleting uncovered rows loses
+// content. The fenced cleanup therefore lives in retireLegacyPayload, which the
+// migration/attach path calls under a content lease and which re-checks coverage
+// inside the DELETE itself.
 //
 // view, when non-nil, is the committed-event observation the caller already
-// made for this session, so this converges and repairs from it instead of
+// made for this same session, so this converges and repairs from it instead of
 // rescanning the log.
 func (m *Manager) convergeFlippedSession(ctx context.Context, sessionDir string, view *committedEventView) error {
 	observed, err := m.observeEventStoreLocked(ctx, view)
@@ -502,17 +612,27 @@ func (m *Manager) convergeFlippedSession(ctx context.Context, sessionDir string,
 	}
 	sessionID := m.header.ID
 	m.applyEventStoreObservationLocked(observed)
+	// Observing the duplicate is read-only and bounded: one existence probe, and
+	// the coverage count only when the duplicate actually exists.
+	if err := m.reportLegacyPayloadStateLocked(ctx, sessionDir, sessionID); err != nil {
+		return err
+	}
 	if !observed.hasEvents {
-		// Nothing was ever exported, so there is no duplicate payload to remove.
-		// Skipping the delete keeps the common new-session bind free of a write
-		// transaction while a durable Run is active.
+		// Nothing was ever exported, so there is no covered duplicate to retire.
 		m.rememberEventStoreConvergenceLocked(sessionDir, sessionID)
 		return nil
 	}
-	// Deleting the duplicate is only necessary when one still exists. Probing
-	// first keeps an already-converged session's bind free of a write
-	// transaction: the delete always matched nothing, yet it still opened the
-	// single writer lock on every open.
+	if err := m.reconcileControlPlane(ctx, sessionDir, observed.batches); err != nil {
+		return err
+	}
+	m.rememberEventStoreConvergenceLocked(sessionDir, sessionID)
+	return nil
+}
+
+// reportLegacyPayloadStateLocked records the split-store condition when the
+// session's legacy transcript holds rows the event log does not cover. It never
+// writes. The caller holds m.mu.
+func (m *Manager) reportLegacyPayloadStateLocked(ctx context.Context, sessionDir, sessionID string) error {
 	db, err := OpenRootDB(sessionDir)
 	if err != nil {
 		return err
@@ -522,18 +642,127 @@ func (m *Manager) convergeFlippedSession(ctx context.Context, sessionDir string,
 	if err != nil {
 		return fmt.Errorf("probe legacy transcript payload: %w", err)
 	}
-	if hasLegacy {
-		if err := WriteRootDatabase(ctx, sessionDir, func(tx *dao.Tx) error {
-			return projectionDAO.DeleteLegacyEntries(ctx, tx, sessionID)
-		}); err != nil {
-			return fmt.Errorf("remove legacy transcript payload after EventStore commit: %w", err)
+	if !hasLegacy {
+		return nil
+	}
+	uncovered, err := projectionDAO.UncoveredLegacyEntryCount(ctx, db.Bun(), sessionID)
+	if err != nil {
+		return fmt.Errorf("probe legacy transcript coverage: %w", err)
+	}
+	if uncovered > 0 {
+		recordSplitStore(sessionID, uncovered)
+	}
+	return nil
+}
+
+// retireLegacyPayload removes the legacy payload duplicate of a session whose
+// canonical content is the EventStore.
+//
+// It is a fenced write, not an open side effect:
+//   - it requires the session's content write lease (this process's execution
+//     lease, or a short cross-process content reservation);
+//   - it refuses when any legacy row is not covered by a committed projection,
+//     because those rows are post-flip content (a build that still writes the
+//     legacy transcript, or a crash before adoption) that must be adopted, not
+//     deleted;
+//   - the DELETE re-checks coverage in the same statement, so a row a legacy
+//     writer appends between the probe and the delete survives.
+//
+// A missing lease or another owner's active run is reported as an error so the
+// caller can decide: the attach path logs it, and a later attach retries.
+func (m *Manager) retireLegacyPayload(ctx context.Context) (int64, error) {
+	if m == nil {
+		return 0, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.mu.Lock()
+	sessionID := ""
+	if m.header != nil {
+		sessionID = m.header.ID
+	}
+	subAgent := m.subAgent
+	sessionDir := ""
+	if sessionID != "" {
+		sessionDir = m.sessionDirOrDerive()
+	}
+	m.mu.Unlock()
+	if sessionID == "" || sessionDir == "" || subAgent {
+		return 0, nil
+	}
+	return retireLegacyPayloadRows(ctx, sessionDir, sessionID, false)
+}
+
+// retireLegacyPayloadRows is retireLegacyPayload without the Manager lock, for
+// callers that already hold m.mu (the migration export tail). It touches no
+// Manager state, so it also never inverts the lock.
+//
+// force skips the post-flip grace window. Only the explicit split-store repair
+// sets it: it has just adopted the delta, and the operator is expected to have
+// stopped every other process.
+func retireLegacyPayloadRows(ctx context.Context, sessionDir, sessionID string, force bool) (int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		return 0, err
+	}
+	projectionDAO := dao.NewSessionEventProjectionDAO(nil)
+	hasLegacy, err := projectionDAO.HasLegacyEntries(ctx, db.Bun(), sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("probe legacy transcript payload: %w", err)
+	}
+	if !hasLegacy {
+		return 0, nil
+	}
+	if !force {
+		flippedAt, err := dao.NewSessionDAO(nil).ContentStoreFlippedAt(ctx, db.Bun(), sessionID)
+		if err != nil {
+			return 0, fmt.Errorf("read content store flip time: %w", err)
+		}
+		if flippedAt > 0 {
+			if age := time.Now().Unix() - flippedAt; age < int64(legacyPayloadRetireGrace/time.Second) {
+				return 0, fmt.Errorf("%w: session %s flipped %ds ago", ErrLegacyPayloadRetireGrace, sessionID, age)
+			}
 		}
 	}
-	if err := m.reconcileControlPlane(ctx, sessionDir, observed.batches); err != nil {
-		return err
+	uncovered, err := projectionDAO.UncoveredLegacyEntryCount(ctx, db.Bun(), sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("probe legacy transcript coverage: %w", err)
 	}
-	m.rememberEventStoreConvergenceLocked(sessionDir, sessionID)
-	return nil
+	if uncovered > 0 {
+		recordSplitStore(sessionID, uncovered)
+		return 0, fmt.Errorf("%w: %s holds %d uncovered row(s)", ErrLegacyPayloadSplit, sessionID, uncovered)
+	}
+	binding, release, err := eventStoreWriteBinding(sessionDir, sessionID, "")
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	var removed int64
+	err = WriteRootDatabase(ctx, sessionDir, func(tx *dao.Tx) error {
+		if _, err := validateRuntimeLeaseBindingTx(tx, sessionDir, sessionID, binding.RunID, binding.Purpose); err != nil {
+			return err
+		}
+		deleted, err := projectionDAO.DeleteCoveredLegacyEntries(ctx, tx, sessionID)
+		if err != nil {
+			return fmt.Errorf("retire legacy transcript: %w", err)
+		}
+		removed = deleted
+		if deleted > 0 {
+			if err := dao.NewSessionStoreMetaDAO(nil).IncrementCounter(ctx, tx, dao.SessionStoreContentLegacyRowsRetiredKey, deleted); err != nil {
+				return fmt.Errorf("count retired legacy rows: %w", err)
+			}
+			log.Printf("[session] %s: retired %d covered legacy transcript row(s) after EventStore migration", sessionID, deleted)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return removed, nil
 }
 
 // repairUnmappedTurnBoundaries retargets every turn whose recorded bounds do not
@@ -635,6 +864,16 @@ func repairUnmappedTurnBoundaries(ctx context.Context, sessionDir, sessionID str
 // On success the Manager's in-memory view is switched to the EventStore as well,
 // so callers cannot leave a flipped session still writing through the legacy
 // path (that divergence would strand the transcript with no committed batch).
+// bumpContentStoreCounter records one maintenance event in session_store_meta.
+// It is diagnostic only, so a failure is logged rather than propagated.
+func bumpContentStoreCounter(ctx context.Context, sessionDir, key string) {
+	if err := WriteRootDatabase(ctx, sessionDir, func(tx *dao.Tx) error {
+		return dao.NewSessionStoreMetaDAO(nil).IncrementCounter(ctx, tx, key, 1)
+	}); err != nil {
+		log.Printf("[session] record %s: %v", key, err)
+	}
+}
+
 func (m *Manager) flipSessionContentStore(ctx context.Context, sessionDir string) error {
 	sessionID := m.header.ID
 	binding, _, holding := HeldRuntimeLeaseBinding(sessionDir, sessionID)
@@ -642,12 +881,13 @@ func (m *Manager) flipSessionContentStore(ctx context.Context, sessionDir string
 	if err != nil {
 		return err
 	}
+	now := time.Now().Unix()
 	err = db.RunInTx(ctx, nil, func(_ context.Context, tx dao.Tx) error {
 		sessionDAO := dao.NewSessionDAO(nil)
 		if !holding {
-			return sessionDAO.SetContentStore(ctx, &tx, sessionID, "event_store")
+			return sessionDAO.SetContentStoreFlipped(ctx, &tx, sessionID, now)
 		}
-		affected, err := sessionDAO.FlipContentStoreOnLease(ctx, &tx, sessionID, "event_store", binding.OwnerInstanceID, binding.Epoch, binding.TokenHash)
+		affected, err := sessionDAO.FlipContentStoreOnLease(ctx, &tx, sessionID, "event_store", binding.OwnerInstanceID, binding.Epoch, binding.TokenHash, now)
 		if err != nil {
 			return err
 		}
