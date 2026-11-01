@@ -145,6 +145,28 @@ const server = createServer((req, res) => {
     return;
   }
   if (url.pathname === '/api/skillhub/installed') return json(res, 200, { installed: [], session: { activeSkills: [] } });
+  if (url.pathname === '/api/git/changes') {
+    return json(res, 200, {
+      repo: true,
+      root: '/tmp/a',
+      branch: 'main',
+      staged: 1,
+      unstaged: 1,
+      untracked: 1,
+      files: [
+        { path: 'internal/serve/run.go', status: 'M', staged: true, added: 12, removed: 3 },
+        { path: 'ui/src/style.css', status: 'M', staged: false, added: 4, removed: 1 },
+        { path: 'notes.txt', status: '?', staged: false, added: 0, removed: 0 }
+      ]
+    });
+  }
+  if (url.pathname === '/api/git/diff') {
+    return json(res, 200, {
+      diff: 'diff --git a/internal/serve/run.go b/internal/serve/run.go\nindex 1111111..2222222 100644\n--- a/internal/serve/run.go\n+++ b/internal/serve/run.go\n@@ -1,2 +1,3 @@\n context line\n-removed line\n+added line\n',
+      truncated: false,
+      binary: false
+    });
+  }
   if (url.pathname === '/api/experts') return json(res, 200, { experts: [] });
   if (/^\/api\/sessions\/[^/]+\/messages$/.test(url.pathname)) {
     const sessionId = url.pathname.split('/')[3];
@@ -633,6 +655,29 @@ try {
 
   await evaluate(cdp, `document.querySelector('.wb-plan-panel .wb-plan-close').click()`);
   await waitFor(cdp, `document.querySelector('.wb-plan-panel') === null`);
+
+  // Git Changes panel: a workbench rail that projects the read-only
+  // /api/git/* endpoints of the focused tab. Sections render porcelain
+  // entries, and opening a file shows the classified unified diff.
+  await evaluate(cdp, `document.querySelector('[data-action="changes"]').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-changes-panel') !== null`);
+  await waitFor(cdp, `document.querySelectorAll('.wb-changes-file').length === 3`);
+  assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-changes-section').length`), 3, 'changes rail groups staged, unstaged, and untracked files');
+  assert.ok(
+    (await evaluate(cdp, `document.querySelector('.wb-changes-panel')?.textContent || ''`)).includes('main'),
+    'changes rail shows the current branch'
+  );
+  const changesLayout = await evaluate(cdp, `(() => { const panel = document.querySelector('.wb-changes-panel').getBoundingClientRect(); const panes = document.querySelector('.wb-panes').getBoundingClientRect(); return { width: panel.width, left: panel.left, panesRight: panes.right }; })()`);
+  assert.ok(changesLayout.width >= 280, `changes dock must keep a readable width (${changesLayout.width}px)`);
+  assert.ok(changesLayout.left >= changesLayout.panesRight - 1, 'changes dock must sit beside the pane area, not overlay it on desktop');
+  await evaluate(cdp, `document.querySelector('.wb-changes-file').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-changes-diff .diff-added') !== null`);
+  await waitFor(cdp, `document.querySelector('.wb-changes-diff .diff-removed') !== null`);
+  await waitFor(cdp, `document.querySelector('.wb-changes-diff .diff-hunk') !== null`);
+  await evaluate(cdp, `document.querySelector('.wb-changes-back').click()`);
+  await waitFor(cdp, `document.querySelectorAll('.wb-changes-file').length === 3`);
+  await evaluate(cdp, `document.querySelector('.wb-changes-close').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-changes-panel') === null`);
 
   // Sending from an existing session exercises the canonical composer path.
   // This guards the ChatPane refactor against local session-id shadowing and

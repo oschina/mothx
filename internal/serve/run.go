@@ -1027,6 +1027,8 @@ func (rt *channelRuntime) routes(configPath string) func(*openaiapi.Server, *htt
 		mux.HandleFunc("/api/terminals", rt.handleTerminals(sessions))
 		mux.HandleFunc("/api/terminals/", rt.handleTerminalByID)
 		mux.Handle("/ws/terminals/", http.HandlerFunc(rt.handleTerminalWebSocket))
+		mux.HandleFunc("/api/git/changes", rt.handleGitChanges(sessions))
+		mux.HandleFunc("/api/git/diff", rt.handleGitDiff(sessions))
 		mux.HandleFunc("/api/browse", rt.handleBrowse)
 		mux.HandleFunc("/api/select-directory", rt.handleSelectDirectory)
 		mux.HandleFunc("/api/skillhub/", rt.handleSkillHub(srv))
