@@ -540,6 +540,7 @@ func (a *App) beginSessionPreparation(input string) tea.Cmd {
 		a.isThinking = true
 		a.spinnerIndex = 0
 		a.requestStart = time.Now()
+		a.streamRate.reset(a.requestStart)
 		a.addMessage(userStyle.Render(a.translator.Text(i18n.MsgYouPrefix)) + input)
 	}
 	a.scheduleRender()

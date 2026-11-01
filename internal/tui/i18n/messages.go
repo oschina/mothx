@@ -226,6 +226,7 @@ const (
 	MsgThinkingStatus                     MessageID = "agent.thinking_status"
 	MsgQueuedPromptsHeader                MessageID = "agent.queued_prompts_header"
 	MsgCancelHint                         MessageID = "agent.cancel_hint"
+	MsgFooterTokenRate                    MessageID = "footer.token_rate"
 	MsgFooterLastDuration                 MessageID = "footer.last_duration"
 	MsgFooterToolModalHints               MessageID = "footer.tool_modal_hints"
 	MsgFooterMainHints                    MessageID = "footer.main_hints"
@@ -813,6 +814,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgThinkingStatus:                   "Thinking...",
 		MsgQueuedPromptsHeader:              "⏸ %d queued — will send in order after the current run finishes",
 		MsgCancelHint:                       "esc to cancel",
+		MsgFooterTokenRate:                  "%s tok/s",
 		MsgFooterLastDuration:               "last %s",
 		MsgFooterToolModalHints:             "Left/Right:switch PgUp/PgDn:page Up/Down:scroll Esc/Ctrl+O:close",
 		MsgFooterMainHints:                  "Tab:mode Esc:abort Ctrl+O:details Ctrl+E:ESM Ctrl+R:preview Ctrl+G:events",
@@ -1329,6 +1331,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgThinkingStatus:               "思考中...",
 		MsgQueuedPromptsHeader:          "⏸ 已排队 %d 条——当前运行结束后按序自动发送",
 		MsgCancelHint:                   "按 Esc 取消",
+		MsgFooterTokenRate:              "%s Token/s",
 		MsgFooterLastDuration:           "上次用时 %s",
 		MsgFooterToolModalHints:         "左/右:切换 PgUp/PgDn:翻页 上/下:滚动 Esc/Ctrl+O:关闭",
 		MsgFooterMainHints:              "Tab:模式 Esc:中止 Ctrl+O:详情 Ctrl+E:ESM Ctrl+R:预览 Ctrl+G:事件",

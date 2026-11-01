@@ -398,6 +398,8 @@ type App struct {
 	spinnerIndex int
 	requestStart time.Time
 	lastDuration time.Duration
+	// Live output throughput projected in the status bar while a run streams.
+	streamRate tokenRateTracker
 
 	// Session history
 	sessionMu          sync.Mutex
@@ -1335,6 +1337,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.spinnerIndex = 0
 		a.requestStart = time.Now()
 		a.lastDuration = 0
+		a.streamRate.reset(a.requestStart)
 		if !msg.compacting && msg.input != "" {
 			a.addMessage(userStyle.Render(a.translator.Text(i18n.MsgYouPrefix)) + msg.input)
 		}
@@ -1781,7 +1784,7 @@ func (a *App) View() string {
 	}
 
 	// 3. Loading indicator (spinner + timer + tokens when thinking)
-	if loading := renderLoadingIndicator(a.translator, a.isThinking || a.preparingSession, a.spinnerIndex, a.timer.Elapsed(), 0, a.width); loading != "" {
+	if loading := renderLoadingIndicator(a.translator, a.isThinking || a.preparingSession, a.spinnerIndex, a.timer.Elapsed(), a.streamRate.total, a.width); loading != "" {
 		parts = append(parts, loading)
 	}
 	// Queued submissions waiting for the active run: typing during a run must

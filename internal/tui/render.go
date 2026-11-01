@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -347,7 +348,11 @@ func (a *App) renderBuiltinFooter() string {
 	if a.waitingForApproval {
 		leftLine2 = " " + a.renderApprovalFooterAlert()
 	} else if a.isAgentActive() {
-		leftLine2 = " " + spinnerChars[a.spinnerIndex] + " " + formatDuration(a.timer.Elapsed()) + " · " + a.translator.Text(i18n.MsgCancelHint)
+		leftLine2 = " " + spinnerChars[a.spinnerIndex] + " " + formatDuration(a.timer.Elapsed())
+		if rate := a.streamRate.tokensPerSecond(time.Now()); rate > 0 {
+			leftLine2 += " · " + a.translator.Text(i18n.MsgFooterTokenRate, formatTokenRate(rate))
+		}
+		leftLine2 += " · " + a.translator.Text(i18n.MsgCancelHint)
 	} else {
 		if a.lastDuration > 0 {
 			leftLine2 = " " + a.translator.Text(i18n.MsgFooterLastDuration, formatDuration(a.lastDuration))

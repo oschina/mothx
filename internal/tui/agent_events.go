@@ -11,6 +11,7 @@ import (
 
 	"github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/agentruntime"
+	ctxpkg "github.com/oschina/mothx/internal/context"
 	"github.com/oschina/mothx/internal/provider"
 	"github.com/oschina/mothx/internal/tools"
 	"github.com/oschina/mothx/internal/tui/i18n"
@@ -43,6 +44,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 	switch event.Type {
 	case agent.EventTextDelta:
 		a.invalidateToolModalCache()
+		a.streamRate.add(ctxpkg.EstimateTextTokens(event.TextDelta), time.Now())
 		if a.currentAssistantIdx >= 0 && a.currentAssistantIdx < len(a.messages) {
 			a.appendAssistantDelta(a.currentAssistantIdx, event.TextDelta)
 		} else {
@@ -58,6 +60,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 
 	case agent.EventThinkDelta:
 		a.invalidateToolModalCache()
+		a.streamRate.add(ctxpkg.EstimateTextTokens(event.ThinkDelta), time.Now())
 		if a.thinkRaw == nil {
 			a.thinkRaw = make(map[int]string)
 		}
