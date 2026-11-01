@@ -159,6 +159,7 @@ Agent Core 不应知道 HTTP、WebSocket、Bubble Tea、微信、飞书或 ACP�
 2. TUI 的 A2A/Sub-agent/Delegate/Workflow/Cron registry hooks 仍由 CLI 注入；当 capability registry contract 能表达这些依赖并有跨入口测试后，迁移到 `agentruntime.Builder`。
 3. Responses provider-specific polling/continuation 和 ACP/Channel/WebUI payload projection 仍由 adapter 负责；它们必须继续使用 canonical Run/Decision/Source/Policy，不得新增本地状态机。
 4. ACP 进程重启不恢复内存 Agent/回调；只有同进程 Runtime reconnect 重新投影 pending Decision。若未来 provider/agent loop 提供可恢复执行句柄，再增加显式 `Reattach` contract 和进程级测试。
+5. Serve 的只读工作区投影（`/api/git/*`、`/api/files/*`）目前住在 adapter 层：root 解析在 `internal/serve/workspace_target.go`（session 走 canonical `GetSessionWorkDir`，draft 允许显式 path），containment/read 在 `internal/workspacefiles`，外部拉起在 `internal/workspaceopen`。owner: serve/WebUI workbench panels。删除条件: ACP/Desktop 落地对应的 `mothx/files/*`、`mothx/git/*` 投影时，root 决策迁入 `internal/agentruntime`（与 session identity 同源），两个共享包保持中立并被两侧复用；届时删除 `workspace_target.go` 桥。在此之前禁止任何入口复制第二套路径清洗/包含逻辑或 launcher 表。
 
 因此 Phase 12 已完成当前 proposal 的可执行边界；上述债务属于后续小步迁移，不再阻塞核心 Runtime 统一验收。
 

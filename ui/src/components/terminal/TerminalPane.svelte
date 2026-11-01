@@ -9,6 +9,10 @@
 
   export let sessionId = '';
   export let active = true;
+  // Optional path relative to the session cwd (requested from the Files
+  // panel). It only takes effect when a fresh shell is created; an existing
+  // reattached terminal keeps its own cwd.
+  export let initialCwd = '';
 
   let host;
   let term = null;
@@ -181,7 +185,12 @@
       const res = await fetch('/api/terminals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, cols: fit?.cols || 80, rows: fit?.rows || 24 })
+        body: JSON.stringify({
+          sessionId,
+          cols: fit?.cols || 80,
+          rows: fit?.rows || 24,
+          ...(initialCwd ? { cwd: initialCwd } : {})
+        })
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -335,16 +344,16 @@
 
 <section class="terminal-pane" class:terminal-pane-active={active} aria-label={$t('terminal.title') || 'Terminal'}>
   <div class="terminal-status">
-    <span>{$t('terminal.title') || 'Terminal'}</span>
+    <span class="terminal-title">{$t('terminal.title') || 'Terminal'}</span>
     <span class="terminal-state">{state}</span>
-    {#if throttled}<span class="terminal-throttled" role="status">{$t('terminal.throttled')}</span>{/if}
-    <span class="terminal-sandbox" role="note">{$t('terminal.sandboxWarning')}</span>
-    <span class="terminal-agent-warning" class:terminal-agent-warning-strong={agentWarningKey !== 'terminal.agentWarning.shared'} role="note" title={$t(agentWarningKey)}>{$t(agentWarningKey)}</span>
-    {#if terminalWarning}<span class="terminal-warning" role="alert">{terminalWarning}</span>{/if}
-    {#if error}<span class="terminal-error" role="alert">{error}</span>{/if}
-    <button type="button" class="terminal-reconnect" onclick={reconnectTerminal}>
-      {$t('terminal.reconnect') || 'Reconnect'}
-    </button>
+    {#if throttled}<span class="terminal-chip terminal-throttled" role="status" title={$t('terminal.throttled')}>⇅</span>{/if}
+    <span class="terminal-chip terminal-sandbox" role="note" title={$t('terminal.sandboxWarning')}>⚠</span>
+    <span class="terminal-chip terminal-agent-warning" class:terminal-agent-warning-strong={agentWarningKey !== 'terminal.agentWarning.shared'} role="note" title={$t(agentWarningKey)}>◉</span>
+    {#if terminalWarning}<span class="terminal-message terminal-warning" role="alert" title={terminalWarning}>{terminalWarning}</span>{/if}
+    {#if error}<span class="terminal-message terminal-error" role="alert" title={error}>{error}</span>{/if}
+    {#if ['disconnected', 'failed', 'exited', 'closed'].includes(state)}
+      <button type="button" class="terminal-reconnect" onclick={reconnectTerminal}>↻</button>
+    {/if}
   </div>
   <div class="terminal-host" bind:this={host}></div>
 </section>
@@ -362,18 +371,47 @@
   .terminal-status {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 6px 10px;
+    gap: 6px;
+    min-height: 24px;
+    padding: 2px 6px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    font-size: 12px;
+    font-size: 11px;
+    line-height: 1;
   }
-  .terminal-state { opacity: 0.65; text-transform: uppercase; }
+  .terminal-title { opacity: 0.78; }
+  .terminal-state { opacity: 0.55; text-transform: uppercase; }
+  .terminal-chip,
+  .terminal-reconnect {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+    border-radius: 4px;
+  }
+  .terminal-chip { opacity: 0.8; cursor: help; }
+  .terminal-message {
+    min-width: 0;
+    max-width: min(36ch, 45%);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .terminal-throttled { color: #ffd479; }
-  .terminal-sandbox { color: #ffd479; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .terminal-warning { color: #ffb86b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .terminal-agent-warning { color: #9bb7cc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .terminal-sandbox { color: #ffd479; }
+  .terminal-warning { color: #ffb86b; }
+  .terminal-agent-warning { color: #9bb7cc; }
   .terminal-agent-warning-strong { color: #ffd479; }
-  .terminal-error { color: #ff8a80; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .terminal-reconnect { margin-left: auto; background: transparent; color: inherit; border: 1px solid rgba(255,255,255,.18); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
-  .terminal-host { flex: 1; min-height: 0; padding: 4px; overflow: hidden; }
+  .terminal-error { color: #ff8a80; }
+  .terminal-reconnect {
+    margin-left: auto;
+    background: transparent;
+    color: inherit;
+    border: 1px solid rgba(255,255,255,.18);
+    padding: 0;
+    cursor: pointer;
+  }
+  .terminal-reconnect:hover { background: rgba(255,255,255,.08); }
+  .terminal-host { flex: 1; min-height: 0; padding: 2px; overflow: hidden; }
 </style>

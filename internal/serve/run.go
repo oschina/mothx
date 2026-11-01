@@ -79,9 +79,13 @@ type channelRuntime struct {
 	// knowledgeMu guards the cached Runtime knowledge-base service. The service
 	// owns the background index-job registry, so a fresh instance per request
 	// would hide a running scan from progress polling and start duplicate jobs.
-	knowledgeMu           sync.Mutex
-	terminals             *terminal.Manager
-	terminalShell         string
+	knowledgeMu   sync.Mutex
+	terminals     *terminal.Manager
+	terminalShell string
+	// testOpenersEnabled force-allows the /api/files/open* gate in unit tests
+	// without a full Config snapshot; production always resolves through
+	// EffectiveTerminalEnabled.
+	testOpenersEnabled    bool
 	knowledgeService      *agentruntime.KnowledgeBaseService
 	nativeDirectoryPicker func(context.Context, string) (string, error)
 	deliveryCancel        context.CancelFunc
@@ -1029,6 +1033,10 @@ func (rt *channelRuntime) routes(configPath string) func(*openaiapi.Server, *htt
 		mux.Handle("/ws/terminals/", http.HandlerFunc(rt.handleTerminalWebSocket))
 		mux.HandleFunc("/api/git/changes", rt.handleGitChanges(sessions))
 		mux.HandleFunc("/api/git/diff", rt.handleGitDiff(sessions))
+		mux.HandleFunc("/api/files/list", rt.handleFilesList(sessions))
+		mux.HandleFunc("/api/files/content", rt.handleFilesContent(sessions))
+		mux.HandleFunc("/api/files/openers", rt.handleFilesOpeners())
+		mux.HandleFunc("/api/files/open", rt.handleFilesOpen(sessions))
 		mux.HandleFunc("/api/browse", rt.handleBrowse)
 		mux.HandleFunc("/api/select-directory", rt.handleSelectDirectory)
 		mux.HandleFunc("/api/skillhub/", rt.handleSkillHub(srv))

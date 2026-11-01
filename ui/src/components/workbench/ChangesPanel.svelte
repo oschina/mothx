@@ -1,11 +1,12 @@
 <script>
-  // Workbench Git Changes panel. Same mode as the plan panel: a collapsible,
-  // resizable right-side rail projected from the focused tab's working
-  // directory via the read-only /api/git/* endpoints. It never mutates the
-  // repository; file rows and the diff surface only project git status output.
+  // Workbench Git Changes panel. Same rail mode as the plan/files panels:
+  // chrome comes from the shared RailPanel; this component owns only the
+  // /api/git/* projection state. Read-only: it never stages, commits, or
+  // mutates the repository, and re-reads when a run reaches its terminal state.
   import { request } from '../../lib/api.js';
   import { isSessionRuntimeBusy, sessionRunStates } from '../../lib/session-runs.js';
   import { t } from '../../lib/preferences.js';
+  import RailPanel from './RailPanel.svelte';
   import { changeCount, changeSections, renderDiffLines, splitPath, statusName } from '../../lib/workbench/changes-model.js';
 
   export let sessionId = '';
@@ -108,14 +109,8 @@
   $: wasRunning = running;
 </script>
 
-<aside
-  class="wb-changes-panel"
-  class:wb-changes-mobile={mobile}
-  style={mobile ? '' : `flex: 0 0 ${Math.round(width)}px`}
-  aria-label={$t('workbench.changes')}
->
-  <header>
-    <strong>{$t('workbench.changes')}</strong>
+<RailPanel titleKey="workbench.changes" ariaLabelKey="workbench.changes" {width} {mobile} onClose={onClose}>
+  <svelte:fragment slot="head">
     {#if payload?.branch}
       <span class="wb-changes-branch" title={payload.root || ''}>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 8.5v7"/><path d="M15.5 6H9a3 3 0 0 0-3 3v0"/></svg>
@@ -123,13 +118,10 @@
       </span>
     {/if}
     <span class="wb-changes-count" title={$t('workbench.changes.total', { n: totalChanges })}>{totalChanges}</span>
-    <button type="button" class="wb-changes-icon" on:click={refresh} disabled={loading} title={$t('workbench.changes.refresh')} aria-label={$t('workbench.changes.refresh')}>
+    <button type="button" class="wb-rail-icon" onclick={refresh} disabled={loading} title={$t('workbench.changes.refresh')} aria-label={$t('workbench.changes.refresh')}>
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class={loading ? 'spinning' : ''} aria-hidden="true"><path d="M4 4v5h5"/><path d="M5.3 9a8 8 0 1 1 .7 5"/></svg>
     </button>
-    <button type="button" class="wb-changes-icon wb-changes-close" on:click={onClose} title={$t('common.close')} aria-label={$t('common.close')}>
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-    </button>
-  </header>
+  </svelte:fragment>
 
   {#if error}
     <p class="wb-changes-note wb-changes-error" role="alert">{error}</p>
@@ -137,14 +129,13 @@
     <p class="wb-changes-note">{$t('workbench.changes.notRepo')}</p>
   {:else if selected}
     <div class="wb-changes-diff-head">
-      <button type="button" class="wb-changes-back" on:click={closeDiff} title={$t('workbench.changes.back')} aria-label={$t('workbench.changes.back')}>
+      <button type="button" class="wb-changes-back" onclick={closeDiff} title={$t('workbench.changes.back')} aria-label={$t('workbench.changes.back')}>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="m11 6-6 6 6 6"/></svg>
       </button>
       <code class="wb-changes-diff-path" title={selected.path}>{selected.path}</code>
       <span class={`wb-changes-status status-${statusName(selected.status)}`}>{selected.status}</span>
     </div>
-    <div class="wb-changes-body wb-changes-diff-surface">
-      {#if diffLoading}
+    {#if diffLoading}
         <p class="wb-changes-note">{$t('common.loading')}</p>
       {:else if diffError}
         <p class="wb-changes-note wb-changes-error" role="alert">{diffError}</p>
@@ -156,17 +147,16 @@
       {:else}
         <p class="wb-changes-note">{$t('workbench.changes.noDiff')}</p>
       {/if}
-    </div>
   {:else}
     <div class="wb-changes-scope" role="group" aria-label={$t('workbench.changes.scope')}>
       {#each ['all', 'staged', 'working'] as mode (mode)}
-        <button type="button" class:active={scope === mode} aria-pressed={scope === mode} on:click={() => (scope = mode)}>
+        <button type="button" class:active={scope === mode} aria-pressed={scope === mode} onclick={() => (scope = mode)}>
           {mode === 'all' ? $t('workbench.changes.scopeAll') : mode === 'staged' ? $t('workbench.changes.staged') : $t('workbench.changes.scopeWorking')}
           <em>{scopeCount(mode)}</em>
         </button>
       {/each}
     </div>
-    <div class="wb-changes-body">
+    <div class="wb-changes-list">
       {#if loading && !payload}
         <p class="wb-changes-note">{$t('common.loading')}</p>
       {:else if visibleSections.length === 0}
@@ -181,7 +171,7 @@
             <ul class="wb-changes-files">
               {#each section.files as file (`${section.label}:${file.path}:${file.staged}`)}
                 <li>
-                  <button type="button" class="wb-changes-file" on:click={() => openDiff(file)}>
+                  <button type="button" class="wb-changes-file" onclick={() => openDiff(file)}>
                     <span class={`wb-changes-status status-${statusName(file.status)}`}>{file.status}</span>
                     <span class="wb-changes-file-path">
                       {#if splitPath(file.path).dir}<em>{splitPath(file.path).dir}</em>{/if}
@@ -203,26 +193,9 @@
       {/if}
     </div>
   {/if}
-</aside>
+</RailPanel>
 
 <style>
-  .wb-changes-panel {
-    display: flex;
-    flex-direction: column;
-    flex: 0 0 320px;
-    min-width: 0;
-    min-height: 0;
-    background: var(--moth-surface-page);
-  }
-  .wb-changes-panel header {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    min-height: 38px;
-    padding: 0 6px 0 12px;
-    border-bottom: 1px solid var(--moth-border-subtle);
-  }
-  .wb-changes-panel header strong { flex: 0 0 auto; font-size: 12px; font-weight: 600; }
   .wb-changes-branch {
     display: inline-flex;
     align-items: center;
@@ -244,25 +217,6 @@
     font-variant-numeric: tabular-nums;
     line-height: 16px;
   }
-  .wb-changes-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    min-height: 0;
-    padding: 0;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--moth-text-muted);
-    cursor: pointer;
-  }
-  .wb-changes-icon:hover:not(:disabled) { background: var(--moth-surface-hover); color: var(--moth-text-primary); }
-  .wb-changes-icon:disabled { opacity: .4; cursor: not-allowed; }
-  .wb-changes-icon:focus-visible { outline: 2px solid var(--moth-selection-indicator); outline-offset: -2px; }
-  .wb-changes-icon .spinning { animation: wb-changes-spin 1s linear infinite; }
-  @keyframes wb-changes-spin { to { transform: rotate(360deg); } }
   .wb-changes-scope {
     display: flex;
     gap: 3px;
@@ -298,7 +252,6 @@
     font-style: normal;
     line-height: 14px;
   }
-  .wb-changes-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 6px 10px; }
   .wb-changes-note {
     margin: 10px 6px;
     color: var(--moth-text-muted);
@@ -397,7 +350,7 @@
     font-size: 11px;
   }
   .wb-changes-diff-head .wb-changes-status { margin-left: auto; }
-  .wb-changes-diff-surface { overflow: auto; padding: 0; }
+  .wb-changes-list { padding: 4px 6px 10px; }
   .wb-changes-diff {
     margin: 0;
     padding: 6px 0 10px;

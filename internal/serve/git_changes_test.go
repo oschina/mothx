@@ -129,15 +129,15 @@ func TestCollectGitChangesNotARepo(t *testing.T) {
 
 func TestGitSessionWorkDirValidation(t *testing.T) {
 	req, _ := http.NewRequest("GET", "/api/git/changes", nil)
-	if _, problem := gitSessionWorkDir(nil, req); problem == "" {
+	if _, problem := sessionWorkDirTarget(nil, req); problem == "" {
 		t.Errorf("expected missing-parameter error")
 	}
 	req, _ = http.NewRequest("GET", "/api/git/changes?sessionId=missing", nil)
-	if _, problem := gitSessionWorkDir(nil, req); problem != "session not found" {
+	if _, problem := sessionWorkDirTarget(nil, req); problem != "session not found" {
 		t.Errorf("unknown sessionId without a manager = %q", problem)
 	}
 	req, _ = http.NewRequest("GET", "/api/git/changes?path=relative/dir", nil)
-	dir, problem := gitSessionWorkDir(nil, req)
+	dir, problem := sessionWorkDirTarget(nil, req)
 	if problem != "" {
 		t.Fatalf("unexpected problem: %v", problem)
 	}

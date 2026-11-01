@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildChangeMarks,
   changeCount,
   changeSections,
   classifyDiffLine,
@@ -61,4 +62,17 @@ test('renderDiffLines drops only the trailing newline', () => {
   assert.equal(lines.length, 3);
   assert.deepEqual(lines.map((entry) => entry.kind), ['hunk', 'added', 'removed']);
   assert.deepEqual(renderDiffLines(''), []);
+});
+
+test('buildChangeMarks maps files and ancestor directories', () => {
+  const marks = buildChangeMarks([
+    { path: 'internal/serve/run.go', status: 'M' },
+    { path: 'gone.go', status: 'D' },
+    { path: 'docs/en/spec.md', status: '?' }
+  ]);
+  assert.equal(marks.byFile.get('internal/serve/run.go'), 'M');
+  assert.equal(marks.byFile.has('gone.go'), false, 'deleted files must not mark leaves');
+  assert.equal(marks.byFile.get('docs/en/spec.md'), '?');
+  assert.ok(marks.dirs.has('internal') && marks.dirs.has('internal/serve') && marks.dirs.has('docs'));
+  assert.equal(marks.dirs.has('gone.go'), false);
 });

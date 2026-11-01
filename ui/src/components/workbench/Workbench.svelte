@@ -7,6 +7,7 @@
   import TerminalPane from '../terminal/TerminalPane.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import ChangesPanel from './ChangesPanel.svelte';
+  import FilesPanel from './FilesPanel.svelte';
   import { BUILTIN_PRESETS } from '../../lib/workbench/presets.js';
   import { collectLeaves, collectTabs, findTab } from '../../lib/workbench/model.js';
   import { getSessionState, isCompletionActive, isSessionRuntimeBusy } from '../../lib/session-runs.js';
@@ -14,6 +15,7 @@
   import { t } from '../../lib/preferences.js';
   import {
     CHANGES_SIZE_KEY,
+    FILES_SIZE_KEY,
     PLAN_MAX,
     PLAN_MIN,
     PLAN_SIZE_KEY,
@@ -45,11 +47,15 @@
   export let onPreset = () => {};
   export let onReset = () => {};
   export let onToggleTerminal = () => {};
+  // Explicitly opens the terminal dock (not a toggle) so the Files panel's
+  // "open in web terminal" action can request the dock on from the parent.
+  export let onOpenTerminal = () => {};
   export let onAttention = () => {};
   export let onMenu = () => {};
   export let pane;
   let planOpen = false;
   let changesOpen = false;
+  let filesOpen = false;
 
   // Terminal dock height and plan panel width are local presentation state.
   // They survive reloads but deliberately stay out of the shared workbench
@@ -61,9 +67,11 @@
   let terminalHeight = readPanelSize(TERMINAL_SIZE_KEY, 320);
   let planWidth = readPanelSize(PLAN_SIZE_KEY, 320);
   let changesWidth = readPanelSize(CHANGES_SIZE_KEY, 320);
+  let filesWidth = readPanelSize(FILES_SIZE_KEY, 320);
   let terminalDragging = false;
   let planDragging = false;
   let changesDragging = false;
+  let filesDragging = false;
   let dragCleanup = null;
 
   onMount(() => {
@@ -76,6 +84,7 @@
         bodyWidth = bodyEl.clientWidth;
         planWidth = clampPlanWidth(planWidth, bodyWidth);
         changesWidth = clampPlanWidth(changesWidth, bodyWidth);
+        filesWidth = clampPlanWidth(filesWidth, bodyWidth);
       }
     };
     measure();
@@ -165,6 +174,23 @@
     );
   }
 
+  function startFilesResize(event) {
+    if (event.button !== 0 || !bodyEl) return;
+    event.preventDefault();
+    const rect = bodyEl.getBoundingClientRect();
+    filesDragging = true;
+    beginDrag(
+      'col',
+      (moveEvent) => {
+        filesWidth = clampPlanWidth(rect.right - moveEvent.clientX, rect.width);
+      },
+      () => {
+        filesDragging = false;
+        writePanelSize(FILES_SIZE_KEY, filesWidth);
+      }
+    );
+  }
+
   function terminalMax() {
     return Math.max(TERMINAL_MIN, Math.floor((mainHeight || 0) * 0.6));
   }
@@ -221,6 +247,22 @@
     writePanelSize(CHANGES_SIZE_KEY, changesWidth);
   }
 
+  function handleFilesResizeKey(event) {
+    const step = event.shiftKey ? 48 : 16;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    filesWidth = clampPlanWidth(
+      filesWidth + (event.key === 'ArrowLeft' ? step : -step),
+      bodyWidth
+    );
+    writePanelSize(FILES_SIZE_KEY, filesWidth);
+  }
+
+  function resetFilesWidth() {
+    filesWidth = clampPlanWidth(320, bodyWidth);
+    writePanelSize(FILES_SIZE_KEY, filesWidth);
+  }
+
   $: focusedGroupId = state?.attention?.focusedGroupId || '';
   $: leaves = state ? collectLeaves(state.frame?.center) : [];
   $: allTabs = state ? collectTabs(state) : [];
@@ -234,6 +276,25 @@
   $: changesWorkDir = focusedTab?.kind === 'draft' ? (focusedTab.workDir || '') : '';
   $: changesTargetKey = changesSessionId || changesWorkDir;
   $: if (!changesTargetKey) changesOpen = false;
+  $: filesSessionId = changesSessionId;
+  $: filesWorkDir = changesWorkDir;
+  $: filesTargetKey = changesTargetKey;
+  $: if (!filesTargetKey) filesOpen = false;
+  // The Files panel can hand a browsed directory to the web terminal dock.
+  // The request carries the path relative to the session cwd; switching the
+  // focused session clears it so a stale subpath never leaks into a new root.
+  let terminalCwd = '';
+  let terminalSessionIdKey = '';
+  $: if (terminalSessionIdKey !== terminalSessionId) {
+    terminalSessionIdKey = terminalSessionId;
+    terminalCwd = '';
+  }
+
+  function handleOpenWebTerminal(dirRel) {
+    if (!terminalSessionId) return;
+    terminalCwd = dirRel || '';
+    onOpenTerminal();
+  }
   $: splitPossible = !mobile && leaves.length > 1 && (width <= 0 || width / leaves.length >= 380);
   $: pendingCount = countPending($sessionRunStates, state);
   $: runningCount = countRunning($sessionRunStates, state);
@@ -339,6 +400,9 @@
     <button type="button" class="wb-tool" class:active={changesOpen} data-action="changes" disabled={!changesTargetKey} onclick={() => (changesOpen = !changesOpen)} title={$t('workbench.changes') || 'Changes'} aria-label={$t('workbench.changes') || 'Changes'}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 8.5v7"/><path d="M15.5 6H9a3 3 0 0 0-3 3v0"/></svg>
     </button>
+    <button type="button" class="wb-tool" class:active={filesOpen} data-action="files" disabled={!filesTargetKey} onclick={() => (filesOpen = !filesOpen)} title={$t('workbench.files') || 'Files'} aria-label={$t('workbench.files') || 'Files'}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7L11 4.5H4a1 1 0 0 0-1 1V19a1 1 0 0 0 1 1Z"/></svg>
+    </button>
     {#if terminalAvailable}
       <button type="button" class="wb-tool" class:active={terminalOpen} data-action="terminal" onclick={onToggleTerminal} disabled={!terminalSessionId} title={$t('workbench.terminal') || 'Terminal'} aria-label={$t('workbench.terminal') || 'Terminal'}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3"/><path d="M13 15h4"/></svg>
@@ -438,6 +502,34 @@
         {/if}
         <ChangesPanel sessionId={changesSessionId} workDir={changesWorkDir} {mobile} width={changesWidth} onClose={() => (changesOpen = false)} />
       {/if}
+      {#if filesOpen && filesTargetKey}
+        {#if !mobile}
+          <div
+            class="wb-plan-resizer"
+            class:dragging={filesDragging}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={$t('workbench.resize.files')}
+            aria-valuemin={PLAN_MIN}
+            aria-valuemax={planMax()}
+            aria-valuenow={Math.round(filesWidth)}
+            tabindex="0"
+            title={$t('workbench.resize.hint')}
+            onpointerdown={startFilesResize}
+            onkeydown={handleFilesResizeKey}
+            ondblclick={resetFilesWidth}
+          ></div>
+        {/if}
+        <FilesPanel
+          sessionId={filesSessionId}
+          workDir={filesWorkDir}
+          {mobile}
+          width={filesWidth}
+          onClose={() => (filesOpen = false)}
+          terminalAvailable={terminalAvailable && Boolean(focusedSessionId)}
+          onOpenWebTerminal={handleOpenWebTerminal}
+        />
+      {/if}
     </div>
 
     {#if terminalOpen && terminalSessionId}
@@ -457,7 +549,7 @@
         ondblclick={resetTerminalHeight}
       ></div>
       <div class="wb-terminal-dock" style={`height:${Math.round(terminalHeight)}px`}>
-        <TerminalPane sessionId={terminalSessionId} active={true} />
+        <TerminalPane sessionId={terminalSessionId} active={true} initialCwd={terminalCwd} />
       </div>
     {/if}
   </div>

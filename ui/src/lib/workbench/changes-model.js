@@ -50,6 +50,23 @@ export function splitPath(path) {
   return { dir: path.slice(0, idx + 1), name: path.slice(idx + 1) };
 }
 
+// buildChangeMarks mirrors thinkrail's marks for the file tree: every changed
+// file carries its porcelain letter, and each ancestor directory is dotted so
+// collapsed folders still show that something below them changed.
+export function buildChangeMarks(files) {
+  const byFile = new Map();
+  const dirs = new Set();
+  for (const file of files || []) {
+    if (!file?.path || file.status === 'D') continue;
+    byFile.set(file.path, file.status);
+    const parts = file.path.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      dirs.add(parts.slice(0, i).join('/'));
+    }
+  }
+  return { byFile, dirs };
+}
+
 const DIFF_KINDS = [
   ['hunk', (line) => line.startsWith('@@')],
   ['file', (line) => line.startsWith('--- ') || line.startsWith('+++ ')],

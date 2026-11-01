@@ -56,6 +56,8 @@ let terminalInput = '';
 let terminalDeletes = 0;
 let terminalSeq = 0;
 let planUpdate = null;
+const filesOpenRequests = [];
+const terminalCreateBodies = [];
 const terminalSessions = [];
 const liveTerminals = new Map();
 
@@ -108,6 +110,7 @@ const server = createServer((req, res) => {
       try { body = JSON.parse(raw || '{}'); } catch {}
       terminalSeq += 1;
       terminalSessions.push(body.sessionId || '');
+      terminalCreateBodies.push(body);
       const terminal = { terminalId: `term-e2e-${terminalSeq}`, sessionId: body.sessionId || '', cwd: `/tmp/${body.sessionId || 'unknown'}`, shell: '/bin/sh', cols: 80, rows: 24, state: 'running' };
       liveTerminals.set(terminal.terminalId, terminal);
       json(res, 200, terminal);
@@ -166,6 +169,38 @@ const server = createServer((req, res) => {
       truncated: false,
       binary: false
     });
+  }
+  if (url.pathname === '/api/files/list') {
+    const dir = url.searchParams.get('dir') || '';
+    if (dir === 'docs') {
+      return json(res, 200, { root: '/tmp/a', dir, entries: [{ name: 'b.md', path: 'docs/b.md', dir: false, size: 9 }], truncated: false });
+    }
+    if (dir === '') {
+      return json(res, 200, { root: '/tmp/a', dir, entries: [
+        { name: 'docs', path: 'docs', dir: true },
+        { name: 'a.txt', path: 'a.txt', dir: false, size: 26 }
+      ], truncated: false });
+    }
+    return json(res, 404, { error: 'not_found' });
+  }
+  if (url.pathname === '/api/files/content') {
+    const file = url.searchParams.get('file') || '';
+    if (file === 'a.txt') {
+      return json(res, 200, { path: file, size: 26, lang: 'text', binary: false, content: 'alpha content\nline two\n' });
+    }
+    return json(res, 404, { error: 'file_not_found' });
+  }
+  if (url.pathname === '/api/files/openers') {
+    return json(res, 200, { reveal: true, systemTerminal: true, editorCandidates: ['code'] });
+  }
+  if (url.pathname === '/api/files/open' && req.method === 'POST') {
+    let raw = '';
+    req.on('data', (chunk) => { raw += chunk; });
+    req.on('end', () => {
+      try { filesOpenRequests.push(JSON.parse(raw || '{}')); } catch {}
+      json(res, 200, { opened: true });
+    });
+    return;
   }
   if (url.pathname === '/api/experts') return json(res, 200, { experts: [] });
   if (/^\/api\/sessions\/[^/]+\/messages$/.test(url.pathname)) {
@@ -660,14 +695,14 @@ try {
   // /api/git/* endpoints of the focused tab. Sections render porcelain
   // entries, and opening a file shows the classified unified diff.
   await evaluate(cdp, `document.querySelector('[data-action="changes"]').click()`);
-  await waitFor(cdp, `document.querySelector('.wb-changes-panel') !== null`);
+  await waitFor(cdp, `document.querySelector('.wb-rail') !== null`);
   await waitFor(cdp, `document.querySelectorAll('.wb-changes-file').length === 3`);
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.wb-changes-section').length`), 3, 'changes rail groups staged, unstaged, and untracked files');
   assert.ok(
-    (await evaluate(cdp, `document.querySelector('.wb-changes-panel')?.textContent || ''`)).includes('main'),
+    (await evaluate(cdp, `document.querySelector('.wb-rail')?.textContent || ''`)).includes('main'),
     'changes rail shows the current branch'
   );
-  const changesLayout = await evaluate(cdp, `(() => { const panel = document.querySelector('.wb-changes-panel').getBoundingClientRect(); const panes = document.querySelector('.wb-panes').getBoundingClientRect(); return { width: panel.width, left: panel.left, panesRight: panes.right }; })()`);
+  const changesLayout = await evaluate(cdp, `(() => { const panel = document.querySelector('.wb-rail').getBoundingClientRect(); const panes = document.querySelector('.wb-panes').getBoundingClientRect(); return { width: panel.width, left: panel.left, panesRight: panes.right }; })()`);
   assert.ok(changesLayout.width >= 280, `changes dock must keep a readable width (${changesLayout.width}px)`);
   assert.ok(changesLayout.left >= changesLayout.panesRight - 1, 'changes dock must sit beside the pane area, not overlay it on desktop');
   await evaluate(cdp, `document.querySelector('.wb-changes-file').click()`);
@@ -676,8 +711,43 @@ try {
   await waitFor(cdp, `document.querySelector('.wb-changes-diff .diff-hunk') !== null`);
   await evaluate(cdp, `document.querySelector('.wb-changes-back').click()`);
   await waitFor(cdp, `document.querySelectorAll('.wb-changes-file').length === 3`);
-  await evaluate(cdp, `document.querySelector('.wb-changes-close').click()`);
-  await waitFor(cdp, `document.querySelector('.wb-changes-panel') === null`);
+  await evaluate(cdp, `document.querySelector('.wb-rail-close').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-rail') === null`);
+
+  // Files rail: lazy /api/files/list tree, in-panel preview, the external
+  // open menu projected from /api/files/openers, and the web-terminal action
+  // that reuses the terminal dock.
+  await evaluate(cdp, `document.querySelector('[data-action="files"]').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-rail') !== null`);
+  await waitFor(cdp, `document.querySelectorAll('.wb-files-row').length === 2`);
+  await evaluate(cdp, `(() => { const row = [...document.querySelectorAll('.wb-files-row')].find((r) => r.textContent.includes('docs')); row.click(); })()`);
+  await waitFor(cdp, `document.querySelectorAll('.wb-files-row').length === 3`);
+  await evaluate(cdp, `(() => { const row = [...document.querySelectorAll('.wb-files-row')].find((r) => r.textContent.includes('a.txt')); row.click(); })()`);
+  await waitFor(cdp, `document.querySelector('.wb-files-lines') !== null`);
+  assert.ok(
+    (await evaluate(cdp, `document.querySelector('.wb-files-preview-body')?.textContent || ''`)).includes('alpha content'),
+    'files preview shows the file content'
+  );
+  await evaluate(cdp, `document.querySelector('.wb-files-back').click()`);
+  await waitFor(cdp, `document.querySelectorAll('.wb-files-row').length === 3`);
+  await evaluate(cdp, `document.querySelector('.wb-files-row .wb-files-openin').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-files-menu') !== null`);
+  const filesMenuText = await evaluate(cdp, `document.querySelector('.wb-files-menu').textContent`);
+  assert.ok(filesMenuText.includes('在文件管理器中显示') || filesMenuText.includes('Reveal'), 'menu offers reveal');
+  assert.ok(filesMenuText.includes('系统终端') || filesMenuText.includes('system terminal'), 'menu offers the system terminal');
+  assert.ok(filesMenuText.includes('VS Code'), 'menu offers the detected editor');
+  assert.ok(filesMenuText.includes('Web 终端') || filesMenuText.includes('web terminal'), 'menu offers the web terminal');
+  await evaluate(cdp, `(() => { const items = [...document.querySelectorAll('.wb-files-menu [role="menuitem"]')]; items[items.length - 1].click(); })()`);
+  await waitFor(cdp, `document.querySelector('.terminal-pane') !== null`);
+  await waitForState(() => terminalCreateBodies.length > 0, 'web terminal created from the files menu');
+  // Close through the toolbar toggle so the dock unmounts deterministically;
+  // waiting for the DELETE here keeps this scenario's PTY from racing the
+  // dedicated terminal test below.
+  await evaluate(cdp, `document.querySelector('[data-action="terminal"]').click()`);
+  await waitFor(cdp, `document.querySelector('.terminal-pane') === null`);
+  await waitForState(() => terminalDeletes >= 1, 'files-menu terminal released on dock close');
+  await evaluate(cdp, `document.querySelector('.wb-rail-close').click()`);
+  await waitFor(cdp, `document.querySelector('.wb-rail') === null`);
 
   // Sending from an existing session exercises the canonical composer path.
   // This guards the ChatPane refactor against local session-id shadowing and

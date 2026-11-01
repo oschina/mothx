@@ -4,6 +4,7 @@
 export const TERMINAL_SIZE_KEY = 'mothx.workbench.terminalHeight';
 export const PLAN_SIZE_KEY = 'mothx.workbench.planWidth';
 export const CHANGES_SIZE_KEY = 'mothx.workbench.changesWidth';
+export const FILES_SIZE_KEY = 'mothx.workbench.filesWidth';
 
 export const TERMINAL_MIN = 160;
 export const PLAN_MIN = 260;

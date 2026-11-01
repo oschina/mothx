@@ -8,9 +8,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/oschina/mothx/internal/terminal"
+	"github.com/oschina/mothx/internal/workspacefiles"
 	"golang.org/x/net/websocket"
 )
 
@@ -42,6 +44,11 @@ type terminalCreateRequest struct {
 	SessionID string `json:"sessionId"`
 	Cols      uint16 `json:"cols"`
 	Rows      uint16 `json:"rows"`
+	// Cwd is an optional path relative to the session's working directory.
+	// The Files panel uses it to open the web terminal inside a browsed
+	// subdirectory; absolute paths and parent traversal are rejected and the
+	// session cwd stays the boundary.
+	Cwd string `json:"cwd,omitempty"`
 }
 
 type terminalInfo struct {
@@ -104,6 +111,18 @@ func (rt *channelRuntime) handleTerminals(sessions activeSessionManager) http.Ha
 			if err != nil || cwd == "" {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found", "code": "session_not_found"})
 				return
+			}
+			if strings.TrimSpace(body.Cwd) != "" {
+				resolved, resolveErr := workspacefiles.Resolve(cwd, body.Cwd)
+				if resolveErr != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid cwd", "code": "invalid_cwd"})
+					return
+				}
+				if info, statErr := os.Stat(resolved); statErr != nil || !info.IsDir() {
+					writeJSON(w, http.StatusNotFound, map[string]string{"error": "cwd not found", "code": "cwd_not_found"})
+					return
+				}
+				cwd = resolved
 			}
 			term, err := rt.terminals.Create(body.SessionID, cwd, body.Cols, body.Rows)
 			if err != nil {

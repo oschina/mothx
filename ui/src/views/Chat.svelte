@@ -382,6 +382,7 @@
       onPreset={handlePreset}
       onReset={handleReset}
       onToggleTerminal={handleToggleTerminal}
+      onOpenTerminal={() => { terminalOpen = true; }}
       onAttention={handleAttention}
       onMenu={() => sidebarOpen.update((value) => !value)}
       {pane}

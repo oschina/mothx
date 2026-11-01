@@ -45,43 +45,13 @@ type gitChangesResponse struct {
 	Untracked int             `json:"untracked"`
 }
 
-// gitSessionWorkDir resolves the target directory from a sessionId (the
-// authoritative persisted session cwd, same convention as the terminal API)
-// or an explicit path query used by draft tabs that have no session yet.
-func gitSessionWorkDir(sessions activeSessionManager, r *http.Request) (string, string) {
-	q := r.URL.Query()
-	if id := strings.TrimSpace(q.Get("sessionId")); id != "" {
-		if sessions == nil {
-			return "", "session not found"
-		}
-		if cwd, err := sessions.GetSessionWorkDir(id); err == nil && cwd != "" {
-			return cwd, ""
-		}
-		for _, info := range sessions.ListActiveSessions() {
-			if info.ID == id && info.WorkDir != "" {
-				return info.WorkDir, ""
-			}
-		}
-		return "", "session not found"
-	}
-	path := q.Get("path")
-	if path == "" {
-		return "", "path or sessionId is required"
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err.Error()
-	}
-	return abs, ""
-}
-
 func (rt *channelRuntime) handleGitChanges(sessions activeSessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		dir, problem := gitSessionWorkDir(sessions, r)
+		dir, problem := sessionWorkDirTarget(sessions, r)
 		if dir == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": problem})
 			return
@@ -99,7 +69,7 @@ func (rt *channelRuntime) handleGitDiff(sessions activeSessionManager) http.Hand
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		dir, problem := gitSessionWorkDir(sessions, r)
+		dir, problem := sessionWorkDirTarget(sessions, r)
 		if dir == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": problem})
 			return
