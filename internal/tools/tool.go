@@ -597,6 +597,18 @@ func (r *Registry) ModeTools(mode string) []provider.ToolDefinition {
 			}
 		}
 		return defs
+	case "router":
+		// Router is a lead-only orchestration mode. Keep its local surface
+		// deliberately read-only; delegation is exposed only after Runtime
+		// installs the appropriate target-specific tool.
+		var defs []provider.ToolDefinition
+		for _, t := range r.All() {
+			switch t.Name() {
+			case "read", "grep", "find", "ls", "plan", "skill_ref":
+				defs = append(defs, ToolDefinition(t))
+			}
+		}
+		return defs
 	case "agent":
 		// Agent mode: all tools, including the interactive question tool.
 		var defs []provider.ToolDefinition

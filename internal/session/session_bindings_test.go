@@ -38,6 +38,9 @@ func TestLatestSessionBindingsReadsNewestMetadataWithoutReplay(t *testing.T) {
 	if _, err := legacy.AppendAdditionalDirectories([]string{"/tmp/new-a", "/tmp/new-b"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := legacy.AppendRouterBinding("codex", "auto_allow_once", "v1"); err != nil {
+		t.Fatal(err)
+	}
 
 	eventStore := New("/tmp/event", sessionDir)
 	if err := eventStore.InitWithID("event-bindings"); err != nil {
@@ -63,6 +66,10 @@ func TestLatestSessionBindingsReadsNewestMetadataWithoutReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := eventStore.AppendAdditionalDirectories([]string{"/tmp/event"}); err != nil {
+		guard.Release()
+		t.Fatal(err)
+	}
+	if _, err := eventStore.AppendRouterBinding("reviewer", "auto_reject", "v2"); err != nil {
 		guard.Release()
 		t.Fatal(err)
 	}
@@ -92,6 +99,9 @@ func TestLatestSessionBindingsReadsNewestMetadataWithoutReplay(t *testing.T) {
 	if got := legacyState.AdditionalDirectories.Directories; len(got) != 2 || got[0] != "/tmp/new-a" || got[1] != "/tmp/new-b" {
 		t.Fatalf("legacy directories = %#v", got)
 	}
+	if !legacyState.HasRouterBinding || legacyState.RouterBinding.ACPProfileID != "codex" || legacyState.RouterBinding.ApprovalStrategy != "auto_allow_once" {
+		t.Fatalf("legacy router binding = %#v", legacyState)
+	}
 
 	eventState, ok := bindings["event-bindings"]
 	if !ok {
@@ -108,6 +118,9 @@ func TestLatestSessionBindingsReadsNewestMetadataWithoutReplay(t *testing.T) {
 	}
 	if !eventState.HasAdditionalDirectories || len(eventState.AdditionalDirectories.Directories) != 1 || eventState.AdditionalDirectories.Directories[0] != "/tmp/event" {
 		t.Fatalf("event store directory binding = %#v", eventState)
+	}
+	if !eventState.HasRouterBinding || eventState.RouterBinding.ACPProfileID != "reviewer" || eventState.RouterBinding.ApprovalStrategy != "auto_reject" {
+		t.Fatalf("event store router binding = %#v", eventState)
 	}
 
 	if _, ok := bindings["missing"]; ok {

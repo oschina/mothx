@@ -742,6 +742,7 @@ func sessionModes(runtime *agentruntime.SessionRuntime) *sessionModeState {
 			{ID: agentruntime.ModePlan, Name: "Plan"},
 			{ID: agentruntime.ModeYolo, Name: "Yolo"},
 			{ID: agentruntime.ModeOS, Name: "OS"},
+			{ID: agentruntime.ModeRouter, Name: "Router"},
 		},
 	}
 }

@@ -47,6 +47,8 @@ func DecodeEventRecord(record EventRecord) (interface{}, error) {
 		entry = &ModelChangeEntry{}
 	case EntryModeChange:
 		entry = &ModeChangeEntry{}
+	case EntryRouterBinding:
+		entry = &RouterBindingEntry{}
 	case EntryThinkingChange:
 		entry = &ThinkingLevelChangeEntry{}
 	case EntryAdditionalDirectories:
@@ -83,6 +85,8 @@ func entryValue(entry interface{}) interface{} {
 	case *ModelChangeEntry:
 		return *value
 	case *ModeChangeEntry:
+		return *value
+	case *RouterBindingEntry:
 		return *value
 	case *ThinkingLevelChangeEntry:
 		return *value

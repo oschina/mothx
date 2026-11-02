@@ -31,6 +31,9 @@ const (
 	ModeAgent = "agent"
 	ModeYolo  = "yolo"
 	ModeOS    = "os"
+	// ModeRouter is a lead-only orchestration mode. Its exact tool surface is
+	// resolved by the Runtime and excludes local mutation/process tools.
+	ModeRouter = "router"
 )
 
 // ExecutionPolicy describes the mode semantics shared by all adapters for one run.
@@ -154,7 +157,7 @@ func (p Policy) ResolveMode(sessionMode, requestedMode string) (string, error) {
 // IsValidMode reports whether mode is one of the public execution modes.
 func IsValidMode(mode string) bool {
 	switch strings.TrimSpace(mode) {
-	case ModePlan, ModeAgent, ModeYolo, ModeOS:
+	case ModePlan, ModeAgent, ModeYolo, ModeOS, ModeRouter:
 		return true
 	default:
 		return false
@@ -163,12 +166,16 @@ func IsValidMode(mode string) bool {
 
 // ResolveUnattendedMode derives the execution mode for unattended derived
 // runs such as ESM role sub-agents. Unattended runs must never stop on
-// interactive approval, so only os is inherited from the session mode and
-// every other session mode (plan/agent/yolo/empty/unknown) falls back to
-// yolo. Hard high-risk-command protections remain mode-independent.
+// interactive approval, so os and router preserve their intentionally narrow
+// tool surfaces; every other session mode (plan/agent/yolo/empty/unknown)
+// falls back to yolo. Hard high-risk-command protections remain
+// mode-independent.
 func ResolveUnattendedMode(sessionMode string) string {
-	if strings.TrimSpace(sessionMode) == ModeOS {
+	switch strings.TrimSpace(sessionMode) {
+	case ModeOS:
 		return ModeOS
+	case ModeRouter:
+		return ModeRouter
 	}
 	return ModeYolo
 }

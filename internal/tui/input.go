@@ -305,6 +305,8 @@ func (a *App) cycleMode() {
 	case "yolo":
 		a.mode = "os"
 	case "os":
+		a.mode = "router"
+	case "router":
 		a.mode = "plan"
 	default:
 		a.mode = "yolo"
@@ -341,6 +343,8 @@ func (a *App) cycleMode() {
 		modeLabel = "🚀 YOLO - Full access"
 	case "os":
 		modeLabel = "🖥 OS - Bash only, no sandbox"
+	case "router":
+		modeLabel = "🧭 ROUTER - Read-only orchestration"
 	}
 	a.addMessage(statusStyle.Render(fmt.Sprintf("Mode: %s", modeLabel)))
 }

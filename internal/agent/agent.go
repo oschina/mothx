@@ -164,7 +164,7 @@ type Config struct {
 	Provider         provider.Provider
 	Vendor           string // user-configured provider/vendor name (e.g. "longcat", "openai")
 	Model            *provider.Model
-	Mode             string // "plan", "agent", "yolo", "os"
+	Mode             string // "plan", "agent", "yolo", "os", "router"
 	ThinkingLevel    provider.ThinkingLevel
 	MaxTokens        int
 	MaxTokensUserSet bool

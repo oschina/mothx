@@ -133,6 +133,50 @@ func TestDefaultSettings(t *testing.T) {
 	}
 }
 
+func TestACPAgentProfileValidationAndLookup(t *testing.T) {
+	settings := DefaultSettings()
+	settings.ACPAgents = []ACPAgentProfile{
+		{
+			ID:               "codex",
+			Title:            "Codex",
+			Command:          []string{"/opt/codex/bin/codex", "acp"},
+			Enabled:          true,
+			Environment:      []string{"OPENAI_API_KEY"},
+			PermissionPolicy: ACPPermissionAutoAllowOnce,
+		},
+	}
+	if err := settings.ValidateACPAgentProfiles(); err != nil {
+		t.Fatalf("ValidateACPAgentProfiles: %v", err)
+	}
+	profile, ok := settings.ACPAgentProfile("codex")
+	if !ok {
+		t.Fatal("configured enabled ACP profile was not found")
+	}
+	if profile.EffectivePermissionPolicy() != ACPPermissionAutoAllowOnce {
+		t.Fatalf("permission policy = %q", profile.EffectivePermissionPolicy())
+	}
+	profile.Command[0] = "mutated"
+	if settings.ACPAgents[0].Command[0] == "mutated" {
+		t.Fatal("ACP profile lookup returned aliased command slice")
+	}
+}
+
+func TestACPAgentProfileRejectsUnsafeCommandAndDuplicates(t *testing.T) {
+	settings := DefaultSettings()
+	settings.ACPAgents = []ACPAgentProfile{{ID: "worker", Command: []string{"codex"}, Enabled: true}}
+	if err := settings.ValidateACPAgentProfiles(); err == nil {
+		t.Fatal("relative ACP command was accepted")
+	}
+
+	settings.ACPAgents = []ACPAgentProfile{
+		{ID: "worker", Command: []string{"/opt/worker"}, Enabled: true},
+		{ID: "worker", Command: []string{"/opt/other"}, Enabled: true},
+	}
+	if err := settings.ValidateACPAgentProfiles(); err == nil {
+		t.Fatal("duplicate ACP profile IDs were accepted")
+	}
+}
+
 func TestAuthoredSettingRoundTrip(t *testing.T) {
 	data, err := json.Marshal(&Settings{Authored: true})
 	if err != nil {

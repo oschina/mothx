@@ -549,7 +549,7 @@ func (a *App) handleSystemInitCommand(cmd string) tea.Cmd {
 		return nil
 	}
 	extra := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(cmd), "/systeminit"))
-	if a.mode == "plan" {
+	if a.mode == "plan" || a.mode == "router" {
 		a.mode = "agent"
 		a.resetAgent(fmt.Errorf("systeminit requires write access"))
 		a.addCommandStatus(a.translator.Text(i18n.MsgSystemInitSwitchedMode))
@@ -647,7 +647,7 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 	case "/mode":
 		if len(parts) > 1 {
 			switch parts[1] {
-			case "plan", "agent", "yolo", "os":
+			case "plan", "agent", "yolo", "os", "router":
 				a.mode = parts[1]
 				// If agent is currently running, abort it so the new mode takes effect immediately
 				if a.isThinking && a.agent != nil {
@@ -675,6 +675,8 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 				a.addCommandStatus(a.translator.Text(i18n.MsgCommandPermissionsYolo))
 			case "os":
 				a.addCommandStatus(a.translator.Text(i18n.MsgCommandPermissionsOS))
+			case "router":
+				a.addCommandStatus(a.translator.Text(i18n.MsgCommandPermissionsRouter))
 			}
 		}
 	case "/model":

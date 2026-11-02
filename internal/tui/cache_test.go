@@ -2060,7 +2060,7 @@ func TestHelpCommandRendersAsSingleCommandOutput(t *testing.T) {
 		t.Fatalf("/help messages len = %d, want 1", len(a.messages))
 	}
 	plain := stripANSI(a.messages[0])
-	for _, want := range []string{"Commands:", "/mode [plan|agent|yolo|os]", "/help", "Keyboard shortcuts:"} {
+	for _, want := range []string{"Commands:", "/mode [plan|agent|yolo|os|router]", "/help", "Keyboard shortcuts:"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("/help output = %q, want substring %q", plain, want)
 		}
@@ -3281,6 +3281,20 @@ func TestModeCommandShowsOSPermissions(t *testing.T) {
 	}
 	if !strings.Contains(joined, "BASH only") || !strings.Contains(joined, "no sandbox") {
 		t.Fatalf("OS permission description missing: %q", joined)
+	}
+}
+
+func TestModeCommandShowsRouterPermissions(t *testing.T) {
+	settings := config.DefaultSettings()
+	settings.TUILang = "en"
+	a := NewApp(nil, &provider.Model{Name: "test"}, settings, nil, nil, "", "", "", nil, "router", false, false, nil, nil, nil)
+	a.handleCommand("/mode")
+	joined := stripANSI(strings.Join(a.messages, "\n"))
+	if !strings.Contains(joined, "Current mode: ROUTER") {
+		t.Fatalf("current Router mode missing: %q", joined)
+	}
+	if !strings.Contains(joined, "no local write or shell tools") {
+		t.Fatalf("Router permission description missing: %q", joined)
 	}
 }
 

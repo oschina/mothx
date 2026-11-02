@@ -117,6 +117,19 @@ func (m *MemoryStore) AppendModeChange(mode string) (string, error) {
 	return id, nil
 }
 
+func (m *MemoryStore) AppendRouterBinding(acpProfileID, approvalStrategy, policyRevision string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id := GenerateID()
+	entry := RouterBindingEntry{
+		EntryBase:    EntryBase{Type: EntryRouterBinding, ID: id, ParentID: m.leafID, Timestamp: time.Now()},
+		ACPProfileID: acpProfileID, ApprovalStrategy: approvalStrategy, PolicyRevision: policyRevision,
+	}
+	m.entries = append(m.entries, entry)
+	m.leafID = &id
+	return id, nil
+}
+
 func (m *MemoryStore) AppendThinkingLevelChange(level string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -214,6 +227,17 @@ func (m *MemoryStore) GetLatestModeChange() (ModeChangeEntry, bool) {
 		}
 	}
 	return ModeChangeEntry{}, false
+}
+
+func (m *MemoryStore) GetLatestRouterBinding() (RouterBindingEntry, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for i := len(m.entries) - 1; i >= 0; i-- {
+		if entry, ok := m.entries[i].(RouterBindingEntry); ok {
+			return entry, true
+		}
+	}
+	return RouterBindingEntry{}, false
 }
 
 func (m *MemoryStore) GetLatestThinkingLevelChange() (ThinkingLevelChangeEntry, bool) {

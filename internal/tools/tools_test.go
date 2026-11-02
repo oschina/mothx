@@ -151,6 +151,23 @@ func TestModeTools(t *testing.T) {
 		t.Error("expected no 'bash' in plan mode")
 	}
 
+	// Router mode - read-only lead tools only.
+	routerTools := r.ModeTools("router")
+	routerToolNames := make(map[string]bool)
+	for _, tool := range routerTools {
+		routerToolNames[tool.Name] = true
+	}
+	for _, name := range []string{"read", "ls", "grep", "find", "plan"} {
+		if !routerToolNames[name] {
+			t.Errorf("expected %q in router mode", name)
+		}
+	}
+	for _, name := range []string{"write", "edit", "insert", "bash", "jobs", "kill"} {
+		if routerToolNames[name] {
+			t.Errorf("did not expect %q in router mode", name)
+		}
+	}
+
 	// Agent mode - all tools
 	agentTools := r.ModeTools("agent")
 	if len(agentTools) != 11 {

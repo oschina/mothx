@@ -865,6 +865,8 @@ type SessionBindings struct {
 	HasModelChange           bool
 	ModeChange               ModeChangeEntry
 	HasModeChange            bool
+	RouterBinding            RouterBindingEntry
+	HasRouterBinding         bool
 	ThinkingLevelChange      ThinkingLevelChangeEntry
 	HasThinkingLevelChange   bool
 	AdditionalDirectories    AdditionalDirectoriesEntry
@@ -874,6 +876,7 @@ type SessionBindings struct {
 var sessionBindingEntryTypes = []string{
 	string(EntryModelChange),
 	string(EntryModeChange),
+	string(EntryRouterBinding),
 	string(EntryThinkingChange),
 	string(EntryAdditionalDirectories),
 }
@@ -959,6 +962,9 @@ func LatestSessionBindings(sessionDir string, sessionIDs []string) (map[string]S
 		if entry, ok := manager.GetLatestModeChange(); ok {
 			state.ModeChange, state.HasModeChange = entry, true
 		}
+		if entry, ok := manager.GetLatestRouterBinding(); ok {
+			state.RouterBinding, state.HasRouterBinding = entry, true
+		}
 		if entry, ok := manager.GetLatestThinkingLevelChange(); ok {
 			state.ThinkingLevelChange, state.HasThinkingLevelChange = entry, true
 		}
@@ -986,6 +992,12 @@ func applySessionBindingEntry(state *SessionBindings, entryType, data string) bo
 			return false
 		}
 		state.ModeChange, state.HasModeChange = entry, true
+	case EntryRouterBinding:
+		var entry RouterBindingEntry
+		if json.Unmarshal([]byte(data), &entry) != nil {
+			return false
+		}
+		state.RouterBinding, state.HasRouterBinding = entry, true
 	case EntryThinkingChange:
 		var entry ThinkingLevelChangeEntry
 		if json.Unmarshal([]byte(data), &entry) != nil {
@@ -1360,6 +1372,23 @@ func (m *Manager) AppendModeChange(mode string) (string, error) {
 	})
 }
 
+// AppendRouterBinding records the selected external ACP profile and automatic
+// approval strategy for a Router-mode session.
+func (m *Manager) AppendRouterBinding(acpProfileID, approvalStrategy, policyRevision string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.ensureInitializedLocked(); err != nil {
+		return "", err
+	}
+	return m.appendEntryLocked(context.Background(), func(parent *string) (interface{}, error) {
+		return RouterBindingEntry{
+			EntryBase:    EntryBase{Type: EntryRouterBinding, ID: GenerateID(), ParentID: parent, Timestamp: time.Now()},
+			ACPProfileID: acpProfileID, ApprovalStrategy: approvalStrategy, PolicyRevision: policyRevision,
+		}, nil
+	})
+}
+
 // AppendThinkingLevelChange records a thinking level change.
 func (m *Manager) AppendThinkingLevelChange(level string) (string, error) {
 	m.mu.Lock()
@@ -1607,6 +1636,18 @@ func (m *Manager) GetLatestModeChange() (ModeChangeEntry, bool) {
 		}
 	}
 	return ModeChangeEntry{}, false
+}
+
+// GetLatestRouterBinding returns the newest Router-specific policy binding.
+func (m *Manager) GetLatestRouterBinding() (RouterBindingEntry, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for i := len(m.entries) - 1; i >= 0; i-- {
+		if entry, ok := m.entries[i].(RouterBindingEntry); ok {
+			return entry, true
+		}
+	}
+	return RouterBindingEntry{}, false
 }
 
 // GetLatestThinkingLevelChange returns the newest thinking level in the session.
@@ -1995,6 +2036,10 @@ func getEntryMetadata(entry interface{}) (id string, typeStr string, parentID *s
 		return e.ID, string(e.Type), e.ParentID, e.Timestamp
 	case ModeChangeEntry:
 		return e.ID, string(e.Type), e.ParentID, e.Timestamp
+	case *RouterBindingEntry:
+		return e.ID, string(e.Type), e.ParentID, e.Timestamp
+	case RouterBindingEntry:
+		return e.ID, string(e.Type), e.ParentID, e.Timestamp
 	case *ThinkingLevelChangeEntry:
 		return e.ID, string(e.Type), e.ParentID, e.Timestamp
 	case ThinkingLevelChangeEntry:
@@ -2172,6 +2217,15 @@ func (m *Manager) loadLocked(ctx context.Context) error {
 
 			case EntryModeChange:
 				var e ModeChangeEntry
+				if err := json.Unmarshal(line, &e); err != nil {
+					corruptRows++
+					continue
+				}
+				m.entries = append(m.entries, e)
+				m.leafID = &e.ID
+
+			case EntryRouterBinding:
+				var e RouterBindingEntry
 				if err := json.Unmarshal(line, &e); err != nil {
 					corruptRows++
 					continue

@@ -660,7 +660,7 @@ func remapForkData(sourceType, raw string, entryIDs, turnIDs map[string]string) 
 		return value
 	}
 	switch EntryType(sourceType) {
-	case EntrySession, EntryMessage, EntryModelChange, EntryModeChange, EntryThinkingChange, EntryAdditionalDirectories, EntrySessionInfo:
+	case EntrySession, EntryMessage, EntryModelChange, EntryModeChange, EntryRouterBinding, EntryThinkingChange, EntryAdditionalDirectories, EntrySessionInfo:
 		return raw, nil
 	case EntryCompaction:
 		var entry CompactionEntry

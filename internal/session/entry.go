@@ -17,6 +17,7 @@ const (
 	EntryMessage               EntryType = "message"
 	EntryModelChange           EntryType = "model_change"
 	EntryModeChange            EntryType = "mode_change"
+	EntryRouterBinding         EntryType = "router_binding"
 	EntryThinkingChange        EntryType = "thinking_level_change"
 	EntryAdditionalDirectories EntryType = "additional_directories"
 	EntryCompaction            EntryType = "compaction"
@@ -73,6 +74,16 @@ type ModelChangeEntry struct {
 type ModeChangeEntry struct {
 	EntryBase
 	Mode string `json:"mode"`
+}
+
+// RouterBindingEntry records the selected external ACP worker and its
+// non-blocking permission strategy for a Router-mode session. The mode itself
+// remains a regular ModeChangeEntry so every projection keeps one mode source.
+type RouterBindingEntry struct {
+	EntryBase
+	ACPProfileID     string `json:"acpProfileId"`
+	ApprovalStrategy string `json:"approvalStrategy"`
+	PolicyRevision   string `json:"policyRevision,omitempty"`
 }
 
 // ThinkingLevelChangeEntry records a thinking level change.

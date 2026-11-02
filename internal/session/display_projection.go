@@ -103,6 +103,12 @@ func applyDisplayEntry(state *eventStoreDisplayState, entry interface{}) {
 		if e != nil {
 			state.Bindings.ModeChange, state.Bindings.HasModeChange = *e, true
 		}
+	case RouterBindingEntry:
+		state.Bindings.RouterBinding, state.Bindings.HasRouterBinding = e, true
+	case *RouterBindingEntry:
+		if e != nil {
+			state.Bindings.RouterBinding, state.Bindings.HasRouterBinding = *e, true
+		}
 	case ThinkingLevelChangeEntry:
 		state.Bindings.ThinkingLevelChange, state.Bindings.HasThinkingLevelChange = e, true
 	case *ThinkingLevelChangeEntry:

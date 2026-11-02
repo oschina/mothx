@@ -51,6 +51,133 @@ type Settings struct {
 	Worktree             WorktreeSettings           `json:"worktree,omitempty"`
 	Maintenance          *MaintenanceSettings       `json:"maintenance,omitempty"`
 	UpdateCheck          *bool                      `json:"updateCheck,omitempty"` // nil/true = check npm for updates on startup, false = disabled
+	ACPAgents            []ACPAgentProfile          `json:"acpAgents,omitempty"`
+}
+
+// ACPPermissionPolicy controls how a trusted external ACP worker's optional
+// session/request_permission requests are handled by the Runtime. It is a
+// cooperative-protocol choice, not an OS security boundary.
+type ACPPermissionPolicy string
+
+const (
+	ACPPermissionAutoAllowOnce ACPPermissionPolicy = "auto_allow_once"
+	ACPPermissionAutoReject    ACPPermissionPolicy = "auto_reject"
+	ACPPermissionInteractive   ACPPermissionPolicy = "interactive"
+)
+
+// ACPAgentProfile is an administrator-configured local ACP stdio Agent. The
+// model only ever receives its ID; command and environment values remain
+// Runtime configuration.
+type ACPAgentProfile struct {
+	ID               string              `json:"id"`
+	Title            string              `json:"title,omitempty"`
+	Command          []string            `json:"command"`
+	Enabled          bool                `json:"enabled"`
+	Environment      []string            `json:"environment,omitempty"`
+	PermissionPolicy ACPPermissionPolicy `json:"permissionPolicy,omitempty"`
+}
+
+// EffectivePermissionPolicy returns the safe non-blocking default for a
+// profile. Router callers reject interactive profiles rather than waiting for
+// a UI decision.
+func (p ACPAgentProfile) EffectivePermissionPolicy() ACPPermissionPolicy {
+	switch p.PermissionPolicy {
+	case ACPPermissionAutoAllowOnce, ACPPermissionAutoReject, ACPPermissionInteractive:
+		return p.PermissionPolicy
+	default:
+		return ACPPermissionAutoReject
+	}
+}
+
+// ACPAgentProfile returns a copy of one configured profile. A profile is only
+// usable when its configuration is valid and explicitly enabled.
+func (s *Settings) ACPAgentProfile(id string) (ACPAgentProfile, bool) {
+	if s == nil {
+		return ACPAgentProfile{}, false
+	}
+	for _, profile := range s.ACPAgents {
+		if profile.ID == id && profile.Enabled && profile.Validate() == nil {
+			profile.Command = append([]string(nil), profile.Command...)
+			profile.Environment = append([]string(nil), profile.Environment...)
+			return profile, true
+		}
+	}
+	return ACPAgentProfile{}, false
+}
+
+// Validate checks the profile's locally enforceable invariants. Command[0]
+// must be absolute so a PATH mutation cannot silently choose a different
+// executable at launch time.
+func (p ACPAgentProfile) Validate() error {
+	if !validACPProfileID(p.ID) {
+		return fmt.Errorf("invalid ACP agent profile id %q", p.ID)
+	}
+	if len(p.Command) == 0 || strings.TrimSpace(p.Command[0]) == "" {
+		return fmt.Errorf("ACP agent profile %q requires command[0]", p.ID)
+	}
+	if !filepath.IsAbs(p.Command[0]) {
+		return fmt.Errorf("ACP agent profile %q command[0] must be absolute", p.ID)
+	}
+	for _, name := range p.Environment {
+		if !validEnvironmentName(name) {
+			return fmt.Errorf("ACP agent profile %q has invalid environment name %q", p.ID, name)
+		}
+	}
+	switch p.PermissionPolicy {
+	case "", ACPPermissionAutoAllowOnce, ACPPermissionAutoReject, ACPPermissionInteractive:
+		return nil
+	default:
+		return fmt.Errorf("ACP agent profile %q has invalid permission policy %q", p.ID, p.PermissionPolicy)
+	}
+}
+
+// ValidateACPAgentProfiles rejects duplicate IDs and malformed configured
+// profiles. It is called by Runtime profile resolution so a stale settings
+// value cannot become an executable command.
+func (s *Settings) ValidateACPAgentProfiles() error {
+	if s == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(s.ACPAgents))
+	for _, profile := range s.ACPAgents {
+		if err := profile.Validate(); err != nil {
+			return err
+		}
+		if _, exists := seen[profile.ID]; exists {
+			return fmt.Errorf("duplicate ACP agent profile id %q", profile.ID)
+		}
+		seen[profile.ID] = struct{}{}
+	}
+	return nil
+}
+
+func validACPProfileID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for index, char := range id {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '_' || char == '-' {
+			if index == 0 && (char == '_' || char == '-') {
+				return false
+			}
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validEnvironmentName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index, char := range name {
+		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || char == '_' || (index > 0 && char >= '0' && char <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // MaintenanceSettings configures Runtime-owned housekeeping that is scheduled

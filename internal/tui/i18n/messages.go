@@ -346,6 +346,7 @@ const (
 	MsgCommandPermissionsAgent            MessageID = "commands.permissions.agent"
 	MsgCommandPermissionsYolo             MessageID = "commands.permissions.yolo"
 	MsgCommandPermissionsOS               MessageID = "commands.permissions.os"
+	MsgCommandPermissionsRouter           MessageID = "commands.permissions.router"
 	MsgCommandInvalidMode                 MessageID = "commands.invalid_mode"
 	MsgCommandModelNotFound               MessageID = "commands.model.not_found"
 	MsgCommandModelSwitched               MessageID = "commands.model.switched"
@@ -560,6 +561,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandPermissionsAgent:            "  Permissions: READ/WRITE/EDIT auto | BASH requires approval",
 		MsgCommandPermissionsYolo:             "  Permissions: ALL tools auto-execute",
 		MsgCommandPermissionsOS:               "  Permissions: BASH only, auto-execute (no sandbox; blacklisted commands still require approval)",
+		MsgCommandPermissionsRouter:           "  Permissions: READ/PLAN and configured worker delegation only (no local write or shell tools)",
 		MsgCommandInvalidMode:                 "Invalid mode",
 		MsgCommandModelNotFound:               "Model %q not found — available: %s",
 		MsgCommandModelSwitched:               "✅ Model switched to: %s (%s)",
@@ -999,6 +1001,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandPermissionsAgent:            "  权限：READ/WRITE/EDIT 自动执行 | BASH 需要审批",
 		MsgCommandPermissionsYolo:             "  权限：所有工具自动执行",
 		MsgCommandPermissionsOS:               "  权限：仅 BASH，自动执行（无沙箱；黑名单命令仍需审批）",
+		MsgCommandPermissionsRouter:           "  权限：仅 READ/PLAN 与已配置的 worker 委派（无本地写入或 shell 工具）",
 		MsgCommandInvalidMode:                 "无效模式",
 		MsgCommandModelNotFound:               "未找到模型 %q——可用模型：%s",
 		MsgCommandModelSwitched:               "✅ 模型已切换到：%s（%s）",

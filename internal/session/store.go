@@ -27,6 +27,9 @@ type Store interface {
 	// AppendModeChange records a session execution mode change.
 	AppendModeChange(mode string) (string, error)
 
+	// AppendRouterBinding records Router-specific session policy.
+	AppendRouterBinding(acpProfileID, approvalStrategy, policyRevision string) (string, error)
+
 	// AppendThinkingLevelChange records a thinking level change.
 	AppendThinkingLevelChange(level string) (string, error)
 	AppendAdditionalDirectories(directories []string) (string, error)
@@ -54,6 +57,9 @@ type Store interface {
 
 	// GetLatestModeChange returns the most recent persisted session mode.
 	GetLatestModeChange() (ModeChangeEntry, bool)
+
+	// GetLatestRouterBinding returns the most recent Router policy binding.
+	GetLatestRouterBinding() (RouterBindingEntry, bool)
 
 	// GetLatestThinkingLevelChange returns the most recent persisted thinking level.
 	GetLatestThinkingLevelChange() (ThinkingLevelChangeEntry, bool)

@@ -100,7 +100,7 @@ func SessionConfigOptionsWithProviders(providerName string, providers ProviderCa
 		{Type: "select", ID: ConfigOptionProvider, Name: "Provider", Category: "provider", CurrentValue: providerName, Options: providerChoices},
 		{Type: "select", ID: ConfigOptionModel, Name: "Model", Category: "model", CurrentValue: providerfactory.QualifiedModel(providerName, model), Options: modelChoices},
 		{Type: "select", ID: ConfigOptionMode, Name: "Mode", Category: "mode", CurrentValue: mode, Options: []SessionConfigOptionChoice{
-			{Value: ModeAgent, Name: "Agent"}, {Value: ModePlan, Name: "Plan"}, {Value: ModeYolo, Name: "Yolo"}, {Value: ModeOS, Name: "OS"},
+			{Value: ModeAgent, Name: "Agent"}, {Value: ModePlan, Name: "Plan"}, {Value: ModeYolo, Name: "Yolo"}, {Value: ModeOS, Name: "OS"}, {Value: ModeRouter, Name: "Router"},
 		}},
 	}
 	if model != nil && model.Reasoning {

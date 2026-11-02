@@ -1996,6 +1996,15 @@ func TestBuildSystemPromptModes(t *testing.T) {
 		t.Error("expected yolo prompt to contain 'YOLO'")
 	}
 
+	// Test router mode
+	routerPrompt := BuildSystemPrompt("router", nil, "/tmp", "", "", nil, nil, false, false, false)
+	if !contains(routerPrompt, "ROUTER") {
+		t.Error("expected router prompt to contain 'ROUTER'")
+	}
+	if contains(routerPrompt, "You have unrestricted system access") {
+		t.Error("router prompt must not inherit the yolo permission contract")
+	}
+
 	// Test unknown mode
 	unknownPrompt := BuildSystemPrompt("custom", nil, "/tmp", "", "", nil, nil, false, false, false)
 	if !contains(unknownPrompt, "CUSTOM") {

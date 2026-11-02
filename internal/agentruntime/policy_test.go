@@ -56,6 +56,12 @@ func TestPolicyResolveMode(t *testing.T) {
 			requested: ModeOS,
 			want:      ModeOS,
 		},
+		{
+			name:      "regular request uses router",
+			policy:    Policy{Source: SourceCLI, DefaultMode: ModeAgent},
+			requested: ModeRouter,
+			want:      ModeRouter,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -99,6 +105,7 @@ func TestResolveUnattendedMode(t *testing.T) {
 		{session: ModeAgent, want: ModeYolo},
 		{session: ModeYolo, want: ModeYolo},
 		{session: ModeOS, want: ModeOS},
+		{session: ModeRouter, want: ModeRouter},
 		{session: " os ", want: ModeOS},
 		{session: "not-a-mode", want: ModeYolo},
 	}

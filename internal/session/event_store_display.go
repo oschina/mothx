@@ -176,6 +176,11 @@ func eventStoreDisplayFromBatches(batches []EventBatch) eventStoreDisplayState {
 				if json.Unmarshal(event.Payload, &entry) == nil {
 					state.Bindings.ModeChange, state.Bindings.HasModeChange = entry, true
 				}
+			case EntryRouterBinding:
+				var entry RouterBindingEntry
+				if json.Unmarshal(event.Payload, &entry) == nil {
+					state.Bindings.RouterBinding, state.Bindings.HasRouterBinding = entry, true
+				}
 			case EntryThinkingChange:
 				var entry ThinkingLevelChangeEntry
 				if json.Unmarshal(event.Payload, &entry) == nil {
