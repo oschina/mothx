@@ -608,8 +608,7 @@ The `/sessions` picker supports Up/Down to select, Enter to switch, `n` to start
 | `/skill:<name>` | Activate a skill (alternative syntax) |
 | `/skillhub [search <q>]` | Open the online skill marketplace or search it |
 | `/skillmgr` | Open the installed-skill manager |
-| `/init_mcp [project\|global] [basic\|full] [--force]` | Create an MCP configuration template |
-| `/mcps` | List configured MCP servers |
+| `/mcpmgr [project\|global]` | Open the MCP management panel (add, edit, delete, enable, or disable servers) |
 | `/paste-image` | Attach an image from the clipboard (where supported) |
 
 ### General

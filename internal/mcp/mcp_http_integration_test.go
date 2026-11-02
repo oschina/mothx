@@ -225,10 +225,18 @@ func TestMCPHTTPSessionIDHeaderRoundTrip(t *testing.T) {
 			w.Header().Set("Mcp-Session-Id", sid)
 		}
 		w.Header().Set("Content-Type", "application/json")
+		result := map[string]any{"tools": []any{}}
+		if req.Method == "initialize" {
+			result = map[string]any{"protocolVersion": mcpProtocolVersion}
+		} else if got := r.Header.Get("MCP-Protocol-Version"); got != mcpProtocolVersion {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("missing negotiated protocol version"))
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
-			"result":  map[string]any{"tools": []any{}},
+			"result":  result,
 		})
 	}))
 	defer srv.Close()
@@ -269,6 +277,41 @@ func TestMCPHTTPRejectsMismatchedResponseID(t *testing.T) {
 	_, err := client.callHTTP(context.Background(), "tools/list", nil)
 	if err == nil || !strings.Contains(err.Error(), "does not match request id") {
 		t.Fatalf("callHTTP error = %v, want mismatched response ID", err)
+	}
+}
+
+func TestMCPHTTPDoesNotFollowRedirects(t *testing.T) {
+	redirectTargetCalled := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectTargetCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"tools": []any{}}})
+	}))
+	defer target.Close()
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var req RPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method == "initialize" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": map[string]any{"protocolVersion": mcpProtocolVersion},
+			})
+			return
+		}
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+
+	registry := tools.NewRegistry(t.TempDir(), sandbox.NewNoneSandbox())
+	registry.RegisterDefaults()
+	if _, err := ConnectServers(context.Background(), []ServerConfig{{Name: "redirect", Type: "http", URL: source.URL}}, registry, Callbacks{}); err == nil {
+		t.Fatal("expected redirecting MCP server to be rejected")
+	}
+	if redirectTargetCalled {
+		t.Fatal("MCP client followed a configured endpoint redirect")
 	}
 }
 

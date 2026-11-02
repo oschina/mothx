@@ -63,10 +63,13 @@ type Client struct {
 	headers    map[string]string
 	sseCancel  context.CancelFunc
 	sessionID  string
-	callbacks  Callbacks
-	ctx        context.Context
-	cancel     context.CancelFunc
-	inbound    chan RPCRequest
+	// protocolVersion is set from the initialize result. Streamable HTTP
+	// requires clients to send the negotiated value on every later request.
+	protocolVersion string
+	callbacks       Callbacks
+	ctx             context.Context
+	cancel          context.CancelFunc
+	inbound         chan RPCRequest
 
 	// imagePolicy resolves the provider/model aware image preprocessing policy
 	// for this connection. It is evaluated on every tool call rather than
@@ -101,6 +104,18 @@ func (c *Client) setSessionID(sid string) {
 	c.smu.Lock()
 	defer c.smu.Unlock()
 	c.sessionID = sid
+}
+
+func (c *Client) currentProtocolVersion() string {
+	c.smu.RLock()
+	defer c.smu.RUnlock()
+	return c.protocolVersion
+}
+
+func (c *Client) setProtocolVersion(version string) {
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	c.protocolVersion = strings.TrimSpace(version)
 }
 
 func (c *Client) context() context.Context {
@@ -190,9 +205,10 @@ type mcpResponse struct {
 }
 
 type mcpToolInfo struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"inputSchema,omitempty"`
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 }
 
 type mcpListToolsResult struct {
@@ -201,8 +217,9 @@ type mcpListToolsResult struct {
 }
 
 type mcpCallToolResult struct {
-	Content []mcpContentBlock `json:"content,omitempty"`
-	IsError bool              `json:"isError,omitempty"`
+	Content           []mcpContentBlock `json:"content,omitempty"`
+	StructuredContent json.RawMessage   `json:"structuredContent,omitempty"`
+	IsError           bool              `json:"isError,omitempty"`
 }
 
 type mcpResourceInfo struct {
@@ -242,13 +259,18 @@ type mcpPromptSample struct {
 }
 
 type mcpContentBlock struct {
-	Type     string          `json:"type"`
-	Text     string          `json:"text,omitempty"`
-	Data     string          `json:"data,omitempty"`
-	Blob     string          `json:"blob,omitempty"`
-	URI      string          `json:"uri,omitempty"`
-	MimeType string          `json:"mimeType,omitempty"`
-	JSON     json.RawMessage `json:"json,omitempty"`
+	Type        string          `json:"type"`
+	Text        string          `json:"text,omitempty"`
+	Data        string          `json:"data,omitempty"`
+	Blob        string          `json:"blob,omitempty"`
+	URI         string          `json:"uri,omitempty"`
+	Name        string          `json:"name,omitempty"`
+	Title       string          `json:"title,omitempty"`
+	Description string          `json:"description,omitempty"`
+	MimeType    string          `json:"mimeType,omitempty"`
+	Size        *int64          `json:"size,omitempty"`
+	JSON        json.RawMessage `json:"json,omitempty"`
+	Resource    json.RawMessage `json:"resource,omitempty"`
 }
 
 // ConnectOptions controls how a group of configured MCP servers is connected.
@@ -526,15 +548,24 @@ func newMCPStdioClient(lifeCtx, dialCtx context.Context, cfg ServerConfig, callb
 
 	initCtx, cancel := context.WithTimeout(dialCtx, mcpInitializeTimeout)
 	defer cancel()
-	if _, err := client.call(initCtx, "initialize", map[string]any{
+	capabilities := map[string]any{}
+	if callbacks.OnSamplingCreateMessage != nil {
+		capabilities["sampling"] = map[string]any{}
+	}
+	initializeResult, err := client.call(initCtx, "initialize", map[string]any{
 		"protocolVersion": mcpProtocolVersion,
-		"capabilities":    map[string]any{},
+		"capabilities":    capabilities,
 		"clientInfo": map[string]any{
 			"name":    "vibecoding",
 			"title":   "VibeCoding",
 			"version": "dev",
 		},
-	}); err != nil {
+	})
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("initialize MCP server %q: %w", cfg.Name, err)
+	}
+	if err := client.acceptInitializeResult(initializeResult); err != nil {
 		client.Close()
 		return nil, fmt.Errorf("initialize MCP server %q: %w", cfg.Name, err)
 	}
@@ -674,13 +705,17 @@ func newMCPHTTPClient(lifeCtx, dialCtx context.Context, cfg ServerConfig, legacy
 		headers[name] = h.Value
 	}
 	client := &Client{
-		name:       cfg.Name,
-		pending:    make(map[string]chan mcpResponse),
-		transport:  cfg.Type,
-		httpClient: &http.Client{},
-		httpURL:    rawURL,
-		headers:    headers,
-		callbacks:  callbacks,
+		name:      cfg.Name,
+		pending:   make(map[string]chan mcpResponse),
+		transport: cfg.Type,
+		// A configured MCP endpoint is a trust boundary. Do not let a server
+		// redirect configured credentials or request bodies to another origin.
+		httpClient: &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
+		httpURL:   rawURL,
+		headers:   headers,
+		callbacks: callbacks,
 	}
 	client.ctx, client.cancel = context.WithCancel(lifeCtx)
 	client.startInboundLoop()
@@ -702,15 +737,24 @@ func newMCPHTTPClient(lifeCtx, dialCtx context.Context, cfg ServerConfig, legacy
 
 	initCtx, cancel := context.WithTimeout(dialCtx, mcpInitializeTimeout)
 	defer cancel()
-	if _, err := client.call(initCtx, "initialize", map[string]any{
+	capabilities := map[string]any{}
+	if callbacks.OnSamplingCreateMessage != nil {
+		capabilities["sampling"] = map[string]any{}
+	}
+	initializeResult, err := client.call(initCtx, "initialize", map[string]any{
 		"protocolVersion": mcpProtocolVersion,
-		"capabilities":    map[string]any{},
+		"capabilities":    capabilities,
 		"clientInfo": map[string]any{
 			"name":    "vibecoding",
 			"title":   "VibeCoding",
 			"version": "dev",
 		},
-	}); err != nil {
+	})
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("initialize MCP server %q: %w", cfg.Name, err)
+	}
+	if err := client.acceptInitializeResult(initializeResult); err != nil {
 		client.Close()
 		return nil, fmt.Errorf("initialize MCP server %q: %w", cfg.Name, err)
 	}
@@ -719,6 +763,29 @@ func newMCPHTTPClient(lifeCtx, dialCtx context.Context, cfg ServerConfig, legacy
 		return nil, fmt.Errorf("initialize MCP server %q: %w", cfg.Name, err)
 	}
 	return client, nil
+}
+
+// acceptInitializeResult records the server-selected protocol revision. A
+// client can only send a protocol header after initialization, so negotiation
+// is intentionally kept separate from the request transport.
+func (c *Client) acceptInitializeResult(raw json.RawMessage) error {
+	var result struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return fmt.Errorf("decode initialize result: %w", err)
+	}
+	if strings.TrimSpace(result.ProtocolVersion) == "" {
+		return errors.New("initialize result omitted protocolVersion")
+	}
+	// This client implements the current revision only. Silently accepting an
+	// older revision would falsely claim compatibility while using current wire
+	// semantics (notably Streamable HTTP headers).
+	if result.ProtocolVersion != mcpProtocolVersion {
+		return fmt.Errorf("unsupported negotiated protocol version %q", result.ProtocolVersion)
+	}
+	c.setProtocolVersion(result.ProtocolVersion)
+	return nil
 }
 
 func (c *Client) listTools(ctx context.Context) ([]mcpToolInfo, error) {
@@ -762,9 +829,17 @@ func (c *Client) callTool(ctx context.Context, name string, args map[string]any)
 		return mcpCallToolResult{}, err
 	}
 	if out.IsError {
-		return out, fmt.Errorf("%s", mcpContentToText(out.Content))
+		return out, fmt.Errorf("%s", mcpContentToText(out.contentBlocks()))
 	}
 	return out, nil
+}
+
+func (r mcpCallToolResult) contentBlocks() []mcpContentBlock {
+	blocks := append([]mcpContentBlock(nil), r.Content...)
+	if len(r.StructuredContent) > 0 && string(r.StructuredContent) != "null" {
+		blocks = append(blocks, mcpContentBlock{Type: "json", JSON: r.StructuredContent})
+	}
+	return blocks
 }
 
 func (c *Client) listResources(ctx context.Context) ([]mcpResourceInfo, error) {
@@ -978,6 +1053,9 @@ func (c *Client) callHTTPInternal(ctx context.Context, method string, params any
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
+	if version := c.currentProtocolVersion(); version != "" {
+		req.Header.Set("MCP-Protocol-Version", version)
+	}
 	if operationID, ok := tools.OperationIDFromContext(requestCtx); ok {
 		// MCP does not standardize an idempotency field, but HTTP MCP servers
 		// can opt into the common header without changing JSON-RPC semantics.
@@ -997,6 +1075,11 @@ func (c *Client) callHTTPInternal(ctx context.Context, method string, params any
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	if !isNotification && resp.StatusCode != http.StatusAccepted && resp.ContentLength != 0 {
+		if err := validateMCPHTTPContentType(resp.Header.Get("Content-Type")); err != nil {
+			return nil, err
+		}
 	}
 	if isNotification || resp.StatusCode == http.StatusAccepted || resp.ContentLength == 0 {
 		return json.RawMessage(`{}`), nil
@@ -1109,9 +1192,12 @@ func (c *Client) postRPCMessage(ctx context.Context, msg any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
+	}
+	if version := c.currentProtocolVersion(); version != "" {
+		req.Header.Set("MCP-Protocol-Version", version)
 	}
 	if sid := c.currentSessionID(); sid != "" {
 		req.Header.Set("Mcp-Session-Id", sid)
@@ -1129,6 +1215,14 @@ func (c *Client) postRPCMessage(ctx context.Context, msg any) error {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+func validateMCPHTTPContentType(contentType string) error {
+	contentType = strings.ToLower(contentType)
+	if strings.Contains(contentType, "application/json") || strings.Contains(contentType, "text/event-stream") {
+		return nil
+	}
+	return fmt.Errorf("invalid MCP HTTP response Content-Type %q", contentType)
 }
 
 func (c *Client) readLoop(r io.Reader) {
@@ -1356,7 +1450,7 @@ func (t *mcpTool) Parameters() json.RawMessage {
 
 func (t *mcpTool) Execute(ctx context.Context, params map[string]any) (tools.ToolResult, error) {
 	result, err := t.client.callTool(ctx, t.info.Name, params)
-	text, contents := t.client.projectMCPContent(result.Content)
+	text, contents := t.client.projectMCPContent(result.contentBlocks())
 	if text == "" && err != nil {
 		text = err.Error()
 	}
@@ -1491,6 +1585,8 @@ func mcpContentToText(blocks []mcpContentBlock) string {
 			}
 		case "image", "audio":
 			parts = append(parts, fmt.Sprintf("[%s content: %s]", block.Type, block.MimeType))
+		case "resource", "resource_link":
+			parts = append(parts, mcpResourceBlockText(block))
 		default:
 			if block.Type == "json" && len(block.JSON) > 0 {
 				parts = append(parts, string(block.JSON))
@@ -1503,6 +1599,42 @@ func mcpContentToText(blocks []mcpContentBlock) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// mcpResourceBlockText preserves the useful, model-safe portion of standard
+// resource and resource_link blocks. Embedded binary payloads intentionally
+// remain opaque, while URI, metadata and embedded text are retained.
+func mcpResourceBlockText(block mcpContentBlock) string {
+	resource := block
+	if block.Type == "resource" && len(block.Resource) > 0 {
+		if err := json.Unmarshal(block.Resource, &resource); err != nil {
+			return "[MCP embedded resource: invalid resource payload]"
+		}
+	}
+	var parts []string
+	if resource.Name != "" {
+		parts = append(parts, resource.Name)
+	}
+	if resource.Title != "" {
+		parts = append(parts, resource.Title)
+	}
+	if resource.URI != "" {
+		parts = append(parts, resource.URI)
+	}
+	if resource.Description != "" {
+		parts = append(parts, resource.Description)
+	}
+	label := "MCP resource"
+	if block.Type == "resource_link" {
+		label = "MCP resource link"
+	}
+	if resource.Text != "" {
+		return fmt.Sprintf("[%s: %s]\n%s", label, strings.Join(parts, " | "), resource.Text)
+	}
+	if resource.Blob != "" || resource.Data != "" {
+		return fmt.Sprintf("[%s: %s; binary %s]", label, strings.Join(parts, " | "), resource.MimeType)
+	}
+	return fmt.Sprintf("[%s: %s]", label, strings.Join(parts, " | "))
 }
 
 // classifyMCPBlock normalizes the two MCP content spellings. tools/call
@@ -1566,6 +1698,8 @@ func (c *Client) projectMCPContent(blocks []mcpContentBlock) (string, []provider
 			// No provider converter or provider.ContentBlock variant carries
 			// audio, so keep the historical placeholder instead of dropping it.
 			parts = append(parts, fmt.Sprintf("[%s content: %s]", block.Type, mimeType))
+		case "resource", "resource_link":
+			parts = append(parts, mcpResourceBlockText(block))
 		case "blob":
 			parts = append(parts, fmt.Sprintf("[binary content: %s]", mimeType))
 		default:

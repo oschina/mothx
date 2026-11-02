@@ -12,6 +12,8 @@
 
 - **TUI 状态栏新增实时生成速度。** Agent 流式输出期间，底部状态栏会在耗时旁显示估算的 `tok/s` 速度；该值基于最近一个短窗口内的流式输出增量计算，在没有新 Token 到达时（例如执行工具或等待审批期间）自动隐藏。加载提示行同时显示本次运行的估算生成 Token 总数。
 
+- **TUI 新增就地 MCP 管理面板，远端 MCP 遵循当前 Streamable HTTP 版本。** `/mcpmgr [project|global]` 在当前作用域的 `mcp.json` 上打开面板，可逐字段新增、编辑、删除、启用或关闭服务器（先选传输类型，再填写名称、端点或命令、参数、环境变量、请求头与启用状态），取代旧的 `/init_mcp` 与 `/mcps`；变更仅修改配置，执行 `/reload` 后生效。HTTP MCP 客户端现在会在 `initialize` 阶段协商协议版本，并在 `MCP-Protocol-Version` 中发送该版本，声明 `Accept: application/json, text/event-stream`，拒绝既非 JSON 也非 `text/event-stream` 的响应，且不再跟随已配置端点的重定向，避免凭据与请求体泄漏到其他来源。`tools/call` 结果会保留 `structuredContent` 以及标准 `resource`/`resource_link` 块并转为模型可读文本，而不再丢弃。
+
 ### 🐛 问题修复
 
 - **ESM 目标编辑不会被并发协调器写入覆盖，孤立 Run 也不再阻塞控制。** ESM 目标的所有读改写路径现在都在 `BEGIN IMMEDIATE` 事务内执行，worker 进度写入不会再把它在用户编辑提交前读到的旧 objective 写回。pause/resume/clear 同时允许一个没有有效 lease、等待恢复的 canonical Run，因此中断的本地准入不会让目标永久不可控制。终端控制还会把不支持平台报告为 `501 terminal_unsupported` 而不是 `terminal_disabled`，Unix PTY 的 build tag 也与受支持平台集合对齐，使 `aix` 等目标编译到显式的 `ErrUnsupported` 实现。

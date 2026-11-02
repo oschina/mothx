@@ -46,6 +46,7 @@ func TestMCPServerSSECallFlow(t *testing.T) {
 
 	message := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
 		var req RPCRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -175,6 +176,7 @@ func TestMCPServerSSENotificationCallback(t *testing.T) {
 
 	message := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
 		var req RPCRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		// Keep initialize/list calls deterministic via direct response to avoid stream-ready races.

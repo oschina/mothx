@@ -1243,11 +1243,17 @@ MothX 启动时会从以下位置加载 MCP 配置：
 
 Serve 的 Web UI 在**设置 → MCP**中提供全局文件编辑器，也可从当前会话聊天工具栏打开项目级编辑器。保存后的 MCP 服务器会应用到新建会话；已有会话会保留已注册的工具，直到重新创建会话。
 
+使用 TUI 管理全局或项目 MCP 服务器：
+
 ```text
-/init_mcp project full
-/init_mcp global basic
-/mcps
+/mcpmgr project
+/mcpmgr global
 ```
+
+面板支持在当前作用域的 `mcp.json` 中新增、编辑、删除、启用、关闭和重新加载 MCP
+服务器。按 `a` 后先选择传输类型，再逐项配置名称、命令或端点、参数、环境变量、请求头和
+启用状态；回车或 `e` 编辑选中服务器，空格启用或关闭，按 `d` 再按 `y` 删除。变更只会修改
+配置；请执行 `/reload`，让当前 TUI 会话加载新的 MCP 工具集合。
 
 示例：
 
@@ -1278,7 +1284,7 @@ Serve 的 Web UI 在**设置 → MCP**中提供全局文件编辑器，也可从
 支持的传输类型：
 
 - `stdio`：`command` 可以是通过 `PATH` 查找的命令名，也可以是直接路径；参数请放在 `args` 中
-- `http`：通过 `url` 连接 streamable HTTP 端点
+- `http`：通过 `url` 连接 MCP Streamable HTTP 端点（推荐的远端传输方式）
 - `sse`：通过 `url` 连接 legacy SSE 流，并通过 `messageUrl` 发送请求
 
 MCP 工具会在内置工具和 `skill_ref` 之后、agent 创建之前注册。agent 会冻结当前会话的 system prompt 和工具定义，因此修改 `mcp.json` 后需要重启客户端，或创建新的 Serve 会话。

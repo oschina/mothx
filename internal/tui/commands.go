@@ -784,10 +784,16 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 		return tea.Quit
 	case "/sessions":
 		a.handleSessionsCommand(parts)
-	case "/init_mcp":
-		a.handleInitMCPCommand(parts)
-	case "/mcps":
-		a.handleMCPsCommand()
+	case "/mcpmgr":
+		scope := "project"
+		if len(parts) > 2 || (len(parts) == 2 && parts[1] != "project" && parts[1] != "global") {
+			a.addCommandError(commandUsage(a.translator, "/mcpmgr [project|global]"))
+			return nil
+		}
+		if len(parts) == 2 {
+			scope = parts[1]
+		}
+		a.openMCPMgr(scope)
 	case "/agent":
 		a.handleAgentCommand(parts)
 	case "/expert":

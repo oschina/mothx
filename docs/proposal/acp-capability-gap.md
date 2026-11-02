@@ -58,7 +58,7 @@
 
 - WebUI 在 HTTP 层支持 16 个：`/clear` `/mode` `/model` `/defaultModel` `/models` `/sessions` `/status` `/compact` `/delegate` `/alloweditpath` `/allowautoedit` `/workflows` `/skill` `/skills` `/rule` `/help`
 - ACP 只展开 `/systeminit`
-- TUI 另有：`/auth` `/settings` `/mcps` `/cron` `/esm` `/stats` `/skillhub` `/agent` `/btw` `/reload` `/statusline` `/quit`
+- TUI 另有：`/auth` `/settings` `/mcpmgr` `/cron` `/esm` `/stats` `/skillhub` `/agent` `/btw` `/reload` `/statusline` `/quit`
 
 ### D. 管理/配置面
 

@@ -1243,13 +1243,20 @@ MothX loads MCP configuration at startup from:
 
 Serve's Web UI provides an MCP editor in **Settings → MCP** for the global file, plus a project-level editor from the active session's chat toolbar. Saved MCP servers are applied to newly created sessions; existing sessions keep their registered tools until recreated.
 
-Create a template from the TUI:
+Manage global or project MCP servers from the TUI:
 
 ```text
-/init_mcp project full
-/init_mcp global basic
-/mcps
+/mcpmgr project
+/mcpmgr global
 ```
+
+The panel supports adding, editing, deleting, enabling, disabling, and reloading
+the scoped `mcp.json`. Press `a` to choose the transport first, then configure
+name, endpoint/command, arguments, environment, headers, and enabled state one
+field at a time. Enter or `e` edits the selected server, Space enables or
+disables it, and `d` then `y` deletes it.
+Changes are configuration-only; run `/reload` before the current TUI session
+uses a changed MCP tool set.
 
 Example:
 
@@ -1280,7 +1287,7 @@ Example:
 Supported transports:
 
 - `stdio`: `command` may be an executable name resolved through `PATH`, or a direct path; put arguments in `args`
-- `http`: streamable HTTP endpoint via `url`
+- `http`: MCP Streamable HTTP endpoint via `url` (the preferred remote transport)
 - `sse`: legacy SSE stream via `url` plus `messageUrl`
 
 MCP tools are registered after built-in tools and `skill_ref`, but before the agent is created. The agent freezes its system prompt and tool definitions for the session, so changes to `mcp.json` require restarting the client or creating a new Serve session.

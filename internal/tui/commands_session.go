@@ -13,7 +13,6 @@ import (
 	xansi "github.com/charmbracelet/x/ansi"
 	agentpkg "github.com/oschina/mothx/agent"
 	"github.com/oschina/mothx/internal/agentruntime"
-	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/platform"
 	"github.com/oschina/mothx/internal/session"
 	"github.com/oschina/mothx/internal/tui/i18n"
@@ -451,101 +450,6 @@ func (a *App) switchToSession(detail session.SessionDetail) error {
 		a.printMessageOnce(idx)
 	}
 	return nil
-}
-
-func (a *App) handleInitMCPCommand(parts []string) {
-	target := "project"
-	template := "full"
-	force := false
-
-	for _, p := range parts[1:] {
-		switch strings.ToLower(p) {
-		case "project", "global":
-			target = strings.ToLower(p)
-		case "basic", "full":
-			template = strings.ToLower(p)
-		case "--force":
-			force = true
-		default:
-			a.addCommandError(commandUsage(a.translator, "/init_mcp [project|global] [basic|full] [--force]"))
-			return
-		}
-	}
-
-	path := config.ProjectMCPPath()
-	if target == "global" {
-		path = config.GlobalMCPPath()
-	}
-
-	if !force {
-		if _, err := os.Stat(path); err == nil {
-			a.addCommandStatus(fmt.Sprintf("MCP config already exists: %s (use --force to overwrite)", path))
-			return
-		}
-	}
-
-	var cfg *config.MCPConfig
-	if template == "basic" {
-		cfg = config.DefaultMCPConfig()
-	} else {
-		cfg = config.FullMCPConfigTemplate()
-	}
-
-	if err := config.SaveMCPConfig(path, cfg); err != nil {
-		a.addCommandError(fmt.Sprintf("Init MCP config failed: %v", err))
-		return
-	}
-	a.addCommandStatus(fmt.Sprintf("✅ Created MCP config: %s", path))
-	a.addCommandStatus(fmt.Sprintf("Template: %s | Target: %s", template, target))
-}
-
-func (a *App) handleMCPsCommand() {
-	type sourceInfo struct {
-		label string
-		path  string
-	}
-	sources := []sourceInfo{
-		{label: "Global", path: config.GlobalMCPPath()},
-		{label: "Project", path: config.ProjectMCPPath()},
-	}
-
-	var sb strings.Builder
-	sb.WriteString("MCP servers:\n")
-	foundAny := false
-
-	for _, src := range sources {
-		sb.WriteString(fmt.Sprintf("\n%s (%s):\n", src.label, src.path))
-		cfg, err := config.LoadMCPConfig(src.path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				sb.WriteString("  (not configured)\n")
-				continue
-			}
-			sb.WriteString(fmt.Sprintf("  (invalid: %v)\n", err))
-			continue
-		}
-		config.NormalizeMCPConfig(cfg)
-		if len(cfg.MCPServers) == 0 {
-			sb.WriteString("  (empty)\n")
-			continue
-		}
-		for _, srv := range cfg.MCPServers {
-			foundAny = true
-			target := srv.Command
-			if target == "" {
-				target = srv.URL
-			}
-			if target == "" {
-				target = "-"
-			}
-			sb.WriteString(fmt.Sprintf("  - %s [%s] %s\n", srv.Name, srv.Type, target))
-		}
-	}
-
-	if !foundAny {
-		sb.WriteString("\nUse /init_mcp to create project mcp.json.")
-	}
-	a.addCommandStatus(sb.String())
 }
 
 // sessionsClear creates a new session, starting fresh.

@@ -36,6 +36,22 @@ func TestMCPContentToText(t *testing.T) {
 	}
 }
 
+func TestMCPToolResultPreservesStructuredAndEmbeddedResourceContent(t *testing.T) {
+	result := mcpCallToolResult{
+		StructuredContent: json.RawMessage(`{"count":2,"items":["a","b"]}`),
+		Content: []mcpContentBlock{{
+			Type:     "resource",
+			Resource: json.RawMessage(`{"uri":"file:///tmp/notes.txt","mimeType":"text/plain","text":"important context"}`),
+		}},
+	}
+	text, _ := (&Client{}).projectMCPContent(result.contentBlocks())
+	for _, want := range []string{`{"count":2,"items":["a","b"]}`, "file:///tmp/notes.txt", "important context"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("projected text %q does not contain %q", text, want)
+		}
+	}
+}
+
 func TestReadLoopRespondsPing(t *testing.T) {
 	in := bytes.NewBufferString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
 	var out bytes.Buffer

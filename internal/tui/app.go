@@ -325,6 +325,11 @@ type App struct {
 	skillMgrLocked   map[string]bool
 	skillMgrMessage  string
 
+	// MCP manager is the sole TUI surface for editing mcp.json. It deliberately
+	// changes configuration only; Runtime-owned MCP clients are refreshed on the
+	// next /reload rather than being mutated behind an active session.
+	mcpMgr mcpMgrState
+
 	// /btw side-question floating layer
 	btwOpen       bool
 	btwActive     bool   // a /btw sub-agent is currently running
@@ -1048,6 +1053,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if handled, cmd := a.handleEnvKey(msg); handled {
 			return a, cmd
 		}
+		if handled, cmd := a.handleMCPMgrKey(msg); handled {
+			return a, cmd
+		}
 		if handled, cmd := a.handleAuthKey(msg); handled {
 			return a, cmd
 		}
@@ -1752,6 +1760,9 @@ func (a *App) View() string {
 	if !a.waitingForApproval && a.skillMgrOpen {
 		return a.renderFixedHeight(lipgloss.JoinVertical(lipgloss.Left, a.renderSkillMgr(), footer))
 	}
+	if !a.waitingForApproval && a.mcpMgr.Open {
+		return a.renderFixedHeight(lipgloss.JoinVertical(lipgloss.Left, a.renderMCPMgr(), footer))
+	}
 	if !a.waitingForApproval && a.esmPanelOpen {
 		panelFooter := footer
 		if a.height > 0 && a.height < 8 {
@@ -1940,6 +1951,9 @@ func (a *App) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	if a.skillMgrOpen {
+		return nil
+	}
+	if a.mcpMgr.Open {
 		return nil
 	}
 	if a.toolModalOpen {

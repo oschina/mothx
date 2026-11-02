@@ -632,8 +632,7 @@ mothx acp --sandbox --mode agent
 | `/skill:<name>` | 激活技能（替代语法） |
 | `/skillhub [search <q>]` | 打开在线技能市场或搜索 |
 | `/skillmgr` | 打开已安装技能管理器 |
-| `/init_mcp [project\|global] [basic\|full] [--force]` | 创建 MCP 配置模板 |
-| `/mcps` | 列出已配置的 MCP 服务器 |
+| `/mcpmgr [project\|global]` | 打开 MCP 管理面板（新增、编辑、删除、启用或关闭服务器） |
 | `/paste-image` | 从剪贴板附加图像（平台支持时） |
 
 ### 通用
