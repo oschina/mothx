@@ -1730,20 +1730,20 @@ func (m *Manager) StartConversationTurn(turnID, intentID, runID string) error {
 		return err
 	}
 	sessionDir, sessionID, file := m.sessionDir, m.header.ID, m.file
+	usesEventStore, err := m.resolveContentStoreLocked(context.Background())
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if usesEventStore {
+		err := m.startEventStoreTurnLocked(context.Background(), ConversationTurn{ID: turnID, SessionID: sessionID, IntentID: intentID, RunID: runID})
+		m.mu.Unlock()
+		return err
+	}
 	m.mu.Unlock()
 	if sessionDir == "" {
 		sessionDir = filepath.Dir(resolveDBPath(file))
 	}
-	m.mu.Lock()
-	if m.eventStoreMode {
-		if err := m.startEventStoreTurnLocked(context.Background(), ConversationTurn{ID: turnID, SessionID: sessionID, IntentID: intentID, RunID: runID}); err != nil {
-			m.mu.Unlock()
-			return err
-		}
-		m.mu.Unlock()
-		return nil
-	}
-	m.mu.Unlock()
 	if err := StartConversationTurn(sessionDir, ConversationTurn{ID: turnID, SessionID: sessionID, IntentID: intentID, RunID: runID}); err != nil {
 		return err
 	}
@@ -1774,7 +1774,12 @@ func (m *Manager) EndConversationTurn(turnID, status, stopReason string) error {
 		sessionDir = filepath.Dir(resolveDBPath(file))
 	}
 	m.mu.Lock()
-	if m.eventStoreMode {
+	usesEventStore, err := m.resolveContentStoreLocked(context.Background())
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if usesEventStore {
 		err := m.endEventStoreTurnLocked(context.Background(), turnID, status, stopReason)
 		m.mu.Unlock()
 		return err

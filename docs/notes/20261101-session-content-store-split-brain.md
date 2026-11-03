@@ -1,6 +1,6 @@
 # 2026-11-01 Session 内容存储 split-brain 与 `ErrSessionModified` 假报错调查
 
-> 状态：调查完成；P0、P1 已落地并通过回归（2026-11-02）；P2 待实施。P0 无 schema 变更；P1 追加 migration 54（`sessions.content_store_flipped_at`）与 `session_store_meta` 计数键。
+> 状态：调查完成；P0、P1 已落地并通过回归（2026-11-02）；P2 已落地（2026-11-03）。P0 无 schema 变更；P1 追加 migration 54（`sessions.content_store_flipped_at`）与 `session_store_meta` 计数键。
 >
 > 关联方案：[`docs/proposal/session-content-store-consistency-remediation-proposal.md`](../proposal/session-content-store-consistency-remediation-proposal.md)
 >
@@ -128,7 +128,12 @@ SELECT max(seq), count(*) FROM session_event_projections WHERE session_id='<id>'
   - [x] 诊断：doctor 只读检查 `sessions.content_store`（split 会话数/未覆盖行数/前 5 个 ID/修复命令）；`session_store_meta` 记录 `content_store_migration_adopted|deferred|legacy_rows_retired`
   - [x] 回归：`content_store_adoption_test.go`（4 条）、`content_store_grace_test.go`（2 条）、`internal/doctor/session_content_repair_test.go`（2 条）；既有 attach 测试改为「attach 迁移 → 冷静期后回收」两阶段，`TestReloadConvergesFlippedSessionWithoutDeadlock` 改为断言 load 不删除
   - [x] 验证：`go build ./...`、`go vet`、`gofmt` 干净；`internal/{session,dao,architecture,agentruntime,agent,acp,cron,tui,doctor,db,serve/...}` + `cmd/mothx` 全绿
-- [ ] P2：架构守卫（resolver 单点 / open 不写 DB / 禁止物理日志决定写入）、changelog 与发布说明（含"升级后重启每个进程"）、清理 allowlist 与旧注释
+- [x] **P2（2026-11-03 落地）**
+  - [x] turn 写入路由：`Manager.StartConversationTurn`/`EndConversationTurn` 改用 `resolveContentStoreLocked`；新增 `TestStaleConversationTurnHandleAdoptsEventStoreAfterFlip`（改回内存标志即失败）
+  - [x] 架构守卫：`internal/architecture/content_store_guard_test.go`——resolver 单点、只读投影调用者白名单、open 不写内容存储（含跨包 DAO 方法）、`eventStoreMode` 不得路由写入；均通过变异检验
+  - [x] allowlist/注释：`convergeFlippedSession` 无残留删除；`eventStoreMode` 合法读取点逐条注明理由
+  - [x] changelog：`docs/{en,zh}/changelog.md` 与 `docs/changelog_online_{en,zh}.md`（含"重启每个进程"与 `doctor --repair-session-content` 用法）
+  - [x] 验证：`go test ./internal/session ./internal/architecture` 全绿
 - [x] 验证（现场，2026-11-02 02:25）：所有 MothX 进程退出后，备份 `~/.mothx/session-backups/20261102T022402/`，用当前构建执行
       `mothx doctor --repair-session-content 95399bdbf08e4403`（adopted 213 / retired 213）与
       `mothx doctor --repair-session-content all`（092c 4/4、75b 4/4、143b 3/3）。

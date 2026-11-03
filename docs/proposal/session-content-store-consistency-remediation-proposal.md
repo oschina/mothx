@@ -1,8 +1,8 @@
 # Session 内容存储一致性修复方案
 
-> 状态：提案（P0、P1 已实施，P2 待实施）
+> 状态：已实施（P0、P1、P2，2026-11-03）
 >
-> 日期：2026-11-01（P0 落地 2026-11-02；P1 落地 2026-11-02）
+> 日期：2026-11-01（P0 落地 2026-11-02；P1 落地 2026-11-02；P2 落地 2026-11-03）
 >
 > 实施进展见 §4「P0 实施记录」与 [`docs/notes/20261101-session-content-store-split-brain.md`](../notes/20261101-session-content-store-split-brain.md)。
 >
@@ -235,7 +235,21 @@ func (m *Manager) MigrateToEventStore(ctx context.Context) (MigrationOutcome, er
 - **现场修复中发现并修复的诊断缺陷**：`dao.SplitContentStoreSessions` 原来同时使用 `Table("entries")` 与 `TableExpr("entries AS e")`，bun 会渲染成 `FROM entries, entries AS e` 的笛卡尔积，doctor 把 224 行报成 52,864 行。改为只声明 `TableExpr("entries AS e")`，并新增 `TestListSplitContentStoreSessionsReportsExactCounts`（同库两个 split 会话的精确计数）固定该查询。
 - **测试**：`content_store_adoption_test.go`（收敛/拒绝缺失祖先/他 owner defer/边界翻译/精确计数）、`content_store_grace_test.go`（冷静期与计数）、`internal/doctor/session_content_repair_test.go`（检查 → 修复 → 幂等 → `RunWithOptions` 先修后检）；既有 attach 测试改为两阶段（attach 迁移 → 冷静期后 attach 回收），`TestReloadConvergesFlippedSessionWithoutDeadlock` 改为断言"load 不删除"。
 
-遗留（P2）：架构守卫（resolver 单点 / open 不写 DB / 禁止物理日志决定写入）、`changelog` 与发布说明（含"升级后重启每个进程"）、清理 allowlist 与旧注释。
+P2 待办（已于 2026-11-03 全部完成，见下）：架构守卫（resolver 单点 / open 不写 DB / 禁止物理日志决定写入）、`changelog` 与发布说明（含"升级后重启每个进程"）、清理 allowlist 与旧注释。
+
+#### P2 实施记录（2026-11-03）
+
+已落地，`go test ./internal/session ./internal/architecture` 全绿。
+
+- **最后一条内存模式写入分支**：`Manager.StartConversationTurn` / `EndConversationTurn` 原来直接按 `m.eventStoreMode` 选择 store。一个在迁移前打开的 handle 会把 turn 边界写进已被回收的 legacy transcript，而同一会话的消息内容已经进入 EventStore。两者现在都调用 `resolveContentStoreLocked`，与 `AppendMessage` 使用同一条持久化列路由；回归测试 `TestStaleConversationTurnHandleAdoptsEventStoreAfterFlip` 断言事件日志出现 `turn_*` start/end 事件且 legacy payload 保持 0 行（把实现改回读内存标志即失败）。
+- **架构守卫**：新增 `internal/architecture/content_store_guard_test.go`，四条独立检查：
+  - `TestContentStoreResolverIsTheOnlyWriteRouter`：`persistedContentStoreLocked` 只能由 `resolveContentStoreLocked` 调用；`dao...ContentStore` 只能出现在 `internal/session` 的 resolver 与两个只读投影函数中。
+  - `TestContentStoreReadProjectionsAreAllowlisted`：包级 `sessionUsesEventStore`/`sessionContentStoreFlipped` 的生产调用者必须逐条列名（resolver、durable run 准入/终态门、迁移/采纳门、只读列表与消息投影），新增调用者无法悄悄变成第二处写入路由。
+  - `TestSessionOpenNeverMutatesContentStore`：从 `loadLocked`/`reloadLocked`/`convergeEventStoreLocked`/`convergeFlippedSession`/`reportLegacyPayloadStateLocked` 出发的同包调用链不得到达 retire/adopt/export/flip/append/commit/reset 等写操作（DAO 方法名在跨包调用处也会被拦截）。守卫同时断言根函数存在，改名会让守卫直接失败而不是静默失效。
+  - `TestEventStoreModeDoesNotRouteWrites`：`m.eventStoreMode` 的读取只允许出现在带理由的 allowlist 中（resolver 热路径、显式 EventStore 写入入口、只读显示投影、翻转为空会话的默认判定、过时 handle 的跳转保护）；新增读取必须说明为何不构成写入路由。
+  - 守卫做了变异检验：新增一次 `persistedContentStoreLocked` 调用、在收敛路径调用 `DeleteLegacyEntries`、在 `AppendMessage` 加入 `sessionUsesEventStore` 或 `m.eventStoreMode` 分支，均以精确信息失败。
+- **注释与 allowlist**：未发现 `convergeFlippedSession` 内的残留删除调用或相关 allowlist 条目（P0 已移除）；`eventStoreMode` 的合法读取点已在守卫中逐条注明移除/保留条件。
+- **文档**：`docs/{en,zh}/changelog.md` 与 `docs/changelog_online_{en,zh}.md` 增加本修复条目，包含"升级后必须退出并重启每一个 MothX 进程"与 `mothx doctor --repair-session-content` 的恢复用法。
 
 ## 5. 测试与验收
 

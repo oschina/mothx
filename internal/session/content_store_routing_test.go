@@ -262,6 +262,89 @@ func TestDeleteCoveredLegacyEntriesSparesUncoveredRows(t *testing.T) {
 	}
 }
 
+// TestStaleConversationTurnHandleAdoptsEventStoreAfterFlip pins the remaining
+// write-routing hole: StartConversationTurn/EndConversationTurn used to branch on
+// this handle's in-memory mode. A Manager that opened before the migration would
+// therefore write turn boundaries into the retired legacy transcript while the
+// session's content (and every other write) had already moved to the EventStore.
+// The turn boundary is a content write, so it must resolve the persisted store
+// exactly like AppendMessage does.
+func TestStaleConversationTurnHandleAdoptsEventStoreAfterFlip(t *testing.T) {
+	sessionDir := t.TempDir()
+	const sessionID = "stale-turn-handle"
+	const workDir = "/tmp/event-stale-turn-handle"
+	const turnID = "turn-stale-routing"
+
+	creator := New(workDir, sessionDir)
+	if err := creator.InitWithID(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := creator.AppendMessage(provider.NewUserMessage("legacy question")); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := Open(creator.GetFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.eventStoreModeForTest() {
+		t.Fatal("fixture opened the stale handle on the EventStore")
+	}
+
+	adopter, err := Open(creator.GetFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := adopter.MigrateToEventStoreOutcome(context.Background()); err != nil {
+		t.Fatal(err)
+	} else if outcome != MigrationAdopted {
+		t.Fatalf("migration outcome = %q, want %q", outcome, MigrationAdopted)
+	}
+	elapseContentStoreRetireGraceForTest(t, sessionDir, sessionID)
+	if _, err := adopter.MigrateToEventStoreOutcome(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := stale.StartConversationTurn(turnID, "intent-stale-turn", "run-stale-turn"); err != nil {
+		t.Fatalf("stale handle StartConversationTurn after migration = %v, want EventStore routing", err)
+	}
+	if !stale.eventStoreModeForTest() {
+		t.Fatal("stale handle did not adopt the EventStore while starting a turn")
+	}
+	if count := legacyTranscriptPayloadCount(t, sessionDir, sessionID); count != 0 {
+		t.Fatalf("turn start wrote %d legacy payload rows, want only the canonical EventStore", count)
+	}
+	if !committedEventExistsForTest(t, sessionDir, sessionID, stableTurnEntryID(turnID, "start")) {
+		t.Fatal("turn-start event was not committed to the EventStore")
+	}
+
+	if err := stale.EndConversationTurn(turnID, "completed", "stop"); err != nil {
+		t.Fatalf("stale handle EndConversationTurn after migration = %v, want EventStore routing", err)
+	}
+	if count := legacyTranscriptPayloadCount(t, sessionDir, sessionID); count != 0 {
+		t.Fatalf("turn end wrote %d legacy payload rows, want only the canonical EventStore", count)
+	}
+	if !committedEventExistsForTest(t, sessionDir, sessionID, stableTurnEntryID(turnID, "end")) {
+		t.Fatal("turn-end event was not committed to the EventStore")
+	}
+}
+
+// committedEventExistsForTest reports whether the canonical log holds one event.
+func committedEventExistsForTest(t *testing.T, sessionDir, sessionID, eventID string) bool {
+	t.Helper()
+	batches, err := ReadCommittedEventBatches(context.Background(), sessionDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, batch := range batches {
+		for _, record := range batch.Events {
+			if record.EventID == eventID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // insertLegacyRowForTest writes one payload row straight into the legacy
 // transcript, reproducing what a build that predates the EventStore writes. It
 // bypasses the Manager on purpose: the Manager now routes every append through
