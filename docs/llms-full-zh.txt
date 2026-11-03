@@ -1604,6 +1604,10 @@ Source: https://mothx.net/zh/changelog.md
 
 ## v1.3.108
 
+### 💥 行为变更
+
+- **主循环的迭代预算初始上限提高到 400 轮，续期后最高 600 轮。** Agent 主循环的默认初始迭代上限从 200 提高到 400，续期天花板为 600，因此在持续有进展的长任务会在预算压力提示出现前多跑一倍轮数。`extend_budget` 续期策略形状不变（最多 2 次，每次 +50% 软上限，最小间隔为软上限的 1/10，墙钟上限 16 小时）；不调用续期的 run 就在 400 轮停止。子代理、Expert 成员与渠道 run 各自保留原有上限（渠道 `maxTurns`、子代理 `max_iterations`），显式传入软上限的调用方仍使用惯例的 2 倍硬上限。
+
 ### ✨ 新功能
 
 - **TUI 与 CLI 现在可以为已配置的外部 ACP worker 激活 Router 模式。** `/router` 打开 ACP worker 面板（列出/新增/编辑/删除/激活 profile）；`/router <profile>` 与 `mothx --router --acp-agent <profile>` 直接激活，三者都走同一条 Runtime 激活路径：profile 必须存在于 `acpAgents`、已启用且使用非交互权限策略；会话必须空闲且来源未被强制为 yolo；Router binding 先于 mode 落盘，因此激活失败会留在非 Router 状态。面板只通过唯一的 `config.SaveACPAgentProfiles` 校验与写入入口持久化，因此相对路径 `command[0]`、重复 ID、写角色缺少 `writeRoots` 都会在写入前被拒绝。激活只负责指定 worker，非交互审批策略由 Runtime 按 profile 记录，并拒绝不一致的显式值。手工编辑或旧版本遗留的 `defaultMode: router` 会在加载与解析时被归一化为只读的 `plan` 模式，而不是让每个新会话的 Agent 构建失败；该回退绝不会放大为完全访问。 没有 binding 时，通用模式切换不能选择 `router`：`router` 已从 Tab 模式循环与 `defaultMode` 循环中移除，且 Agent 构建在无可用 binding 时对 Router 失败关闭，因此持久化默认值或过期的适配器取值都不会造出「委派必然失败」的 Router 工具面。TUI 的所有模式写入（`/mode`、Tab 循环、`/systeminit`、修改 `defaultMode` 设置）现在都经过共享 Runtime，适配器不再只改本地状态、导致重开时回放旧模式。会话在其他适配器重新打开、或无模式参数恢复时，会回放持久化模式（包括 Router）。直接编辑 `settings.json` 依然受支持且同样需要谨慎；外部委派已通过 Router 可用。
@@ -11812,7 +11816,7 @@ func main() {
         WithWorkDir("/home/user/project").
         WithThinkingLevel(agent.ThinkingMedium).
         WithMaxTokens(16384).
-        WithMaxIterations(200).
+        WithMaxIterations(400).
         WithToolExecutionMode("parallel").           // "parallel" 或 "sequential"
         WithMaxToolConcurrency(10).
         WithSystemPromptExtra("专注于 Go 代码。").
@@ -11876,7 +11880,7 @@ func truncate(s string, n int) string {
 | `WithWorkDir(dir)` | `os.Getwd()` | 工作目录 |
 | `WithThinkingLevel(level)` | `ThinkingMedium` | `Off` / `Minimal` / `Low` / `Medium` / `High` / `XHigh` |
 | `WithMaxTokens(n)` | `16384` | 最大输出 token 数 |
-| `WithMaxIterations(n)` | `200` | 循环迭代安全上限 |
+| `WithMaxIterations(n)` | `400` | 循环迭代安全上限 |
 | `WithToolExecutionMode(m)` | `"parallel"` | `"parallel"` / `"sequential"` |
 | `WithMaxToolConcurrency(n)` | `10` | 每批 tool call 的本地并发上限；`1` 等价于串行 |
 | `WithTools(names)` | 全部 | 过滤可用工具 |

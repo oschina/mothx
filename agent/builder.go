@@ -51,7 +51,7 @@ func NewBuilder() *Builder {
 		mode:               "yolo",
 		thinkingLevel:      ThinkingMedium,
 		maxTokens:          16384,
-		maxIterations:      200,
+		maxIterations:      400,
 		toolExecutionMode:  "parallel",
 		maxToolConcurrency: DefaultMaxToolConcurrency,
 		compactionEnabled:  true,

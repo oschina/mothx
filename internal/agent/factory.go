@@ -240,7 +240,7 @@ func (f *AgentFactory) Create(opts AgentOptions) agentpkg.Agent {
 
 	maxIterations := opts.MaxIterations
 	if maxIterations == 0 {
-		maxIterations = 200
+		maxIterations = 400
 	}
 
 	toolExecMode := opts.ToolExecutionMode

@@ -29,6 +29,13 @@ func (noopTool) Execute(context.Context, map[string]any) (tools.ToolResult, erro
 }
 
 func TestIterationBudgetPolicyNormalize(t *testing.T) {
+	// An unset soft limit resolves to the main loop's 400/600 default pair.
+	def := IterationBudgetPolicy{}.Normalize(0)
+	if def.Soft != 400 || def.Hard != 600 {
+		t.Fatalf("default soft/hard = %d/%d, want 400/600", def.Soft, def.Hard)
+	}
+
+	// A supplied soft limit keeps the conventional 2x ceiling.
 	p := IterationBudgetPolicy{}.Normalize(90)
 	if p.Soft != 90 || p.Hard != 180 {
 		t.Fatalf("soft/hard = %d/%d, want 90/180", p.Soft, p.Hard)

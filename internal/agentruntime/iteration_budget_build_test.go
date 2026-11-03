@@ -45,6 +45,12 @@ func TestResolveIterationBudget(t *testing.T) {
 	if def.Soft != 90 || def.Hard != 180 {
 		t.Fatalf("default soft/hard = %d/%d, want 90/180", def.Soft, def.Hard)
 	}
+
+	// A lead built without an explicit soft limit gets the 400/600 default pair.
+	loop := ResolveIterationBudget(agent.IterationBudgetPolicy{}, 0)
+	if loop.Soft != 400 || loop.Hard != 600 {
+		t.Fatalf("loop default soft/hard = %d/%d, want 400/600", loop.Soft, loop.Hard)
+	}
 	if !def.Enabled() {
 		t.Fatal("the resolved budget must be enabled")
 	}

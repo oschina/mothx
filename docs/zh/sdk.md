@@ -209,7 +209,7 @@ func main() {
         WithWorkDir("/home/user/project").
         WithThinkingLevel(agent.ThinkingMedium).
         WithMaxTokens(16384).
-        WithMaxIterations(200).
+        WithMaxIterations(400).
         WithToolExecutionMode("parallel").           // "parallel" 或 "sequential"
         WithMaxToolConcurrency(10).
         WithSystemPromptExtra("专注于 Go 代码。").
@@ -273,7 +273,7 @@ func truncate(s string, n int) string {
 | `WithWorkDir(dir)` | `os.Getwd()` | 工作目录 |
 | `WithThinkingLevel(level)` | `ThinkingMedium` | `Off` / `Minimal` / `Low` / `Medium` / `High` / `XHigh` |
 | `WithMaxTokens(n)` | `16384` | 最大输出 token 数 |
-| `WithMaxIterations(n)` | `200` | 循环迭代安全上限 |
+| `WithMaxIterations(n)` | `400` | 循环迭代安全上限 |
 | `WithToolExecutionMode(m)` | `"parallel"` | `"parallel"` / `"sequential"` |
 | `WithMaxToolConcurrency(n)` | `10` | 每批 tool call 的本地并发上限；`1` 等价于串行 |
 | `WithTools(names)` | 全部 | 过滤可用工具 |

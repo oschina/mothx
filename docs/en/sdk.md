@@ -209,7 +209,7 @@ func main() {
         WithWorkDir("/home/user/project").
         WithThinkingLevel(agent.ThinkingMedium).
         WithMaxTokens(16384).
-        WithMaxIterations(200).
+        WithMaxIterations(400).
         WithToolExecutionMode("parallel").           // "parallel" or "sequential"
         WithMaxToolConcurrency(10).
         WithSystemPromptExtra("Focus on Go code.").
@@ -273,7 +273,7 @@ func truncate(s string, n int) string {
 | `WithWorkDir(dir)` | `os.Getwd()` | Working directory |
 | `WithThinkingLevel(level)` | `ThinkingMedium` | `Off` / `Minimal` / `Low` / `Medium` / `High` / `XHigh` |
 | `WithMaxTokens(n)` | `16384` | Max output tokens |
-| `WithMaxIterations(n)` | `200` | Safety limit for loop iterations |
+| `WithMaxIterations(n)` | `400` | Safety limit for loop iterations |
 | `WithToolExecutionMode(m)` | `"parallel"` | `"parallel"` / `"sequential"` |
 | `WithMaxToolConcurrency(n)` | `10` | Maximum local tool calls in flight per tool-call batch; `1` is serial |
 | `WithTools(names)` | all | Filter available tools |

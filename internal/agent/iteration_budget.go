@@ -16,7 +16,10 @@ import (
 const IterationBudgetToolName = "extend_budget"
 
 const (
-	defaultIterationBudgetSoft = 200
+	// defaultIterationBudgetSoft/defaultIterationBudgetHard are the main loop's
+	// default soft (initial) and hard (post-renewal ceiling) iteration limits.
+	defaultIterationBudgetSoft = 400
+	defaultIterationBudgetHard = 600
 	defaultRenewFactor         = 0.5
 	defaultMaxRenewals         = 2
 	// DefaultIterationBudgetWallClock is the default total wall-clock cap for one
@@ -30,10 +33,11 @@ const (
 // model-requested renewals. The zero value disables renewal: the loop keeps the
 // legacy fixed-MaxIterations behavior.
 //
-// Soft is the initial effective limit, Hard the ceiling renewal may never pass,
-// RenewFactor the fraction of Soft granted per renewal, MaxRenewals the number
-// of grants allowed per run, MinInterval the minimum number of iterations between
-// two grants, and MaxWallClock the total wall-clock cap for one run.
+// Soft is the initial effective limit (default 400), Hard the ceiling renewal
+// may never pass (default 600), RenewFactor the fraction of Soft granted per
+// renewal, MaxRenewals the number of grants allowed per run, MinInterval the
+// minimum number of iterations between two grants, and MaxWallClock the total
+// wall-clock cap for one run.
 type IterationBudgetPolicy struct {
 	Soft         int
 	Hard         int
@@ -45,8 +49,13 @@ type IterationBudgetPolicy struct {
 
 // Normalize applies defaults relative to the supplied soft limit (used when the
 // policy leaves Soft unset). A normalized policy is always Enabled.
+//
+// When neither Soft nor Hard is supplied the main loop's 400/600 default pair is
+// used; an explicit soft limit (for example a channel's MaxTurns) keeps the
+// conventional 2x ceiling.
 func (p IterationBudgetPolicy) Normalize(soft int) IterationBudgetPolicy {
-	if soft <= 0 {
+	defaulted := soft <= 0
+	if defaulted {
 		soft = defaultIterationBudgetSoft
 	}
 	out := p
@@ -55,6 +64,9 @@ func (p IterationBudgetPolicy) Normalize(soft int) IterationBudgetPolicy {
 	}
 	if out.Hard < out.Soft {
 		out.Hard = out.Soft * 2
+		if defaulted && out.Soft == defaultIterationBudgetSoft {
+			out.Hard = defaultIterationBudgetHard
+		}
 	}
 	if out.RenewFactor <= 0 {
 		out.RenewFactor = defaultRenewFactor

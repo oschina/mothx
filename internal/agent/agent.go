@@ -217,7 +217,7 @@ type AgentLoopConfig struct {
 	MaxToolConcurrency int
 
 	// MaxIterations is the safety limit for agent loop iterations. Zero uses the
-	// default limit; a negative value intentionally leaves the loop unbounded
+	// default limit (400); a negative value intentionally leaves the loop unbounded
 	// until it completes or its context is cancelled.
 	MaxIterations int
 
@@ -638,7 +638,7 @@ func New(cfg Config, registry *tools.Registry) *Agent {
 		Config:             cfg,
 		ToolExecutionMode:  toolExecutionMode,
 		MaxToolConcurrency: maxToolConcurrency,
-		MaxIterations:      200,
+		MaxIterations:      400,
 	}
 
 	id := cfg.ID
@@ -677,7 +677,7 @@ func NewWithLoopConfig(cfg AgentLoopConfig, registry *tools.Registry) *Agent {
 	cfg.CompactionSettings = ctxpkg.NormalizeCompactionSettings(cfg.CompactionSettings)
 	configureRegistryImageHint(cfg.Config, registry)
 	if cfg.MaxIterations == 0 {
-		cfg.MaxIterations = 200
+		cfg.MaxIterations = 400
 	}
 	if cfg.ToolExecutionMode == "" {
 		if cfg.Settings != nil {

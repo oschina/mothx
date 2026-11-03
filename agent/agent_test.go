@@ -290,8 +290,8 @@ func TestNewBuilder(t *testing.T) {
 	if b.maxTokens != 16384 {
 		t.Errorf("expected maxTokens 16384, got %d", b.maxTokens)
 	}
-	if b.maxIterations != 200 {
-		t.Errorf("expected maxIterations 200, got %d", b.maxIterations)
+	if b.maxIterations != 400 {
+		t.Errorf("expected maxIterations 400, got %d", b.maxIterations)
 	}
 	if b.toolExecutionMode != "parallel" {
 		t.Errorf("expected toolExecutionMode 'parallel', got %q", b.toolExecutionMode)
