@@ -61,7 +61,7 @@ of this document.
 | External delegation and child projection | Implemented | One blocking worker per session; a Runtime-owned `agent.Agent` proxy projects ACP text/thought/tool/plan/usage updates into canonical child events, owns the single `EventRunFinished`, and returns a bounded `worker-reported` envelope. Cancellation answers pending decisions as cancelled and reaps the process tree. |
 | Diagnostics and docs | Implemented | `mothx doctor` checks profile shape/executable availability without launching; bilingual configuration and tool-contract docs added; `mothx/manage/acp/profiles/list` projects the safe Runtime catalog. Executable/profile writes intentionally stay on the local settings path. |
 | Decision and process containment | Implemented | Remote `session/request_permission` records a canonical decision and answers immediately with an offered one-time option; the Runtime process launcher contains the tree with a Unix process group / Windows Job Object and `internal/acp/client` owns no process. |
-| Router target projection | Implemented | The Runtime publishes the activated worker ID into the `delegate_subagent` tool: the tool description names it, the `agent` schema pins it (`const` for one profile, `enum` for several), and a wrong `agent` value fails with the accepted name instead of a generic rule. |
+| Router target projection | Implemented | The Runtime publishes the activated worker ID into the `delegate_subagent` tool: the tool description names it, the `agent` schema is always a `const` for that ID, and a wrong `agent` value fails with the accepted name instead of a generic rule. Other configured profiles appear only as correction context, never as accepted schema values. |
 | Known-agent preset picker | Implemented | `agentruntime.ACPAgentPresets()` holds verified launch recipes; the TUI `/router` panel opens on that picker instead of a blank form, because the most common configuration mistake is assuming `codex acp` / `claude acp` start an ACP server. |
 
 The focused package suite covering these foundations passes; the detailed
@@ -85,9 +85,9 @@ persisted `RouterBinding` and pushes it into the tool
 
 - names the activated worker in its description, which is what the model reads
   first;
-- pins the `agent` schema to that ID — `const` when exactly one profile is
-  configured, `enum` when several are — so a wrong name is a schema violation
-  rather than a runtime surprise; and
+- pins the `agent` schema to that ID with `const` even when several profiles
+  are configured, so a wrong name is a schema violation rather than a runtime
+  surprise; other profiles appear only in the correction text; and
 - fails a wrong `agent` value with the accepted name (and the list of
   configured profiles) instead of restating the rule.
 
@@ -128,9 +128,25 @@ Tests:
   arguments survive, and Esc leaves no half-open form.
 - `internal/agent/delegate_router_target_test.go`: the generated schema is
   always valid JSON (including an ID that needs JSON escaping), the `agent`
-  field is pinned to the activated worker and uses `const` for a single
-  profile, the published target is defensively copied and reversible, and a
-  wrong or missing `agent` value names the accepted worker.
+  field is always `const` for the activated worker, the published target is
+  defensively copied and reversible, and a wrong or missing `agent` value names
+  the accepted worker.
+
+### 2026-11-03 post-MVP hardening
+
+Review closed four implementation gaps without widening the MVP:
+
+- the ACP client leaves its notification channel open and drains it through
+  `Done`, removing a close/send panic on worker exit; inbound frames are read
+  in bounded fragments so the limit is enforced before allocation;
+- the Router `agent` schema is always `const`, even with multiple configured
+  profiles, so only the activated worker is a valid schema value;
+- Router rejects local-child parameters (`mode`, `work_dir`, `worktree`,
+  `tools`, `max_iterations`) instead of silently ignoring them; and
+- ACP permission cancellation uses `DecisionService`, failed resolution
+  commits discard the in-memory pending entry after recording a terminal row,
+  output truncation preserves UTF-8, and Windows workers start suspended until
+  they join the Job Object.
 
 ## 1.1 MothX Architecture Gate
 
@@ -256,7 +272,7 @@ reviewed with the existing settings schema, but its intended shape is:
     {
       "id": "codex",
       "title": "Codex ACP",
-      "command": ["/opt/codex/bin/codex", "acp"],
+      "command": ["codex-acp"],
       "enabled": true,
       "environment": ["OPENAI_API_KEY"],
       "roles": ["investigate", "implement", "test", "review"],
@@ -272,8 +288,10 @@ Rules:
 
 - `id` is a stable, lower-case identifier. It is the only value exposed to a
   model tool call.
-- `command` is an argv array, not a shell string. `command[0]` is resolved and
-  validated when settings are saved/loaded; launch uses `exec.Command`, never
+- `command` is an argv array, not a shell string. `command[0]` may be an
+  absolute path or a bare command resolved through `PATH` at launch; settings
+  save/load validates that it is non-empty, and `mothx doctor` checks the
+  executable the same way a launch would. Launch uses `exec.Command`, never
   `sh -c`, `cmd /c`, or interpolation.
 - `environment` is an allowlist of variable *names*. Values are read at launch
   from MothX's existing secret/environment mechanism and are never persisted in
@@ -309,18 +327,8 @@ above its parent/session policy.
 
 ### 6.2 Tool-call surface
 
-Extend the existing tools; do not add parallel orchestration tools:
-
-```json
-{
-  "name": "subagent_spawn",
-  "arguments": {
-    "task": "Inspect the retry handling in internal/acp. Return findings only.",
-    "agent": "codex",
-    "tools": ["read", "grep"]
-  }
-}
-```
+Extend the existing tools; do not add parallel orchestration tools. The MVP
+implements only the blocking `delegate_subagent` path:
 
 ```json
 {
@@ -332,22 +340,24 @@ Extend the existing tools; do not add parallel orchestration tools:
 }
 ```
 
-`agent` is a new optional profile ID:
+`agent` is an optional profile ID in the tool schema, but Router requires it:
 
 | Combination | Behavior |
 | --- | --- |
 | no `agent` | Exact existing local child behavior. |
-| `agent: <enabled-profile>` on `subagent_spawn` | Start an asynchronous ACP-backed child and return the usual `handle`/`running` result. |
+| `agent: <enabled-profile>` on `subagent_spawn` | Deferred to Phase 4; the MVP does not expose an asynchronous external child. |
 | `agent: <enabled-profile>` on `delegate_subagent` | Run a blocking ACP-backed child and return the usual compact result after its terminal state. |
 | `member` plus `agent` | Reject. An Expert Team member is a Runtime-resolved local member definition in Phase 1; it cannot silently become an arbitrary remote implementation. |
 | profile unavailable, disabled, saturated, or forbidden by policy | Reject before process launch. |
 
-Existing `mode`, `work_dir`, `worktree`, `tools`, `max_iterations`, and
-`system_prompt_extra` retain their meanings only where MothX can enforce them.
-For an ACP Agent they are sent as a bounded task instruction, except
-`work_dir`/`worktree`, which are Runtime-resolved and become the subprocess
-working directory plus ACP `session/new.cwd`. They are not a security boundary
-over the external Agent. The tool description must state this explicitly.
+`mode`, `work_dir`, `worktree`, `tools`, and `max_iterations` are local-child
+parameters. Router rejects them explicitly instead of silently ignoring them:
+the external worker's mode, tools, and lifetime belong to its own profile and
+ACP implementation, and its working directory is Runtime-resolved. The
+subprocess working directory and ACP `session/new.cwd` are that resolved
+directory. `system_prompt_extra` is folded into the bounded task contract.
+None of these values are a security boundary over the external Agent. The tool
+schema and description state this explicitly.
 
 The Runtime injects the list of available profile IDs and human display names
 into the lead's tool/prompt guidance after policy resolution. It must not
@@ -420,7 +430,7 @@ initial lead surface:
 | --- | --- | --- |
 | Local inspection | `read`, `ls`, `grep`, `find` | Lets the lead investigate, inspect child changes in the shared worktree, and verify stated file-level facts. |
 | Planning/context | `plan`, `skill_ref` | `plan` changes canonical task-plan state, not the worktree. |
-| Orchestration | MVP: `delegate_subagent`; later: selected `subagent_*` tools | The MVP delegate is bound to one eligible ACP profile. Async spawn/status/send/wait are deferred; Router never silently falls back to a local in-process child. |
+| Orchestration | MVP: `delegate_subagent`; later: selected `subagent_*` tools | The MVP delegate is bound to one eligible ACP profile. Async spawn/status/send/wait are deferred; Router never silently falls back to a local in-process child. Local-child parameters (`mode`, `work_dir`, `worktree`, `tools`, `max_iterations`) are rejected, not ignored. |
 | Local mutation/process | none | `write`, `edit`, `insert`, `bash`, `jobs`, `kill`, and any future workspace-mutating/process-launching tool are absent from the frozen tool snapshot and rejected if a provider hallucinates them. |
 | Other optional tools | off by default | Browser, web search, workflow, publishing, attachment mutation, and provider-hosted side-effect tools require an explicit future Router policy decision. |
 

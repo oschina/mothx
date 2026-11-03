@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	acpclient "github.com/oschina/mothx/internal/acp/client"
 	"github.com/oschina/mothx/internal/config"
@@ -48,6 +50,20 @@ func TestACPWorkerBridgeRunsOneTextTurnOverStdio(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("bridge did not forward session/update")
+	}
+}
+
+func TestBoundACPTextDoesNotSplitRunes(t *testing.T) {
+	text := strings.Repeat("a", maxACPProjectionTextBytes-2) + "界" + "tail"
+	bounded, truncated := boundACPText(text)
+	if !truncated {
+		t.Fatal("long text was not marked truncated")
+	}
+	if !utf8.ValidString(bounded) {
+		t.Fatalf("bounded text is not valid UTF-8: %q", bounded)
+	}
+	if len(bounded) != maxACPProjectionTextBytes-2 {
+		t.Fatalf("bounded length = %d, want the last full rune boundary %d", len(bounded), maxACPProjectionTextBytes-2)
 	}
 }
 

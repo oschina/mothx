@@ -431,8 +431,8 @@ The fix is a Runtime-owned projection, not an adapter hint:
 `SynchronizeToolGroups` calls `publishRouterTarget`, which reads the session's
 persisted `RouterBinding` and publishes it into the tool through
 `agent.DelegateSubAgentTool.SetRouterTarget`. The tool then names the
-activated worker in its description, pins the `agent` schema to that ID
-(`const` for one profile, `enum` for several), and fails a wrong value with
+activated worker in its description, pins the `agent` schema to that ID with
+`const` (even when several profiles are configured), and fails a wrong value with
 the accepted name instead of restating the rule.
 
 Because the target is republished on every tool-group synchronization,
@@ -471,6 +471,27 @@ PATH-resolved worker is diagnosed correctly.
 - `internal/tui/router_presets_test.go`: the picker is the create flow's
   entry point, a chosen preset fills a usable profile and persists, argv
   arguments survive, and Esc leaves no half-open form.
+
+## Post-MVP hardening (2026-11-03)
+
+The MVP review found four implementation-level gaps and closed them:
+
+- `internal/acp/client` no longer closes its notification channel while a
+  reader may be sending. Consumers stop on `Done` and drain already-buffered
+  notifications. Inbound frames use fragmented bounded reads, so an oversized
+  line is rejected before the whole payload is allocated.
+- The Router `agent` schema is always a `const` for the activated worker.
+  Other configured profiles appear only as correction context, never as
+  provider-visible enum values.
+- `delegate_subagent` explicitly rejects local-child parameters in Router
+  (`mode`, `work_dir`, `worktree`, `tools`, `max_iterations`) instead of
+  silently ignoring them. The proposal and bilingual tool docs now describe
+  the blocking-only MVP.
+- ACP permission cancellation also goes through `DecisionService`, and a
+  failed resolution commit discards the in-memory pending entry after writing
+  the terminal ledger row. ACP output truncation now preserves UTF-8 runes.
+- Windows workers start suspended, join the Job Object, and are resumed only
+  after assignment, closing the window in which a descendant could escape.
 
 ## Remaining (Phase 4 deliberate follow-ups)
 

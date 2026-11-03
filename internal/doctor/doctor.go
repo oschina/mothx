@@ -339,7 +339,7 @@ func checkACPAgents(settings *config.Settings) []Check {
 		return []Check{check}
 	}
 	if err := settings.ValidateACPAgentProfiles(); err != nil {
-		return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: err.Error(), Fix: "Fix acpAgents in settings.json (absolute command, valid roles/writeRoots)"}}
+		return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: err.Error(), Fix: "Fix acpAgents in settings.json (valid command, roles/writeRoots, environment names)"}}
 	}
 	enabled := 0
 	capped := make([]string, 0, len(settings.ACPAgents))

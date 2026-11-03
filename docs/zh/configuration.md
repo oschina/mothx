@@ -1165,7 +1165,7 @@ Agent 模式下：
 
 ### acpAgents
 
-`acpAgents` 是 MothX 可用作 Router worker 的外部 ACP 编码 Agent 全局白名单。MothX 不会从 `PATH` 自动发现可执行文件，不会接受模型工具调用传入的命令，也不会通过 shell 字符串启动。
+`acpAgents` 是 MothX 可用作 Router worker 的外部 ACP 编码 Agent 全局白名单。MothX 不会自动发现 Agent，也不会接受模型工具调用传入的命令；profile 的 `command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名，启动从不经过 shell 字符串。
 
 ```json
 {
@@ -1173,7 +1173,7 @@ Agent 模式下：
     {
       "id": "codex",
       "title": "Codex ACP",
-      "command": ["/opt/codex/bin/codex", "acp"],
+      "command": ["codex-acp"],
       "enabled": true,
       "environment": ["OPENAI_API_KEY"],
       "roles": ["investigate", "implement", "test", "review"],

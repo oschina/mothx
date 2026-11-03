@@ -158,6 +158,23 @@ func (s *DecisionService) ResolveWith(resolution DecisionResolution, commit func
 	return s.resolveWith(resolution, commit)
 }
 
+// Discard removes a pending decision without resolving it. It is used when a
+// caller has already recorded a terminal outcome in the durable ledger but the
+// service could not commit that resolution: leaving the in-memory pending entry
+// would let a reconnect project a decision the ledger says is finished.
+//
+// Discard never removes a resolved decision and never invokes a resolver.
+func (s *DecisionService) Discard(id string) {
+	if s == nil || id == "" {
+		return
+	}
+	s.mu.Lock()
+	delete(s.pending, id)
+	delete(s.resolvers, id)
+	delete(s.resolving, id)
+	s.mu.Unlock()
+}
+
 func (s *DecisionService) resolveWith(resolution DecisionResolution, commit func(DecisionRequest) error) (DecisionRequest, error) {
 	if s == nil {
 		return DecisionRequest{}, fmt.Errorf("decision service is nil")

@@ -70,6 +70,31 @@ func TestDecisionServiceRetainsDecisionWhenResolverFails(t *testing.T) {
 	}
 }
 
+func TestDecisionServiceDiscardRemovesUncommittablePending(t *testing.T) {
+	var service DecisionService
+	request := DecisionRequest{ID: "approval-1", RunID: "run-1", Kind: DecisionApproval}
+	if err := service.Register(request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ResolveWith(DecisionResolution{
+		ID: "approval-1", Kind: DecisionApproval, Status: DecisionStatusResolved, Value: "allow_once",
+	}, func(DecisionRequest) error {
+		return errors.New("durable commit failed")
+	}); err == nil {
+		t.Fatal("failed commit unexpectedly resolved the decision")
+	}
+	if len(service.Pending()) != 1 {
+		t.Fatal("failed commit consumed the pending decision before the caller could record a terminal row")
+	}
+	service.Discard("approval-1")
+	if pending := service.Pending(); len(pending) != 0 {
+		t.Fatalf("discard left a pending decision: %#v", pending)
+	}
+	if _, err := service.Resolve(DecisionResolution{ID: "approval-1", Kind: DecisionApproval}); err == nil {
+		t.Fatal("discarded decision remained resolvable")
+	}
+}
+
 func TestDecisionServiceRegisterRejectsNilReceiver(t *testing.T) {
 	var service *DecisionService
 	err := service.Register(DecisionRequest{ID: "decision-1", RunID: "run-1", Kind: DecisionApproval})

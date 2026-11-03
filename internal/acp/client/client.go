@@ -164,6 +164,10 @@ func newClient(ctx context.Context, cancel context.CancelFunc, stdin io.WriteClo
 
 // Notifications returns Agent-originated ACP notifications in receive order.
 // Consumers must treat all content as untrusted.
+//
+// The channel is never closed: a send in progress must not race a close when
+// the transport terminates. Consumers stop by selecting on Done, then drain any
+// notifications already buffered.
 func (c *Client) Notifications() <-chan Message {
 	if c == nil {
 		return nil
@@ -218,8 +222,7 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	if err := c.write(Message{JSONRPC: "2.0", ID: id, Method: method, Params: encodedParams}); err != nil {
 		return err
 	}
-	select {
-	case response := <-responseCh:
+	handleResponse := func(response Message) error {
 		if response.Error != nil {
 			return response.Error
 		}
@@ -229,10 +232,21 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 			}
 		}
 		return nil
+	}
+	select {
+	case response := <-responseCh:
+		return handleResponse(response)
 	case <-ctx.Done():
 		_ = c.Notify("$/cancel_request", map[string]json.RawMessage{"requestId": id})
 		return ctx.Err()
 	case <-c.done:
+		// The final response may have been dispatched just before stdout hit
+		// EOF. Prefer it over the transport's terminal error.
+		select {
+		case response := <-responseCh:
+			return handleResponse(response)
+		default:
+		}
 		return c.terminalError()
 	}
 }
@@ -317,6 +331,11 @@ func (c *Client) dispatch(message Message) {
 	if message.Method != "" {
 		if len(message.ID) == 0 {
 			select {
+			case <-c.done:
+				return
+			default:
+			}
+			select {
 			case c.notifications <- message:
 			case <-c.done:
 			}
@@ -393,7 +412,6 @@ func (c *Client) finish(err error) {
 		c.mu.Lock()
 		c.pending = make(map[string]chan Message)
 		c.mu.Unlock()
-		close(c.notifications)
 		close(c.done)
 	})
 }
@@ -417,19 +435,33 @@ func encodeParams(value any) (json.RawMessage, error) {
 }
 
 func readFrame(reader *bufio.Reader, maxBytes int) ([]byte, error) {
-	line, err := reader.ReadBytes('\n')
-	if len(line) > maxBytes {
-		return nil, fmt.Errorf("ACP inbound frame exceeds %d bytes", maxBytes)
+	if maxBytes <= 0 {
+		return nil, errors.New("ACP inbound frame limit must be positive")
 	}
-	if err != nil {
+	// ReadSlice returns the reader's internal buffer directly, so the frame is
+	// copied only after its size is checked. ReadBytes would grow an unbounded
+	// allocation before the limit could be enforced.
+	var frame []byte
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(frame)+len(fragment) > maxBytes {
+			return nil, fmt.Errorf("ACP inbound frame exceeds %d bytes", maxBytes)
+		}
+		frame = append(frame, fragment...)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
 		return nil, err
 	}
-	if len(line) == 0 {
+	if len(frame) == 0 {
 		return nil, errors.New("empty ACP frame")
 	}
-	line = bytes.TrimSuffix(line[:len(line)-1], []byte{'\r'})
-	if len(line) == 0 {
+	frame = bytes.TrimSuffix(frame[:len(frame)-1], []byte{'\r'})
+	if len(frame) == 0 {
 		return nil, errors.New("empty ACP frame")
 	}
-	return line, nil
+	return frame, nil
 }

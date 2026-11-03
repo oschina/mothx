@@ -62,8 +62,8 @@ func (r *SessionRuntime) RouterBinding() (RouterBinding, bool) {
 
 // SetRouterBinding persists one Router worker selection before exposing it in
 // Runtime. Callers must switch the session to ModeRouter separately through
-// SetConfigOption so mode and binding retain their existing independent replay
-// entries.
+// applyModeOption/SetMode so mode and binding retain their existing independent
+// replay entries.
 func (r *SessionRuntime) SetRouterBinding(binding RouterBinding) error {
 	if err := r.ensureOpen(); err != nil {
 		return err

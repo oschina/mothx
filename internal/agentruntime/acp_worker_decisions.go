@@ -81,35 +81,38 @@ func (r *SessionRuntime) newACPRequestHandler(parentRunID, childID, profileID st
 			cancelled = true
 		}
 		value := option.OptionID
+		status := DecisionStatusResolved
 		if cancelled {
 			value = ""
+			status = DecisionStatusCancelled
 			payload["selectedOptionId"] = ""
-			if parentRunID != "" {
-				r.recordACPDecision(steps, DecisionStatusPending, "", payload)
-				r.recordACPDecision(steps, DecisionStatusCancelled, "cancelled", payload)
-			}
-			return acpclient.PermissionCancelled(), nil
+		} else {
+			payload["selectedOptionId"] = value
 		}
-		payload["selectedOptionId"] = value
 		if parentRunID != "" {
 			r.recordACPDecision(steps, DecisionStatusPending, "", payload)
 			decisions := r.decisionService()
 			if decisions != nil {
 				if err := decisions.Register(steps); err == nil {
-					if _, resolveErr := decisions.ResolveWith(DecisionResolution{ID: decisionID, Kind: DecisionApproval, Status: DecisionStatusResolved, Value: value},
+					if _, resolveErr := decisions.ResolveWith(DecisionResolution{ID: decisionID, Kind: DecisionApproval, Status: status, Value: value},
 						func(resolved DecisionRequest) error {
-							r.recordACPDecision(resolved, DecisionStatusResolved, value, payload)
+							r.recordACPDecision(resolved, status, value, payload)
 							return nil
 						}); resolveErr != nil {
-						// A failed resolve must not leave an unrecoverable pending row.
+						// The durable row is terminal, so the in-memory pending
+						// entry must not survive to be re-projected on reconnect.
 						r.recordACPDecision(steps, DecisionStatusCancelled, "cancelled", payload)
+						decisions.Discard(decisionID)
 					}
 				} else {
-					r.recordACPDecision(steps, DecisionStatusResolved, value, payload)
+					r.recordACPDecision(steps, status, value, payload)
 				}
 			} else {
-				r.recordACPDecision(steps, DecisionStatusResolved, value, payload)
+				r.recordACPDecision(steps, status, value, payload)
 			}
+		}
+		if cancelled {
+			return acpclient.PermissionCancelled(), nil
 		}
 		if emit != nil {
 			emit(agentpkg.Event{

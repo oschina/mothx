@@ -112,6 +112,71 @@ func TestReadFrameRejectsOversizedAndEncodeRejectsUnsupportedParams(t *testing.T
 	}
 }
 
+// A frame larger than the configured limit must be rejected without first
+// buffering the whole line: ReadBytes would allocate the entire payload before
+// the caller could check it.
+func TestReadFrameBoundsMemoryBeforeReadingWholeLine(t *testing.T) {
+	source := &countingReader{r: strings.NewReader(strings.Repeat("x", 1<<20) + "\n")}
+	if _, err := readFrame(bufio.NewReader(source), 1024); err == nil {
+		t.Fatal("oversized frame was accepted")
+	}
+	if source.n > 8*1024 {
+		t.Fatalf("read %d bytes before rejecting a 1 MiB frame; the limit was applied after buffering", source.n)
+	}
+}
+
+func TestReadFrameAcceptsFramesLargerThanTheReaderBuffer(t *testing.T) {
+	payload := strings.Repeat("y", 8*1024)
+	frame, err := readFrame(bufio.NewReader(strings.NewReader(payload+"\n")), 8*1024+1)
+	if err != nil {
+		t.Fatalf("readFrame: %v", err)
+	}
+	if string(frame) != payload {
+		t.Fatalf("frame length = %d, want %d", len(frame), len(payload))
+	}
+}
+
+// The notification channel is deliberately left open: closing it while a
+// transport reader may be sending is a panic. Consumers use Done to stop.
+func TestNotificationsStayOpenAfterFinish(t *testing.T) {
+	client := newClient(context.Background(), func() {}, nopWriteCloser{Writer: io.Discard}, io.NopCloser(strings.NewReader("")), nil, Config{})
+	client.finish(nil)
+
+	select {
+	case _, ok := <-client.Notifications():
+		if !ok {
+			t.Fatal("Notifications channel was closed on transport finish")
+		}
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	// A notification observed after termination must not panic or be queued for
+	// a consumer that may already have stopped.
+	client.dispatch(Message{JSONRPC: "2.0", Method: "session/update"})
+	select {
+	case <-client.Notifications():
+		t.Fatal("notification was queued after the transport terminated")
+	default:
+	}
+}
+
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (nopWriteCloser) Close() error { return nil }
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n += n
+	return n, err
+}
+
 func TestStartRunsACPHandshakeAndPromptOverRealStdio(t *testing.T) {
 	client, err := Start(context.Background(), Config{
 		Command:  []string{os.Args[0], "-test.run=TestACPHelperProcess", "--"},

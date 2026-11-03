@@ -126,11 +126,11 @@ func (t *DelegateSubAgentTool) Parameters() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"task": {"type": "string", "description": "A specific, bounded task description. Must include: (1) the exact goal or question, (2) relevant file paths or search patterns, (3) expected output format, (4) stop conditions. Example: 'Find all Go files in internal/serve/openaiapi/ that import net/http but do not call http.Error. Return file paths with line numbers.'"},
-			"mode": {"type": "string", "enum": ["plan", "agent", "yolo", "os"], "description": "Sub-agent execution mode. Defaults to the parent agent's mode; if unavailable, falls back to 'yolo'. 'agent' is balanced, 'yolo' is unrestricted, and 'plan' is read-only analysis."},
-			"work_dir": {"type": "string", "description": "Working directory for the sub-agent (defaults to the parent workspace). Set explicitly if the task targets a different directory."},
-			"worktree": {"type": "string", "description": "Run the delegated sub-agent in its own isolated git worktree. Pass \"true\" to create one, or a worktree name. Defaults to inheriting the parent workspace."},
-			"tools": {"type": "array", "items": {"type": "string"}, "description": "Restrict sub-agent to specific tools (empty = all tools except nested sub-agent/delegate). Use to narrow scope, e.g. ['read', 'grep', 'find'] for investigation-only tasks."},
-			"max_iterations": {"type": "integer", "default": 100, "description": "Maximum tool-call iterations. Lower for simple tasks (20-40), higher for complex exploration (100-200)."},
+			"mode": {"type": "string", "enum": ["plan", "agent", "yolo", "os"], "description": "Local sub-agent execution mode. Defaults to the parent agent's mode; if unavailable, falls back to 'yolo'. 'agent' is balanced, 'yolo' is unrestricted, and 'plan' is read-only analysis. Rejected for an external Router worker, whose mode is the profile policy."},
+			"work_dir": {"type": "string", "description": "Local sub-agent working directory (defaults to the parent workspace). Rejected for an external Router worker, which always uses the Runtime-resolved session directory."},
+			"worktree": {"type": "string", "description": "Run a local delegated sub-agent in its own isolated git worktree. Pass \"true\" to create one, or a worktree name. Rejected for an external Router worker in this release."},
+			"tools": {"type": "array", "items": {"type": "string"}, "description": "Restrict a local sub-agent to specific tools (empty = all tools except nested sub-agent/delegate). Rejected for an external Router worker, whose tools are owned by its own policy."},
+			"max_iterations": {"type": "integer", "description": "Local sub-agent tool-call iteration limit (defaults to 100). Rejected for an external Router worker, whose lifetime is not bounded by the MothX iteration budget."},
 			"system_prompt_extra": {"type": "string", "description": "Additional context or constraints for the sub-agent. Use to pass domain knowledge, coding conventions, or specific instructions not in the task description."},
 			"agent": %s,
 			"role": {"type": "string", "enum": ["investigate", "implement", "test", "review", "integrate"], "description": "Router only: the task role. Defaults to investigate. implement/integrate require a write_scope inside the profile's configured write roots and verification evidence."},
@@ -146,8 +146,9 @@ func (t *DelegateSubAgentTool) Parameters() json.RawMessage {
 }
 
 // agentParameterSchema renders the `agent` property. In Router mode it pins the
-// enum to the activated worker so a wrong name is a schema violation rather than a
-// runtime surprise; otherwise it stays a free-form string with no misleading hint.
+// value to the activated worker so a wrong name is a schema violation rather than
+// a runtime surprise; otherwise it stays a free-form string with no misleading
+// hint.
 func (t *DelegateSubAgentTool) agentParameterSchema() string {
 	target, ok := t.RouterTarget()
 	if !ok {
@@ -158,13 +159,11 @@ func (t *DelegateSubAgentTool) agentParameterSchema() string {
 	field := map[string]any{
 		"type":        "string",
 		"description": fmt.Sprintf("Required. This Router session delegates to the activated ACP worker %q; pass exactly that value.", target.ID),
+		"const":       target.ID,
 	}
-	if len(target.Available) > 1 {
-		field["enum"] = target.Available
-		field["description"] = fmt.Sprintf("Required. This Router session delegates to the activated ACP worker %q; pass exactly that value. Configured profiles: %s.",
-			target.ID, strings.Join(target.Available, ", "))
-	} else {
-		field["const"] = target.ID
+	if others := otherRouterTargets(target); len(others) > 0 {
+		field["description"] = fmt.Sprintf("Required. This Router session delegates to the activated ACP worker %q; pass exactly that value. Other configured profiles are not accepted for this session: %s.",
+			target.ID, strings.Join(others, ", "))
 	}
 	encoded, err := json.Marshal(field)
 	if err != nil {
@@ -173,6 +172,16 @@ func (t *DelegateSubAgentTool) agentParameterSchema() string {
 		return `{"type": "string", "description": "Required. Pass the activated external ACP worker profile ID."}`
 	}
 	return string(encoded)
+}
+
+func otherRouterTargets(target RouterTarget) []string {
+	others := make([]string, 0, len(target.Available))
+	for _, id := range target.Available {
+		if id != target.ID {
+			others = append(others, id)
+		}
+	}
+	return others
 }
 
 func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]any) (tools.ToolResult, error) {
@@ -203,6 +212,9 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 				available = fmt.Sprintf(" Configured profiles: %s.", strings.Join(target.Available, ", "))
 			}
 			return tools.ToolResult{}, fmt.Errorf("agent=%q is not this session's Router worker; use agent=%q.%s", externalAgent, target.ID, available)
+		}
+		if err := rejectRouterLocalOnlyParams(params); err != nil {
+			return tools.ToolResult{}, err
 		}
 	} else if externalAgent != "" {
 		return tools.ToolResult{}, fmt.Errorf("agent is only available in Router mode")
@@ -392,6 +404,29 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 	}
 	data, _ := json.Marshal(result)
 	return tools.NewTextToolResult(string(data)), nil
+}
+
+// rejectRouterLocalOnlyParams reports local-subagent parameters that an external
+// Router worker cannot honor. Silently ignoring them would let the lead believe
+// a tool, worktree, or mode restriction was applied when the worker's own policy
+// is the only authority.
+func rejectRouterLocalOnlyParams(params map[string]any) error {
+	if mode, _ := params["mode"].(string); strings.TrimSpace(mode) != "" {
+		return fmt.Errorf("mode is not available for an external Router worker; its mode is resolved from the ACP profile")
+	}
+	if workDir, _ := params["work_dir"].(string); strings.TrimSpace(workDir) != "" {
+		return fmt.Errorf("work_dir is not available for an external Router worker; the Runtime resolves its working directory")
+	}
+	if parseWorktreeRequest(params["worktree"]) != nil {
+		return fmt.Errorf("worktree is not available for an external Router worker in this release")
+	}
+	if len(stringSliceParam(params["tools"])) > 0 {
+		return fmt.Errorf("tools is not available for an external Router worker; its tool authority is the ACP profile policy")
+	}
+	if value, ok := params["max_iterations"].(float64); ok && value > 0 {
+		return fmt.Errorf("max_iterations is not available for an external Router worker; its lifetime is not bounded by the MothX iteration budget")
+	}
+	return nil
 }
 
 func stringSliceParam(value any) []string {

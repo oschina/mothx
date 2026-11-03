@@ -39,8 +39,9 @@ func TestDelegateParametersAreValidJSON(t *testing.T) {
 	}
 }
 
-// In Router mode the schema must pin the agent value: a model that guesses a
-// plausible product name should be structurally prevented from doing so.
+// In Router mode the schema must pin the agent value to the activated worker: a
+// model that guesses a plausible product name should be structurally prevented
+// from doing so. Other configured profiles are correction context only.
 func TestDelegateSchemaPinsActivatedWorker(t *testing.T) {
 	tool := NewDelegateSubAgentTool(nil)
 	tool.SetRouterTarget(&RouterTarget{ID: "opencode", Available: []string{"opencode", "codex"}})
@@ -63,16 +64,37 @@ func TestDelegateSchemaPinsActivatedWorker(t *testing.T) {
 	if !strings.Contains(agentField.Description, "opencode") {
 		t.Fatalf("agent description does not name the activated worker: %q", agentField.Description)
 	}
-	listed := append([]string(nil), agentField.Enum...)
-	if agentField.Const != "" {
-		listed = append(listed, agentField.Const)
+	if agentField.Const != "opencode" {
+		t.Fatalf("agent const = %q, want the activated worker", agentField.Const)
 	}
-	if len(listed) == 0 {
-		t.Fatal("agent field does not constrain the value")
+	if len(agentField.Enum) != 0 {
+		t.Fatalf("agent field advertises other profiles as accepted values: %v", agentField.Enum)
 	}
-	first := listed[0]
-	if first != "opencode" {
-		t.Fatalf("agent field leads with %q, want opencode", first)
+	if !strings.Contains(agentField.Description, "not accepted") {
+		t.Fatalf("agent description does not mark other profiles as unaccepted: %q", agentField.Description)
+	}
+}
+
+// Multiple configured profiles must still produce one const value. Otherwise a
+// provider may legally choose a profile that Execute will reject.
+func TestDelegateSchemaUsesConstWithMultipleProfiles(t *testing.T) {
+	tool := NewDelegateSubAgentTool(nil)
+	tool.SetRouterTarget(&RouterTarget{ID: "opencode", Available: []string{"opencode", "codex", "claude-code"}})
+	var schema struct {
+		Properties map[string]struct {
+			Enum  []string `json:"enum"`
+			Const string   `json:"const"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(tool.Parameters(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	field := schema.Properties["agent"]
+	if field.Const != "opencode" {
+		t.Fatalf("const = %q, want opencode", field.Const)
+	}
+	if len(field.Enum) != 0 {
+		t.Fatalf("multiple profiles produced an enum: %v", field.Enum)
 	}
 }
 
@@ -184,5 +206,35 @@ func TestDelegateMissingAgentNamesWorker(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "opencode") {
 		t.Fatalf("error does not name the required worker: %s", err.Error())
+	}
+}
+
+// Local-subagent parameters must fail explicitly in Router rather than being
+// silently ignored: the external worker's profile is the only authority for its
+// mode, tools, worktree, and lifetime.
+func TestDelegateRouterRejectsLocalOnlyParameters(t *testing.T) {
+	cases := map[string]map[string]any{
+		"mode":           {"mode": "plan"},
+		"work_dir":       {"work_dir": "/tmp/elsewhere"},
+		"worktree":       {"worktree": "isolated"},
+		"tools":          {"tools": []any{"read"}},
+		"max_iterations": {"max_iterations": float64(10)},
+	}
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			tool := NewDelegateSubAgentTool(NewAgentManager(nil))
+			tool.SetRouterTarget(&RouterTarget{ID: "opencode"})
+			params := map[string]any{"task": "inspect", "agent": "opencode"}
+			for key, value := range extra {
+				params[key] = value
+			}
+			_, err := tool.Execute(ContextWithParentMode(context.Background(), "router"), params)
+			if err == nil {
+				t.Fatalf("%s was silently accepted for an external Router worker", name)
+			}
+			if !strings.Contains(err.Error(), "not available for an external Router worker") {
+				t.Fatalf("%s error = %q", name, err)
+			}
+		})
 	}
 }

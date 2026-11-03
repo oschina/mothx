@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	agentpkg "github.com/oschina/mothx/agent"
 	acpclient "github.com/oschina/mothx/internal/acp/client"
@@ -110,7 +111,8 @@ func (ACPWorkerBridge) Run(ctx context.Context, invocation ACPWorkerInvocation) 
 			if output.Len()+len(text) > maxSubagentResultBytes {
 				remaining := maxSubagentResultBytes - output.Len()
 				if remaining > 0 {
-					output.WriteString(text[:remaining])
+					piece, _ := truncateACPText(text, remaining)
+					output.WriteString(piece)
 				}
 				truncated = true
 				return
@@ -173,11 +175,30 @@ func (ACPWorkerBridge) Run(ctx context.Context, invocation ACPWorkerInvocation) 
 	notificationsDone := make(chan struct{})
 	go func() {
 		defer close(notificationsDone)
-		for notification := range client.Notifications() {
+		notifications := client.Notifications()
+		handle := func(notification acpclient.Message) {
 			if invocation.OnNotification != nil {
 				invocation.OnNotification(notification)
 			}
 			handleUpdate(notification)
+		}
+		for {
+			select {
+			case notification := <-notifications:
+				handle(notification)
+			case <-client.Done():
+				// Notifications are not closed by the transport (closing would
+				// race a concurrent send). Drain what is already buffered, then
+				// stop; anything arriving after termination has no consumer.
+				for {
+					select {
+					case notification := <-notifications:
+						handle(notification)
+					default:
+						return
+					}
+				}
+			}
 		}
 	}()
 	// One teardown path for every success and error return: close the transport,
@@ -352,5 +373,23 @@ func boundACPText(text string) (string, bool) {
 	if len(text) <= maxACPProjectionTextBytes {
 		return text, false
 	}
-	return text[:maxACPProjectionTextBytes], true
+	bounded, _ := truncateACPText(text, maxACPProjectionTextBytes)
+	return bounded, true
+}
+
+// truncateACPText returns the longest valid UTF-8 prefix no longer than limit
+// bytes. A plain byte slice could split a multi-byte rune and corrupt the
+// projected event or completion text.
+func truncateACPText(text string, limit int) (string, bool) {
+	if limit <= 0 {
+		return "", len(text) > 0
+	}
+	if len(text) <= limit {
+		return text, false
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut], true
 }

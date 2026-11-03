@@ -25,6 +25,8 @@
 
 ### 🐛 问题修复
 
+- **Router 的外部 ACP worker 路径已完成加固。** ACP 客户端不再在传输读取方可能发送时关闭通知通道，因此 worker 退出或取消不会因并发发送而 panic；当最终响应与传输终态同时就绪时，也会优先返回响应。入站帧改为分片限长读取，超长行在分配完整 payload 之前即被拒绝。Router 的 `agent` schema 始终使用 `const` 钉死已激活 worker；本地子 Agent 参数（`mode`、`work_dir`、`worktree`、`tools`、`max_iterations`）会明确拒绝而不是静默忽略。ACP 权限取消现在也经过 `DecisionService`，解析提交失败时在写入终态行后清除内存中的 pending；输出截断保留 UTF-8 字符边界；Windows worker 以 suspended 状态启动，加入 Job Object 后才恢复线程。
+
 - **ESM 目标编辑不会被并发协调器写入覆盖，孤立 Run 也不再阻塞控制。** ESM 目标的所有读改写路径现在都在 `BEGIN IMMEDIATE` 事务内执行，worker 进度写入不会再把它在用户编辑提交前读到的旧 objective 写回。pause/resume/clear 同时允许一个没有有效 lease、等待恢复的 canonical Run，因此中断的本地准入不会让目标永久不可控制。终端控制还会把不支持平台报告为 `501 terminal_unsupported` 而不是 `terminal_disabled`，Unix PTY 的 build tag 也与受支持平台集合对齐，使 `aix` 等目标编译到显式的 `ErrUnsupported` 实现。
 
 - **交互终端生命周期无数据竞争，会跟随焦点，并持续显示安全边界。** PTY 读取/等待循环现在在创建时直接接收句柄，结束路径在锁内清空终端句柄，既消除了数据竞争，也消除了短命 shell 在启动期间退出时可能触发的空指针窗口；列出/附加终端时通过加锁的 `Size()` 读取尺寸，而不是访问未同步字段。切换工作台焦点会话时，现在会释放旧会话的 shell 并为新 cwd 创建终端，不再留下绑定到上一个会话的旧终端；终端 id 失效（如 serve 重启）后会停止重试，由“重新连接”按钮创建新 shell。终端状态栏现在持续标明 shell 不受沙箱保护、继承 serve 进程用户与环境变量，并展示 `/api/status` 上报的占位认证 token 警告；浏览器冒烟测试对提示与焦点重绑定均有断言。关闭活动 shell 时现在会在进程退出后立即返回，仅在宽限期后升级为 SIGKILL，不再每次都等待 2 秒；浏览器 cookie 会话不再收到长期 terminal token；被拒绝的配置更新在回滚前不会先应用终端限制或杀掉 shell；Windows ConPTY 包装现在保证句柄只关闭一次，并把 shell 加入 kill-on-close Job Object，终端关闭后遗留的后台子进程不会继续运行。

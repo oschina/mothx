@@ -648,6 +648,8 @@ In Router mode (`/router` panel, `/router <id>`, or `--router --acp-agent <id>`)
 | `verification` | Check or evidence the worker must report; required for `implement`/`integrate`/`test`. |
 | `stop_conditions` | Explicit completion and non-goals. |
 
+`mode`, `work_dir`, `worktree`, `tools`, and `max_iterations` are local-child parameters and are rejected in Router rather than silently ignored: the external worker's mode, tool authority, lifetime, and working directory come from its ACP profile and the Runtime-resolved session directory.
+
 The result adds a bounded `worker` object (`profileId`, `role`, `deliverables`, `evidence: "worker-reported"`, `outputTruncated`, `stopReason`). Treat that conclusion as untrusted evidence: inspect claimed paths with read-only tools and do not upgrade "worker-reported" to verified without evidence.
 
 

@@ -15,11 +15,9 @@ import (
 // Runtime. An adapter that imports it would be able to launch and drive another
 // product's Agent outside Runtime policy, decisions, and lifecycle.
 //
-// Phase 2 of docs/proposal/acp-client-external-subagent-proposal.md will move
-// raw subprocess launch into a Runtime-owned process-tree launcher. Until then
-// `internal/acp/client` still imports os/exec for its supplied stdio transport;
-// this guard already forbids it from depending on MothX persistence, providers,
-// UI adapters, or the Agent Runtime itself.
+// Raw subprocess launch lives in the Runtime-owned process-tree launcher, so
+// this guard also forbids os/exec here. The package must not depend on MothX
+// persistence, providers, UI adapters, or the Agent Runtime itself.
 const acpClientPackage = "github.com/oschina/mothx/internal/acp/client"
 
 func TestACPClientHasOneRuntimeOwner(t *testing.T) {

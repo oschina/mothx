@@ -648,6 +648,8 @@ Delegate 模式适用于大范围代码搜索、多步调查、聚焦实现或�
 | `verification` | worker 必须报告的检查或证据；`implement`/`integrate`/`test` 必填。 |
 | `stop_conditions` | 明确的完成条件与非目标。 |
 
+`mode`、`work_dir`、`worktree`、`tools`、`max_iterations` 是本地子 Agent 参数，Router 下会明确拒绝而不是静默忽略：外部 worker 的模式、工具权限、生命周期和工作目录来自其 ACP profile 与 Runtime 解析出的会话目录。
+
 返回值新增有界 `worker` 对象（`profileId`、`role`、`deliverables`、`evidence: "worker-reported"`、`outputTruncated`、`stopReason`）。请把该结论视为不可信证据：用只读工具核对声称的路径，不要在没有证据时把 `worker-reported` 升级为已验证。
 
 

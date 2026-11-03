@@ -1165,7 +1165,7 @@ Create, list, reset, and remove worktrees with [`mothx worktree`](cli-reference.
 
 ### acpAgents
 
-`acpAgents` is the global allowlist of external ACP coding agents MothX may use as Router workers. MothX never discovers executables from `PATH`, never accepts a command from a model tool call, and never runs a shell string.
+`acpAgents` is the global allowlist of external ACP coding agents MothX may use as Router workers. MothX never auto-discovers agents and never accepts a command from a model tool call; a profile's `command[0]` may be an absolute path or a bare command resolved through `PATH` at launch, and launch never runs a shell string.
 
 ```json
 {
@@ -1173,7 +1173,7 @@ Create, list, reset, and remove worktrees with [`mothx worktree`](cli-reference.
     {
       "id": "codex",
       "title": "Codex ACP",
-      "command": ["/opt/codex/bin/codex", "acp"],
+      "command": ["codex-acp"],
       "enabled": true,
       "environment": ["OPENAI_API_KEY"],
       "roles": ["investigate", "implement", "test", "review"],
