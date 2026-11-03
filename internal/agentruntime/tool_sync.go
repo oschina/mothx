@@ -69,6 +69,10 @@ func SynchronizeToolGroups(rt *SessionRuntime, registry *tools.Registry, policy 
 	}
 	if policy.Delegate || mode == ModeRouter {
 		agent.RegisterDelegateSubAgentTool(registry, manager)
+		// Router has exactly one activated worker. Publish it to the tool so the
+		// model-facing description and the `agent` schema carry the real profile ID
+		// instead of leaving the model to guess a well-known product name.
+		publishRouterTarget(rt, registry, mode)
 	} else {
 		registry.Remove(delegateSubAgentToolName)
 	}
@@ -101,4 +105,42 @@ func trimToolSelection(registry *tools.Registry, names []string, selection map[s
 			registry.Remove(name)
 		}
 	}
+}
+
+// publishRouterTarget pushes the session's activated ACP worker into the blocking
+// delegate tool. It runs on every tool-group synchronization, so activation,
+// binding changes, and leaving Router mode are all reflected without rebuilding
+// the tool instance.
+func publishRouterTarget(rt *SessionRuntime, registry *tools.Registry, mode string) {
+	if registry == nil {
+		return
+	}
+	tool, ok := registry.Get(delegateSubAgentToolName)
+	if !ok {
+		return
+	}
+	delegate, ok := tool.(*agent.DelegateSubAgentTool)
+	if !ok {
+		return
+	}
+	if mode != ModeRouter {
+		delegate.SetRouterTarget(nil)
+		return
+	}
+	binding, hasBinding := rt.RouterBinding()
+	if !hasBinding || strings.TrimSpace(binding.ACPProfileID) == "" {
+		delegate.SetRouterTarget(nil)
+		return
+	}
+	target := &agent.RouterTarget{ID: binding.ACPProfileID}
+	// Offer the other configured profiles only as context for a correction; the
+	// binding stays the single accepted value.
+	if settings := rt.SettingsSnapshot(); settings != nil {
+		for _, descriptor := range ListACPWorkerProfiles(settings) {
+			if descriptor.RouterEligible {
+				target.Available = append(target.Available, descriptor.ID)
+			}
+		}
+	}
+	delegate.SetRouterTarget(target)
 }

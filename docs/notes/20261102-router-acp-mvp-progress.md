@@ -80,7 +80,7 @@ Files:
 {
   "id": "codex",
   "title": "Codex",
-  "command": ["/absolute/path/to/codex", "acp"],
+  "command": ["codex-acp"],
   "enabled": true,
   "environment": ["OPENAI_API_KEY"],
   "permissionPolicy": "auto_allow_once"
@@ -90,7 +90,9 @@ Files:
 Implemented constraints:
 
 - profile IDs are lower-case ASCII identifiers;
-- `command[0]` must be absolute, preventing PATH replacement at launch;
+- `command[0]` may be an absolute path or a bare command resolved through `PATH`
+  at launch, exactly like any other `exec.Command` launch; launch never goes
+  through a shell, so there is nothing extra to enforce;
 - environment entries are variable names only, never inline secret values;
 - duplicate IDs and unsupported permission policies fail validation;
 - `ACPAgentProfile()` returns only enabled, valid profiles and copies slices;
@@ -101,7 +103,7 @@ executable-code trust), and there are exactly two supported surfaces: the global
 `settings.json`, and the TUI `/router` panel. The panel renders the Runtime's
 read-only catalog (`agentruntime.ListACPWorkerProfiles`) for eligibility and
 writes only through `config.SaveACPAgentProfiles`, which validates the complete
-candidate set (absolute `command[0]`, duplicate IDs, environment names,
+candidate set (non-empty `command[0]`, duplicate IDs, environment names,
 roles/`writeRoots`, concurrency) before persisting. That keeps one validation
 owner and one write owner; no adapter parses or writes `settings.json` itself.
 `mothx/manage/acp/profiles/list` remains a read-only projection for ACP clients.
@@ -412,6 +414,63 @@ go test ./internal/agent ./internal/agentruntime ./internal/acp/client   ./inter
 ```
 
 All packages passed at the time of this note.
+
+## Follow-up closed 2026-11-03: preset picker and Router target projection
+
+Two usability defects surfaced after the MVP landed. Both are closed and
+recorded in the proposal's Implementation Status section.
+
+### The model could not learn which worker it was bound to
+
+`delegate_subagent` advertised a free-form `agent` string, so a lead model
+guessed a plausible product name — a user reported it asking for `codex`
+while the session was bound to `opencode` — and every delegation failed on a
+rule the model had no way to learn.
+
+The fix is a Runtime-owned projection, not an adapter hint:
+`SynchronizeToolGroups` calls `publishRouterTarget`, which reads the session's
+persisted `RouterBinding` and publishes it into the tool through
+`agent.DelegateSubAgentTool.SetRouterTarget`. The tool then names the
+activated worker in its description, pins the `agent` schema to that ID
+(`const` for one profile, `enum` for several), and fails a wrong value with
+the accepted name instead of restating the rule.
+
+Because the target is republished on every tool-group synchronization,
+activation, binding changes, and leaving Router mode are all reflected
+without rebuilding the tool instance, and a stale profile ID cannot survive
+into a non-Router session.
+
+### Configuring a worker required knowing its launch recipe
+
+Several popular CLIs do not start an ACP server themselves: `codex acp` and
+`claude acp` are not valid, and the official adapter packages
+(`@zed-industries/codex-acp`, `@zed-industries/claude-agent-acp`) are the real
+entry points. `agentruntime.ACPAgentPresets()` records the verified recipe
+for each well-known agent, and the TUI `/router` panel opens on that picker
+rather than an empty form. Every preset carries the install caveat it
+implies.
+
+This relaxed one validation rule: `command[0]` no longer has to be an
+absolute path, because a bare command resolved through `PATH` is exactly how
+every other process launch works and the presets depend on it. Launch still
+uses `exec.Command` and never a shell, so there is no injection surface to
+close. `mothx doctor` was updated to resolve the command the way a real
+launch would (`exec.LookPath`) rather than `os.Stat`-ing it, so a
+PATH-resolved worker is diagnosed correctly.
+
+### Tests
+
+- `internal/agent/delegate_router_target_test.go`: schema validity, schema
+  pinning, target copying and clearing, and the correction messages.
+- `internal/agentruntime/router_target_projection_test.go`: the activated
+  worker reaches the tool description and schema, and the target is cleared
+  when the session leaves Router mode.
+- `internal/agentruntime/router_presets_test.go`: every preset expands to a
+  valid, Router-eligible profile; no preset reintroduces a non-ACP
+  self-server command; the preset recipe is copied, not aliased.
+- `internal/tui/router_presets_test.go`: the picker is the create flow's
+  entry point, a chosen preset fills a usable profile and persists, argv
+  arguments survive, and Esc leaves no half-open form.
 
 ## Remaining (Phase 4 deliberate follow-ups)
 

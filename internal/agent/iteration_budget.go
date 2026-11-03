@@ -20,8 +20,13 @@ const (
 	// default soft (initial) and hard (post-renewal ceiling) iteration limits.
 	defaultIterationBudgetSoft = 400
 	defaultIterationBudgetHard = 600
-	defaultRenewFactor         = 0.5
 	defaultMaxRenewals         = 2
+	// fallbackRenewFactor is the generic per-grant fraction used only when the
+	// Soft->Hard headroom cannot define a positive step (for example Hard == Soft).
+	// Otherwise Normalize derives the factor from the actual headroom so that
+	// MaxRenewals grants exactly span Soft->Hard: 0.5 for a 2x ceiling (a channel's
+	// 90/180) and 0.25 for the main loop's 400/600 pair.
+	fallbackRenewFactor = 0.5
 	// DefaultIterationBudgetWallClock is the default total wall-clock cap for one
 	// run. It is exported so the serve run watchdog and durable background-polling
 	// caps agree with the agent loop instead of drifting to a shorter limit that
@@ -35,7 +40,8 @@ const (
 //
 // Soft is the initial effective limit (default 400), Hard the ceiling renewal
 // may never pass (default 600), RenewFactor the fraction of Soft granted per
-// renewal, MaxRenewals the number of grants allowed per run, MinInterval the
+// renewal (derived by default so MaxRenewals grants exactly fill the Soft->Hard
+// headroom), MaxRenewals the number of grants allowed per run, MinInterval the
 // minimum number of iterations between two grants, and MaxWallClock the total
 // wall-clock cap for one run.
 type IterationBudgetPolicy struct {
@@ -52,7 +58,9 @@ type IterationBudgetPolicy struct {
 //
 // When neither Soft nor Hard is supplied the main loop's 400/600 default pair is
 // used; an explicit soft limit (for example a channel's MaxTurns) keeps the
-// conventional 2x ceiling.
+// conventional 2x ceiling. With no explicit RenewFactor the per-grant step is
+// derived from the Soft->Hard headroom so the MaxRenewals grants together fill
+// it, keeping the step proportional when the ceiling ratio changes.
 func (p IterationBudgetPolicy) Normalize(soft int) IterationBudgetPolicy {
 	defaulted := soft <= 0
 	if defaulted {
@@ -68,14 +76,14 @@ func (p IterationBudgetPolicy) Normalize(soft int) IterationBudgetPolicy {
 			out.Hard = defaultIterationBudgetHard
 		}
 	}
+	if out.MaxRenewals <= 0 {
+		out.MaxRenewals = defaultMaxRenewals
+	}
 	if out.RenewFactor <= 0 {
-		out.RenewFactor = defaultRenewFactor
+		out.RenewFactor = deriveRenewFactor(out.Soft, out.Hard, out.MaxRenewals)
 	}
 	if out.RenewFactor > 1 {
 		out.RenewFactor = 1
-	}
-	if out.MaxRenewals <= 0 {
-		out.MaxRenewals = defaultMaxRenewals
 	}
 	if out.MinInterval < 0 {
 		out.MinInterval = 0
@@ -94,6 +102,24 @@ func (p IterationBudgetPolicy) Normalize(soft int) IterationBudgetPolicy {
 
 // Enabled reports whether renewal is configured (a Hard ceiling above Soft).
 func (p IterationBudgetPolicy) Enabled() bool { return p.Soft > 0 && p.Hard > p.Soft }
+
+// deriveRenewFactor returns the per-grant fraction of Soft that makes renewals
+// grants span exactly Soft->Hard (Hard-Soft)/(Soft*renewals). It falls back to
+// fallbackRenewFactor when the headroom is unusable (Hard <= Soft or a
+// non-positive Soft/renewals).
+func deriveRenewFactor(soft, hard, renewals int) float64 {
+	if soft <= 0 || renewals <= 0 || hard <= soft {
+		return fallbackRenewFactor
+	}
+	f := float64(hard-soft) / (float64(soft) * float64(renewals))
+	if f <= 0 {
+		return fallbackRenewFactor
+	}
+	if f > 1 {
+		f = 1
+	}
+	return f
+}
 
 // iterationBudget is the per-run, Runtime-owned budget handle shared between the
 // agent loop and the extend_budget tool. The loop owns the turn counter and the

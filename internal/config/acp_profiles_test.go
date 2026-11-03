@@ -36,11 +36,11 @@ func TestSaveACPAgentProfilesRejectsInvalidSetBeforeWriting(t *testing.T) {
 	if err := SaveACPAgentProfiles(duplicate); err == nil {
 		t.Fatal("duplicate profile IDs were persisted")
 	}
-	relativeCommand := acpProfileFixture()
-	relativeCommand.ID = "helper"
-	relativeCommand.Command = []string{"codex", "acp"}
-	if err := SaveACPAgentProfiles([]ACPAgentProfile{relativeCommand}); err == nil {
-		t.Fatal("a relative command[0] was persisted")
+	emptyCommand := acpProfileFixture()
+	emptyCommand.ID = "helper"
+	emptyCommand.Command = []string{"  "}
+	if err := SaveACPAgentProfiles([]ACPAgentProfile{emptyCommand}); err == nil {
+		t.Fatal("an empty command[0] was persisted")
 	}
 	writeRoleWithoutRoots := acpProfileFixture()
 	writeRoleWithoutRoots.WriteRoots = nil

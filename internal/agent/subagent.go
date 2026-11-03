@@ -48,10 +48,25 @@ func NewSubAgentSpawnTool(m *AgentManager) *SubAgentSpawnTool {
 	return &SubAgentSpawnTool{manager: m}
 }
 
+// RouterTarget describes the external ACP worker this session is actually bound
+// to. Router mode has exactly one activated worker, so the model must be told its
+// ID rather than left to guess a plausible name like "codex".
+type RouterTarget struct {
+	// ID is the activated profile ID; it is the only accepted `agent` value.
+	ID string
+	// Available lists other configured profile IDs, for the error message a model
+	// sees when it names the wrong one.
+	Available []string
+}
+
 // DelegateSubAgentTool runs exactly one delegated sub-agent task synchronously.
 type DelegateSubAgentTool struct {
 	manager *AgentManager
 	busy    atomic.Bool
+	// router is the current Router target, refreshed by the Runtime whenever the
+	// tool group is synchronized. It is read on every Description/Parameters call
+	// so a newly activated worker is reflected without rebuilding the tool.
+	router atomic.Pointer[RouterTarget]
 }
 
 // NewDelegateSubAgentTool creates a blocking delegate_subagent tool.
@@ -59,8 +74,35 @@ func NewDelegateSubAgentTool(m *AgentManager) *DelegateSubAgentTool {
 	return &DelegateSubAgentTool{manager: m}
 }
 
+// SetRouterTarget publishes the activated external worker to the model-facing tool
+// description and schema. A nil or empty target restores the generic wording, so
+// leaving Router mode cannot leave a stale profile ID in the prompt.
+func (t *DelegateSubAgentTool) SetRouterTarget(target *RouterTarget) {
+	if target == nil || strings.TrimSpace(target.ID) == "" {
+		t.router.Store(nil)
+		return
+	}
+	copied := RouterTarget{ID: strings.TrimSpace(target.ID)}
+	if len(target.Available) > 0 {
+		copied.Available = append([]string(nil), target.Available...)
+	}
+	t.router.Store(&copied)
+}
+
+// RouterTarget returns the currently published target, if any.
+func (t *DelegateSubAgentTool) RouterTarget() (RouterTarget, bool) {
+	target := t.router.Load()
+	if target == nil || target.ID == "" {
+		return RouterTarget{}, false
+	}
+	return *target, true
+}
+
 func (t *DelegateSubAgentTool) Name() string { return "delegate_subagent" }
 func (t *DelegateSubAgentTool) Description() string {
+	if target, ok := t.RouterTarget(); ok {
+		return fmt.Sprintf("Delegate one bounded independent subtask to a blocking sub-agent. In this Router session the only external ACP worker is %q: pass agent=%q exactly. Waits until completion and returns a summarized result.", target.ID, target.ID)
+	}
 	return "Delegate one bounded independent subtask to a blocking sub-agent. Waits until completion and returns a summarized result."
 }
 func (t *DelegateSubAgentTool) PromptSnippet() string {
@@ -77,7 +119,10 @@ func (t *DelegateSubAgentTool) PromptGuidelines() []string {
 	}
 }
 func (t *DelegateSubAgentTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{
+	// The agent field is built dynamically so the model sees the activated worker
+	// ID (and the configured alternatives) instead of guessing a well-known name.
+	agentSchema := t.agentParameterSchema()
+	schema := fmt.Sprintf(`{
 		"type": "object",
 		"properties": {
 			"task": {"type": "string", "description": "A specific, bounded task description. Must include: (1) the exact goal or question, (2) relevant file paths or search patterns, (3) expected output format, (4) stop conditions. Example: 'Find all Go files in internal/serve/openaiapi/ that import net/http but do not call http.Error. Return file paths with line numbers.'"},
@@ -85,9 +130,9 @@ func (t *DelegateSubAgentTool) Parameters() json.RawMessage {
 			"work_dir": {"type": "string", "description": "Working directory for the sub-agent (defaults to the parent workspace). Set explicitly if the task targets a different directory."},
 			"worktree": {"type": "string", "description": "Run the delegated sub-agent in its own isolated git worktree. Pass \"true\" to create one, or a worktree name. Defaults to inheriting the parent workspace."},
 			"tools": {"type": "array", "items": {"type": "string"}, "description": "Restrict sub-agent to specific tools (empty = all tools except nested sub-agent/delegate). Use to narrow scope, e.g. ['read', 'grep', 'find'] for investigation-only tasks."},
-			"max_iterations": {"type": "integer", "default": 50, "description": "Maximum tool-call iterations. Lower for simple tasks (10-20), higher for complex exploration (50-100)."},
+			"max_iterations": {"type": "integer", "default": 100, "description": "Maximum tool-call iterations. Lower for simple tasks (20-40), higher for complex exploration (100-200)."},
 			"system_prompt_extra": {"type": "string", "description": "Additional context or constraints for the sub-agent. Use to pass domain knowledge, coding conventions, or specific instructions not in the task description."},
-			"agent": {"type": "string", "description": "Router only: the activated external ACP worker profile ID. Required in Router mode and must match the session's activated profile."},
+			"agent": %s,
 			"role": {"type": "string", "enum": ["investigate", "implement", "test", "review", "integrate"], "description": "Router only: the task role. Defaults to investigate. implement/integrate require a write_scope inside the profile's configured write roots and verification evidence."},
 			"read_scope": {"type": "array", "items": {"type": "string"}, "description": "Router only: bounded paths or search targets the worker should read."},
 			"write_scope": {"type": "array", "items": {"type": "string"}, "description": "Router only: paths the worker may modify. Required for write roles and must stay inside the profile write roots."},
@@ -96,7 +141,38 @@ func (t *DelegateSubAgentTool) Parameters() json.RawMessage {
 			"stop_conditions": {"type": "array", "items": {"type": "string"}, "description": "Router only: explicit completion and non-goals."}
 		},
 		"required": ["task"]
-	}`)
+	}`, agentSchema)
+	return json.RawMessage(schema)
+}
+
+// agentParameterSchema renders the `agent` property. In Router mode it pins the
+// enum to the activated worker so a wrong name is a schema violation rather than a
+// runtime surprise; otherwise it stays a free-form string with no misleading hint.
+func (t *DelegateSubAgentTool) agentParameterSchema() string {
+	target, ok := t.RouterTarget()
+	if !ok {
+		return `{"type": "string", "description": "Router only: the activated external ACP worker profile ID. Not used outside Router mode."}`
+	}
+	// Encode values with the JSON encoder rather than %q: Go quoting escapes
+	// quotes Go-style, which is not valid inside a JSON string literal.
+	field := map[string]any{
+		"type":        "string",
+		"description": fmt.Sprintf("Required. This Router session delegates to the activated ACP worker %q; pass exactly that value.", target.ID),
+	}
+	if len(target.Available) > 1 {
+		field["enum"] = target.Available
+		field["description"] = fmt.Sprintf("Required. This Router session delegates to the activated ACP worker %q; pass exactly that value. Configured profiles: %s.",
+			target.ID, strings.Join(target.Available, ", "))
+	} else {
+		field["const"] = target.ID
+	}
+	encoded, err := json.Marshal(field)
+	if err != nil {
+		// A hand-built fallback keeps the schema valid even if encoding fails; the
+		// Execute-time error still names the correct worker.
+		return `{"type": "string", "description": "Required. Pass the activated external ACP worker profile ID."}`
+	}
+	return string(encoded)
 }
 
 func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]any) (tools.ToolResult, error) {
@@ -112,8 +188,21 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 	externalAgent, _ := params["agent"].(string)
 	externalAgent = strings.TrimSpace(externalAgent)
 	if parentMode == "router" {
+		target, hasTarget := t.RouterTarget()
 		if externalAgent == "" {
+			if hasTarget {
+				return tools.ToolResult{}, fmt.Errorf("Router delegation requires agent=%q (the activated ACP worker); next time pass agent=%q. Local child fallback is not available", target.ID, target.ID)
+			}
 			return tools.ToolResult{}, fmt.Errorf("Router delegation requires agent=<activated ACP worker profile>; local child fallback is not available")
+		}
+		// A wrong name is the most common failure: the model guesses a well-known
+		// product name. Name the one accepted value instead of restating the rule.
+		if hasTarget && externalAgent != target.ID {
+			available := ""
+			if len(target.Available) > 1 {
+				available = fmt.Sprintf(" Configured profiles: %s.", strings.Join(target.Available, ", "))
+			}
+			return tools.ToolResult{}, fmt.Errorf("agent=%q is not this session's Router worker; use agent=%q.%s", externalAgent, target.ID, available)
 		}
 	} else if externalAgent != "" {
 		return tools.ToolResult{}, fmt.Errorf("agent is only available in Router mode")
@@ -140,7 +229,7 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 		}
 	}
 	worktreeReq := parseWorktreeRequest(params["worktree"])
-	maxIter := 50
+	maxIter := 100
 	if v, ok := params["max_iterations"].(float64); ok && v > 0 {
 		maxIter = int(v)
 	}
@@ -349,7 +438,7 @@ func (t *SubAgentSpawnTool) Parameters() json.RawMessage {
 			"work_dir": {"type": "string", "description": "Working directory for the sub-agent (defaults to the parent workspace)"},
 			"worktree": {"type": "string", "description": "Run this sub-agent in its own isolated git worktree. Pass \"true\" to create one, or a worktree name. Defaults to inheriting the parent workspace."},
 			"tools": {"type": "array", "items": {"type": "string"}, "description": "Allowed tools (empty = all)"},
-			"max_iterations": {"type": "integer", "default": 50, "description": "Maximum iterations"},
+			"max_iterations": {"type": "integer", "default": 100, "description": "Maximum iterations"},
 			"system_prompt_extra": {"type": "string", "description": "Extra context for the sub-agent"}
 		},
 		"required": ["task"]
@@ -434,7 +523,7 @@ func (t *SubAgentSpawnTool) Execute(ctx context.Context, params map[string]any) 
 		maxIterSet = true
 	}
 	if !maxIterSet {
-		maxIter = 50
+		maxIter = 100
 	}
 
 	extra, _ := params["system_prompt_extra"].(string)

@@ -36,7 +36,7 @@ func TestRouterPanelProjectsRuntimeEligibility(t *testing.T) {
 	app.routerPanel.Profiles = []config.ACPAgentProfile{
 		{ID: "codex", Title: "Codex", Command: []string{"/opt/codex/bin/codex", "acp"}, Enabled: true, PermissionPolicy: config.ACPPermissionAutoAllowOnce},
 		{ID: "helper", Command: []string{"/opt/helper/bin/helper"}, Enabled: false, PermissionPolicy: config.ACPPermissionAutoAllowOnce},
-		{ID: "broken", Command: []string{"relative-command"}, Enabled: true},
+		{ID: "broken", Command: []string{" "}, Enabled: true},
 	}
 	descriptors := app.routerPanelDescriptors()
 	if !descriptors["codex"].RouterEligible {
@@ -46,7 +46,7 @@ func TestRouterPanelProjectsRuntimeEligibility(t *testing.T) {
 		t.Fatal("a disabled profile projected as Router-eligible")
 	}
 	if descriptors["broken"].InvalidReason == "" {
-		t.Fatal("a relative command[0] was not projected as invalid")
+		t.Fatal("an empty command[0] was not projected as invalid")
 	}
 }
 
@@ -59,15 +59,15 @@ func TestRouterPanelSaveUsesSharedValidation(t *testing.T) {
 
 	app.beginRouterPanelCreate()
 	app.routerPanel.Draft = config.ACPAgentProfile{
-		ID:      "relative",
-		Command: []string{"codex", "acp"},
+		ID:      "empty",
+		Command: []string{"  "},
 		Enabled: true,
 	}
 	app.routerPanel.Roles = map[config.ACPAgentRole]bool{config.ACPRoleInvestigate: true}
 	app.saveRouterPanelDraft()
 
 	if app.routerPanel.Error == "" {
-		t.Fatal("the panel accepted a profile with a relative command[0]")
+		t.Fatal("the panel accepted a profile with an empty command[0]")
 	}
 	if !app.routerPanel.Editing {
 		t.Fatal("a rejected save closed the editor form")

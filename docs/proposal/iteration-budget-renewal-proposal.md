@@ -1,9 +1,13 @@
 # 主循环迭代预算：感知与有界续期方案
 
-> 状态：Proposal
+> 状态：Implemented（2026-09-17 落地；2026-11-03 上限放大并随 v1.3.108 发布）
 > 日期：2026-09-17
 > 范围：`internal/agent` 主循环 + `internal/agentruntime` 策略解析
 > 目标：让模型在逼近 `MaxIterations` 时能感知剩余预算，并在 Runtime 有界放行的前提下续期，而不是数到上限就硬切 `incomplete`
+>
+> **状态更新（2026-11-03）：已实现并发布（v1.3.108）。** 感知层、续期工具与 Runtime clamp 均已落地，见 §11。
+> 本次发布把主循环软限从 200 提到 400（硬上限 600），并同步放大配套上限；续期步长改为按
+> Soft→Hard headroom 推导，使两次续期恰好填满 400→500→600。详见 §5 与 §11。
 
 ## 1. 背景与问题
 
@@ -11,6 +15,8 @@
 
 - 循环条件 `for i := 0; i < a.config.MaxIterations; i++`（`internal/agent/agent.go:1376`），run 内没有任何路径修改它。
 - 默认值 200（`agent.go:619`、`agent.go:658`），由适配器按需覆盖（渠道 `MaxTurns` 默认 90，`internal/serve/channels/config.go:147`、`internal/serve/channels/dispatcher.go:2262`；子代理默认 50，`internal/agent/subagent.go:93`/`:325`；ESM worker 200 / critic·audit 80 / observer 40，`internal/esm/runtime_core.go:140`/`:146`/`:236`）。
+
+> **以上为实施前基线（历史记录）。** 当前值：主循环 400（`internal/agent/agent.go:641`/`:680`）、渠道 `MaxTurns` 180、子代理与 workflow worker 100、ESM recovery observer 80（`internal/esm/runtime_core.go:283`）；ESM worker/critic/audit 为长任务模式（`LongTaskMaxIterations = -1`，不设轮数上限）。放大后的完整参数见 §5。
 - 耗尽后直接 `emitRunFinished(ch, TaskIncomplete, "max_iterations", ...)`（`agent.go:1986-1988`），TUI 显示 `会话结束：incomplete`（`internal/tui/agent_events.go:275-288`）。
 
 由此产生两个问题：
@@ -139,17 +145,17 @@ type IterationBudgetPolicy struct {
 
 | 场景 | 软限 | 硬上限 | wall-clock | 续期 |
 |---|---|---|---|---|
-| 主 run（TUI/CLI/ACP/API/WebUI） | 200 | **400（2×）** | **16h** | 最多 2 次，每次 +50%（或 1 次 +100%），每次需模型调用 `extend_budget` 且带 `reason` |
-| 渠道 | 90 | **180（2×）** | **16h** | 同上；渠道现有 `run_max_duration_secs`（14400s）提升到 57600s |
-| 子代理 / Expert 成员 | 50 / frontmatter | **= 软限** | 继承父 run | 不续期（`subagent.go:318-322` 只能收窄） |
-| 后台 run | 200 | 400 | 6h（`backgroundRunMaxSeconds`） | 另受后台轮询上限约束 |
+| 主 run（TUI/CLI/ACP/API/WebUI） | 400 | **600（1.5×）** | **16h** | 最多 2 次，每次 +100（RenewFactor 由 headroom 推导为 0.25，或 1 次 +200），每次需模型调用 `extend_budget` 且带 `reason` |
+| 渠道 | 180 | **360（2×）** | **16h** | 同上；渠道 `run_max_duration_secs` 已提升到 57600s |
+| 子代理 / Expert 成员 | 100 / frontmatter | **= 软限** | 继承父 run | 不续期（`subagent.go:318-322` 只能收窄） |
+| 后台 run | 400 | 600 | 16h（`backgroundRunMaxSeconds`） | 另受后台轮询上限约束 |
 
 理由：
 
 - 2× 是有界且与输出侧“升到固定 escalated 上限”一致的最坏情况放大；`MaxRenewals = 2` 避免“续期变成常态”，`MinInterval` 避免连续刷。
 - 轮数只是代理指标，真正的硬边界是成本与时间。渠道侧已有时间护栏（stale 600s、run max 14400s = 4h，`channels/config.go:102-103`），但 TUI/CLI/ACP 目前**没有**总时长上限。
-- **wall-clock 上限统一取 16 小时（57600s）**：前台（TUI/CLI/ACP/API/WebUI）与渠道共用同一策略值；渠道现有 `run_max_duration_secs`（14400s = 4h）随之提升到 57600s。（注：相对 4h 是 4×，按 16h 记录。）
-- 后台 durable 轮询仍由 `backgroundRunMaxSeconds`（6h）单独约束——那是轮询生命周期，不是 run 时长，保持不变。
+- **wall-clock 上限统一取 16 小时（57600s）**：前台（TUI/CLI/ACP/API/WebUI）与渠道共用同一策略值；渠道 `run_max_duration_secs`（原 14400s = 4h）随之提升到 57600s。（注：相对 4h 是 4×，按 16h 记录。）
+- 后台 durable 轮询由 `backgroundRunMaxSeconds` 单独约束——那是轮询生命周期，不是 run 时长。它同样取 16h：渠道侧 `defaultBackgroundRunMax` 与 Serve 侧 `defaultBackgroundRunMaxDuration` 都引用 `agent.DefaultIterationBudgetWallClock`，避免同一运行时出现两个时长上限。
 - 最优雅的形态是让硬边界统一由策略表达为 `{软轮数, 硬轮数, 最长时长, 最大续期次数}`，而不是散落的魔法数字。
 
 ## 6. 缓存分析（关键）
@@ -173,7 +179,7 @@ type IterationBudgetPolicy struct {
 | `internal/agent/`（新增） | `extend_budget` 工具定义、`iterationBudget` 句柄与 `Request()` clamp、`ContextWithIterationBudget` / `FromContext` |
 | `internal/agent/agent_context.go` | 新增构造预算通知 `SystemInjected` 消息的 helper（与 `buildSessionContextMessage` 并列） |
 | `internal/agentruntime/agent_build.go` | `AgentBuildOptions` 增策略字段并透传到循环配置 |
-| `internal/agentruntime`（ResolvePolicy 附近） | 解析默认值（200/400/续期次数），按 `RuntimeSource` 差异化 |
+| `internal/agentruntime`（ResolvePolicy 附近） | 解析默认值（主循环 400/600、续期次数），按 `RuntimeSource` 差异化 |
 | `internal/serve/channels/config.go` | `run_max_duration_secs` 默认从 14400s 提升到 57600s（16h）。**不新增** serve.json 字段：硬上限/续期次数/间隔/时长由 `IterationBudgetPolicy.Normalize` 统一给出，渠道 soft 仍用 `agent.maxTurns` |
 | `internal/tui/agent_events.go` / `internal/acp/acp.go` | 仅投影：把“已续期”作为普通状态事件渲染，不新造事件语义 |
 
@@ -205,7 +211,7 @@ type IterationBudgetPolicy struct {
 - **已定**：续期由模型经 `extend_budget` 工具申请（§3.2 / §3.3），Runtime 只做 clamp；不再提供纯 Runtime 自动放行路径。
 - **已定**：wall-clock 上限统一 16h（57600s），前台与渠道共用（§5）；渠道 `run_max_duration_secs` 提升到 57600s。
 
-## 11. 实现状态（2026-09-17）
+## 11. 实现状态（2026-09-17 落地，2026-11-03 放大并发布）
 
 已落地：
 
@@ -217,8 +223,8 @@ type IterationBudgetPolicy struct {
 
 实现说明与决策：
 
-- 硬上限/续期次数/最小间隔/wall-clock 默认值由 `IterationBudgetPolicy.Normalize` 给出（hard = 2× soft、RenewFactor 0.5、MaxRenewals 2、MinInterval = soft/10、MaxWallClock 16h）。**决策：不新增 `serve.json` 字段**，硬边界统一由 Runtime 策略代码默认值给出；渠道仍以 `agent.maxTurns` 作为 soft。
-- 续期默认放大量 = `round(soft × RenewFactor)`；模型可用 `additional_turns` 覆盖，但始终被 `Hard` 截断。
+- 硬上限/续期次数/最小间隔/wall-clock 默认值由 `IterationBudgetPolicy.Normalize` 给出（主 loop 默认 pair 400/600、MaxRenewals 2、MinInterval = soft/10、MaxWallClock 16h）。**决策：不新增 `serve.json` 字段**，硬边界统一由 Runtime 策略代码默认值给出；渠道仍以 `agent.maxTurns` 作为 soft。
+- 续期默认放大量 = `round(soft × RenewFactor)`，其中 `RenewFactor` 在未显式给出时由 headroom 推导（`(Hard-Soft)/(Soft×MaxRenewals)`），使 `MaxRenewals` 次续期恰好填满 Soft->Hard（主 loop 400/600 → 0.25；渠道 90/180 → 0.5）；模型可用 `additional_turns` 覆盖，但始终被 `Hard` 截断。
 - wall-clock 命中按“预算耗尽”处理（`TaskIncomplete` / `wall_clock_limit`），与 `max_iterations` 同语义。
 - 续期不产生终态事件，`EventRunFinished` 契约不变。
 
@@ -226,3 +232,29 @@ type IterationBudgetPolicy struct {
 
 - `internal/agent/iteration_budget_test.go`：策略规范化、`Request` clamp、context 往返、工具、循环注入一次、经工具续期越过 soft 上限、cache marker 不受尾部注入影响。
 - `internal/agentruntime/iteration_budget_build_test.go`：lead 才注册 `extend_budget`，transient 不注册，子代理工具集不含它。
+
+### 11.1 2026-11-03 的上限放大与续期步长推导（v1.3.108）
+
+本轮把“长任务连续性”当作产品优先级，统一放大了各层轮数上限，并让续期步长随软/硬上限的比例自动适配，避免硬编码一个在比例变化后失真的系数。
+
+变更：
+
+- 主循环默认软限 200 → **400**，硬上限 **600**（`internal/agent/iteration_budget.go` 的 `defaultIterationBudgetSoft` / `defaultIterationBudgetHard`；`internal/agent/agent.go:641`/`:680` 同步）。
+- 卡住检测的静默轮数阈值 95 → **195**（`internal/agent/agent.go`），保持“静默轮数 ≈ 循环预算一半”的比例关系，不因预算放大而让卡住检测形同虚设。
+- 渠道 `agent.maxTurns` 默认 90 → **180**（`internal/serve/channels/config.go`，WebUI `ServeConfig.svelte` 的表单默认值同步）。
+- 子代理 / workflow worker 的 `max_iterations` 默认 50 → **100**（`internal/agent/subagent.go` 的 `delegate_subagent` 与 `subagent_spawn`；`internal/workflow/agent_host.go`）。
+- ESM recovery observer 的 `MaxIterations` 40 → **80**（`internal/esm/runtime_core.go:283`）。
+- 续期步长改为**按 headroom 推导**：`RenewFactor` 未显式给出时取 `(Hard-Soft)/(Soft×MaxRenewals)`（`deriveRenewFactor`），使 `MaxRenewals` 次续期恰好填满 Soft→Hard。旧实现是写死的 `0.5`，在 400/600 这一新比例下会让两次续期越过硬上限。headroom 不可用时（`Hard <= Soft`）回落到 `fallbackRenewFactor = 0.5`，显式传入的 `RenewFactor` 仍然优先，且始终被 `Hard` 截断。
+- 显式传入软上限的调用方不受影响：仍使用惯例的 2 倍硬上限（`Normalize` 保留 `defaulted` 判定）。
+
+不变的边界：
+
+- ESM worker / critic / audit 仍是长任务模式（`LongTaskMaxIterations = -1`），没有轮数上限，也没有新增角色级 wall-clock 死线；只有只读的 recovery observer 保留自己的有界上限。
+- 续期仍是模型经 `extend_budget` 工具申请、Runtime 确定性 clamp，不存在 Runtime 自动放行路径。
+- 终态语义不变：续期不产生终态事件，`EventRunFinished` 每条退出路径恰好一次。
+- wall-clock 仍是 16h 单 run 上限；后台轮询另受 `backgroundRunMaxSeconds` 约束（同样取 16h）。
+
+文档同步：
+
+- `docs/en/changelog.md`、`docs/zh/changelog.md`、`docs/changelog_online_en.md`、`docs/changelog_online_zh.md` 与生成的 `docs/llms-full*.txt` 已记录行为变更。
+- `docs/en/tools.md`、`docs/zh/tools.md`、`docs/en/sdk.md`、`docs/zh/sdk.md`、`docs/en/workflow.md`、`docs/zh/workflow.md` 中的 `max_iterations` 默认值已同步为 100。

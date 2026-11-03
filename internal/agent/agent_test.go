@@ -1381,6 +1381,9 @@ func TestToolOnlyWarningAppendedAfterToolResults(t *testing.T) {
 		},
 		ToolExecutionMode: "sequential",
 		MaxIterations:     95,
+		// Keep the silent-turn guard well inside this loop's budget so the warning
+		// fires promptly; the assertion only checks ordering after tool results.
+		MaxConsecutiveNoText: 5,
 		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
 			for _, msg := range ctx.NewMessages {
 				if msg.Role == "user" && contains(msg.Content, "You have been making tool calls") {
@@ -2891,8 +2894,8 @@ func TestMaxConsecutiveNoText_Default(t *testing.T) {
 		},
 	}, registry)
 
-	// Default MaxConsecutiveNoText should be 200 (MaxIterations default)
-	// but the threshold is 95. Verify the config field is 0 (uses default).
+	// Default MaxConsecutiveNoText should be 400 (MaxIterations default)
+	// but the threshold is 195. Verify the config field is 0 (uses default).
 	if a.config.MaxConsecutiveNoText != 0 {
 		t.Fatalf("expected default MaxConsecutiveNoText=0, got %d", a.config.MaxConsecutiveNoText)
 	}

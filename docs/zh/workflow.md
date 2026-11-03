@@ -21,6 +21,6 @@ workflow("quick audit", {
 
 运行时表达式包括 `result("phase.agent")`、`resultKey("phase.agent", "r0")`、`resultLatest("phase.agent")`、`results("phase")` 和 `log("message", value)`。重复逻辑 agent 保持固定名称，并使用唯一 key，例如 `key: "r" + i`。
 
-并发默认值为 5。worker 的 `maxIterations` 省略、为 0 或负数时默认为 50。`workflow_run` 的 `timeoutSeconds` 是独立的工具级超时。worker 不能启动嵌套编排。生成或修改复杂源码后，应先调用 `workflow_lint`。
+并发默认值为 5。worker 的 `maxIterations` 省略、为 0 或负数时默认为 100。`workflow_run` 的 `timeoutSeconds` 是独立的工具级超时。worker 不能启动嵌套编排。生成或修改复杂源码后，应先调用 `workflow_lint`。
 
 CLI 和 Serve 模式提供 `/workflows` 用于列表、查看和取消；`workflow_cancel` 只取消当前进程中的 active run。

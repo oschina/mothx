@@ -608,7 +608,7 @@ Unlike `subagent_*` multi-agent tools, `delegate_subagent` runs synchronously: t
 | `mode` | string | - | Parent mode, then `yolo` | Sub-agent execution mode: `plan`, `agent`, or `yolo`. |
 | `work_dir` | string | - | Current working directory | Working directory for the sub-agent. |
 | `tools` | array of strings | - | All tools except nested sub-agent/delegate | Optional tool allowlist, e.g. `["read", "grep", "find"]`. |
-| `max_iterations` | integer | - | `50` | Maximum tool-call iterations. |
+| `max_iterations` | integer | - | `100` | Maximum tool-call iterations. |
 | `system_prompt_extra` | string | - | - | Extra instructions or constraints for the worker. |
 
 Example payload:
@@ -684,7 +684,7 @@ Example payload:
 
 Supported workflow builtins include `workflow`, `phase`, `parallel`, `series`, `agent`, `concurrency`, `result`, `resultKey`, `resultLatest`, `results`, and `log`. Worker agents receive dynamic workflow context through their task prompt, so the parent system prompt and tool definitions remain frozen after agent construction.
 
-Important defaults: `concurrency` defaults to 5, `mode` inherits the parent agent mode, omitted `tools` uses the default tool set for the worker mode, and omitted/zero/negative `maxIterations` defaults to 50 worker-agent loop iterations. Use `key` for repeated logical agents inside loops; keyed results are stored as `phase.agent[key]` and can be read with `resultKey` or `resultLatest`. Worker agents cannot spawn subagents, delegate, or start nested workflows, and the DSL has no per-worker `:timeout`, `model`, `:thinking-level`, or `:max-tokens` options.
+Important defaults: `concurrency` defaults to 5, `mode` inherits the parent agent mode, omitted `tools` uses the default tool set for the worker mode, and omitted/zero/negative `maxIterations` defaults to 100 worker-agent loop iterations. Use `key` for repeated logical agents inside loops; keyed results are stored as `phase.agent[key]` and can be read with `resultKey` or `resultLatest`. Worker agents cannot spawn subagents, delegate, or start nested workflows, and the DSL has no per-worker `:timeout`, `model`, `:thinking-level`, or `:max-tokens` options.
 
 For detailed usage and best practices of workflow mode, see the [Workflow Mode](workflow.md) documentation.
 

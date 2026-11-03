@@ -14,7 +14,7 @@ func TestListACPWorkerProfilesMarksRouterEligibility(t *testing.T) {
 			Roles: []config.ACPAgentRole{config.ACPRoleInvestigate, config.ACPRoleImplement}, WriteRoots: []string{"src"}},
 		{ID: "interactive", Command: []string{"/opt/i", "acp"}, Enabled: true, PermissionPolicy: config.ACPPermissionInteractive},
 		{ID: "disabled", Command: []string{"/opt/d", "acp"}, Enabled: false},
-		{ID: "broken", Command: []string{"relative"}, Enabled: true},
+		{ID: "broken", Command: []string{" "}, Enabled: true},
 	}
 	profiles := ListACPWorkerProfiles(settings)
 	if len(profiles) != 5 {

@@ -397,7 +397,7 @@ EventAgentEnd
   "mode": "agent",
   "work_dir": "/home/user/project",
   "tools": ["read", "grep", "find", "ls"],
-  "max_iterations": 50,
+  "max_iterations": 100,
   "system_prompt_extra": "仅关注 src/ 目录"
 }
 ```

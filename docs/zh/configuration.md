@@ -1185,13 +1185,13 @@ Agent 模式下：
 }
 ```
 
-- `id` 是唯一暴露给模型的值。`command` 是 argv 数组，`command[0]` 必须是绝对路径。
+- `id` 是唯一暴露给模型的值。`command` 是 argv 数组；`command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名（启动从不经过 shell）。
 - `environment` 只列变量**名称**；启动时从 `env.json` 或进程环境读取值，不会展示给模型，也不会写入事件。
 - `roles` 是能力上限。未声明 `roles` 的 profile 只读（`investigate`）。写角色（`implement`、`integrate`）必须至少声明一个相对 `writeRoots`，任务的 write scope 必须位于其中。
 - `maxConcurrentChildren` 默认为 `1`，上限为 `8`。大于 `1` 的值会被接受以保持兼容（旧构建写入的 `settings.json` 仍能加载），但本版本每个会话只执行一个存活的外部 worker：Router worker 运行在共享的会话工作目录中，只读 lead 没有本地写入工具来化解两个外部写入者之间的冲突。Runtime 的许可会执行该上限，而 `mothx doctor` 与 `/router` 面板会把「配置值高于实际上限」报告为**尚未生效**而不是报错；当 Runtime 拥有「每 worker 独立 worktree」后，该值才可真正大于 1。
 - Router 的 `permissionPolicy` 只能是 `auto_allow_once` 或 `auto_reject`；`interactive` profile 不能作为 Router worker 激活。MothX 只会选择远端 Agent 实际提供的一次性选项，绝不会自动选择 `allow_always`/`reject_always`。
 
-可以在 `settings.json` 中编辑 `acpAgents`，也可以使用 TUI 的 `/router` 面板：面板会列出 profile 及其由 Runtime 解析出的可用性，并支持新增、编辑、删除和激活。面板只通过共享配置层写入，因此无效候选（相对路径 `command[0]`、重复 ID、写角色缺少 `writeRoots`、内联明文密钥）会在写入前被拒绝。在面板中按 `t`、在 TUI 中使用 `/router <id>`，或在 CLI 中使用 `mothx --router --acp-agent <id>` 激活。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化 profile 与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
+可以在 `settings.json` 中编辑 `acpAgents`，也可以使用 TUI 的 `/router` 面板：面板会列出 profile 及其由 Runtime 解析出的可用性，并支持新增、编辑、删除和激活。面板只通过共享配置层写入，因此无效候选（空的 `command[0]`、重复 ID、写角色缺少 `writeRoots`、内联明文密钥）会在写入前被拒绝。在面板中按 `t`、在 TUI 中使用 `/router <id>`，或在 CLI 中使用 `mothx --router --acp-agent <id>` 激活。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化 profile 与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
 
 **信任边界：** 选择 profile 意味着信任该可执行文件可以访问会话工作目录、你允许的环境变量以及它自行选择的网络。Router 的只读工具列表约束的是 MothX lead，而不是外部 Agent。运行 `mothx doctor` 可以在不启动任何进程的情况下检查 profile 形状与可执行文件可用性。
 

@@ -29,19 +29,25 @@ func (noopTool) Execute(context.Context, map[string]any) (tools.ToolResult, erro
 }
 
 func TestIterationBudgetPolicyNormalize(t *testing.T) {
-	// An unset soft limit resolves to the main loop's 400/600 default pair.
+	// An unset soft limit resolves to the main loop's 400/600 default pair, with
+	// the per-grant factor derived so the two grants fill the 200-turn headroom
+	// (400 -> 500 -> 600), i.e. 0.25.
 	def := IterationBudgetPolicy{}.Normalize(0)
 	if def.Soft != 400 || def.Hard != 600 {
 		t.Fatalf("default soft/hard = %d/%d, want 400/600", def.Soft, def.Hard)
 	}
+	if def.RenewFactor != 0.25 {
+		t.Fatalf("default renew factor = %v, want 0.25", def.RenewFactor)
+	}
 
-	// A supplied soft limit keeps the conventional 2x ceiling.
+	// A supplied soft limit keeps the conventional 2x ceiling, and the per-grant
+	// factor is derived from the headroom (90 -> 180: 90/(90*2) = 0.5).
 	p := IterationBudgetPolicy{}.Normalize(90)
 	if p.Soft != 90 || p.Hard != 180 {
 		t.Fatalf("soft/hard = %d/%d, want 90/180", p.Soft, p.Hard)
 	}
-	if p.RenewFactor != defaultRenewFactor || p.MaxRenewals != defaultMaxRenewals {
-		t.Fatalf("renew factor/renewals = %v/%d", p.RenewFactor, p.MaxRenewals)
+	if p.RenewFactor != 0.5 || p.MaxRenewals != defaultMaxRenewals {
+		t.Fatalf("renew factor/renewals = %v/%d, want 0.5/%d", p.RenewFactor, p.MaxRenewals, defaultMaxRenewals)
 	}
 	if p.MinInterval != 9 {
 		t.Fatalf("min interval = %d, want 9 (soft/10)", p.MinInterval)
@@ -54,6 +60,37 @@ func TestIterationBudgetPolicyNormalize(t *testing.T) {
 	}
 	if (IterationBudgetPolicy{}).Enabled() {
 		t.Fatal("zero policy must be disabled")
+	}
+}
+
+// TestIterationBudgetDefaultRenewalWalk pins that the derived default factor
+// makes the two allowed grants fill the loop's 400->600 headroom exactly, so no
+// renewal is wasted on the first call.
+func TestIterationBudgetDefaultRenewalWalk(t *testing.T) {
+	b := newIterationBudget(IterationBudgetPolicy{}, 0)
+	if b.Soft() != 400 || b.Hard() != 600 {
+		t.Fatalf("default soft/hard = %d/%d, want 400/600", b.Soft(), b.Hard())
+	}
+
+	b.setTurn(0)
+	granted, _, renewals, err := b.Request(0, "unfinished")
+	if err != nil || granted != 100 || renewals != 1 {
+		t.Fatalf("first grant = %d renewals %d err %v, want 100/1/nil", granted, renewals, err)
+	}
+	if b.Limit() != 500 {
+		t.Fatalf("limit after first grant = %d, want 500", b.Limit())
+	}
+
+	b.setTurn(b.minInterval)
+	granted, _, renewals, err = b.Request(0, "still unfinished")
+	if err != nil || granted != 100 || renewals != 2 {
+		t.Fatalf("second grant = %d renewals %d err %v, want 100/2/nil", granted, renewals, err)
+	}
+	if b.Limit() != 600 {
+		t.Fatalf("limit after second grant = %d, want the hard ceiling 600", b.Limit())
+	}
+	if b.CanRenew() {
+		t.Fatal("a budget at its hard ceiling with no renewals left must not advertise renewal")
 	}
 }
 

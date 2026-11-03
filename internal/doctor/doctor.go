@@ -354,9 +354,16 @@ func checkACPAgents(settings *config.Settings) []Check {
 		if profile.EffectiveMaxConcurrentChildren() > profile.EffectiveEnforcedChildren() {
 			capped = append(capped, fmt.Sprintf("%s=%d", profile.ID, profile.EffectiveMaxConcurrentChildren()))
 		}
-		info, err := os.Stat(profile.Command[0])
+		// Resolve the way a real launch would: a bare command through PATH, a path
+		// as given. exec.LookPath reports "not found" for a missing bare command,
+		// so this is the same answer the launcher would get.
+		resolved, err := exec.LookPath(profile.Command[0])
 		if err != nil {
-			return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: fmt.Sprintf("profile %q executable %q is unavailable", profile.ID, profile.Command[0]), Fix: "Update acpAgents command or install the worker"}}
+			return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: fmt.Sprintf("profile %q command %q was not found", profile.ID, profile.Command[0]), Fix: "Install the worker, add it to PATH, or use an absolute path in acpAgents"}}
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: fmt.Sprintf("profile %q executable %q is unavailable", profile.ID, resolved), Fix: "Update acpAgents command or install the worker"}}
 		}
 		if info.IsDir() {
 			return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: fmt.Sprintf("profile %q command is a directory", profile.ID), Fix: "Point acpAgents command at the worker executable"}}

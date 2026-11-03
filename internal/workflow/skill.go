@@ -80,9 +80,9 @@ Runtime expressions:
 - results("phase") returns deterministic phase fan-in text.
 - log("message", value) appends a workflow log entry.
 
-Defaults: concurrency is 5; maxIterations defaults to 50 when omitted, zero, or
-negative; mode and workDir inherit surrounding settings. Worker tools cannot start
-nested orchestration. workflow_run timeoutSeconds is separate from maxIterations.
+Defaults: concurrency is 5; maxIterations defaults to 100 when omitted, zero, or
+negative; mode and workDir inherit surrounding settings. Worker tools cannot
+start nested orchestration. workflow_run timeoutSeconds is separate from maxIterations.
 Use workflow_lint before workflow_run for non-trivial source.
 `,
 	"references/01-research.md": `# Research and Investigation Workflows

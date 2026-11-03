@@ -44,8 +44,13 @@ type routerPanelState struct {
 	InputField    string
 	Input         editor.Model
 	ConfirmDelete bool
-	Error         string
-	Message       string
+	// Presets is the well-known-agent picker shown when creating a profile. It
+	// exists so a user does not have to know that `codex acp` is not a valid ACP
+	// launch and which adapter package is.
+	ChoosingPreset bool
+	PresetCursor   int
+	Error          string
+	Message        string
 }
 
 // routerPanelPermissionOptions is the ordered permission-policy vocabulary the
@@ -125,14 +130,42 @@ func (a *App) routerPanelActiveProfile() string {
 }
 
 func (a *App) beginRouterPanelCreate() {
+	// Start with the well-known-agent picker: the most common configuration
+	// mistake is assuming `codex acp` / `claude acp` start an ACP server, so the
+	// user should not have to remember each tool's launch recipe.
+	a.routerPanel.ChoosingPreset = true
+	a.routerPanel.PresetCursor = 0
+	a.routerPanel.Error = ""
+	a.routerPanel.Message = ""
+	a.routerPanel.ConfirmDelete = false
 	a.routerPanel.Editing = true
 	a.routerPanel.EditingIndex = -1
 	a.routerPanel.Draft = config.ACPAgentProfile{Enabled: true, PermissionPolicy: config.ACPPermissionAutoReject}
 	a.routerPanel.Roles = map[config.ACPAgentRole]bool{config.ACPRoleInvestigate: true}
 	a.routerPanel.FormCursor = 0
 	a.routerPanel.InputField = ""
+}
+
+// beginRouterPanelCreateFromPreset fills the draft from a known launch recipe.
+func (a *App) beginRouterPanelCreateFromPreset(preset agentruntime.ACPAgentPreset) {
+	a.routerPanel.ChoosingPreset = false
+	a.routerPanel.Draft = agentruntime.ACPAgentProfileFromPreset(preset)
+	a.routerPanel.Roles = map[config.ACPAgentRole]bool{config.ACPRoleInvestigate: true}
+	a.routerPanel.FormCursor = 0
+	a.routerPanel.InputField = ""
 	a.routerPanel.Error = ""
-	a.routerPanel.ConfirmDelete = false
+	a.routerPanel.Message = preset.Note
+}
+
+// beginRouterPanelCreateFromScratch opens an empty form for a custom agent.
+func (a *App) beginRouterPanelCreateFromScratch() {
+	a.routerPanel.ChoosingPreset = false
+	a.routerPanel.Draft = config.ACPAgentProfile{Enabled: true, PermissionPolicy: config.ACPPermissionAutoReject}
+	a.routerPanel.Roles = map[config.ACPAgentRole]bool{config.ACPRoleInvestigate: true}
+	a.routerPanel.FormCursor = 0
+	a.routerPanel.InputField = ""
+	a.routerPanel.Error = ""
+	a.routerPanel.Message = ""
 }
 
 func (a *App) beginRouterPanelEdit(index int) {
@@ -154,6 +187,11 @@ func (a *App) beginRouterPanelEdit(index int) {
 func (a *App) closeRouterPanelForm() {
 	a.routerPanel.Editing = false
 	a.routerPanel.EditingIndex = -1
+	// The preset picker is part of the create flow, so leaving the form must also
+	// leave the picker. Otherwise Esc appears to do nothing: the picker still
+	// swallows every key.
+	a.routerPanel.ChoosingPreset = false
+	a.routerPanel.PresetCursor = 0
 	a.routerPanel.Draft = config.ACPAgentProfile{}
 	a.routerPanel.Roles = map[config.ACPAgentRole]bool{}
 	a.routerPanel.FormCursor = 0
@@ -219,7 +257,7 @@ func (a *App) routerPanelFieldPlaceholder(field string) string {
 	case "title":
 		return "Codex"
 	case "command":
-		return "/absolute/path/to/worker acp"
+		return "opencode acp   (or /absolute/path/to/worker acp)"
 	case "environment":
 		return "NAME, NAME (never NAME=value)"
 	case "writeRoots":
@@ -438,6 +476,27 @@ func (a *App) handleRouterPanelKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		a.scheduleRender()
 		return true, nil
 	}
+	if a.routerPanel.ChoosingPreset {
+		presets := agentruntime.ACPAgentPresets()
+		// One extra row at the end opens a blank form for a custom agent.
+		last := len(presets)
+		switch {
+		case msg.Type == tea.KeyEsc:
+			a.closeRouterPanelForm()
+		case msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && string(msg.Runes) == "k"):
+			a.routerPanel.PresetCursor = max(0, a.routerPanel.PresetCursor-1)
+		case msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && string(msg.Runes) == "j"):
+			a.routerPanel.PresetCursor = min(last, a.routerPanel.PresetCursor+1)
+		case msg.Type == tea.KeyEnter || (msg.Type == tea.KeyRunes && string(msg.Runes) == "e"):
+			if a.routerPanel.PresetCursor == last {
+				a.beginRouterPanelCreateFromScratch()
+			} else {
+				a.beginRouterPanelCreateFromPreset(presets[a.routerPanel.PresetCursor])
+			}
+		}
+		a.scheduleRender()
+		return true, nil
+	}
 	if a.routerPanel.Editing {
 		fields := a.routerPanelFormFields()
 		switch {
@@ -564,6 +623,22 @@ func (a *App) renderRouterPanel() string {
 	active := a.routerPanelActiveProfile()
 	lines := []string{a.translator.Text(i18n.MsgRouterPanelTitle), strings.Repeat("-", width)}
 	switch {
+	case a.routerPanel.ChoosingPreset:
+		lines = append(lines, a.translator.Text(i18n.MsgRouterPanelChoosePreset)+":")
+		presets := agentruntime.ACPAgentPresets()
+		for i, preset := range presets {
+			cursor := " "
+			if i == a.routerPanel.PresetCursor {
+				cursor = ">"
+			}
+			lines = append(lines, xansi.Truncate(fmt.Sprintf("%s %-14s %-8s %s", cursor, preset.ID, strings.Join(preset.Command, " "), preset.Note), width, "..."))
+		}
+		cursor := " "
+		if a.routerPanel.PresetCursor == len(presets) {
+			cursor = ">"
+		}
+		lines = append(lines, fmt.Sprintf("%s %s", cursor, a.translator.Text(i18n.MsgRouterPanelPresetCustom)))
+		lines = append(lines, "", a.translator.Text(i18n.MsgRouterPanelPresetHint))
 	case a.routerPanel.InputField != "":
 		lines = append(lines, a.translator.Text(i18n.MsgRouterPanelSetField, a.routerPanel.InputField)+":", a.routerPanel.Input.View(), "", a.translator.Text(i18n.MsgRouterPanelInputHint))
 	case a.routerPanel.ChoosingColon:

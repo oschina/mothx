@@ -55,7 +55,7 @@
       memory: { enabled: true, path: '' },
       security: { smartApprovals: true },
       agent: {
-        maxTurns: 90,
+        maxTurns: 180,
         budgetPressure: true,
         contextPressure: true,
         budgetPressureThreshold: 0.2,
@@ -299,7 +299,7 @@
 
     security.smart_approvals = Boolean(form.security.smartApprovals);
 
-    agent.max_turns = numberValue(form.agent.maxTurns, 90);
+    agent.max_turns = numberValue(form.agent.maxTurns, 180);
     agent.budget_pressure = Boolean(form.agent.budgetPressure);
     agent.context_pressure = Boolean(form.agent.contextPressure);
     agent.budget_pressure_threshold = numberValue(form.agent.budgetPressureThreshold, 0.2);

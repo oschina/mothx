@@ -10,8 +10,8 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Security.SmartApprovals {
 		t.Error("expected smart_approvals=true")
 	}
-	if cfg.Agent.MaxTurns != 90 {
-		t.Errorf("expected max_turns=90, got %d", cfg.Agent.MaxTurns)
+	if cfg.Agent.MaxTurns != 180 {
+		t.Errorf("expected max_turns=180, got %d", cfg.Agent.MaxTurns)
 	}
 	if !cfg.Cron.Enabled {
 		t.Error("expected cron enabled by default")

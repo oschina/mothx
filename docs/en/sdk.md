@@ -398,7 +398,7 @@ Create and start a sub-agent for a bounded task.
   "mode": "agent",
   "work_dir": "/home/user/project",
   "tools": ["read", "grep", "find", "ls"],
-  "max_iterations": 50,
+  "max_iterations": 100,
   "system_prompt_extra": "Focus only on the src/ directory"
 }
 ```

@@ -1606,11 +1606,11 @@ Source: https://mothx.net/zh/changelog.md
 
 ### 💥 行为变更
 
-- **主循环的迭代预算初始上限提高到 400 轮，续期后最高 600 轮。** Agent 主循环的默认初始迭代上限从 200 提高到 400，续期天花板为 600，因此在持续有进展的长任务会在预算压力提示出现前多跑一倍轮数。`extend_budget` 续期策略形状不变（最多 2 次，每次 +50% 软上限，最小间隔为软上限的 1/10，墙钟上限 16 小时）；不调用续期的 run 就在 400 轮停止。子代理、Expert 成员与渠道 run 各自保留原有上限（渠道 `maxTurns`、子代理 `max_iterations`），显式传入软上限的调用方仍使用惯例的 2 倍硬上限。
+- **主循环的迭代预算初始上限提高到 400 轮，续期后最高 600 轮。** Agent 主循环的默认初始迭代上限从 200 提高到 400，续期天花板为 600，因此在持续有进展的长任务会在预算压力提示出现前多跑一倍轮数。`extend_budget` 仍保留 2 次续期，但每次的放大量改为按 Soft->Hard headroom 推导，使两次续期恰好填满（400 -> 500 -> 600）；不调用续期的 run 就在 400 轮停止。配套上限同步放大：卡住检测的静默轮数阈值提高到 195（原 95），渠道 run 的 `maxTurns` 默认提高到 180（原 90），子代理 / workflow worker 的 `max_iterations` 默认提高到 100（原 50）。显式传入软上限的调用方仍使用惯例的 2 倍硬上限。
 
 ### ✨ 新功能
 
-- **TUI 与 CLI 现在可以为已配置的外部 ACP worker 激活 Router 模式。** `/router` 打开 ACP worker 面板（列出/新增/编辑/删除/激活 profile）；`/router <profile>` 与 `mothx --router --acp-agent <profile>` 直接激活，三者都走同一条 Runtime 激活路径：profile 必须存在于 `acpAgents`、已启用且使用非交互权限策略；会话必须空闲且来源未被强制为 yolo；Router binding 先于 mode 落盘，因此激活失败会留在非 Router 状态。面板只通过唯一的 `config.SaveACPAgentProfiles` 校验与写入入口持久化，因此相对路径 `command[0]`、重复 ID、写角色缺少 `writeRoots` 都会在写入前被拒绝。激活只负责指定 worker，非交互审批策略由 Runtime 按 profile 记录，并拒绝不一致的显式值。手工编辑或旧版本遗留的 `defaultMode: router` 会在加载与解析时被归一化为只读的 `plan` 模式，而不是让每个新会话的 Agent 构建失败；该回退绝不会放大为完全访问。 没有 binding 时，通用模式切换不能选择 `router`：`router` 已从 Tab 模式循环与 `defaultMode` 循环中移除，且 Agent 构建在无可用 binding 时对 Router 失败关闭，因此持久化默认值或过期的适配器取值都不会造出「委派必然失败」的 Router 工具面。TUI 的所有模式写入（`/mode`、Tab 循环、`/systeminit`、修改 `defaultMode` 设置）现在都经过共享 Runtime，适配器不再只改本地状态、导致重开时回放旧模式。会话在其他适配器重新打开、或无模式参数恢复时，会回放持久化模式（包括 Router）。直接编辑 `settings.json` 依然受支持且同样需要谨慎；外部委派已通过 Router 可用。
+- **TUI 与 CLI 现在可以为已配置的外部 ACP worker 激活 Router 模式。** `/router` 打开 ACP worker 面板（列出/新增/编辑/删除/激活 profile）；`/router <profile>` 与 `mothx --router --acp-agent <profile>` 直接激活，三者都走同一条 Runtime 激活路径：profile 必须存在于 `acpAgents`、已启用且使用非交互权限策略；会话必须空闲且来源未被强制为 yolo；Router binding 先于 mode 落盘，因此激活失败会留在非 Router 状态。面板只通过唯一的 `config.SaveACPAgentProfiles` 校验与写入入口持久化，因此空的 `command[0]`、重复 ID、写角色缺少 `writeRoots` 都会在写入前被拒绝。激活只负责指定 worker，非交互审批策略由 Runtime 按 profile 记录，并拒绝不一致的显式值。手工编辑或旧版本遗留的 `defaultMode: router` 会在加载与解析时被归一化为只读的 `plan` 模式，而不是让每个新会话的 Agent 构建失败；该回退绝不会放大为完全访问。 没有 binding 时，通用模式切换不能选择 `router`：`router` 已从 Tab 模式循环与 `defaultMode` 循环中移除，且 Agent 构建在无可用 binding 时对 Router 失败关闭，因此持久化默认值或过期的适配器取值都不会造出「委派必然失败」的 Router 工具面。TUI 的所有模式写入（`/mode`、Tab 循环、`/systeminit`、修改 `defaultMode` 设置）现在都经过共享 Runtime，适配器不再只改本地状态、导致重开时回放旧模式。会话在其他适配器重新打开、或无模式参数恢复时，会回放持久化模式（包括 Router）。直接编辑 `settings.json` 依然受支持且同样需要谨慎；外部委派已通过 Router 可用。
 
 - **Router 模式可以把任务委派给已配置的外部 ACP 编码 Agent。** Router 绑定的 `delegate_subagent` 通过共享 Runtime 启动一个阻塞式外部 worker：Agent Core 只拿到事件/输入代理，profile 策略、有界任务契约、唯一终态事件与进程 containment 都由 Runtime 负责。Router lead 会看到带 `agent` 身份的文本、思考、工具、计划与用量投影；阻塞返回值附带标记为 `worker-reported` 的有界 `worker` 元数据，完整远端 transcript 仍作为子级投影。远端 `session/request_permission` 会写入共享决策账本，并按 profile 的 `auto_allow_once`/`auto_reject` 立即作答，只选择对方实际提供的一次性选项。取消会发送 `session/cancel`、把所有待处理请求回答为 cancelled，并回收整个进程树（Unix 进程组、Windows Job Object）。外部子级传输不依赖持久化、provider 或适配器；`mothx doctor` 现在可在不启动 worker 的情况下校验 profile 形状与可执行文件可用性。 ACP profile 的 `maxConcurrentChildren` 现在真正被执行：Runtime 的 worker 许可每个会话只放行一个存活的外部 worker，因为两个 worker 会同时写入同一个会话工作目录，而只读的 Router lead 没有本地写入工具来化解该冲突。配置值大于 1 仍可正常加载（既有的 `settings.json` 必须保持有效），并由 `mothx doctor` 与 `/router` 面板报告为「尚未生效」，而不是被静默当作已生效；并行能力本身仍取决于 Runtime 拥有的「每 worker 独立 worktree」。
 
@@ -7694,13 +7694,13 @@ Agent 模式下：
 }
 ```
 
-- `id` 是唯一暴露给模型的值。`command` 是 argv 数组，`command[0]` 必须是绝对路径。
+- `id` 是唯一暴露给模型的值。`command` 是 argv 数组；`command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名（启动从不经过 shell）。
 - `environment` 只列变量**名称**；启动时从 `env.json` 或进程环境读取值，不会展示给模型，也不会写入事件。
 - `roles` 是能力上限。未声明 `roles` 的 profile 只读（`investigate`）。写角色（`implement`、`integrate`）必须至少声明一个相对 `writeRoots`，任务的 write scope 必须位于其中。
 - `maxConcurrentChildren` 默认为 `1`，上限为 `8`。大于 `1` 的值会被接受以保持兼容（旧构建写入的 `settings.json` 仍能加载），但本版本每个会话只执行一个存活的外部 worker：Router worker 运行在共享的会话工作目录中，只读 lead 没有本地写入工具来化解两个外部写入者之间的冲突。Runtime 的许可会执行该上限，而 `mothx doctor` 与 `/router` 面板会把「配置值高于实际上限」报告为**尚未生效**而不是报错；当 Runtime 拥有「每 worker 独立 worktree」后，该值才可真正大于 1。
 - Router 的 `permissionPolicy` 只能是 `auto_allow_once` 或 `auto_reject`；`interactive` profile 不能作为 Router worker 激活。MothX 只会选择远端 Agent 实际提供的一次性选项，绝不会自动选择 `allow_always`/`reject_always`。
 
-可以在 `settings.json` 中编辑 `acpAgents`，也可以使用 TUI 的 `/router` 面板：面板会列出 profile 及其由 Runtime 解析出的可用性，并支持新增、编辑、删除和激活。面板只通过共享配置层写入，因此无效候选（相对路径 `command[0]`、重复 ID、写角色缺少 `writeRoots`、内联明文密钥）会在写入前被拒绝。在面板中按 `t`、在 TUI 中使用 `/router <id>`，或在 CLI 中使用 `mothx --router --acp-agent <id>` 激活。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化 profile 与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
+可以在 `settings.json` 中编辑 `acpAgents`，也可以使用 TUI 的 `/router` 面板：面板会列出 profile 及其由 Runtime 解析出的可用性，并支持新增、编辑、删除和激活。面板只通过共享配置层写入，因此无效候选（空的 `command[0]`、重复 ID、写角色缺少 `writeRoots`、内联明文密钥）会在写入前被拒绝。在面板中按 `t`、在 TUI 中使用 `/router <id>`，或在 CLI 中使用 `mothx --router --acp-agent <id>` 激活。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化 profile 与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
 
 **信任边界：** 选择 profile 意味着信任该可执行文件可以访问会话工作目录、你允许的环境变量以及它自行选择的网络。Router 的只读工具列表约束的是 MothX lead，而不是外部 Agent。运行 `mothx doctor` 可以在不启动任何进程的情况下检查 profile 形状与可执行文件可用性。
 
@@ -12004,7 +12004,7 @@ EventAgentEnd
   "mode": "agent",
   "work_dir": "/home/user/project",
   "tools": ["read", "grep", "find", "ls"],
-  "max_iterations": 50,
+  "max_iterations": 100,
   "system_prompt_extra": "仅关注 src/ 目录"
 }
 ```
@@ -14482,7 +14482,7 @@ Agent 声明“完成文件可作为交付制品”的唯一入口。它会先�
 | `mode` | string | - | 父模式，然后 `yolo` | 子 Agent 执行模式：`plan`、`agent` 或 `yolo`。 |
 | `work_dir` | string | - | 当前工作目录 | 子 Agent 的工作目录。 |
 | `tools` | array of strings | - | 除嵌套子 Agent/delegate 外的所有工具 | 可选的工具白名单，例如 `["read", "grep", "find"]`。 |
-| `max_iterations` | integer | - | `50` | 最大工具调用迭代次数。 |
+| `max_iterations` | integer | - | `100` | 最大工具调用迭代次数。 |
 | `system_prompt_extra` | string | - | - | 传给子 Agent 的额外上下文或约束。 |
 
 请求示例：
@@ -14558,7 +14558,7 @@ Workflow 脚本必须使用受支持的 JavaScript DSL。不要用 JSON DSL 描�
 
 当前支持的 workflow builtin 包括 `workflow`、`phase`、`parallel`、`series`、`agent`、`concurrency`、`result`、`resultKey`、`resultLatest`、`results` 和 `log`。Worker agent 通过任务 prompt 接收动态 workflow 上下文，因此父 Agent 的 system prompt 和 tool definitions 在构造后保持冻结。
 
-重要默认值：`concurrency` 默认 5；`mode` 默认继承父 agent mode；省略 `tools` 时使用该 worker mode 的默认工具集；省略、`0` 或负数的 `maxIterations` 默认 50 次 worker-agent 循环。循环中重复的逻辑 agent 应使用 `key`，keyed 结果会保存为 `phase.agent[key]`，可用 `resultKey` 或 `resultLatest` 读取。Worker agent 不能 spawn 子 agent、delegate 或启动嵌套 workflow；DSL 也没有 per-worker `:timeout`、`model`、`:thinking-level` 或 `:max-tokens` 选项。
+重要默认值：`concurrency` 默认 5；`mode` 默认继承父 agent mode；省略 `tools` 时使用该 worker mode 的默认工具集；省略、`0` 或负数的 `maxIterations` 默认 100 次 worker-agent 循环。循环中重复的逻辑 agent 应使用 `key`，keyed 结果会保存为 `phase.agent[key]`，可用 `resultKey` 或 `resultLatest` 读取。Worker agent 不能 spawn 子 agent、delegate 或启动嵌套 workflow；DSL 也没有 per-worker `:timeout`、`model`、`:thinking-level` 或 `:max-tokens` 选项。
 
 更多 workflow 模式的详细用法和最佳实践请参考 [Workflow 模式](workflow.md) 文档。
 
@@ -15231,7 +15231,7 @@ workflow("quick audit", {
 
 运行时表达式包括 `result("phase.agent")`、`resultKey("phase.agent", "r0")`、`resultLatest("phase.agent")`、`results("phase")` 和 `log("message", value)`。重复逻辑 agent 保持固定名称，并使用唯一 key，例如 `key: "r" + i`。
 
-并发默认值为 5。worker 的 `maxIterations` 省略、为 0 或负数时默认为 50。`workflow_run` 的 `timeoutSeconds` 是独立的工具级超时。worker 不能启动嵌套编排。生成或修改复杂源码后，应先调用 `workflow_lint`。
+并发默认值为 5。worker 的 `maxIterations` 省略、为 0 或负数时默认为 100。`workflow_run` 的 `timeoutSeconds` 是独立的工具级超时。worker 不能启动嵌套编排。生成或修改复杂源码后，应先调用 `workflow_lint`。
 
 CLI 和 Serve 模式提供 `/workflows` 用于列表、查看和取消；`workflow_cancel` 只取消当前进程中的 active run。
 

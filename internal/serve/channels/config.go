@@ -131,7 +131,7 @@ func DefaultConfig() *Config {
 			SmartApprovals: true,
 		},
 		Agent: AgentConfig{
-			MaxTurns:                 90,
+			MaxTurns:                 180,
 			BudgetPressure:           true,
 			ContextPressure:          true,
 			BudgetPressureThreshold:  0.20,

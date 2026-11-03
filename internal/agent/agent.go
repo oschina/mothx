@@ -260,7 +260,7 @@ type AgentLoopConfig struct {
 	IterationBudget IterationBudgetPolicy
 
 	// MaxConsecutiveNoText is the max silent tool-only turns (no text or
-	// reasoning output) before a stuck-detection warning. 0 means default (95).
+	// reasoning output) before a stuck-detection warning. 0 means default (195).
 	MaxConsecutiveNoText int
 }
 
@@ -1395,7 +1395,9 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 	consecutiveSilentTurns := 0
 	maxConsecutiveSilentTurns := a.config.MaxConsecutiveNoText
 	if maxConsecutiveSilentTurns <= 0 {
-		maxConsecutiveSilentTurns = 95 // default threshold
+		// Scaled with the default MaxIterations (400): 195 silent turns plus the
+		// 5 post-warning turns below keep the guard at half the loop budget.
+		maxConsecutiveSilentTurns = 195 // default threshold
 	}
 	const maxConsecutiveSilentTurnsAfterWarning = 5 // After warning, allow 5 more turns before stopping
 	warningIssued := false

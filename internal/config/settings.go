@@ -200,18 +200,18 @@ func (s *Settings) ACPAgentProfile(id string) (ACPAgentProfile, bool) {
 	return ACPAgentProfile{}, false
 }
 
-// Validate checks the profile's locally enforceable invariants. Command[0]
-// must be absolute so a PATH mutation cannot silently choose a different
-// executable at launch time.
+// Validate checks the profile's locally enforceable invariants.
+//
+// command[0] may be an absolute path, a bare command resolved through PATH (the
+// same way every other process launch works), or a relative path containing a
+// separator. Launching uses exec.Command, which already resolves a bare name via
+// PATH and never goes through a shell, so there is nothing extra to enforce.
 func (p ACPAgentProfile) Validate() error {
 	if !validACPProfileID(p.ID) {
 		return fmt.Errorf("invalid ACP agent profile id %q", p.ID)
 	}
 	if len(p.Command) == 0 || strings.TrimSpace(p.Command[0]) == "" {
 		return fmt.Errorf("ACP agent profile %q requires command[0]", p.ID)
-	}
-	if !filepath.IsAbs(p.Command[0]) {
-		return fmt.Errorf("ACP agent profile %q command[0] must be absolute", p.ID)
 	}
 	for _, name := range p.Environment {
 		if !validEnvironmentName(name) {

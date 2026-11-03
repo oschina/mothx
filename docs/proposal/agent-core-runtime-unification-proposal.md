@@ -2,7 +2,7 @@
 
 > 状态：Phase 12 当前验收完成（2026-08-15）。核心 Agent Runtime 边界已经落地；明确命名的 adapter 兼容桥仍保留，并有 owner、删除条件和合同测试，不再作为第二套核心生命周期。
 >
-> 最近同步：2026-08-15
+> 最近同步：2026-11-03
 >
 > 当前进度：`internal/agentruntime` 已提供 `ExecutionRuntime`、`DecisionService`、protocol-neutral `DecisionRecord`、`ReplayDecisions`、`DecisionService.Rehydrate`、`RunEvent/RunEventSink`、`RunStore`、`DurableRunStore`、durable transition API、orphan recovery policy/projection 和 delivery replay/event constructors。生产 Agent 构造已统一经 `SessionRuntime.BuildAgent`、`BuildTransientAgent` 或共享 `NewAgentManager`；CLI print、Responses background 和各主要入口都使用 Runtime build options。数据库访问已完成严格收敛：`internal/db` 统一管理 Bun 连接生命周期，`internal/dao` 统一承载所有 Bun 查询构造、SQL、表操作和行映射，业务/runtime 代码只通过 DAO 方法访问数据库，不保留 `internal/commondb` 兼容桥。Responses provider-specific polling、continuation 和 remote replay 仍保留在 Adapter driver。2026-08-15 已修复 Serve 子 Agent content/terminal 投影竞态、`DecisionService.Register` nil receiver、Channel high-risk command bypass、标题生成 shutdown race，以及 ACP prompt/ durable run identity 混用。
 >
@@ -49,6 +49,8 @@ MothX 当前已经拥有较完整的 Agent 核心：Agent loop、Provider 抽象
 ## 1.2 实施进度（2026-08-28）
 
 > 本节记录截至 **2026 年 8 月 28 日** 的代码迁移状态。`DecisionService` 负责 pending decision identity、first-response-wins、Run 清理、可选 resolver callback 和 durable identity rehydration；协议 payload、callback 重绑、超时调度和外部交互仍由 Adapter 负责。数据库迁移已完成严格验收：生产 SQL/Bun 查询全部收口到 `internal/dao`，连接生命周期全部由 `internal/db` 控制，业务层不得越过 DAO。
+>
+> 2026-11-03 后续工作见 §1.3：Router 模式作为共享 Runtime 的一等模式落地，未新增第二套运行语义。
 
 | 阶段 | 状态 | 已完成 | 仍未完成 |
 |---|---|---|---|
@@ -162,6 +164,25 @@ Agent Core 不应知道 HTTP、WebSocket、Bubble Tea、微信、飞书或 ACP�
 5. Serve 的只读工作区投影（`/api/git/*`、`/api/files/*`）目前住在 adapter 层：root 解析在 `internal/serve/workspace_target.go`（session 走 canonical `GetSessionWorkDir`，draft 允许显式 path），containment/read 在 `internal/workspacefiles`，外部拉起在 `internal/workspaceopen`。owner: serve/WebUI workbench panels。删除条件: ACP/Desktop 落地对应的 `mothx/files/*`、`mothx/git/*` 投影时，root 决策迁入 `internal/agentruntime`（与 session identity 同源），两个共享包保持中立并被两侧复用；届时删除 `workspace_target.go` 桥。在此之前禁止任何入口复制第二套路径清洗/包含逻辑或 launcher 表。
 
 因此 Phase 12 已完成当前 proposal 的可执行边界；上述债务属于后续小步迁移，不再阻塞核心 Runtime 统一验收。
+
+## 1.3 后续演进：Router 模式与外部 ACP 子代理（2026-11-03）
+
+Phase 12 之后新增的 Router 工作没有引入第二套运行语义，而是把「外部 ACP worker」表达为共享 Runtime 的一等模式与能力。详见 [Router / 外部 ACP 子代理方案](./acp-client-external-subagent-proposal.md)。
+
+对核心边界的验证：
+
+- **Source/Policy 复用**：`ModeRouter` 进入共享 mode resolver，`ResolvePolicy` 解析出 Router 专属的工具围栏与能力；WeChat/Feishu 的 source-forced `yolo` 仍然优先，Router 不会覆盖它。
+- **一个构造路径**：Router lead 仍然经 `SessionRuntime.BuildAgent` 构造；没有 eligible `RouterBinding` 时对 Router 失败关闭，因此不会造出「委派必然失败」的 Agent。
+- **一个执行/生命周期路径**：外部 worker 是 Runtime 拥有的 child backend，共享 canonical child event、单一 `EventRunFinished`、决策账本与进程树收敛；`internal/acp/client` 只做传输，不持有进程、不持有持久化、不依赖 provider。
+- **一个 session 事实所有者**：`RouterBinding` 是可回放的 session 条目（legacy store、EventStore、display projection、fork、Runtime 解析均支持），不是适配器本地布尔值。
+- **一个模式写入路径**：TUI 的 `/mode`、Tab 循环、`/systeminit`、`defaultMode` 变更与 `/router` 激活现在都经过 `SessionRuntime.SetMode` / `ActivateRouter`，适配器不再只改本地状态导致重开时回放旧模式。
+
+新增的 Runtime 侧投影：
+
+- `publishRouterTarget` 在每次工具组同步时把已激活的 worker ID 推送到 `delegate_subagent` 工具：工具描述点名该 worker，`agent` schema 被钉死（单 profile 用 `const`，多 profile 用 `enum`），传错名字时错误消息直接给出正确值。这是 Runtime 拥有的投影，不是适配层提示。
+- `agentruntime.ACPAgentPresets()` 记录已验证的启动配方；TUI `/router` 面板以预设选择器作为新建入口，避免用户必须知道 `codex acp` / `claude acp` 并不启动 ACP server。
+
+Phase 4 剩余项（异步 `subagent_spawn`、多 profile fan-out、mailbox wakeup、client-owned fs/terminal bridge、URL 认证、远程 session 复用、managed worktree change-set）仍为刻意延后项，需要各自的前置方案。
 
 ## 2. 方案范围与术语
 

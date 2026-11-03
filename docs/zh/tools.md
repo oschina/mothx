@@ -608,7 +608,7 @@ Agent 声明“完成文件可作为交付制品”的唯一入口。它会先�
 | `mode` | string | - | 父模式，然后 `yolo` | 子 Agent 执行模式：`plan`、`agent` 或 `yolo`。 |
 | `work_dir` | string | - | 当前工作目录 | 子 Agent 的工作目录。 |
 | `tools` | array of strings | - | 除嵌套子 Agent/delegate 外的所有工具 | 可选的工具白名单，例如 `["read", "grep", "find"]`。 |
-| `max_iterations` | integer | - | `50` | 最大工具调用迭代次数。 |
+| `max_iterations` | integer | - | `100` | 最大工具调用迭代次数。 |
 | `system_prompt_extra` | string | - | - | 传给子 Agent 的额外上下文或约束。 |
 
 请求示例：
@@ -684,7 +684,7 @@ Workflow 脚本必须使用受支持的 JavaScript DSL。不要用 JSON DSL 描�
 
 当前支持的 workflow builtin 包括 `workflow`、`phase`、`parallel`、`series`、`agent`、`concurrency`、`result`、`resultKey`、`resultLatest`、`results` 和 `log`。Worker agent 通过任务 prompt 接收动态 workflow 上下文，因此父 Agent 的 system prompt 和 tool definitions 在构造后保持冻结。
 
-重要默认值：`concurrency` 默认 5；`mode` 默认继承父 agent mode；省略 `tools` 时使用该 worker mode 的默认工具集；省略、`0` 或负数的 `maxIterations` 默认 50 次 worker-agent 循环。循环中重复的逻辑 agent 应使用 `key`，keyed 结果会保存为 `phase.agent[key]`，可用 `resultKey` 或 `resultLatest` 读取。Worker agent 不能 spawn 子 agent、delegate 或启动嵌套 workflow；DSL 也没有 per-worker `:timeout`、`model`、`:thinking-level` 或 `:max-tokens` 选项。
+重要默认值：`concurrency` 默认 5；`mode` 默认继承父 agent mode；省略 `tools` 时使用该 worker mode 的默认工具集；省略、`0` 或负数的 `maxIterations` 默认 100 次 worker-agent 循环。循环中重复的逻辑 agent 应使用 `key`，keyed 结果会保存为 `phase.agent[key]`，可用 `resultKey` 或 `resultLatest` 读取。Worker agent 不能 spawn 子 agent、delegate 或启动嵌套 workflow；DSL 也没有 per-worker `:timeout`、`model`、`:thinking-level` 或 `:max-tokens` 选项。
 
 更多 workflow 模式的详细用法和最佳实践请参考 [Workflow 模式](workflow.md) 文档。
 

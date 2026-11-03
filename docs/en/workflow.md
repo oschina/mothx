@@ -21,6 +21,6 @@ workflow("quick audit", {
 
 Runtime expressions: `result("phase.agent")`, `resultKey("phase.agent", "r0")`, `resultLatest("phase.agent")`, `results("phase")`, and `log("message", value)`. Repeated logical agents keep a literal name and use a unique key such as `key: "r" + i`.
 
-Concurrency defaults to 5. Worker `maxIterations` defaults to 50 when omitted, zero, or negative. `workflow_run` `timeoutSeconds` is a separate tool-level timeout. Worker agents cannot start nested orchestration. Use `workflow_lint` before running non-trivial generated or edited source.
+Concurrency defaults to 5. Worker `maxIterations` defaults to 100 when omitted, zero, or negative. `workflow_run` `timeoutSeconds` is a separate tool-level timeout. Worker agents cannot start nested orchestration. Use `workflow_lint` before running non-trivial generated or edited source.
 
 The CLI and Serve mode expose `/workflows` for listing, inspection, and cancellation. `workflow_cancel` only cancels active runs in the current process.

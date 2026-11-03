@@ -32,7 +32,7 @@ func (h *AgentHost) RunAgent(ctx context.Context, task AgentTask) (AgentResult, 
 	}
 	maxIter := task.MaxIterations
 	if maxIter <= 0 {
-		maxIter = 50
+		maxIter = 100
 	}
 
 	multiAgent := false

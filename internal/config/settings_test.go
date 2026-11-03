@@ -235,9 +235,15 @@ func TestACPAgentProfileRoleCeilings(t *testing.T) {
 
 func TestACPAgentProfileRejectsUnsafeCommandAndDuplicates(t *testing.T) {
 	settings := DefaultSettings()
+	// A bare command is resolved through PATH exactly like any other exec.Command
+	// launch, so it is valid configuration; an empty command is not.
 	settings.ACPAgents = []ACPAgentProfile{{ID: "worker", Command: []string{"codex"}, Enabled: true}}
+	if err := settings.ValidateACPAgentProfiles(); err != nil {
+		t.Fatalf("a bare command resolved through PATH was rejected: %v", err)
+	}
+	settings.ACPAgents = []ACPAgentProfile{{ID: "worker", Command: []string{"  "}, Enabled: true}}
 	if err := settings.ValidateACPAgentProfiles(); err == nil {
-		t.Fatal("relative ACP command was accepted")
+		t.Fatal("an empty command[0] was accepted")
 	}
 
 	settings.ACPAgents = []ACPAgentProfile{

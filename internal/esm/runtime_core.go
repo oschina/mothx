@@ -280,7 +280,7 @@ func (s *Supervisor) runRecoveryObserver(ctx context.Context, obj *Objective, re
 	observer := req
 	observer.Role = RoleRecovery
 	observer.RunID = baseRunID + "-recovery-observer"
-	observer.MaxIterations = 40
+	observer.MaxIterations = 80
 	observer.Tools = []string{"read", "grep", "find", "ls"}
 	observer.Prompt = RecoveryObserverTaskPrompt(obj, string(req.Role), compactESMError(interruption))
 	started := time.Now()

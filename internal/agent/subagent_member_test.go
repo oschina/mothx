@@ -313,8 +313,8 @@ func TestSubAgentSpawnToolWithoutMemberKeepsInheritance(t *testing.T) {
 	if loopCfg.Config.Mode != "yolo" {
 		t.Fatalf("child mode = %q, want inherited yolo", loopCfg.Config.Mode)
 	}
-	if loopCfg.MaxIterations != 50 {
-		t.Fatalf("child max iterations = %d, want spawn default 50", loopCfg.MaxIterations)
+	if loopCfg.MaxIterations != 100 {
+		t.Fatalf("child max iterations = %d, want spawn default 100", loopCfg.MaxIterations)
 	}
 	if strings.Contains(loopCfg.Config.ExtraContext, "ENGINEER-PERSONA") {
 		t.Fatal("spawn without member must not inject any persona")

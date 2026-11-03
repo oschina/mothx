@@ -376,6 +376,9 @@ const (
 	MsgRouterPanelStateActive             MessageID = "router_panel.state.active"
 	MsgRouterPanelStateInteractive        MessageID = "router_panel.state.interactive"
 	MsgRouterPanelStateCapped             MessageID = "router_panel.state.capped"
+	MsgRouterPanelChoosePreset            MessageID = "router_panel.choose_preset"
+	MsgRouterPanelPresetCustom            MessageID = "router_panel.preset.custom"
+	MsgRouterPanelPresetHint              MessageID = "router_panel.preset.hint"
 	MsgRouterPanelFieldID                 MessageID = "router_panel.field.id"
 	MsgRouterPanelFieldTitle              MessageID = "router_panel.field.title"
 	MsgRouterPanelFieldCommand            MessageID = "router_panel.field.command"
@@ -636,6 +639,9 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelStateActive:             "(active)",
 		MsgRouterPanelStateInteractive:        "interactive only",
 		MsgRouterPanelStateCapped:             "concurrency capped to 1",
+		MsgRouterPanelChoosePreset:            "Pick a known agent, or start from scratch",
+		MsgRouterPanelPresetCustom:            "(custom agent)",
+		MsgRouterPanelPresetHint:              "Up/Down: choose  Enter: use  Esc: cancel",
 		MsgRouterPanelFieldID:                 "ID",
 		MsgRouterPanelFieldTitle:              "Title",
 		MsgRouterPanelFieldCommand:            "Command",
@@ -1121,6 +1127,9 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelStateActive:             "（当前）",
 		MsgRouterPanelStateInteractive:        "仅交互审批",
 		MsgRouterPanelStateCapped:             "并发上限为 1",
+		MsgRouterPanelChoosePreset:            "选择已知 Agent，或从头开始",
+		MsgRouterPanelPresetCustom:            "（自定义 Agent）",
+		MsgRouterPanelPresetHint:              "上下键：选择  Enter：使用  Esc：取消",
 		MsgRouterPanelFieldID:                 "ID",
 		MsgRouterPanelFieldTitle:              "标题",
 		MsgRouterPanelFieldCommand:            "命令",

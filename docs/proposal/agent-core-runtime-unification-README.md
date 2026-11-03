@@ -5,10 +5,16 @@
 - 主方案：[统一 Agent 核心与多入口 Runtime 方案](./agent-core-runtime-unification-proposal.md)
 - 后续方案：[Runtime 提交队列与执行完成屏障方案](./runtime-submission-queue-completion-barrier-proposal.md)
 - 状态：Phase 12 当前验收完成（2026-08-15）。核心 Runtime boundary 已落地；剩余内容是有 owner、合同测试和删除条件的命名迁移桥。
-- 最近同步：2026-10-17
+- 最近同步：2026-11-03
 - 当前完成：Source/Policy 与 strict conflict/unknown-source rejection、forced `yolo`、SessionRuntime/Builder、统一 Agent 构造、ExecutionRuntime durable transition/recovery、DecisionService `ResolveWith` commit-before-consume、ACP prompt/run identity、ACP-owned orphan recovery、Cron/SessionPool shutdown tracking、架构守卫和跨入口合同测试。
 - 当前边界：Responses provider driver、协议 payload/callback、RunManager 内存 fan-out/query、TUI capability hooks 仍由 Adapter 或 CLI 注入；它们不能创建 Agent、Run 或 Decision 的第二套核心生命周期。
 - ACP 恢复语义：同一进程 reconnect 会复用 Runtime 并 replay pending projections；进程重启无法重建本地 Agent/callback 栈，因此 ACP-owned orphan Run 会 terminalize，不会伪造 reattach。
+
+## 并行方案进度（2026-11-03）
+
+- [Router / 外部 ACP 子代理](./acp-client-external-subagent-proposal.md)：Phase 0–3 已实现并随 v1.3.108 发布；Phase 4 为刻意延后项。Router 是共享 Runtime 的一等模式与能力，不新增第二套运行语义。
+- [主循环迭代预算](./iteration-budget-renewal-proposal.md)：已实现并随 v1.3.108 发布；主循环软限 400 / 硬上限 600，续期步长按 Soft→Hard headroom 推导。
+- [Session 内容存储一致性](./session-content-store-consistency-remediation-proposal.md)：P0/P1/P2 已实施。
 
 ## 残余迁移债务
 
