@@ -2000,7 +2000,9 @@ func (s *Server) PatchSessionCapabilities(id string, patch SessionCapabilityPatc
 		if err != nil {
 			return nil, err
 		}
-		sess.Mode = resolved
+		if err := s.applySessionMode(sess, resolved); err != nil {
+			return nil, err
+		}
 	}
 	if patch.DisplayMode != nil {
 		sess.DisplayMode = normalizedDisplayMode(*patch.DisplayMode)
@@ -2073,6 +2075,14 @@ func (s *Server) applyStoredSessionCapabilities(sess *APISession) error {
 		if err := applyStoredCapabilitiesToSession(sess, stored); err != nil {
 			return err
 		}
+	}
+	// The Runtime is the authority for the session's mode: it replays the
+	// durable mode entry through the shared source/mode resolver. The capability
+	// row only carries adapter preferences. Letting the row win would reset a
+	// session resumed in Router/Plan back to the API default and silently drop
+	// that mode's tool fence.
+	if persisted := sess.Runtime.PersistedMode(); persisted != "" {
+		sess.Mode = persisted
 	}
 	mode, err := s.resolveSessionMode(sess, "")
 	if err != nil {

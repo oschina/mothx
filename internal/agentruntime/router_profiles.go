@@ -17,7 +17,12 @@ type ACPWorkerProfileDescriptor struct {
 	Roles                 []config.ACPAgentRole      `json:"roles,omitempty"`
 	PermissionPolicy      config.ACPPermissionPolicy `json:"permissionPolicy"`
 	MaxConcurrentChildren int                        `json:"maxConcurrentChildren"`
-	InvalidReason         string                     `json:"invalidReason,omitempty"`
+	// MaxConcurrentChildrenEnforced is the live-worker ceiling actually applied by
+	// this release. A configured MaxConcurrentChildren above it is accepted for
+	// compatibility but is not yet effective, so a management projection can say
+	// so instead of implying parallel workers are running.
+	MaxConcurrentChildrenEnforced int    `json:"maxConcurrentChildrenEnforced"`
+	InvalidReason                 string `json:"invalidReason,omitempty"`
 }
 
 // ListACPWorkerProfiles is the shared Runtime catalog used by management
@@ -34,6 +39,8 @@ func ListACPWorkerProfiles(settings *config.Settings) []ACPWorkerProfileDescript
 			Roles:                 profile.EffectiveRoles(),
 			PermissionPolicy:      profile.EffectivePermissionPolicy(),
 			MaxConcurrentChildren: profile.EffectiveMaxConcurrentChildren(),
+
+			MaxConcurrentChildrenEnforced: profile.EffectiveEnforcedChildren(),
 		}
 		if err := profile.Validate(); err != nil {
 			descriptor.InvalidReason = err.Error()

@@ -149,7 +149,7 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `providers` | object | *(see below)* | Provider configurations (keyed by name) |
 | `defaultProvider` | string | `"deepseek-openai"` | Which provider to use by default |
 | `defaultModel` | string | `"deepseek-v4-flash"` | Which model ID to use by default |
-| `defaultMode` | string | `"yolo"` | Default run mode: `plan`, `agent`, `yolo`, or `os` |
+| `defaultMode` | string | `"yolo"` | Default run mode: `plan`, `agent`, `yolo`, or `os`. `router` is not a valid default: Router binds one external ACP worker per session, so it is entered through activation (`/router`) rather than a global default |
 | `defaultThinkingLevel` | string | `"medium"` | Default thinking level |
 | `toolExecution` | object | *(see below)* | Local function/custom tool execution mode and per-batch concurrency |
 | `statusLine` | object | *(see below)* | External status line command settings for TUI only |
@@ -672,6 +672,8 @@ Default run mode:
 | `yolo` | Full access mode — all tools auto-execute |
 | `os` | Shell-only mode — exposes Bash with YOLO-level approval behavior and no sandbox; high-risk protections still apply |
 
+`router` is a valid session execution mode but not a valid `defaultMode`: it binds one activated external ACP worker per session, so enter it with `/router` (TUI) or `mothx --router --acp-agent <id>`. If `defaultMode` is set to `router` anyway, it is treated as `plan` rather than failing: a default resolves before any worker is bound, and `plan` is the read-only projection of that intent, so the fallback never widens the tool surface to full access.
+
 ```json
 { "defaultMode": "yolo" }
 ```
@@ -1186,10 +1188,10 @@ Create, list, reset, and remove worktrees with [`mothx worktree`](cli-reference.
 - `id` is the only value exposed to the model. `command` is an argv array and `command[0]` must be an absolute path.
 - `environment` lists variable **names**; values are read from `env.json` or the process environment at launch and are never shown to the model or written to events.
 - `roles` is the capability ceiling. A profile with no `roles` is read-only (`investigate`). Write roles (`implement`, `integrate`) require at least one relative `writeRoots` entry, and a task's write scope must stay inside it.
-- `maxConcurrentChildren` defaults to `1` (the Router MVP is one blocking worker) and is bounded at 8.
+- `maxConcurrentChildren` is `1` by default and bounded at `8`. A value above `1` is accepted for compatibility — a `settings.json` written by an earlier build keeps loading — but this release enforces exactly one live external worker per session, because a Router worker runs in the shared session worktree and the read-only lead has no local write tool to resolve a conflict between two external writers. The Runtime permit enforces that ceiling, and `mothx doctor` plus the `/router` panel report a configured value above it as *not yet effective* rather than failing: the field becomes configurable above one together with a Runtime-owned per-worker worktree.
 - `permissionPolicy` is `auto_allow_once` or `auto_reject` for Router; `interactive` profiles cannot be activated as Router workers. MothX only selects a one-time option the remote Agent actually offered and never auto-selects `allow_always`/`reject_always`.
 
-Activate Router with `/router <id>` in the TUI or `mothx --router --acp-agent <id>`. Activation requires an idle session whose source is not forced to yolo, and persists the profile selection plus Router mode through the normal session replay entries. The TUI/CLI never read profile argv or start the worker themselves.
+Edit `acpAgents` either in `settings.json` or from the TUI `/router` panel, which lists profiles with their Runtime-resolved eligibility and can add, edit, delete, and activate one. The panel writes only through the shared configuration owner, so an invalid candidate set (relative `command[0]`, duplicate ID, write role without `writeRoots`, inline secret value) is rejected before anything is stored. Activate Router with `t` in the panel, `/router <id>` in the TUI, or `mothx --router --acp-agent <id>`. Activation requires an idle session whose source is not forced to yolo, and persists the profile selection plus Router mode through the normal session replay entries. The TUI/CLI never read profile argv or start the worker themselves.
 
 **Trust boundary:** choosing a profile means trusting that executable with the session working directory, the environment variables you allowlisted, and any network access it chooses. Router's read-only tool list constrains MothX's own lead, not the external Agent. Run `mothx doctor` to validate profile shape and executable availability without launching anything.
 

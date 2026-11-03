@@ -195,7 +195,7 @@ reviewed with the existing settings schema, but its intended shape is:
       "environment": ["OPENAI_API_KEY"],
       "roles": ["investigate", "implement", "test", "review"],
       "writeRoots": ["src"],
-      "maxConcurrentChildren": 2,
+      "maxConcurrentChildren": 1,
       "permissionPolicy": "auto_allow_once"
     }
   ]
@@ -217,7 +217,13 @@ Rules:
   not accept a profile-owned or model-supplied directory override.
 - `enabled`, profile limits, and the permission policy are authoritative
   Runtime policy. A disabled or unknown profile is absent from the tool schema
-  and fails closed if a stale model call names it.
+  and fails closed if a stale model call names it. `maxConcurrentChildren` is
+  part of that policy: the Runtime worker permit enforces the profile's
+  *enforced* ceiling, while the configured value stays schema-validated and
+  forward-compatible. A configured value above the enforced ceiling is accepted
+  (an existing `settings.json` must keep loading) and reported as not yet
+  effective by `mothx doctor` and the `/router` panel, never silently presented
+  as active.
 - `permissionPolicy` selects the Runtime strategy for a cooperating ACP
   Agent's permission requests. It is not an assertion that the external Agent
   cannot perform an operation without asking; profile process isolation remains
@@ -1141,8 +1147,11 @@ be a shared Runtime execution policy, not a Desktop or ACP-client exception.
    additive ACP management projections only after the backing Runtime service
    exists. Desktop remains an ACP projection and does not read settings files.
    (2026-11-03: `agentruntime.ListACPWorkerProfiles` plus the read-only
-   `mothx/manage/acp/profiles/list` projection. Writes remain on the deliberate
-   local settings path because the profile is executable-code trust.)
+   `mothx/manage/acp/profiles/list` projection. 2026-11-03 follow-up: the TUI
+   `/router` panel is the in-product editor; it renders that Runtime catalog for
+   eligibility and writes through the single `config.SaveACPAgentProfiles`
+   validator/owner, so no adapter parses or writes `settings.json` itself. The
+   write path stays deliberate because the profile is executable-code trust.)
 3. [x] Document profile setup, trust boundary, profile diagnostics, and the exact
    tool-call contract in both English and Chinese user documentation.
 4. [x] Provide `mothx doctor` checks for executable availability and invalid

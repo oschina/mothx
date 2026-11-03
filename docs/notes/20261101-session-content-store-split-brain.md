@@ -181,7 +181,7 @@ SELECT max(seq), count(*) FROM session_event_projections WHERE session_id='<id>'
 
 - 事件日志现有内容 = run #1（11:18-11:33，原导出）+ run #7（13:01-13:02）+ run #8（13:02-13:23，本次采纳）；
 - run #2-#6 的**消息正文**在 legacy 与事件两侧都不存在，无法从任何备份恢复（当时唯一的副本在调查过程中被 13:10 的再次拷贝覆盖）；
-- 这些 run 的 `session_runs` 与 `conversation_turns` 行仍存在，边界仍指向已删除的 legacy seq；`repairUnmappedTurnBoundaries` 找不到对应 marker 时会跳过（不伪造边界），因此在那些 turn 上 fork 会 fail closed。后续 P2 可让 doctor 报告"边界无对应 marker"的 turn 集合。
+- 这些 run 的 `session_runs` 与 `conversation_turns` 行仍存在，边界仍指向已删除的 legacy seq；`repairUnmappedTurnBoundaries` 找不到对应 marker 时会跳过（不伪造边界），因此在那些 turn 上 fork 会 fail closed。**已补（2026-11-03）：** `mothx doctor` 新增 `sessions.turn_boundaries` 检查，通过 `session.ListUnmappedTurnBoundarySessions` 只读报告这类 turn；该检查只针对 `content_store = 'event_store'` 的会话（legacy 会话的边界是 `entries.seq`，本就没有 projection marker，不应报警）。检测按 turn 身份匹配，而不是按 seq 范围，因为一个 legacy seq 可能恰好等于某个无关的事件位置。命中的 turn 无法自动修复（内容已不存在），因此报告状态为 warn 并说明「仍可读取、但无法 fork」，而不是假装健康。
 
 ### 8.2 本机二进制更新（2026-11-02 02:32）
 

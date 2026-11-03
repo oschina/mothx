@@ -682,7 +682,10 @@ func (s *Server) HandleSubmitRun(w http.ResponseWriter, r *http.Request) {
 	// in the submit body is persisted so it sticks for subsequent runs.
 	if modeProvided {
 		before := capabilitySnapshotFromSession(sess)
-		sess.Mode = mode
+		if err := s.applySessionMode(sess, mode); err != nil {
+			failSubmit(http.StatusInternalServerError, err, "session_capabilities_persist_failed", "server_error", agentruntime.FailurePersistence, agentruntime.PhasePersistence, "run.error.capabilitiesPersistFailed", "The session capabilities could not be saved.", agentruntime.RetryReconcile, true)
+			return
+		}
 		if err := s.persistSessionCapabilitiesWithEvents(sess, before, "run_mode", "webui", runID, map[string]any{
 			"source": "run_submit",
 		}); err != nil {

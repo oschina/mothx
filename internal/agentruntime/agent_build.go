@@ -220,6 +220,18 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 	if err != nil {
 		return nil, err
 	}
+	// Router is not a selectable execution mode on its own: it is the read-only
+	// lead surface for exactly one activated external worker. Hiding it from
+	// adapter switchers is not sufficient authorization, because a persisted
+	// default, a stale adapter value, or a protocol request can still reach this
+	// construction boundary with "router". Fail closed here, at the same layer
+	// that freezes the prompt and tool surface, so a Router Agent can never be
+	// built without an eligible binding to delegate to.
+	if mode == ModeRouter {
+		if _, ok := r.RouterBinding(); !ok {
+			return nil, fmt.Errorf("Router mode requires an activated ACP worker profile; activate one with /router or --router --acp-agent <profile>")
+		}
+	}
 	beforeToolCall := beforeToolCallForPolicy(policy, opts.BeforeToolCall)
 	beforeToolExecute := beforeToolExecuteForRuntime(r)
 	if opts.BeforeToolExecute != nil {

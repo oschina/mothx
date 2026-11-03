@@ -356,6 +356,7 @@ Checks performed:
 - **Sandbox**: Checks bubblewrap availability and version
 - **MCP Servers**: Lists configured MCP servers
 - **Sessions**: Shows session directory and entry count
+- **Session content store**: Reports split sessions (content only the legacy transcript still holds) and event-store sessions whose turn boundaries no longer address a matching marker; `--repair-session-content [all|SESSION_ID]` adopts a split-store delta and translates boundaries before anything is retired
 - **Skills**: Shows global and project skills directories
 - **Context Files**: Discovers AGENTS.md, CLAUDE.md, CURSOR.md, .cursorrules, CONVENTIONS.md
 

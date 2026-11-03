@@ -211,9 +211,25 @@ func TestACPAgentProfileRoleCeilings(t *testing.T) {
 	if err := writer.Validate(); err == nil {
 		t.Fatal("negative concurrency was accepted")
 	}
-	writer.MaxConcurrentChildren = 1
-	if got := writer.EffectiveMaxConcurrentChildren(); got != 1 {
-		t.Fatalf("effective concurrency = %d", got)
+	writer.MaxConcurrentChildren = 9
+	if err := writer.Validate(); err == nil {
+		t.Fatal("concurrency above the schema bound was accepted")
+	}
+	// A value written by an earlier build must keep loading: accepting it is a
+	// compatibility requirement, because rejecting it would strand users whose
+	// settings were valid when written.
+	for configured, want := range map[int]int{0: 1, 1: 1, 2: 2, 8: 8} {
+		writer.MaxConcurrentChildren = configured
+		if err := writer.Validate(); err != nil {
+			t.Fatalf("maxConcurrentChildren %d was rejected: %v", configured, err)
+		}
+		if got := writer.EffectiveMaxConcurrentChildren(); got != want {
+			t.Fatalf("configured %d reported as %d, want %d", configured, got, want)
+		}
+		// The enforced ceiling stays one regardless of what was configured.
+		if got := writer.EffectiveEnforcedChildren(); got != 1 {
+			t.Fatalf("configured %d enforced %d workers, want 1", configured, got)
+		}
 	}
 }
 

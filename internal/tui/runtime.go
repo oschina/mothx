@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	agentpkg "github.com/oschina/mothx/agent"
 	"github.com/oschina/mothx/internal/agent"
@@ -83,6 +84,42 @@ func (a *App) effectiveRuntimeMode() (string, error) {
 	}
 	_, mode, err := a.runtime.ResolvePolicy(a.mode, "", a.settings.DefaultMode)
 	return mode, err
+}
+
+// applyModeSelection is the TUI's single mode-write path. The adapter collects a
+// user choice, but the shared Runtime owns mode resolution, the Router binding
+// fence, and the replay entry. Writing a.mode alone would desynchronize the
+// adapter from the persisted mode, so a session resumed in Router could be left
+// in Router after the user switched to plan.
+//
+// Before a session exists there is nothing to persist and nothing to diverge
+// from, so the adapter keeps the choice locally and the first bind applies it.
+func (a *App) applyModeSelection(mode string) error {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return fmt.Errorf("mode is required")
+	}
+	if a.runtime == nil {
+		a.mode = mode
+		return nil
+	}
+	if err := a.runtime.SetMode(mode); err != nil {
+		return err
+	}
+	a.adoptRuntimeMode()
+	return nil
+}
+
+// adoptRuntimeMode mirrors the Runtime's already-resolved mode into the adapter
+// display field. It never writes: callers use it after a Runtime operation
+// (activation) that already persisted the mode entry.
+func (a *App) adoptRuntimeMode() {
+	if a.runtime == nil {
+		return
+	}
+	if _, _, _, resolved, _ := a.runtime.ConfigSnapshot(); strings.TrimSpace(resolved) != "" {
+		a.mode = resolved
+	}
 }
 
 func (a *App) buildRuntimeAgent() (*agent.Agent, error) {

@@ -16,7 +16,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "/settings", Value: "/settings", Usage: "/settings", Description: i18n.MsgCommandSettingsDescription},
 	{Name: "/tuilang", Value: "/tuilang ", Usage: "/tuilang [global|project] [auto|zh|en]", Description: i18n.MsgCommandTUILangDescription},
 	{Name: "/mode", Value: "/mode ", Usage: "/mode [plan|agent|yolo|os|router]", Description: i18n.MsgCommandModeDescription},
-	{Name: "/router", Value: "/router ", Usage: "/router <acp-profile-id>", Description: i18n.MsgCommandRouterDescription},
+	{Name: "/router", Value: "/router", Usage: "/router [acp-profile-id]", Description: i18n.MsgCommandRouterDescription},
 	{Name: "/esm", Value: "/esm ", Usage: "/esm [objective|edit|pause|resume|clear|guide]", Description: i18n.MsgCommandESMDescription},
 	{Name: "/model", Value: "/model ", Usage: "/model [model_id]", Description: i18n.MsgCommandModelDescription},
 	{Name: "/defaultModel", Value: "/defaultModel ", Usage: "/defaultModel [project|global]", Description: i18n.MsgCommandDefaultModelDescription},

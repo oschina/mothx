@@ -80,11 +80,11 @@ type SessionRuntime struct {
 	ExpertCenter *expert.Center
 	Submissions  *SubmissionCoordinator
 
-	// acpWorkerBusy is the MVP's per-session one-live-external-worker permit.
-	// It is intentionally Runtime-owned so no adapter can create a second
-	// worker side channel.
-	acpWorkerMu   sync.Mutex
-	acpWorkerBusy bool
+	// acpWorkersLive counts this session's live external ACP workers against the
+	// profile ceiling. It is intentionally Runtime-owned so no adapter can create
+	// a second worker side channel.
+	acpWorkerMu    sync.Mutex
+	acpWorkersLive int
 
 	// resourceSettings and the two capability flags record the shared resource
 	// assembly policy used to create this runtime. They let a lazily-bound
@@ -437,6 +437,31 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 // session never persisted a mode, so a new session keeps its adapter/default
 // mode. This is what makes a persisted Router session reopen as Router in
 // adapters that have no Router startup flag.
+// PersistedMode returns the session's persisted Router/Plan/Agent mode as
+// resolved through the shared source/mode policy, or "" when the session never
+// persisted one. It is the single projection adapters use to adopt a resumed
+// session's mode instead of deriving their own; the durable entry is owned by
+// the session and the resolution by ResolvePolicy.
+func (r *SessionRuntime) PersistedMode() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.RLock()
+	manager := r.Manager
+	source := r.Source
+	entrySource := r.EntrySource
+	policySource := r.Policy.Source
+	r.mu.RUnlock()
+	if source == SourceUnknown && policySource != SourceUnknown {
+		source = policySource
+	}
+	mode, err := replayPersistedMode(manager, SourceResolution{Source: source}, entrySource)
+	if err != nil {
+		return ""
+	}
+	return mode
+}
+
 func replayPersistedMode(manager *session.Manager, source SourceResolution, entrySource RuntimeSource) (string, error) {
 	if manager == nil {
 		return "", nil
@@ -854,6 +879,19 @@ func (r *SessionRuntime) reloadPersistedConfig(manager *session.Manager) error {
 	r.LastUsed = time.Now()
 	r.mu.Unlock()
 	return nil
+}
+
+// SetMode applies one requested session mode through the shared resolver,
+// persists the canonical mode entry, and updates the Runtime binding. It is the
+// single mode-mutation entry point for every adapter: mode selection does not
+// depend on a provider/model catalog, so this is deliberately separate from
+// SetConfigOption.
+func (r *SessionRuntime) SetMode(value string) error {
+	if err := r.ensureOpen(); err != nil {
+		return err
+	}
+	_, _, _, currentMode, _ := r.ConfigSnapshot()
+	return r.applyModeOption(currentMode, strings.TrimSpace(value))
 }
 
 // applyModeOption resolves, persists, and applies one mode value. The generic

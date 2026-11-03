@@ -248,6 +248,43 @@ type SplitStoreSession struct {
 	UncoveredRows int64
 }
 
+// UnmappedBoundarySession is one session whose canonical EventStore is the
+// transcript authority but whose conversation-turn control rows no longer
+// address a matching turn marker.
+//
+// This is the residue of a flip performed by a build that predates the boundary
+// remap, or of content loss the repair could not recover: the turn lifecycle
+// facts survived while the marker that bounds them did not. Convergence repairs
+// what it can on bind, but a turn with no marker at all cannot be inferred
+// without fabricating a fork point, so it stays and has to be reported.
+type UnmappedBoundarySession struct {
+	SessionID     string
+	CWD           string
+	UnmappedTurns int64
+}
+
+// ListUnmappedTurnBoundarySessions reports every session whose turn boundaries
+// address no marker of their own identity. It is the read-only entry point behind
+// the doctor check; it never writes and never opens a session, so it is safe to
+// run while another process serves the database.
+func ListUnmappedTurnBoundarySessions(sessionDir string) ([]UnmappedBoundarySession, error) {
+	db, err := OpenRootDB(sessionDir)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := dao.NewConversationTurnDAO(nil).UnmappedTurnBoundarySessions(context.Background(), db.Bun())
+	if err != nil {
+		return nil, err
+	}
+	sessions := make([]UnmappedBoundarySession, 0, len(rows))
+	for _, row := range rows {
+		sessions = append(sessions, UnmappedBoundarySession{
+			SessionID: row.SessionID, CWD: row.CWD, UnmappedTurns: row.UnmappedTurns,
+		})
+	}
+	return sessions, nil
+}
+
 // AdoptLegacyContentByID opens a persisted session and adopts its split-store
 // delta. It is the session-layer entry point for the doctor repair, so the
 // command line never manipulates the transcript or the lease itself.

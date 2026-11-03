@@ -1549,9 +1549,18 @@ Source: https://mothx.net/en/changelog.md
 
 ### ✨ New Features
 
+- **Router mode can now be activated from the TUI and CLI for a configured external ACP worker.** `/router` opens the ACP worker panel (list, add, edit, delete, and activate profiles); `/router <profile>` and `mothx --router --acp-agent <profile>` activate directly, and all of them call the same Runtime activation path: the profile must exist in `acpAgents`, be enabled, and use a non-interactive permission policy; the session must be idle and not source-forced to yolo; and the Router binding is persisted before the mode entry, so a failed activation leaves a non-Router session. The panel writes only through the single `config.SaveACPAgentProfiles` validator/owner, so a relative `command[0]`, duplicate ID, or write role without `writeRoots` is rejected before anything is stored. Activation only names the worker; Runtime records the non-blocking approval strategy from the profile and rejects a contradictory one. A hand-edited or legacy `defaultMode: router` is normalized to the read-only `plan` mode at load and resolution time instead of failing every new session's Agent construction; the fallback never widens to full access. A generic mode switch cannot select `router` without that binding: `router` is excluded from the Tab mode cycle and the `defaultMode` cycle, and Agent construction fails closed if a Router lead would be built with no eligible binding, so a persisted default or stale adapter value cannot produce a Router tool surface whose delegation can only fail. Every TUI mode write (`/mode`, the Tab cycle, `/systeminit`, a `defaultMode` settings change) now goes through the shared Runtime, so the adapter can no longer switch locally and then replay the old mode on reopen. A session reopened from another adapter or resumed without a mode flag replays its persisted mode, including Router. Editing `settings.json` remains supported and equally deliberate; external delegation is available through Router.
+
+- **Router mode can delegate to a configured external ACP coding agent.** A Router-bound `delegate_subagent` launches one blocking external worker through the shared Runtime: Agent Core gets only an event/input proxy, while the Runtime owns profile policy, the bounded task contract, the single terminal event, and process containment. The Router lead sees streamed text, thought, tool, plan, and usage projections with `agent` identity; the blocking result carries bounded `worker` metadata labeled `worker-reported`, and the full remote transcript remains a child projection. Remote `session/request_permission` requests are recorded through the shared decision ledger and answered immediately with the profile's `auto_allow_once`/`auto_reject` strategy, selecting only an offered one-time option. Cancellation sends `session/cancel`, answers pending requests as cancelled, and reaps the entire process tree (Unix process group, Windows Job Object). The external child transport has no persistence, provider, or adapter dependencies, and `mothx doctor` now validates profile shape and executable availability without launching a worker. An ACP profile's `maxConcurrentChildren` is now actually enforced: the Runtime worker permit admits exactly one live external worker per session, because two would write the same session worktree and the read-only Router lead has no local write tool to resolve that conflict. A configured value above one keeps loading (an existing `settings.json` must stay valid) and is reported as *not yet effective* by `mothx doctor` and the `/router` panel instead of being silently presented as active; parallelism itself stays gated on a Runtime-owned per-worker worktree.
+
+
 - **Serve Web UI gains a dynamic multi-session workbench.** `/chat` now supports session tabs, up to four split panes with menu/drag splitting, per-pane composers and model/draft state, persisted layout, and a single-pane mobile projection. A single app-wide `session-stream` dispatcher is the only `/ws/runs` consumer and owns the SSE fallback, so background sessions keep streaming when another pane is closed. Panes render canonical `sessionRunStates` directly, and overflowing tabs are reachable through an explicit all-tabs menu; approvals and questions resolve in their owning pane's overlay, while background decisions surface only as tab and global attention badges without stealing focus; layout changes beyond the four-pane or tab limit are rejected with a visible reason. The legacy single-session fallback and its `?workbench=0`/Settings switch have been removed; `/chat` is always the workbench. A read-only Plan dock projects the focused session's latest plan message without adding storage, a tool, or a backend endpoint. Composer text survives tab switches; attachments with a `providerRef` are restored after a refresh, while dataUrl-only attachments prompt the user to select them again. Tab-strip dragging now reorders tabs instead of being mistaken for an edge split, and a second browser tab restores the shared last layout with last-write-wins recovery. Per-session scroll positions survive tab switches, and closing a tab whose task is still running shows a one-time background notice instead of silently dropping it. The workbench tab strip and icon-only toolbar are now compact and theme-aware, and the composer mirrors Desktop: the collapsed model+mode entry expands to plan/agent/yolo/os mode, Work/Code display mode, and provider/model/expert selection, while the session workdir sits in the chat header.
 
 - **Serve gains an authenticated interactive terminal.** `features.terminal` exposes an xterm.js PTY panel backed by `internal/terminal` (creack/pty on Unix, ConPTY on Windows) over `/api/terminals` and `/ws/terminals/`. Terminals bind to the focused session's cwd, inherit the serve environment, support resize/replay/takeover, and are gated by loopback-or-authenticated-listener policy; they create no Run, transcript entry, or Runtime lease and remain outside the sandbox. On Linux the shell also carries `Pdeathsig`, so it cannot outlive the serve process, and a Windows-only ConPTY round-trip test is the real-runner gate. Terminal settings round-trip through `serve.json` saves, including an explicit `enabled: false`, shell, limits, and allowed origins. The status bar surfaces server-side output backpressure instead of treating it as a disconnect, and serve logs only terminal lifecycle metadata (create/exit/kill), never input or output.
+
+- **The TUI status bar reports live generation speed.** While an agent streams, the footer now shows an estimated `tok/s` rate next to the elapsed time. The reading is derived from streamed output deltas over a short rolling window and disappears when no tokens are arriving, for example while a tool runs or an approval is pending. The loading line also shows the run's estimated generated-token total.
+
+- **The TUI gains an in-place MCP manager, and remote MCP follows the current Streamable HTTP revision.** `/mcpmgr [project|global]` opens a panel over the scoped `mcp.json` that adds, edits, deletes, enables, and disables servers one field at a time (transport first, then name, endpoint or command, args, env, headers, and enabled state), replacing the previous `/init_mcp` and `/mcps` commands; changes are configuration-only and take effect after `/reload`. HTTP MCP clients now negotiate the protocol revision during `initialize`, send it in `MCP-Protocol-Version`, advertise `Accept: application/json, text/event-stream`, reject responses that are neither JSON nor `text/event-stream`, and no longer follow redirects on a configured endpoint, so credentials and request bodies cannot leak to another origin. `tools/call` results preserve `structuredContent` plus standard `resource`/`resource_link` blocks as model-readable text instead of dropping them.
 
 ### 🐛 Bug Fixes
 
@@ -1562,6 +1571,8 @@ Source: https://mothx.net/en/changelog.md
 - **Interactive terminal recovery, focus, and warnings are now complete.** The terminal dock always discloses that it shares the focused session's cwd with a possibly running Agent, and escalates the warning when the canonical execution snapshot is running locally or in another process. A page reload reattaches the detached shell recorded for that tab instead of leaking it and creating a second terminal, while an exited or lost terminal lets Reconnect create a fresh one. xterm's stylesheet is loaded, `@xterm/xterm`/`@xterm/addon-fit` are pinned exactly, and the PTY read loop waits for `cmd.Wait` before publishing an exit frame so a non-zero exit code is not reported as 0. Workbench tests also gained a 1000-operation property test, which fixed draft trajectory-mode persistence, focus repair after group removal/preset changes, exact split-weight clamping, paginated session-tab reconciliation, duplicate command-suggestion DOM ids, and mobile context-menu targeting.
 
 - **A Draft created outside `/chat` survives the workbench remount.** Workbench hydration is now a one-shot startup step instead of re-reading `localStorage` whenever the lazily loaded Chat view mounts. A new Draft created from Sidebar/Sessions before the 300 ms persistence debounce fired could previously be replaced by the older stored layout; the in-memory workbench is now authoritative once the app has started, while a newly opened page still inherits the shared last layout. Browser and unit regression tests cover the remount and delayed-hydration paths.
+
+- **Session content writes now have one authority, and split stores are repairable without data loss.** Every transcript write — messages, tool results, mode/thinking/title changes, and conversation turn boundaries — now resolves the persisted `sessions.content_store` instead of trusting this handle's in-memory mode, so a process that opened a session before another process migrated it adopts the committed event log instead of writing into the retired SQLite transcript or raising a false `session was modified by another process`. Opening a session is read-only: it no longer retires legacy payload rows, flips the store, or resets the log; legacy duplicate rows are removed only by a fenced, coverage-checked retire under a content lease, after a post-flip grace window. Rows a legacy build appends after the flip are detected as a split store and preserved. `mothx doctor` reports split sessions and, separately, sessions whose event-store turn boundaries address no matching turn marker (content lost before the event log owned it: those turns still read but cannot be forked, and `doctor` says so instead of reporting a clean store). `mothx doctor --repair-session-content [all|SESSION_ID]` adopts the uncovered delta, translates turn boundaries, and then retires the covered duplicate idempotently; `--json` reports per-session results. Architecture guards now reject a second content-store router, an open that reaches a store mutation, and any write branch on the in-memory mode. **Upgrade every MothX binary together and restart every running process (TUI, serve, and Desktop's bundled `mothx acp`) before repairing.** A mixed-build window cannot be prevented from the new build, but it no longer loses content: the new build keeps both stores until the repair entry adopts the difference.
 
 ## v1.3.107
 
@@ -6093,6 +6104,7 @@ Checks performed:
 - **Sandbox**: Checks bubblewrap availability and version
 - **MCP Servers**: Lists configured MCP servers
 - **Sessions**: Shows session directory and entry count
+- **Session content store**: Reports split sessions (content only the legacy transcript still holds) and event-store sessions whose turn boundaries no longer address a matching marker; `--repair-session-content [all|SESSION_ID]` adopts a split-store delta and translates boundaries before anything is retired
 - **Skills**: Shows global and project skills directories
 - **Context Files**: Discovers AGENTS.md, CLAUDE.md, CURSOR.md, .cursorrules, CONVENTIONS.md
 
@@ -6345,8 +6357,7 @@ The `/sessions` picker supports Up/Down to select, Enter to switch, `n` to start
 | `/skill:<name>` | Activate a skill (alternative syntax) |
 | `/skillhub [search <q>]` | Open the online skill marketplace or search it |
 | `/skillmgr` | Open the installed-skill manager |
-| `/init_mcp [project\|global] [basic\|full] [--force]` | Create an MCP configuration template |
-| `/mcps` | List configured MCP servers |
+| `/mcpmgr [project\|global]` | Open the MCP management panel (add, edit, delete, enable, or disable servers) |
 | `/paste-image` | Attach an image from the clipboard (where supported) |
 
 ### General
@@ -6558,7 +6569,7 @@ The top-level `tuilang` setting accepts `"auto"` (the default), `"zh"`, or `"en"
 | `providers` | object | *(see below)* | Provider configurations (keyed by name) |
 | `defaultProvider` | string | `"deepseek-openai"` | Which provider to use by default |
 | `defaultModel` | string | `"deepseek-v4-flash"` | Which model ID to use by default |
-| `defaultMode` | string | `"yolo"` | Default run mode: `plan`, `agent`, `yolo`, or `os` |
+| `defaultMode` | string | `"yolo"` | Default run mode: `plan`, `agent`, `yolo`, or `os`. `router` is not a valid default: Router binds one external ACP worker per session, so it is entered through activation (`/router`) rather than a global default |
 | `defaultThinkingLevel` | string | `"medium"` | Default thinking level |
 | `toolExecution` | object | *(see below)* | Local function/custom tool execution mode and per-batch concurrency |
 | `statusLine` | object | *(see below)* | External status line command settings for TUI only |
@@ -7081,6 +7092,8 @@ Default run mode:
 | `yolo` | Full access mode — all tools auto-execute |
 | `os` | Shell-only mode — exposes Bash with YOLO-level approval behavior and no sandbox; high-risk protections still apply |
 
+`router` is a valid session execution mode but not a valid `defaultMode`: it binds one activated external ACP worker per session, so enter it with `/router` (TUI) or `mothx --router --acp-agent <id>`. If `defaultMode` is set to `router` anyway, it is treated as `plan` rather than failing: a default resolves before any worker is bound, and `plan` is the read-only projection of that intent, so the fallback never widens the tool surface to full access.
+
 ```json
 { "defaultMode": "yolo" }
 ```
@@ -7570,6 +7583,38 @@ Isolated git worktrees managed by the shared Runtime (`agentruntime.WorktreeMana
 
 Create, list, reset, and remove worktrees with [`mothx worktree`](cli-reference.md#worktree---isolated-git-worktrees), or the equivalent ACP/Desktop controls.
 
+### acpAgents
+
+`acpAgents` is the global allowlist of external ACP coding agents MothX may use as Router workers. MothX never discovers executables from `PATH`, never accepts a command from a model tool call, and never runs a shell string.
+
+```json
+{
+  "acpAgents": [
+    {
+      "id": "codex",
+      "title": "Codex ACP",
+      "command": ["/opt/codex/bin/codex", "acp"],
+      "enabled": true,
+      "environment": ["OPENAI_API_KEY"],
+      "roles": ["investigate", "implement", "test", "review"],
+      "writeRoots": ["src"],
+      "maxConcurrentChildren": 1,
+      "permissionPolicy": "auto_allow_once"
+    }
+  ]
+}
+```
+
+- `id` is the only value exposed to the model. `command` is an argv array and `command[0]` must be an absolute path.
+- `environment` lists variable **names**; values are read from `env.json` or the process environment at launch and are never shown to the model or written to events.
+- `roles` is the capability ceiling. A profile with no `roles` is read-only (`investigate`). Write roles (`implement`, `integrate`) require at least one relative `writeRoots` entry, and a task's write scope must stay inside it.
+- `maxConcurrentChildren` is `1` by default and bounded at `8`. A value above `1` is accepted for compatibility — a `settings.json` written by an earlier build keeps loading — but this release enforces exactly one live external worker per session, because a Router worker runs in the shared session worktree and the read-only lead has no local write tool to resolve a conflict between two external writers. The Runtime permit enforces that ceiling, and `mothx doctor` plus the `/router` panel report a configured value above it as *not yet effective* rather than failing: the field becomes configurable above one together with a Runtime-owned per-worker worktree.
+- `permissionPolicy` is `auto_allow_once` or `auto_reject` for Router; `interactive` profiles cannot be activated as Router workers. MothX only selects a one-time option the remote Agent actually offered and never auto-selects `allow_always`/`reject_always`.
+
+Edit `acpAgents` either in `settings.json` or from the TUI `/router` panel, which lists profiles with their Runtime-resolved eligibility and can add, edit, delete, and activate one. The panel writes only through the shared configuration owner, so an invalid candidate set (relative `command[0]`, duplicate ID, write role without `writeRoots`, inline secret value) is rejected before anything is stored. Activate Router with `t` in the panel, `/router <id>` in the TUI, or `mothx --router --acp-agent <id>`. Activation requires an idle session whose source is not forced to yolo, and persists the profile selection plus Router mode through the normal session replay entries. The TUI/CLI never read profile argv or start the worker themselves.
+
+**Trust boundary:** choosing a profile means trusting that executable with the session working directory, the environment variables you allowlisted, and any network access it chooses. Router's read-only tool list constrains MothX's own lead, not the external Agent. Run `mothx doctor` to validate profile shape and executable availability without launching anything.
+
 ### maintenance
 
 Runtime-owned background housekeeping. These are not user automation tasks: MothX schedules them through the shared cron lifecycle, and they stay out of the cron views in the Web UI and Desktop, the `/api/cron` management surface, and the `cron` tool.
@@ -7652,13 +7697,20 @@ MothX loads MCP configuration at startup from:
 
 Serve's Web UI provides an MCP editor in **Settings → MCP** for the global file, plus a project-level editor from the active session's chat toolbar. Saved MCP servers are applied to newly created sessions; existing sessions keep their registered tools until recreated.
 
-Create a template from the TUI:
+Manage global or project MCP servers from the TUI:
 
 ```text
-/init_mcp project full
-/init_mcp global basic
-/mcps
+/mcpmgr project
+/mcpmgr global
 ```
+
+The panel supports adding, editing, deleting, enabling, disabling, and reloading
+the scoped `mcp.json`. Press `a` to choose the transport first, then configure
+name, endpoint/command, arguments, environment, headers, and enabled state one
+field at a time. Enter or `e` edits the selected server, Space enables or
+disables it, and `d` then `y` deletes it.
+Changes are configuration-only; run `/reload` before the current TUI session
+uses a changed MCP tool set.
 
 Example:
 
@@ -7689,7 +7741,7 @@ Example:
 Supported transports:
 
 - `stdio`: `command` may be an executable name resolved through `PATH`, or a direct path; put arguments in `args`
-- `http`: streamable HTTP endpoint via `url`
+- `http`: MCP Streamable HTTP endpoint via `url` (the preferred remote transport)
 - `sse`: legacy SSE stream via `url` plus `messageUrl`
 
 MCP tools are registered after built-in tools and `skill_ref`, but before the agent is created. The agent freezes its system prompt and tool definitions for the session, so changes to `mcp.json` require restarting the client or creating a new Serve session.
@@ -12892,6 +12944,8 @@ Access `http://127.0.0.1:7872` to open the Web UI. When authentication is enable
 - **Chat Interface**: SSE streaming output, tool call/result rendering, plan cards, and a compact composer config panel that merges the current model with `plan`/`agent`/`yolo`/`os` and Work/Code display modes. Submissions preserve persisted conversation history; optional images, session tool toggles, skills, and explicit mode can be sent with a run. Runtime mode and capability changes apply immediately from the server's authoritative response, while session-list refreshes remain best-effort. The composer reflects server-side queued/running states after reconnect.
 - **Dynamic Workbench**: `/chat` supports session tabs, up to four split panes, menu/drag splitting, persisted layout, and a single-pane mobile projection. Every pane owns its composer, model selection, draft, approvals, and trajectory view. Panes render the canonical `sessionRunStates` projection directly, and an all-tabs overflow menu keeps every open session reachable. The workbench toolbar also opens a read-only Plan dock that projects the focused session's latest `plan` message without adding storage, a tool, or a backend endpoint. The legacy single-session fallback and its setting/query switch have been removed; events are always consumed by the same `session-stream` dispatcher.
 - **Interactive Terminal**: when `/api/status` reports `features.terminal`, the workbench toolbar can open an interactive PTY for the focused session's cwd (xterm.js over WebSocket). The terminal is a local shell with the serve process user's privileges, is not protected by the sandbox, and inherits the full serve process environment; it creates no Run, writes no transcript, and takes no Runtime lease. It is available on a loopback listener, or on a non-loopback listener when auth is enabled with a token; an unauthenticated non-loopback listener returns `terminal_unsafe`. Because `--unsafe` binds all interfaces while disabling auth, it also disables the terminal: use a loopback listener (the `make ui-dev` backend now binds `127.0.0.1:7872` without `--unsafe`) or configure auth with a token when you need the terminal during development.
+- **Git Changes Panel**: the workbench toolbar can open a resizable right-side Changes dock for the focused tab — a session tab resolves its persisted cwd, a draft tab uses its chosen directory. It projects branch, Staged / Unstaged / Untracked sections with per-file `+/-` stats, and a per-file unified diff through the read-only `GET /api/git/changes` and `GET /api/git/diff` endpoints (`sessionId` or `path`). The panel shells out to `git status`/`git diff` only: it creates no Run, never stages, commits, or mutates the repository, and re-reads automatically when a run reaches its terminal state.
+- **Files Panel + Preview**: the workbench toolbar can open a resizable Files rail over the same focused-tab target. The tree lazy-loads one directory at a time via `GET /api/files/list` (relative paths only, traversal/symlink-escape rejected, 2000-entry cap), shows git change badges and ancestor-dir marks from `/api/git/changes`, remembers expansion per root in localStorage, and opens an in-panel text preview via `GET /api/files/content` (2 MiB cap, binary/invalid-UTF-8 detection, line numbers). Each row's "open with" menu is gated by `GET /api/files/openers` and posts allowlisted argv to `POST /api/files/open`: reveal in the system file manager (Finder `open -R` / Explorer `/select,` / `xdg-open`), open a new system terminal in the directory (`Terminal.app`, Windows Terminal, or a detected Linux emulator), or open VS Code/VSCodium/Cursor when their binaries or apps exist. "Open in web terminal" instead routes the browsed subdirectory into the existing terminal dock through the optional `cwd` field of `POST /api/terminals`, which must resolve inside the session cwd. **External launches share the terminal's transport gate** (`EffectiveTerminalEnabled`): available on a loopback listener, on non-loopback only with auth plus a real token, and disabled together with the terminal under `--unsafe`; the menu states why launches are unavailable when gated. All file listing, preview, and external-launch actions are read-only projections outside the Runtime: they create no Run, take no lease, and launchers never go through a shell string. Layering: `internal/workspacefiles` owns the only read-only listing/reading and path containment, `internal/workspaceopen` owns the only launcher table plus the `RootResolver`/`OpenerPolicy` contracts, and serve is a thin projection; ACP reuses the same two packages rather than duplicating logic (see migration debt #5 in the unification proposal).
 - **Approval Center**: Review pending tool approvals, approve once or deny, persist command/path allow rules, and inspect the session approval audit history.
 - **Session Management**: Pagination, keyboard shortcuts, historical sessions, runtime snapshots, capability toggles, and reconnect-safe approval state. Historical sessions are sorted by last-used time with the most recently replied-to session at the top; the session-management page shows each session's last reply time. Active runs remain protected after a page refresh until they reach a terminal state. `GET /api/sessions` is bounded: without `limit` it returns the first 100 sessions plus `total`, `limit`, `offset`, and `hasMore`, and `scope=active`/`/api/sessions/active` project only the in-memory session pool instead of loading all history.
 - **Responses Background Runs**: When an `openai-responses` provider enables `responses.background`, Serve submits supported requests as remote background tasks, persists their response lineage and archived output, polls them through completion, resumes recoverable runs after restart, and executes local function/custom-tool calls. The authenticated run API supports `GET /api/responses/runs/{localRunID}?session_id={sessionID}` plus `cancel`, `reconnect`, and `abandon` actions; see [Configuration](configuration.md#responses-field).
@@ -14469,6 +14523,23 @@ Result shape:
 ```
 
 Use delegate mode for broad searches, multi-step investigations, focused implementation, or verification tasks. Avoid it for one-tool operations, tasks needing user clarification, or highly stateful work that depends on the full conversation.
+
+#### Router external worker
+
+In Router mode (`/router` panel, `/router <id>`, or `--router --acp-agent <id>`), `delegate_subagent` always targets the activated external ACP worker. `agent` is required, must match the activated profile, and there is no local-child fallback. The lead also supplies a bounded task contract:
+
+| Parameter | Description |
+|-----------|-------------|
+| `agent` | Required in Router: the activated ACP profile ID. |
+| `role` | `investigate` (default), `implement`, `test`, `review`, or `integrate`. |
+| `read_scope` | Bounded paths or search targets the worker should read. |
+| `write_scope` | Paths the worker may modify; required for write roles and must stay inside the profile's `writeRoots`. |
+| `expected_deliverables` | `findings`, `changed-files`, `test-evidence`, or `review`; defaults are role-specific. |
+| `verification` | Check or evidence the worker must report; required for `implement`/`integrate`/`test`. |
+| `stop_conditions` | Explicit completion and non-goals. |
+
+The result adds a bounded `worker` object (`profileId`, `role`, `deliverables`, `evidence: "worker-reported"`, `outputTruncated`, `stopReason`). Treat that conclusion as untrusted evidence: inspect claimed paths with read-only tools and do not upgrade "worker-reported" to verified without evidence.
+
 
 ---
 

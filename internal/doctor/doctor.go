@@ -107,6 +107,7 @@ func RunWithOptions(opts Options) Response {
 	checks = append(checks, checkSessions(settings))
 	checks = append(checks, checkSessionIntegrity(settings))
 	checks = append(checks, checkSessionContentStore(settings))
+	checks = append(checks, checkSessionTurnBoundaries(settings))
 	checks = append(checks, checkSkills(cwd, settings)...)
 	checks = append(checks, checkContext(cwd, settings)...)
 
@@ -341,11 +342,18 @@ func checkACPAgents(settings *config.Settings) []Check {
 		return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: err.Error(), Fix: "Fix acpAgents in settings.json (absolute command, valid roles/writeRoots)"}}
 	}
 	enabled := 0
+	capped := make([]string, 0, len(settings.ACPAgents))
 	for _, profile := range settings.ACPAgents {
 		if !profile.Enabled {
 			continue
 		}
 		enabled++
+		// A ceiling this release cannot honor is not an error: the value keeps
+		// loading (compatibility) but the user must not believe parallel workers
+		// are running. Report it as information, not a configuration failure.
+		if profile.EffectiveMaxConcurrentChildren() > profile.EffectiveEnforcedChildren() {
+			capped = append(capped, fmt.Sprintf("%s=%d", profile.ID, profile.EffectiveMaxConcurrentChildren()))
+		}
 		info, err := os.Stat(profile.Command[0])
 		if err != nil {
 			return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: fmt.Sprintf("profile %q executable %q is unavailable", profile.ID, profile.Command[0]), Fix: "Update acpAgents command or install the worker"}}
@@ -361,8 +369,21 @@ func checkACPAgents(settings *config.Settings) []Check {
 		check.Detail = "all configured profiles are disabled"
 		return []Check{check}
 	}
-	return []Check{{ID: "acp.profiles", Status: StatusOK, Title: "ACP worker profiles", Detail: fmt.Sprintf("%d enabled profile(s) validated", enabled)}}
+	ok := Check{ID: "acp.profiles", Status: StatusOK, Title: "ACP worker profiles", Detail: fmt.Sprintf("%d enabled profile(s) validated", enabled)}
+	if len(capped) == 0 {
+		return []Check{ok}
+	}
+	// Valid configuration, but the configured parallelism is not active yet. This
+	// is informational so it never turns a working setup into a failing doctor run.
+	return []Check{ok, {
+		ID: "acp.profiles.concurrency", Status: StatusWarn, Title: "ACP worker concurrency",
+		Detail: fmt.Sprintf("%s configured above the enforced ceiling of %d; this release runs one external worker per session worktree", strings.Join(capped, ", "), effectiveACPIgnoredHint),
+		Fix:    "No action needed: the setting is accepted and kept for a later release that adds a per-worker worktree",
+	}}
 }
+
+// effectiveACPIgnoredHint is the enforced live-worker ceiling reported to users.
+const effectiveACPIgnoredHint = 1
 
 func checkSandbox(settings *config.Settings) []Check {
 	if p, err := exec.LookPath("bwrap"); err == nil {
@@ -489,6 +510,56 @@ func checkSessionContentStore(settings *config.Settings) Check {
 	return Check{
 		ID: "sessions.content_store", Status: StatusWarn, Title: "Session content store", Detail: detail,
 		Fix: "Quit every MothX process, back up the session directory, then run `mothx doctor --repair-session-content all` (the delta is adopted into the event log before anything is retired)",
+	}
+}
+
+// checkSessionTurnBoundaries reports sessions whose canonical EventStore owns the
+// transcript but whose conversation-turn control rows address no matching turn
+// marker. These turns can be read but not forked: the boundary is the only fork
+// point, and inferring one would fabricate history. The check is read-only and
+// reports only sessions already on the event store, because a legacy session is
+// bounded by `entries.seq` and has no projection marker to match.
+func checkSessionTurnBoundaries(settings *config.Settings) Check {
+	check := Check{ID: "sessions.turn_boundaries", Status: StatusSkip, Title: "Session turn boundaries", Detail: "settings unavailable"}
+	if settings == nil {
+		return check
+	}
+	dir := settings.GetSessionDir()
+	path := session.RootDatabasePath(dir)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		check.Detail = path + " (not created yet)"
+		return check
+	} else if err != nil {
+		check.Status, check.Detail = StatusError, err.Error()
+		return check
+	}
+	sessions, err := session.ListUnmappedTurnBoundarySessions(dir)
+	if err != nil {
+		check.Status = StatusWarn
+		check.Detail = "could not inspect session turn boundaries: " + err.Error()
+		check.Fix = "Back up the session directory and retry; do not delete sessions.db or the event-store directory"
+		return check
+	}
+	if len(sessions) == 0 {
+		check.Status, check.Detail = StatusOK, "every migrated turn boundary addresses its own marker"
+		return check
+	}
+	var turns int64
+	ids := make([]string, 0, 5)
+	for i, item := range sessions {
+		turns += item.UnmappedTurns
+		if i < 5 {
+			ids = append(ids, item.SessionID)
+		}
+	}
+	detail := fmt.Sprintf("%d session(s), %d turn(s) with no matching marker: %s", len(sessions), turns, strings.Join(ids, ", "))
+	if len(sessions) > len(ids) {
+		detail += fmt.Sprintf(" (+%d more)", len(sessions)-len(ids))
+	}
+	return Check{
+		ID: "sessions.turn_boundaries", Status: StatusWarn, Title: "Session turn boundaries",
+		Detail: detail,
+		Fix:    "Content was lost before the event log owned it and cannot be reconstructed. These turns still read normally but cannot be forked; keep the sessions.db backup and do not delete the event-store directory",
 	}
 }
 

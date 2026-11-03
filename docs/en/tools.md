@@ -636,7 +636,7 @@ Use delegate mode for broad searches, multi-step investigations, focused impleme
 
 #### Router external worker
 
-In Router mode (`/router <id>` or `--router --acp-agent <id>`), `delegate_subagent` always targets the activated external ACP worker. `agent` is required, must match the activated profile, and there is no local-child fallback. The lead also supplies a bounded task contract:
+In Router mode (`/router` panel, `/router <id>`, or `--router --acp-agent <id>`), `delegate_subagent` always targets the activated external ACP worker. `agent` is required, must match the activated profile, and there is no local-child fallback. The lead also supplies a bounded task contract:
 
 | Parameter | Description |
 |-----------|-------------|

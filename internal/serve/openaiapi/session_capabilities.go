@@ -19,6 +19,35 @@ func IsSessionCapabilityMutationBusy(err error) bool {
 		errors.Is(err, agentruntime.ErrDetachedRemoteExecution)
 }
 
+// applySessionMode is the adapter's single mode-mutation path. The Runtime owns
+// mode resolution, the Router binding fence, durable mode-entry persistence, and
+// the in-memory binding, so the WebUI must not write a mode anywhere else: a
+// capability-row-only write would leave the Runtime (and therefore the next
+// session attach) on the previous mode.
+//
+// A runtime-only session with no shared Runtime keeps the legacy adapter-local
+// assignment; it has no durable mode entry to own.
+func (s *Server) applySessionMode(sess *APISession, resolved string) error {
+	if sess == nil {
+		return ErrSessionNotFound
+	}
+	resolved = strings.TrimSpace(resolved)
+	if resolved == "" {
+		return nil
+	}
+	if sess.Runtime == nil || sess.Manager == nil {
+		sess.Mode = resolved
+		return nil
+	}
+	if err := sess.Runtime.SetMode(resolved); err != nil {
+		return err
+	}
+	if _, _, _, mode, _ := sess.Runtime.ConfigSnapshot(); strings.TrimSpace(mode) != "" {
+		sess.Mode = mode
+	}
+	return nil
+}
+
 // patchActiveSessionCapabilities updates an already locked active session for
 // slash commands. Registry synchronization remains capability-owned: a mode
 // change only persists the runtime setting and never re-registers tools.
@@ -39,7 +68,9 @@ func (s *Server) patchActiveSessionCapabilities(sess *APISession, patch SessionC
 		if err != nil {
 			return nil, err
 		}
-		sess.Mode = resolved
+		if err := s.applySessionMode(sess, resolved); err != nil {
+			return nil, err
+		}
 	}
 	if applyBoolOption(&sess.WebSearch, patch.WebSearch) {
 		// Web search is read when building the next agent configuration.

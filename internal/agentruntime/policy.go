@@ -54,9 +54,11 @@ type Policy = ExecutionPolicy
 
 // ResolveIterationBudget returns the normalized iteration-budget policy for a run
 // whose soft iteration limit is soft. It is the single owner of the budget
-// defaults (hard = 2x soft, two renewals, minimum interval = soft/10, 16h wall
-// clock); adapters only supply the soft limit (MaxIterations/MaxTurns) and may
-// pre-set IterationBudget to override the defaults. The result is always enabled.
+// defaults (the main loop pairs a 400 soft limit with a 600 hard ceiling; a
+// supplied soft limit keeps the conventional 2x ceiling, with two renewals, a
+// minimum interval of soft/10, and a 16h wall clock). Adapters only supply the
+// soft limit (MaxIterations/MaxTurns) and may pre-set IterationBudget to override
+// the defaults. The result is always enabled.
 func ResolveIterationBudget(policy agent.IterationBudgetPolicy, soft int) agent.IterationBudgetPolicy {
 	return policy.Normalize(soft)
 }
@@ -150,6 +152,15 @@ func (p Policy) ResolveMode(sessionMode, requestedMode string) (string, error) {
 	}
 	if !IsValidMode(defaultMode) {
 		return "", fmt.Errorf("invalid default mode %q", defaultMode)
+	}
+	// Router is a legal session mode but never a legal *default*: the default
+	// applies to a session that has no activated ACP worker yet, so it cannot
+	// resolve to Router. Treating it as Router fails Agent construction for every
+	// new session with no product surface to repair it. Do not widen to yolo
+	// either — Router is read-only, so the fail-safe projection of that intent is
+	// the read-only plan mode.
+	if defaultMode == ModeRouter {
+		return ModePlan, nil
 	}
 	return defaultMode, nil
 }

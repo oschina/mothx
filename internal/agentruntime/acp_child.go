@@ -186,7 +186,7 @@ func (p *acpChildProxy) Run(ctx context.Context, userMsg string) <-chan agentpkg
 			events <- event
 		}
 
-		release, err := p.runtime.acquireACPWorkerPermit()
+		release, err := p.runtime.acquireACPWorkerPermit(p.profile.EffectiveEnforcedChildren())
 		if err != nil {
 			p.finishRun(emit, agentpkg.TaskError, err, "")
 			return

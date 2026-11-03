@@ -551,7 +551,10 @@ func (a *App) handleSystemInitCommand(cmd string) tea.Cmd {
 	}
 	extra := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(cmd), "/systeminit"))
 	if a.mode == "plan" || a.mode == "router" {
-		a.mode = "agent"
+		if err := a.applyModeSelection("agent"); err != nil {
+			a.addCommandError(err.Error())
+			return nil
+		}
 		a.resetAgent(fmt.Errorf("systeminit requires write access"))
 		a.addCommandStatus(a.translator.Text(i18n.MsgSystemInitSwitchedMode))
 	}
@@ -649,17 +652,12 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 		if len(parts) > 1 {
 			switch parts[1] {
 			case "plan", "agent", "yolo", "os", "router":
-				if parts[1] == "router" {
-					if a.runtime == nil {
-						a.addCommandError(a.translator.Text(i18n.MsgCommandRouterUsage))
-						return nil
-					}
-					if _, ok := a.runtime.RouterBinding(); !ok {
-						a.addCommandError(a.translator.Text(i18n.MsgCommandRouterUsage))
-						return nil
-					}
+				// Runtime owns mode resolution, the Router binding fence, and the
+				// replay entry. The adapter only forwards the user's choice.
+				if err := a.applyModeSelection(parts[1]); err != nil {
+					a.addCommandError(err.Error())
+					return nil
 				}
-				a.mode = parts[1]
 				a.syncToolGroups()
 				// If agent is currently running, abort it so the new mode takes effect immediately
 				if a.isThinking && a.agent != nil {
@@ -692,6 +690,13 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 			}
 		}
 	case "/router":
+		// `/router` opens the ACP worker manager; `/router <id>` activates that
+		// profile directly. Both end at the one shared activation path, and the
+		// panel never owns eligibility or approval policy.
+		if len(parts) == 1 {
+			a.openRouterPanel()
+			return nil
+		}
 		if len(parts) != 2 {
 			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterUsage))
 			return nil
@@ -720,7 +725,9 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterFailed, err))
 			return nil
 		}
-		a.mode = agentruntime.ModeRouter
+		// Activation already persisted Router mode through the shared Runtime;
+		// mirror that resolved value instead of writing the adapter field.
+		a.adoptRuntimeMode()
 		a.syncToolGroups()
 		a.resetAgent(fmt.Errorf("router activated"))
 		a.addCommandStatus(a.translator.Text(i18n.MsgCommandRouterActivated, parts[1]))

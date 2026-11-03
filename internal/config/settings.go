@@ -78,9 +78,25 @@ const (
 	ACPRoleIntegrate   ACPAgentRole = "integrate"
 )
 
-// maxACPConcurrentChildren bounds per-profile concurrent external workers so a
-// configured value cannot turn into unbounded process fan-out.
+// maxACPConcurrentChildren is the schema bound for a profile's live-worker
+// ceiling. It is validated, not enforced: this release honors one worker per
+// session (see effectiveACPConcurrentChildren), so a larger configured value is
+// accepted for forward compatibility and reported as not-yet-effective rather
+// than rejected.
+//
+// Rejecting it would change the meaning of an existing settings.json field and
+// strand every user who configured the value on a previous build; a validated
+// ceiling plus an honest doctor/panel projection is the compatible behavior.
 const maxACPConcurrentChildren = 8
+
+// effectiveACPConcurrentChildren is the live-external-worker ceiling this release
+// actually enforces for one session.
+//
+// It is one because a Router worker operates on the shared session worktree and
+// the read-only lead has no local write tool with which to resolve a conflict
+// between two external writers. Raising it belongs with the Runtime-owned
+// per-worker worktree that would make parallelism safe.
+const effectiveACPConcurrentChildren = 1
 
 // ACPAgentProfile is an administrator-configured local ACP stdio Agent. The
 // model only ever receives its ID; command and environment values remain
@@ -129,8 +145,15 @@ func ACPRoleWrites(role ACPAgentRole) bool {
 	return role == ACPRoleImplement || role == ACPRoleIntegrate
 }
 
-// EffectiveMaxConcurrentChildren applies the serial-MVP default and the shared
-// upper bound to a validated profile.
+// EffectiveMaxConcurrentChildren is the configured live-worker ceiling of a
+// validated profile, bounded by the schema maximum. It reflects the user's
+// intent for management projections.
+//
+// It is not the enforced limit: this release admits at most
+// EffectiveEnforcedChildren per session, so a larger configured value is
+// accepted and reported as not yet effective instead of being rejected. Keeping
+// the two separate means a settings.json written by an earlier build keeps
+// loading.
 func (p ACPAgentProfile) EffectiveMaxConcurrentChildren() int {
 	if p.MaxConcurrentChildren <= 0 {
 		return 1
@@ -139,6 +162,12 @@ func (p ACPAgentProfile) EffectiveMaxConcurrentChildren() int {
 		return maxACPConcurrentChildren
 	}
 	return p.MaxConcurrentChildren
+}
+
+// EffectiveEnforcedChildren is the number of live external workers this release
+// actually admits for one session. It is the value the Runtime permit consumes.
+func (p ACPAgentProfile) EffectiveEnforcedChildren() int {
+	return effectiveACPConcurrentChildren
 }
 
 // EffectivePermissionPolicy returns the safe non-blocking default for a
@@ -213,6 +242,10 @@ func (p ACPAgentProfile) Validate() error {
 			return fmt.Errorf("ACP agent profile %q: %w", p.ID, err)
 		}
 	}
+	// maxConcurrentChildren is a forward-compatible ceiling: this release runs one
+	// worker per session worktree, so a value above one is accepted and reported as
+	// not yet effective. Rejecting it would change the meaning of an existing
+	// settings.json field and break users who configured it on an earlier build.
 	if p.MaxConcurrentChildren < 0 || p.MaxConcurrentChildren > maxACPConcurrentChildren {
 		return fmt.Errorf("ACP agent profile %q maxConcurrentChildren must be 0 (default 1) or between 1 and %d", p.ID, maxACPConcurrentChildren)
 	}
@@ -272,6 +305,56 @@ func (s *Settings) ValidateACPAgentProfiles() error {
 		seen[profile.ID] = struct{}{}
 	}
 	return nil
+}
+
+// ValidateACPAgentProfileSet validates a complete candidate profile list as it
+// would be persisted. It is the same rule set Runtime resolution applies to
+// loaded settings, so a configuration editor cannot store a set that Runtime
+// would later reject. Persistence remains owned by SaveACPAgentProfiles.
+func ValidateACPAgentProfileSet(profiles []ACPAgentProfile) error {
+	candidate := &Settings{ACPAgents: append([]ACPAgentProfile(nil), profiles...)}
+	return candidate.ValidateACPAgentProfiles()
+}
+
+// SaveACPAgentProfiles is the single durable entry point for the global
+// `acpAgents` list. Callers (configuration surfaces and the shared Runtime) edit
+// values, but only this function validates and writes them, using a sparse patch
+// so unrelated settings keys are untouched.
+//
+// A profile is executable-code trust: validation here is deliberately stricter
+// than "it parses", and an invalid candidate set is rejected before any write.
+func SaveACPAgentProfiles(profiles []ACPAgentProfile) error {
+	// Normalize first so the validated value is exactly the persisted value:
+	// trimmed identifiers and copied slices.
+	normalized := make([]ACPAgentProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		profile.ID = strings.TrimSpace(profile.ID)
+		profile.Title = strings.TrimSpace(profile.Title)
+		command := make([]string, 0, len(profile.Command))
+		for _, arg := range profile.Command {
+			command = append(command, strings.TrimSpace(arg))
+		}
+		profile.Command = command
+		environment := make([]string, 0, len(profile.Environment))
+		for _, name := range profile.Environment {
+			environment = append(environment, strings.TrimSpace(name))
+		}
+		profile.Environment = environment
+		roots := make([]string, 0, len(profile.WriteRoots))
+		for _, root := range profile.WriteRoots {
+			roots = append(roots, strings.TrimSpace(root))
+		}
+		profile.WriteRoots = roots
+		profile.Roles = append([]ACPAgentRole(nil), profile.Roles...)
+		normalized = append(normalized, profile)
+	}
+	if err := ValidateACPAgentProfileSet(normalized); err != nil {
+		return err
+	}
+	if len(normalized) == 0 {
+		return SaveGlobalSettingsPatch(map[string]any{"acpAgents": nil})
+	}
+	return SaveGlobalSettingsPatch(map[string]any{"acpAgents": normalized})
 }
 
 func validACPProfileID(id string) bool {
@@ -1715,7 +1798,34 @@ func LoadSettingsFor(cwd string) (*Settings, error) {
 	}
 	normalizeLegacyWebSearchProvider(s)
 	normalizeLegacySkillHubDefaultMarket(s)
+	normalizeUnbindableDefaultMode(s)
 	return s, nil
+}
+
+// normalizeUnbindableDefaultMode keeps an inert `defaultMode` from making a
+// session unbuildable.
+//
+// `router` is a legal session mode but never a legal *default*: it needs a
+// per-session activated ACP worker binding, which does not exist before a session
+// starts. A hand-edited settings.json (or a value written by an earlier build)
+// would otherwise fail Agent construction for every new session with no product
+// surface to repair it. The projection is the read-only plan mode rather than
+// yolo: Router is read-only, so falling back to full access would widen
+// permissions. Policy.ResolveMode applies the same rule for settings values that
+// bypass this loader.
+func normalizeUnbindableDefaultMode(s *Settings) {
+	if s == nil {
+		return
+	}
+	// Literal values on purpose: agentruntime imports config, so the mode
+	// vocabulary cannot be imported back here. default_mode_normalize_test.go
+	// pins these against agentruntime.ModeRouter/ModePlan.
+	if strings.TrimSpace(s.DefaultMode) == "router" {
+		if Verbose {
+			fmt.Fprintf(os.Stderr, "[config] defaultMode %q requires an activated ACP worker per session; treating it as %q\n", "router", "plan")
+		}
+		s.DefaultMode = "plan"
+	}
 }
 
 // LoadMeta describes side effects and paths from settings loading.
@@ -1806,6 +1916,7 @@ func LoadSettingsWithMeta() (*Settings, LoadMeta, error) {
 	// adapter shows what will actually be used.
 	normalizeLegacyWebSearchProvider(s)
 	normalizeLegacySkillHubDefaultMarket(s)
+	normalizeUnbindableDefaultMode(s)
 
 	return s, meta, nil
 }

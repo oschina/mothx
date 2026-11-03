@@ -352,6 +352,47 @@ const (
 	MsgCommandRouterDescription           MessageID = "commands.router.description"
 	MsgCommandRouterActivated             MessageID = "commands.router.activated"
 	MsgCommandRouterFailed                MessageID = "commands.router.failed"
+	MsgRouterPanelTitle                   MessageID = "router_panel.title"
+	MsgRouterPanelKeys                    MessageID = "router_panel.keys"
+	MsgRouterPanelEmpty                   MessageID = "router_panel.empty"
+	MsgRouterPanelLoadFailed              MessageID = "router_panel.load_failed"
+	MsgRouterPanelSaveFailed              MessageID = "router_panel.save_failed"
+	MsgRouterPanelInvalidProfile          MessageID = "router_panel.invalid_profile"
+	MsgRouterPanelSaved                   MessageID = "router_panel.saved"
+	MsgRouterPanelDeleted                 MessageID = "router_panel.deleted"
+	MsgRouterPanelConfirmDelete           MessageID = "router_panel.confirm_delete"
+	MsgRouterPanelConfigure               MessageID = "router_panel.configure"
+	MsgRouterPanelFormHint                MessageID = "router_panel.form_hint"
+	MsgRouterPanelInputHint               MessageID = "router_panel.input_hint"
+	MsgRouterPanelSetField                MessageID = "router_panel.set_field"
+	MsgRouterPanelChoosePermission        MessageID = "router_panel.choose_permission"
+	MsgRouterPanelChooseHint              MessageID = "router_panel.choose_hint"
+	MsgRouterPanelChooseRole              MessageID = "router_panel.choose_role"
+	MsgRouterPanelChooseRoleHint          MessageID = "router_panel.choose_role_hint"
+	MsgRouterPanelRoleRequired            MessageID = "router_panel.role_required"
+	MsgRouterPanelStateEligible           MessageID = "router_panel.state.eligible"
+	MsgRouterPanelStateIneligible         MessageID = "router_panel.state.ineligible"
+	MsgRouterPanelStateInvalid            MessageID = "router_panel.state.invalid"
+	MsgRouterPanelStateActive             MessageID = "router_panel.state.active"
+	MsgRouterPanelStateInteractive        MessageID = "router_panel.state.interactive"
+	MsgRouterPanelStateCapped             MessageID = "router_panel.state.capped"
+	MsgRouterPanelFieldID                 MessageID = "router_panel.field.id"
+	MsgRouterPanelFieldTitle              MessageID = "router_panel.field.title"
+	MsgRouterPanelFieldCommand            MessageID = "router_panel.field.command"
+	MsgRouterPanelFieldEnvironment        MessageID = "router_panel.field.environment"
+	MsgRouterPanelFieldPermission         MessageID = "router_panel.field.permission"
+	MsgRouterPanelFieldRoles              MessageID = "router_panel.field.roles"
+	MsgRouterPanelFieldWriteRoots         MessageID = "router_panel.field.write_roots"
+	MsgRouterPanelFieldEnabled            MessageID = "router_panel.field.enabled"
+	MsgRouterPanelFieldSave               MessageID = "router_panel.field.save"
+	MsgRouterPanelFieldSaveHint           MessageID = "router_panel.field.save_hint"
+	MsgRouterPanelFieldCancel             MessageID = "router_panel.field.cancel"
+	MsgRouterPanelFieldCancelHint         MessageID = "router_panel.field.cancel_hint"
+	MsgRouterPanelValueOn                 MessageID = "router_panel.value.on"
+	MsgRouterPanelValueOff                MessageID = "router_panel.value.off"
+	MsgRouterPanelValueUnset              MessageID = "router_panel.value.unset"
+	MsgRouterPanelValueNone               MessageID = "router_panel.value.none"
+	MsgRouterPanelValueRequired           MessageID = "router_panel.value.required"
 	MsgCommandModelNotFound               MessageID = "commands.model.not_found"
 	MsgCommandModelSwitched               MessageID = "commands.model.switched"
 	MsgCommandRunningCannotOpen           MessageID = "commands.running.cannot_open"
@@ -567,10 +608,51 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandPermissionsOS:               "  Permissions: BASH only, auto-execute (no sandbox; blacklisted commands still require approval)",
 		MsgCommandPermissionsRouter:           "  Permissions: READ/PLAN and configured worker delegation only (no local write or shell tools)",
 		MsgCommandInvalidMode:                 "Invalid mode",
-		MsgCommandRouterDescription:           "Activate Router mode with a configured ACP worker profile",
+		MsgCommandRouterDescription:           "Manage ACP worker profiles and activate Router mode",
 		MsgCommandRouterUsage:                 "Usage: /router <acp-profile-id> (configure acpAgents in settings.json first)",
 		MsgCommandRouterActivated:             "✅ Router activated with ACP worker: %s",
 		MsgCommandRouterFailed:                "Router activation failed: %v",
+		MsgRouterPanelTitle:                   "Router ACP Workers",
+		MsgRouterPanelKeys:                    "a:add  enter/e:edit  t:activate  d:delete  r:reload  esc:close",
+		MsgRouterPanelEmpty:                   "(no ACP worker profiles; press a to add one)",
+		MsgRouterPanelLoadFailed:              "Load settings: %v",
+		MsgRouterPanelSaveFailed:              "Save ACP profiles: %v",
+		MsgRouterPanelInvalidProfile:          "Invalid ACP profile: %v",
+		MsgRouterPanelSaved:                   "Saved. Activate with t, or /router <id>.",
+		MsgRouterPanelDeleted:                 "Profile deleted.",
+		MsgRouterPanelConfirmDelete:           "Delete %q? y/n",
+		MsgRouterPanelConfigure:               "Configure ACP worker:",
+		MsgRouterPanelFormHint:                "Up/Down: choose  Enter: set/toggle  Esc: cancel",
+		MsgRouterPanelInputHint:               "Enter: confirm  Esc: back",
+		MsgRouterPanelSetField:                "Set %s",
+		MsgRouterPanelChoosePermission:        "Choose a permission policy",
+		MsgRouterPanelChooseHint:              "Up/Down: choose  Enter: confirm  Esc: cancel",
+		MsgRouterPanelChooseRole:              "Toggle worker roles",
+		MsgRouterPanelChooseRoleHint:          "Up/Down: choose  Space/Enter: toggle  Esc: done",
+		MsgRouterPanelRoleRequired:            "A profile needs at least one role.",
+		MsgRouterPanelStateEligible:           "eligible",
+		MsgRouterPanelStateIneligible:         "disabled",
+		MsgRouterPanelStateInvalid:            "invalid",
+		MsgRouterPanelStateActive:             "(active)",
+		MsgRouterPanelStateInteractive:        "interactive only",
+		MsgRouterPanelStateCapped:             "concurrency capped to 1",
+		MsgRouterPanelFieldID:                 "ID",
+		MsgRouterPanelFieldTitle:              "Title",
+		MsgRouterPanelFieldCommand:            "Command",
+		MsgRouterPanelFieldEnvironment:        "Environment",
+		MsgRouterPanelFieldPermission:         "Permission",
+		MsgRouterPanelFieldRoles:              "Roles",
+		MsgRouterPanelFieldWriteRoots:         "Write roots",
+		MsgRouterPanelFieldEnabled:            "Enabled",
+		MsgRouterPanelFieldSave:               "Save profile",
+		MsgRouterPanelFieldSaveHint:           "Validate and write acpAgents to settings.json",
+		MsgRouterPanelFieldCancel:             "Cancel",
+		MsgRouterPanelFieldCancelHint:         "Discard changes",
+		MsgRouterPanelValueOn:                 "on",
+		MsgRouterPanelValueOff:                "off",
+		MsgRouterPanelValueUnset:              "unset",
+		MsgRouterPanelValueNone:               "none",
+		MsgRouterPanelValueRequired:           "required",
 		MsgCommandModelNotFound:               "Model %q not found — available: %s",
 		MsgCommandModelSwitched:               "✅ Model switched to: %s (%s)",
 		MsgCommandRunningCannotOpen:           "Cannot open %s while the agent is running.",
@@ -1011,10 +1093,51 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandPermissionsOS:               "  权限：仅 BASH，自动执行（无沙箱；黑名单命令仍需审批）",
 		MsgCommandPermissionsRouter:           "  权限：仅 READ/PLAN 与已配置的 worker 委派（无本地写入或 shell 工具）",
 		MsgCommandInvalidMode:                 "无效模式",
-		MsgCommandRouterDescription:           "使用已配置的 ACP worker profile 激活 Router 模式",
+		MsgCommandRouterDescription:           "管理 ACP worker profile 并激活 Router 模式",
 		MsgCommandRouterUsage:                 "用法：/router <acp-profile-id>（请先在 settings.json 配置 acpAgents）",
 		MsgCommandRouterActivated:             "✅ Router 已激活，ACP worker：%s",
 		MsgCommandRouterFailed:                "Router 激活失败：%v",
+		MsgRouterPanelTitle:                   "Router ACP Worker",
+		MsgRouterPanelKeys:                    "a:新增  enter/e:编辑  t:激活  d:删除  r:刷新  esc:关闭",
+		MsgRouterPanelEmpty:                   "（尚未配置 ACP worker profile；按 a 新增）",
+		MsgRouterPanelLoadFailed:              "读取设置失败：%v",
+		MsgRouterPanelSaveFailed:              "保存 ACP profile 失败：%v",
+		MsgRouterPanelInvalidProfile:          "ACP profile 无效：%v",
+		MsgRouterPanelSaved:                   "已保存。按 t 激活，或使用 /router <id>。",
+		MsgRouterPanelDeleted:                 "Profile 已删除。",
+		MsgRouterPanelConfirmDelete:           "删除 %q？y/n",
+		MsgRouterPanelConfigure:               "配置 ACP worker：",
+		MsgRouterPanelFormHint:                "上下键：选择  Enter：设置/切换  Esc：取消",
+		MsgRouterPanelInputHint:               "Enter：确认  Esc：返回",
+		MsgRouterPanelSetField:                "设置 %s",
+		MsgRouterPanelChoosePermission:        "选择权限策略",
+		MsgRouterPanelChooseHint:              "上下键：选择  Enter：确认  Esc：取消",
+		MsgRouterPanelChooseRole:              "切换 worker 角色",
+		MsgRouterPanelChooseRoleHint:          "上下键：选择  空格/Enter：切换  Esc：完成",
+		MsgRouterPanelRoleRequired:            "profile 至少需要一个角色。",
+		MsgRouterPanelStateEligible:           "可用",
+		MsgRouterPanelStateIneligible:         "已禁用",
+		MsgRouterPanelStateInvalid:            "无效",
+		MsgRouterPanelStateActive:             "（当前）",
+		MsgRouterPanelStateInteractive:        "仅交互审批",
+		MsgRouterPanelStateCapped:             "并发上限为 1",
+		MsgRouterPanelFieldID:                 "ID",
+		MsgRouterPanelFieldTitle:              "标题",
+		MsgRouterPanelFieldCommand:            "命令",
+		MsgRouterPanelFieldEnvironment:        "环境变量",
+		MsgRouterPanelFieldPermission:         "权限策略",
+		MsgRouterPanelFieldRoles:              "角色",
+		MsgRouterPanelFieldWriteRoots:         "写入根目录",
+		MsgRouterPanelFieldEnabled:            "启用",
+		MsgRouterPanelFieldSave:               "保存 profile",
+		MsgRouterPanelFieldSaveHint:           "校验并写入 settings.json 的 acpAgents",
+		MsgRouterPanelFieldCancel:             "取消",
+		MsgRouterPanelFieldCancelHint:         "放弃修改",
+		MsgRouterPanelValueOn:                 "开",
+		MsgRouterPanelValueOff:                "关",
+		MsgRouterPanelValueUnset:              "未设置",
+		MsgRouterPanelValueNone:               "无",
+		MsgRouterPanelValueRequired:           "必填",
 		MsgCommandModelNotFound:               "未找到模型 %q——可用模型：%s",
 		MsgCommandModelSwitched:               "✅ 模型已切换到：%s（%s）",
 		MsgCommandRunningCannotOpen:           "Agent 运行时不能打开 %s。",

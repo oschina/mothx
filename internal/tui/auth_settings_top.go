@@ -223,7 +223,7 @@ func (a *App) selectSettingsFieldValue(value string) {
 		next.DefaultThinkingLevel = cycleString(next.DefaultThinkingLevel, []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}, "medium")
 		a.saveAuthSettingsPatch("defaultThinkingLevel", map[string]any{"defaultThinkingLevel": next.DefaultThinkingLevel})
 	case "defaultMode":
-		next.DefaultMode = cycleString(next.DefaultMode, []string{"plan", "agent", "yolo", "os", "router"}, "yolo")
+		next.DefaultMode = cycleString(next.DefaultMode, defaultModeCycleValues, "yolo")
 		a.saveAuthSettingsPatch("defaultMode", map[string]any{"defaultMode": next.DefaultMode})
 	case "enablePlanTool":
 		next.EnablePlanTool = cycleSettingsBoolPtr(next.EnablePlanTool, true)
@@ -702,7 +702,12 @@ func (a *App) applyRuntimeSettingsAfterSave(label string, effective *config.Sett
 	}
 	a.syncAgentManagerRuntime()
 	if label == "defaultMode" && effective != nil && strings.TrimSpace(effective.DefaultMode) != "" {
-		a.mode = effective.DefaultMode
+		// Settings defaults are global; the active session's mode is a Runtime
+		// fact. Route through the shared writer so the session replay entry and
+		// the adapter field cannot diverge.
+		if err := a.applyModeSelection(effective.DefaultMode); err != nil {
+			a.addCommandError(err.Error())
+		}
 	}
 	if label == "enableArtifact" && effective != nil && a.runtime != nil {
 		_ = a.runtime.SetArtifactEnabled(effective.IsArtifactEnabled())
@@ -834,6 +839,12 @@ func parseApprovalPrefixes(s string) []string {
 	}
 	return out
 }
+
+// defaultModeCycleValues is the settings editor's cycle for defaultMode.
+// `router` is deliberately absent: a default mode applies to every new session,
+// while Router only exists for one per-session activated external worker. Use
+// the /router panel to activate that worker instead.
+var defaultModeCycleValues = []string{"plan", "agent", "yolo", "os"}
 
 func cycleString(current string, values []string, fallback string) string {
 	current = strings.TrimSpace(current)

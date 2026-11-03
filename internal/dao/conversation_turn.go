@@ -144,3 +144,38 @@ func (d *ConversationTurnDAO) ListFrom(ctx context.Context, executor bun.IDB, se
 	err := executor.NewSelect().Model(&records).Where("session_id = ?", sessionID).OrderExpr("start_seq").Scan(ctx)
 	return records, err
 }
+
+// UnmappedBoundarySession is one session whose persisted turn control rows no
+// longer match the turn markers they claim to bound.
+type UnmappedBoundarySession struct {
+	SessionID     string `bun:"session_id"`
+	CWD           string `bun:"cwd"`
+	UnmappedTurns int64  `bun:"unmapped_turns"`
+}
+
+// UnmappedTurnBoundarySessions reports sessions whose canonical EventStore is
+// authoritative but whose conversation_turns rows address no marker of their own
+// turn identity.
+//
+// Only `content_store = 'event_store'` sessions are considered: a session still
+// on the legacy store is bounded by `entries.seq`, which has no projection row to
+// match and is therefore not a defect. The test is identity-based on purpose — a
+// legacy sequence can coincide with an unrelated EventStore position, so a range
+// check would prove nothing.
+func (d *ConversationTurnDAO) UnmappedTurnBoundarySessions(ctx context.Context, executor bun.IDB) ([]UnmappedBoundarySession, error) {
+	var rows []UnmappedBoundarySession
+	err := executor.NewSelect().
+		ColumnExpr("t.session_id AS session_id").
+		ColumnExpr("COALESCE(s.cwd, '') AS cwd").
+		ColumnExpr("COUNT(*) AS unmapped_turns").
+		TableExpr("conversation_turns AS t").
+		Join("JOIN sessions AS s ON s.id = t.session_id AND s.content_store = ?", "event_store").
+		Where(`NOT EXISTS (
+			SELECT 1 FROM session_event_projections p
+			WHERE p.session_id = t.session_id AND p.type = 'turn_start' AND p.turn_id = t.id
+		)`).
+		GroupExpr("t.session_id, s.cwd").
+		OrderExpr("unmapped_turns DESC, t.session_id ASC").
+		Scan(ctx, &rows)
+	return rows, err
+}

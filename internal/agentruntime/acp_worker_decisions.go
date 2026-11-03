@@ -13,23 +13,38 @@ import (
 	"github.com/oschina/mothx/internal/config"
 )
 
-// acquireACPWorkerPermit enforces the MVP's one-live-external-worker rule per
-// session. The permit is released by the child proxy on every terminal path.
-func (r *SessionRuntime) acquireACPWorkerPermit() (func(), error) {
+// acquireACPWorkerPermit enforces the profile's live-external-worker ceiling for
+// this session. The permit is released by the child proxy on every terminal
+// path.
+//
+// limit is the Runtime-resolved ceiling for the profile, so the configured value
+// is consumed here rather than being descriptive only. It is one in this release
+// (see config.ACPAgentProfile.Validate); the counter exists so raising the
+// effective ceiling is a policy change in one place instead of a rewrite of the
+// admission rule.
+func (r *SessionRuntime) acquireACPWorkerPermit(limit int) (func(), error) {
 	if r == nil {
 		return nil, fmt.Errorf("agent runtime is nil")
 	}
+	if limit <= 0 {
+		limit = 1
+	}
 	r.acpWorkerMu.Lock()
 	defer r.acpWorkerMu.Unlock()
-	if r.acpWorkerBusy {
-		return nil, fmt.Errorf("an external ACP worker is already running for this session")
+	if r.acpWorkersLive >= limit {
+		if limit == 1 {
+			return nil, fmt.Errorf("an external ACP worker is already running for this session")
+		}
+		return nil, fmt.Errorf("this session already has %d live external ACP workers (limit %d)", r.acpWorkersLive, limit)
 	}
-	r.acpWorkerBusy = true
+	r.acpWorkersLive++
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			r.acpWorkerMu.Lock()
-			r.acpWorkerBusy = false
+			if r.acpWorkersLive > 0 {
+				r.acpWorkersLive--
+			}
 			r.acpWorkerMu.Unlock()
 		})
 	}, nil

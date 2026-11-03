@@ -330,6 +330,13 @@ type App struct {
 	// next /reload rather than being mutated behind an active session.
 	mcpMgr mcpMgrState
 
+	// /router panel is the sole TUI surface for editing the global `acpAgents`
+	// list. Configuration validation and persistence stay in internal/config,
+	// eligibility stays in the shared Runtime projection, and activation stays
+	// on SessionRuntime.ActivateRouter. This panel only renders and collects
+	// input.
+	routerPanel routerPanelState
+
 	// /btw side-question floating layer
 	btwOpen       bool
 	btwActive     bool   // a /btw sub-agent is currently running
@@ -1056,6 +1063,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if handled, cmd := a.handleMCPMgrKey(msg); handled {
 			return a, cmd
 		}
+		if handled, cmd := a.handleRouterPanelKey(msg); handled {
+			return a, cmd
+		}
 		if handled, cmd := a.handleAuthKey(msg); handled {
 			return a, cmd
 		}
@@ -1763,6 +1773,9 @@ func (a *App) View() string {
 	if !a.waitingForApproval && a.mcpMgr.Open {
 		return a.renderFixedHeight(lipgloss.JoinVertical(lipgloss.Left, a.renderMCPMgr(), footer))
 	}
+	if !a.waitingForApproval && a.routerPanel.Open {
+		return a.renderFixedHeight(lipgloss.JoinVertical(lipgloss.Left, a.renderRouterPanel(), footer))
+	}
 	if !a.waitingForApproval && a.esmPanelOpen {
 		panelFooter := footer
 		if a.height > 0 && a.height < 8 {
@@ -1954,6 +1967,9 @@ func (a *App) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	if a.mcpMgr.Open {
+		return nil
+	}
+	if a.routerPanel.Open {
 		return nil
 	}
 	if a.toolModalOpen {

@@ -297,19 +297,29 @@ func (a *App) finishRequestTimer() {
 }
 
 func (a *App) cycleMode() {
+	var next string
 	switch a.mode {
 	case "plan":
-		a.mode = "agent"
+		next = "agent"
 	case "agent":
-		a.mode = "yolo"
+		next = "yolo"
 	case "yolo":
-		a.mode = "os"
+		next = "os"
 	case "os":
-		a.mode = "router"
+		// Router is deliberately absent from the Tab cycle: it is not a mode the
+		// user can switch into, because it only exists for one activated external
+		// worker. Use /router to select and activate a worker instead.
+		next = "plan"
 	case "router":
-		a.mode = "plan"
+		next = "plan"
 	default:
-		a.mode = "yolo"
+		next = "yolo"
+	}
+	// The short-cycle shortcut must persist exactly like /mode. Writing a.mode
+	// directly would leave the session replaying its previous mode.
+	if err := a.applyModeSelection(next); err != nil {
+		a.addCommandError(err.Error())
+		return
 	}
 
 	if a.isThinking && a.agent != nil {
@@ -1044,6 +1054,13 @@ func (a *App) activateSession(sess *session.Manager) error {
 	// keeping the previous one when it is empty) would recreate the divergence
 	// this ordering exists to prevent.
 	a.cwd = sess.GetHeader().Cwd
+	// Adopt the Runtime-resolved persisted mode. The Runtime is the single owner
+	// of mode replay; the adapter must not keep its own copy, or a session
+	// resumed in Router/Plan would silently rebuild its Agent with the previous
+	// session's mode and lose that mode's tool fence.
+	if persisted := a.runtime.PersistedMode(); persisted != "" {
+		a.mode = persisted
+	}
 	// Project cross-process ownership for the freshly activated session (an
 	// idle snapshot stays silent). Pure Runtime projection, no local state.
 	a.notifySessionExecutionState(sess.GetHeader().ID)

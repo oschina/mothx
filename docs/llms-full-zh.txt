@@ -1606,9 +1606,18 @@ Source: https://mothx.net/zh/changelog.md
 
 ### ✨ 新功能
 
+- **TUI 与 CLI 现在可以为已配置的外部 ACP worker 激活 Router 模式。** `/router` 打开 ACP worker 面板（列出/新增/编辑/删除/激活 profile）；`/router <profile>` 与 `mothx --router --acp-agent <profile>` 直接激活，三者都走同一条 Runtime 激活路径：profile 必须存在于 `acpAgents`、已启用且使用非交互权限策略；会话必须空闲且来源未被强制为 yolo；Router binding 先于 mode 落盘，因此激活失败会留在非 Router 状态。面板只通过唯一的 `config.SaveACPAgentProfiles` 校验与写入入口持久化，因此相对路径 `command[0]`、重复 ID、写角色缺少 `writeRoots` 都会在写入前被拒绝。激活只负责指定 worker，非交互审批策略由 Runtime 按 profile 记录，并拒绝不一致的显式值。手工编辑或旧版本遗留的 `defaultMode: router` 会在加载与解析时被归一化为只读的 `plan` 模式，而不是让每个新会话的 Agent 构建失败；该回退绝不会放大为完全访问。 没有 binding 时，通用模式切换不能选择 `router`：`router` 已从 Tab 模式循环与 `defaultMode` 循环中移除，且 Agent 构建在无可用 binding 时对 Router 失败关闭，因此持久化默认值或过期的适配器取值都不会造出「委派必然失败」的 Router 工具面。TUI 的所有模式写入（`/mode`、Tab 循环、`/systeminit`、修改 `defaultMode` 设置）现在都经过共享 Runtime，适配器不再只改本地状态、导致重开时回放旧模式。会话在其他适配器重新打开、或无模式参数恢复时，会回放持久化模式（包括 Router）。直接编辑 `settings.json` 依然受支持且同样需要谨慎；外部委派已通过 Router 可用。
+
+- **Router 模式可以把任务委派给已配置的外部 ACP 编码 Agent。** Router 绑定的 `delegate_subagent` 通过共享 Runtime 启动一个阻塞式外部 worker：Agent Core 只拿到事件/输入代理，profile 策略、有界任务契约、唯一终态事件与进程 containment 都由 Runtime 负责。Router lead 会看到带 `agent` 身份的文本、思考、工具、计划与用量投影；阻塞返回值附带标记为 `worker-reported` 的有界 `worker` 元数据，完整远端 transcript 仍作为子级投影。远端 `session/request_permission` 会写入共享决策账本，并按 profile 的 `auto_allow_once`/`auto_reject` 立即作答，只选择对方实际提供的一次性选项。取消会发送 `session/cancel`、把所有待处理请求回答为 cancelled，并回收整个进程树（Unix 进程组、Windows Job Object）。外部子级传输不依赖持久化、provider 或适配器；`mothx doctor` 现在可在不启动 worker 的情况下校验 profile 形状与可执行文件可用性。 ACP profile 的 `maxConcurrentChildren` 现在真正被执行：Runtime 的 worker 许可每个会话只放行一个存活的外部 worker，因为两个 worker 会同时写入同一个会话工作目录，而只读的 Router lead 没有本地写入工具来化解该冲突。配置值大于 1 仍可正常加载（既有的 `settings.json` 必须保持有效），并由 `mothx doctor` 与 `/router` 面板报告为「尚未生效」，而不是被静默当作已生效；并行能力本身仍取决于 Runtime 拥有的「每 worker 独立 worktree」。
+
+
 - **Serve Web UI 新增动态多会话工作台。** `/chat` 现支持会话标签、最多 4 个窗格分屏（菜单/拖拽）、每个 pane 独立的 composer 与模型/草稿状态、布局持久化和移动端单窗格投影。应用级唯一的 `session-stream` 调度器是 `/ws/runs` 的唯一消费者并接管 SSE 回退，因此关闭一个 pane 不会中断其他后台会话的流。各 pane 直接渲染 canonical `sessionRunStates`，溢出的标签可通过“全部标签”菜单访问；审批与提问在所属 pane 的浮层中完成，后台待处理只显示标签与全局 attention 徽标，不会抢占焦点；超过 4 个窗格或标签上限的布局操作会被拒绝并提示原因。旧的单会话回退及其 `?workbench=0`/设置开关已移除，`/chat` 始终是工作台；只读 Plan dock 从焦点会话的最新 plan 消息派生，不新增存储、工具或后端端点。composer 文本在切换标签时保留；带 providerRef 的附件可跨刷新恢复，仅带 dataUrl 的附件在刷新后会提示重新选择。标签条内拖拽现在始终按同窗格重排处理，不再被误判为边缘分屏；第二个浏览器标签页会恢复共享的最近布局，并按 last-write-wins 保持可恢复。每个会话的滚动位置在切换标签后保留；关闭仍在运行的会话标签时会给出一次后台继续提示，而不是静默丢弃。 工作台标签条与 icon-only 工具条已收紧并适配明暗主题；composer 对齐 Desktop：折叠的模型+模式入口可展开 plan/agent/yolo/os 模式、Work/Code 显示模式与 provider/model/主角团选择，会话目录移到聊天头部。
 
 - **Serve 新增带认证的交互式终端。** `features.terminal` 通过 `/api/terminals` 与 `/ws/terminals/` 暴露由 `internal/terminal`（Unix 使用 creack/pty，Windows 使用 ConPTY）驱动的 xterm.js PTY 面板。终端绑定焦点会话的 cwd，继承 serve 进程环境，支持 resize/replay/takeover，并按“回环或已认证监听”策略授权；它不创建 Run、不写 transcript、不占 Runtime lease，也不在 sandbox 内运行。Linux 上 shell 还带有 `Pdeathsig`，不会在 serve 退出后残留；Windows 则提供仅在该平台运行的 ConPTY start/input/resize/exit 往返测试作为实机门禁。 终端配置（含显式 `enabled: false`、shell、资源上限与 allowedOrigins）在 `serve.json` 保存/重载后完整保留。状态栏会显示服务端输出反压，不再把它误判为断线；serve 只记录终端创建/退出/终止的生命周期元数据，不记录输入或输出。
+
+- **TUI 状态栏新增实时生成速度。** Agent 流式输出期间，底部状态栏会在耗时旁显示估算的 `tok/s` 速度；该值基于最近一个短窗口内的流式输出增量计算，在没有新 Token 到达时（例如执行工具或等待审批期间）自动隐藏。加载提示行同时显示本次运行的估算生成 Token 总数。
+
+- **TUI 新增就地 MCP 管理面板，远端 MCP 遵循当前 Streamable HTTP 版本。** `/mcpmgr [project|global]` 在当前作用域的 `mcp.json` 上打开面板，可逐字段新增、编辑、删除、启用或关闭服务器（先选传输类型，再填写名称、端点或命令、参数、环境变量、请求头与启用状态），取代旧的 `/init_mcp` 与 `/mcps`；变更仅修改配置，执行 `/reload` 后生效。HTTP MCP 客户端现在会在 `initialize` 阶段协商协议版本，并在 `MCP-Protocol-Version` 中发送该版本，声明 `Accept: application/json, text/event-stream`，拒绝既非 JSON 也非 `text/event-stream` 的响应，且不再跟随已配置端点的重定向，避免凭据与请求体泄漏到其他来源。`tools/call` 结果会保留 `structuredContent` 以及标准 `resource`/`resource_link` 块并转为模型可读文本，而不再丢弃。
 
 ### 🐛 问题修复
 
@@ -1619,6 +1628,8 @@ Source: https://mothx.net/zh/changelog.md
 - **交互终端的恢复、焦点与安全提示已补齐。** 终端 dock 会始终提示它与可能正在运行的 Agent 共享焦点会话 cwd，并在 canonical execution 快照为本地或另一进程执行时升级警告。页面刷新会重新 attach 该标签页记录的 detached shell，而不是泄漏旧终端再新建一个；shell 已退出或终端 id 失效后，“重新连接”会创建新终端。xterm 样式已加载，`@xterm/xterm`/`@xterm/addon-fit` 改为精确 pin；PTY read loop 在发布 exit 帧前等待 `cmd.Wait`，非零退出码不再被误报为 0。工作台新增 1000 步 property test，并据此修复 Draft trajectory 模式持久化、删除 group/应用预设后的焦点修复、分隔权重精确夹紧、分页会话标签对账、命令建议重复 DOM id 与移动端右键菜单目标。
 
 - **在 `/chat` 之外创建的新任务不会再因工作台重新挂载而丢失。** 工作台 hydration 改为应用启动时的一次性步骤，不再在懒加载的 Chat 视图每次挂载时重新读取 `localStorage`。此前从 Sidebar/Sessions 新建 Draft 后，若 300ms 持久化防抖尚未触发就切回 `/chat`，旧布局会覆盖内存中的新任务；现在应用启动后内存状态即权威，新开的页面仍会继承共享的最近布局。浏览器与单测均覆盖重新挂载和延迟 hydration 路径。
+
+- **会话内容写入收敛为单一裁决，split 存储可无损修复。** 消息、工具结果、模式/思考层级/标题变更以及对话 turn 边界现在都以持久化的 `sessions.content_store` 为准，不再信任当前 handle 的内存状态；在别的进程迁移之前打开的进程会采纳已提交的事件日志，而不是继续写入已被回收的 SQLite transcript，也不会再误报 `session was modified by another process`。打开会话现在是只读的：不再回收 legacy payload 行、不翻转存储、不重置日志；legacy 重复行只能由持有内容租约的围栏回收删除，且在翻转后的冷静期之后进行，并在 DELETE 内重新校验覆盖关系。旧构建在翻转后追加的行会被识别为 split 存储并完整保留。`mothx doctor` 会报告 split 会话，并单独报告「事件日志侧 turn 边界找不到对应 marker」的会话（内容在事件日志接管之前就已丢失：这些 turn 仍可读取但无法 fork，doctor 会如实报告而不是显示一切正常）。`mothx doctor --repair-session-content [all|SESSION_ID]` 会增量采纳未覆盖内容、翻译 turn 边界并幂等回收已覆盖的重复行，`--json` 输出逐会话结果。新增架构守卫会拒绝第二处 content store 路由、会写入存储的 open 路径，以及任何按内存模式选择写入分支的代码。**升级时请统一所有 MothX 二进制，并在修复前退出并重启每一个正在运行的进程（TUI、serve、Desktop 捆绑的 `mothx acp`）。** 新构建无法阻止混合构建窗口，但不会再丢内容：它会同时保留两份存储，直到修复入口采纳差异。
 
 ## v1.3.107
 
@@ -6129,6 +6140,7 @@ mothx doctor [--json]
 - **沙箱**: 检查 bubblewrap 可用性和版本
 - **MCP 服务器**: 列出已配置的 MCP 服务器
 - **会话**: 显示会话目录和条目数量
+- **会话内容存储**: 报告 split 会话（内容只在 legacy transcript 中），以及事件日志侧 turn 边界找不到对应 marker 的会话；`--repair-session-content [all|SESSION_ID]` 会先采纳 split 增量、翻译边界，然后才回收重复行
 - **技能**: 显示全局和项目技能目录
 - **上下文文件**: 发现 AGENTS.md、CLAUDE.md、CURSOR.md、.cursorrules、CONVENTIONS.md
 
@@ -6430,8 +6442,7 @@ mothx acp --sandbox --mode agent
 | `/skill:<name>` | 激活技能（替代语法） |
 | `/skillhub [search <q>]` | 打开在线技能市场或搜索 |
 | `/skillmgr` | 打开已安装技能管理器 |
-| `/init_mcp [project\|global] [basic\|full] [--force]` | 创建 MCP 配置模板 |
-| `/mcps` | 列出已配置的 MCP 服务器 |
+| `/mcpmgr [project\|global]` | 打开 MCP 管理面板（新增、编辑、删除、启用或关闭服务器） |
 | `/paste-image` | 从剪贴板附加图像（平台支持时） |
 
 ### 通用
@@ -6643,7 +6654,7 @@ MothX 使用两个配置文件:
 | `providers` | object | *(见下文)* | 提供商配置 (以名称为 key) |
 | `defaultProvider` | string | `"deepseek-openai"` | 默认使用的提供商 |
 | `defaultModel` | string | `"deepseek-v4-flash"` | 默认使用的模型 ID |
-| `defaultMode` | string | `"yolo"` | 默认运行模式: `plan`、`agent`、`yolo` 或 `os` |
+| `defaultMode` | string | `"yolo"` | 默认运行模式: `plan`、`agent`、`yolo` 或 `os`。`router` 不是合法默认值：Router 为每个会话绑定一个外部 ACP worker，因此只能通过激活（`/router`）进入，不能设为全局默认 |
 | `defaultThinkingLevel` | string | `"medium"` | 默认思考级别 |
 | `toolExecution` | object | *(见下文)* | 本地 function/custom tool 执行模式与每批并发上限 |
 | `statusLine` | object | *(见下文)* | 仅 TUI 生效的外部状态行命令设置 |
@@ -7166,6 +7177,8 @@ WebUI 在“设置 > Tools”中提供这两个字段，TUI 在 `/settings` > Be
 | `yolo` | 完全访问模式 — 所有工具自动执行 |
 | `os` | 仅 Shell 模式 — 只提供 Bash，使用 YOLO 级审批行为且不启用沙箱；高风险保护仍然生效 |
 
+`router` 是合法的会话运行模式，但不是合法的 `defaultMode`：它为每个会话绑定一个已激活的外部 ACP worker，因此需要通过 `/router`（TUI）或 `mothx --router --acp-agent <id>` 进入。若仍把 `defaultMode` 设为 `router`，它会被当作 `plan` 处理而不会报错：默认值在绑定 worker 之前就已解析，而 `plan` 是该意图的只读投影，因此这一回退绝不会把工具权限放大到完全访问。
+
 ```json
 { "defaultMode": "yolo" }
 ```
@@ -7655,6 +7668,38 @@ Agent 模式下：
 
 使用 [`mothx worktree`](cli-reference.md#worktree---隔离-git-worktree) 或对应的 ACP/Desktop 控件创建、列出、重置与删除 worktree。
 
+### acpAgents
+
+`acpAgents` 是 MothX 可用作 Router worker 的外部 ACP 编码 Agent 全局白名单。MothX 不会从 `PATH` 自动发现可执行文件，不会接受模型工具调用传入的命令，也不会通过 shell 字符串启动。
+
+```json
+{
+  "acpAgents": [
+    {
+      "id": "codex",
+      "title": "Codex ACP",
+      "command": ["/opt/codex/bin/codex", "acp"],
+      "enabled": true,
+      "environment": ["OPENAI_API_KEY"],
+      "roles": ["investigate", "implement", "test", "review"],
+      "writeRoots": ["src"],
+      "maxConcurrentChildren": 1,
+      "permissionPolicy": "auto_allow_once"
+    }
+  ]
+}
+```
+
+- `id` 是唯一暴露给模型的值。`command` 是 argv 数组，`command[0]` 必须是绝对路径。
+- `environment` 只列变量**名称**；启动时从 `env.json` 或进程环境读取值，不会展示给模型，也不会写入事件。
+- `roles` 是能力上限。未声明 `roles` 的 profile 只读（`investigate`）。写角色（`implement`、`integrate`）必须至少声明一个相对 `writeRoots`，任务的 write scope 必须位于其中。
+- `maxConcurrentChildren` 默认为 `1`，上限为 `8`。大于 `1` 的值会被接受以保持兼容（旧构建写入的 `settings.json` 仍能加载），但本版本每个会话只执行一个存活的外部 worker：Router worker 运行在共享的会话工作目录中，只读 lead 没有本地写入工具来化解两个外部写入者之间的冲突。Runtime 的许可会执行该上限，而 `mothx doctor` 与 `/router` 面板会把「配置值高于实际上限」报告为**尚未生效**而不是报错；当 Runtime 拥有「每 worker 独立 worktree」后，该值才可真正大于 1。
+- Router 的 `permissionPolicy` 只能是 `auto_allow_once` 或 `auto_reject`；`interactive` profile 不能作为 Router worker 激活。MothX 只会选择远端 Agent 实际提供的一次性选项，绝不会自动选择 `allow_always`/`reject_always`。
+
+可以在 `settings.json` 中编辑 `acpAgents`，也可以使用 TUI 的 `/router` 面板：面板会列出 profile 及其由 Runtime 解析出的可用性，并支持新增、编辑、删除和激活。面板只通过共享配置层写入，因此无效候选（相对路径 `command[0]`、重复 ID、写角色缺少 `writeRoots`、内联明文密钥）会在写入前被拒绝。在面板中按 `t`、在 TUI 中使用 `/router <id>`，或在 CLI 中使用 `mothx --router --acp-agent <id>` 激活。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化 profile 与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
+
+**信任边界：** 选择 profile 意味着信任该可执行文件可以访问会话工作目录、你允许的环境变量以及它自行选择的网络。Router 的只读工具列表约束的是 MothX lead，而不是外部 Agent。运行 `mothx doctor` 可以在不启动任何进程的情况下检查 profile 形状与可执行文件可用性。
+
 ### maintenance（后台维护）
 
 Runtime 自有的后台维护配置。它们不是用户自动化任务：MothX 复用共享的 cron 生命周期来调度，并且不会出现在 Web UI 与 Desktop 的定时任务视图、`/api/cron` 管理接口以及 `cron` 工具里。
@@ -7737,11 +7782,17 @@ MothX 启动时会从以下位置加载 MCP 配置：
 
 Serve 的 Web UI 在**设置 → MCP**中提供全局文件编辑器，也可从当前会话聊天工具栏打开项目级编辑器。保存后的 MCP 服务器会应用到新建会话；已有会话会保留已注册的工具，直到重新创建会话。
 
+使用 TUI 管理全局或项目 MCP 服务器：
+
 ```text
-/init_mcp project full
-/init_mcp global basic
-/mcps
+/mcpmgr project
+/mcpmgr global
 ```
+
+面板支持在当前作用域的 `mcp.json` 中新增、编辑、删除、启用、关闭和重新加载 MCP
+服务器。按 `a` 后先选择传输类型，再逐项配置名称、命令或端点、参数、环境变量、请求头和
+启用状态；回车或 `e` 编辑选中服务器，空格启用或关闭，按 `d` 再按 `y` 删除。变更只会修改
+配置；请执行 `/reload`，让当前 TUI 会话加载新的 MCP 工具集合。
 
 示例：
 
@@ -7772,7 +7823,7 @@ Serve 的 Web UI 在**设置 → MCP**中提供全局文件编辑器，也可从
 支持的传输类型：
 
 - `stdio`：`command` 可以是通过 `PATH` 查找的命令名，也可以是直接路径；参数请放在 `args` 中
-- `http`：通过 `url` 连接 streamable HTTP 端点
+- `http`：通过 `url` 连接 MCP Streamable HTTP 端点（推荐的远端传输方式）
 - `sse`：通过 `url` 连接 legacy SSE 流，并通过 `messageUrl` 发送请求
 
 MCP 工具会在内置工具和 `skill_ref` 之后、agent 创建之前注册。agent 会冻结当前会话的 system prompt 和工具定义，因此修改 `mcp.json` 后需要重启客户端，或创建新的 Serve 会话。
@@ -12899,6 +12950,8 @@ mothx serve init-config project  # 生成 .mothx/serve.json
 - **聊天界面**：SSE 流式输出，工具调用/结果渲染，计划卡片，以及将当前模型与 `plan`/`agent`/`yolo`/`os` 模式、Work/Code 显示模式合并的 composer 配置面板。提交的运行会保留持久化会话历史；支持在 run 中传入图片、会话工具开关、技能和显式模式。运行时模式和能力修改会立即采用服务端返回的权威状态，会话列表刷新则作为尽力而为的后台同步；重连后输入区会正确反映服务端排队/运行状态。
 - **动态工作台**：`/chat` 支持会话标签、最多 4 个窗格分屏、菜单/拖拽分屏、布局记忆与移动端单窗格投影；每个 pane 拥有独立 composer、模型选择、草稿、审批和轨迹视图。各 pane 直接渲染 canonical `sessionRunStates` 投影，标签溢出时可通过“全部标签”菜单访问所有会话；工作台工具条还提供只读 Plan dock，从焦点会话的最新 `plan` 消息派生，不新增存储、工具或后端端点。旧的单会话回退及其设置/查询开关已移除；事件流始终由同一个 `session-stream` 调度器消费。
 - **交互终端**：当 `/api/status` 的 `features.terminal` 为 true 时，工作台工具条可为当前会话 cwd 打开交互式 PTY（xterm.js + WebSocket）。终端等价于 serve 进程用户权限的本地 shell，不受 sandbox 保护，并完整继承 serve 进程环境变量；它不创建 Run、不写 transcript、不占 Runtime lease。只有回环监听、或已启用 auth 且配置了 token 的非回环监听可用；未认证的非回环监听返回 `terminal_unsafe`。`--unsafe` 会同时绑定所有网卡并关闭 auth，因此也会关闭终端；开发时请使用回环监听（`make ui-dev` 的后端现在绑定 `127.0.0.1:7872` 且不再传 `--unsafe`），或配置 auth token。
+- **Git 变更面板**：工作台工具条可为焦点标签打开可拖宽的右侧变更面板——会话标签解析其持久化 cwd，草稿标签使用所选目录。它通过只读的 `GET /api/git/changes` 与 `GET /api/git/diff`（`sessionId` 或 `path` 参数）投影分支、已暂存/未暂存/未跟踪分组、每文件 `+/-` 统计与单文件 unified diff。面板仅执行 `git status`/`git diff`：不创建 Run、不 stage、不 commit、不修改仓库，并在 run 进入终态后自动重读。
+- **文件面板 + 预览**：工作台工具条可打开可拖宽的 Files 侧栏，目标解析与变更面板相同。文件树通过 `GET /api/files/list` 逐目录懒加载（仅接受相对路径，拒绝穿越/符号链接逃逸，上限 2000 条），用 `/api/git/changes` 投影文件变更徽章与祖先目录打点，展开状态按 root 存于 localStorage，并通过 `GET /api/files/content` 在面板内预览文本（2 MiB 上限、二进制/非法 UTF-8 检测、行号）。每行的“打开方式”菜单由 `GET /api/files/openers` 门控，向 `POST /api/files/open` 提交白名单 argv：在系统文件管理器中显示（Finder `open -R` / Explorer `/select,` / `xdg-open`）、在该目录新开系统终端（Terminal.app、Windows Terminal 或检测到的 Linux 终端模拟器）、或在存在对应二进制/App 时打开 VS Code/VSCodium/Cursor。“在 Web 终端中打开”则经由 `POST /api/terminals` 的可选 `cwd` 字段把浏览到的子目录交给现有终端 dock，该 cwd 必须解析在会话 cwd 之内。**外部拉起与终端共享同一传输门控**（`EffectiveTerminalEnabled`）：回环监听可用；非回环需 auth+真实 token；`--unsafe` 同时禁用两者，菜单会显示禁用原因。所有文件列表、预览与外部拉起都是 Runtime 之外的只读投影：不创建 Run、不占 lease，且拉起命令绝不经过 shell 字符串。实现分层：`internal/workspacefiles`（唯一的只读列表/读取与路径包含 owner）、`internal/workspaceopen`（唯一的 launcher 表与 `RootResolver`/`OpenerPolicy` 契约）、serve 仅为薄投影；ACP 未来复用同两包而非复制逻辑（见统一提案迁移债务 #5）。
 - **审批中心**：查看待处理工具审批，一次性批准或拒绝，持久化命令/路径放行规则，并查看会话审批审计历史。
 - **会话管理**：分页浏览，键盘快捷键，历史会话，运行时快照，能力开关及可安全重连恢复的审批状态。历史会话按最后使用时间倒序排列，最新回复的会话位于最上方；会话管理页面会显示最后回复时间。页面刷新后，活动 run 直到进入终态前仍会保持会话忙碌。`GET /api/sessions` 默认有界：未指定 `limit` 时返回前 100 个会话以及 `total`、`limit`、`offset`、`hasMore`；`scope=active` 与 `/api/sessions/active` 只投影内存中的会话池，不再加载全部历史。
 - **Responses 后台运行**：当 `openai-responses` provider 启用 `responses.background` 时，Serve 会将支持的请求提交为远程后台任务，持久化 response lineage 与归档输出，轮询直到完成，在重启后恢复可恢复任务，并执行本地 function/custom tool 调用。经认证的 run API 支持 `GET /api/responses/runs/{localRunID}?session_id={sessionID}` 以及 `cancel`、`reconnect`、`abandon` 操作；详见[配置](configuration.md#responses-字段)。
@@ -14450,6 +14503,23 @@ Agent 声明“完成文件可作为交付制品”的唯一入口。它会先�
 ```
 
 Delegate 模式适用于大范围代码搜索、多步调查、聚焦实现或验证任务。不适用于单步操作、需要向用户澄清的任务或强依赖完整会话历史的有状态工作。
+
+#### Router 外部 worker
+
+在 Router 模式（`/router` 面板、`/router <id>` 或 `--router --acp-agent <id>`）下，`delegate_subagent` 始终指向已激活的外部 ACP worker。`agent` 必填且必须与已激活 profile 一致，不存在本地子 Agent 回退。lead 还需要提供有界任务契约：
+
+| 参数 | 说明 |
+|------|------|
+| `agent` | Router 必填：已激活的 ACP profile ID。 |
+| `role` | `investigate`（默认）、`implement`、`test`、`review` 或 `integrate`。 |
+| `read_scope` | worker 应读取的路径或搜索目标（有界）。 |
+| `write_scope` | worker 可修改的路径；写角色必填，且必须位于 profile 的 `writeRoots` 内。 |
+| `expected_deliverables` | `findings`、`changed-files`、`test-evidence` 或 `review`；默认值按角色决定。 |
+| `verification` | worker 必须报告的检查或证据；`implement`/`integrate`/`test` 必填。 |
+| `stop_conditions` | 明确的完成条件与非目标。 |
+
+返回值新增有界 `worker` 对象（`profileId`、`role`、`deliverables`、`evidence: "worker-reported"`、`outputTruncated`、`stopReason`）。请把该结论视为不可信证据：用只读工具核对声称的路径，不要在没有证据时把 `worker-reported` 升级为已验证。
+
 
 ---
 

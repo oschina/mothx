@@ -49,10 +49,23 @@ Behavior:
   advertisement and the Agent Core execution authorization snapshot.
 - The Router system prompt describes a read-only lead/orchestrator and does not
   include the YOLO unrestricted-access claim.
-- CLI accepts `-M router`; TUI supports `/mode router`, completion, mode
-  cycling, footer display, default-mode cycling, and English/Chinese
-  permissions copy. ACP session mode catalogs also recognize Router so it is
-  not treated as an unknown persisted mode.
+- CLI accepts `-M router`; TUI supports `/mode router` and `/router <id>`,
+  footer display, and English/Chinese permissions copy. ACP session mode
+  catalogs also recognize Router so it is not treated as an unknown persisted
+  mode.
+- Router is deliberately **not** a cycleable mode. It is excluded from the Tab
+  mode cycle and from the `defaultMode` settings cycle, because it is not a
+  mode the user can switch into: it exists only for one activated external
+  worker. `/router` (panel or `/router <id>`) is the only entry point.
+- Activation is not the only fence. `SessionRuntime.buildAgent` fails closed
+  when a Router-mode Agent would be constructed without an eligible
+  `RouterBinding`, so a persisted default, stale adapter value, or protocol
+  request cannot produce a Router lead whose `delegate_subagent` can only fail.
+- Every TUI mode write goes through `SessionRuntime.SetMode`. `/mode`,
+  the Tab cycle, `/systeminit`, a `defaultMode` settings change, and `/router`
+  activation previously assigned `App.mode` locally, which made the adapter and
+  the persisted replay entry diverge: leaving Router then reopened the session
+  as Router and re-applied the read-only tool fence.
 
 ### 2. ACP worker profile configuration
 
@@ -83,10 +96,15 @@ Implemented constraints:
 - `ACPAgentProfile()` returns only enabled, valid profiles and copies slices;
 - empty/unknown permission policy resolves conservatively to `auto_reject`.
 
-This schema is not exposed by an in-product configuration editor. It remains a
-local, deliberate settings edit (profile configuration is executable-code
-trust); `mothx/manage/acp/profiles/list` projects a read-only safe catalog and
-no adapter reads `settings.json` directly.
+Editing this schema is a deliberate act (profile configuration is
+executable-code trust), and there are exactly two supported surfaces: the global
+`settings.json`, and the TUI `/router` panel. The panel renders the Runtime's
+read-only catalog (`agentruntime.ListACPWorkerProfiles`) for eligibility and
+writes only through `config.SaveACPAgentProfiles`, which validates the complete
+candidate set (absolute `command[0]`, duplicate IDs, environment names,
+roles/`writeRoots`, concurrency) before persisting. That keeps one validation
+owner and one write owner; no adapter parses or writes `settings.json` itself.
+`mothx/manage/acp/profiles/list` remains a read-only projection for ACP clients.
 
 ### 3. RouterBinding session persistence
 
@@ -193,7 +211,7 @@ note.
 {
   "roles": ["investigate", "implement", "test", "review"],
   "writeRoots": ["src"],
-  "maxConcurrentChildren": 2
+  "maxConcurrentChildren": 1
 }
 ```
 
@@ -202,7 +220,17 @@ note.
 - Write roles (`implement`, `integrate`) require at least one `writeRoots`
   entry; roots must stay relative to, and inside, the Runtime-resolved child
   work directory.
-- `maxConcurrentChildren` defaults to 1 (the serial MVP) and is bounded at 8.
+- `maxConcurrentChildren` defaults to one live external worker per session and
+  is bounded at 8. A value above one is **accepted and kept** — rejecting it
+  would change the meaning of an existing `settings.json` field and strand every
+  user who configured it on an earlier build — while this release enforces
+  exactly one worker, because two would write the same session worktree and the
+  read-only lead has no local write tool with which to resolve that conflict.
+  The Runtime permit consumes `EffectiveEnforcedChildren`, and the difference
+  between the configured and enforced ceilings is surfaced by `mothx doctor`
+  (`acp.profiles.concurrency`) and the `/router` panel, so an inert setting is
+  never silently presented as active. Parallelism itself stays gated on a
+  Runtime-owned per-worker worktree.
 - Profile lookup copies `Roles`/`WriteRoots` so a caller cannot mutate global
   configuration through the returned value.
 

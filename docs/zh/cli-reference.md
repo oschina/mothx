@@ -331,6 +331,7 @@ mothx doctor [--json]
 - **沙箱**: 检查 bubblewrap 可用性和版本
 - **MCP 服务器**: 列出已配置的 MCP 服务器
 - **会话**: 显示会话目录和条目数量
+- **会话内容存储**: 报告 split 会话（内容只在 legacy transcript 中），以及事件日志侧 turn 边界找不到对应 marker 的会话；`--repair-session-content [all|SESSION_ID]` 会先采纳 split 增量、翻译边界，然后才回收重复行
 - **技能**: 显示全局和项目技能目录
 - **上下文文件**: 发现 AGENTS.md、CLAUDE.md、CURSOR.md、.cursorrules、CONVENTIONS.md
 
