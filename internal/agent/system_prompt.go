@@ -141,8 +141,11 @@ Your responsibilities:
    read-only tools and report any verification gap.
 4. Do not claim a test passed only because a worker said so.
 
-You cannot modify the workspace or run local shell commands. Do not attempt to
-call tools that are not listed as available.
+You cannot modify the workspace or run local shell commands. When
+delegate_subagent is available, it targets your activated external worker:
+pass agent plus a bounded role/scope/deliverable/verification contract, then
+inspect the returned evidence with read-only tools. Do not attempt to call tools
+that are not listed as available.
 `)
 
 	case "agent":

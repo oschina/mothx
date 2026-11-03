@@ -97,6 +97,7 @@ func RunWithOptions(opts Options) Response {
 		checks = append(checks, checkProvider(settings)...)
 		checks = append(checks, checkConfiguredProviders(settings)...)
 		checks = append(checks, checkEnvironmentOverrides()...)
+		checks = append(checks, checkACPAgents(settings)...)
 		if strings.TrimSpace(opts.RepairSessionContent) != "" {
 			repairs = RepairSessionContent(context.Background(), settings, opts.RepairSessionContent)
 		}
@@ -326,6 +327,41 @@ func checkEnvironmentOverrides() []Check {
 		}
 	}
 	return checks
+}
+
+// checkACPAgents validates configured external ACP worker profiles without
+// launching them. It reports configuration shape and executable availability;
+// it never starts a process, sends a prompt, or prints environment values.
+func checkACPAgents(settings *config.Settings) []Check {
+	check := Check{ID: "acp.profiles", Status: StatusSkip, Title: "ACP worker profiles", Detail: "no profiles configured"}
+	if settings == nil || len(settings.ACPAgents) == 0 {
+		return []Check{check}
+	}
+	if err := settings.ValidateACPAgentProfiles(); err != nil {
+		return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: err.Error(), Fix: "Fix acpAgents in settings.json (absolute command, valid roles/writeRoots)"}}
+	}
+	enabled := 0
+	for _, profile := range settings.ACPAgents {
+		if !profile.Enabled {
+			continue
+		}
+		enabled++
+		info, err := os.Stat(profile.Command[0])
+		if err != nil {
+			return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: fmt.Sprintf("profile %q executable %q is unavailable", profile.ID, profile.Command[0]), Fix: "Update acpAgents command or install the worker"}}
+		}
+		if info.IsDir() {
+			return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: fmt.Sprintf("profile %q command is a directory", profile.ID), Fix: "Point acpAgents command at the worker executable"}}
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+			return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: fmt.Sprintf("profile %q executable is not executable", profile.ID), Fix: "chmod +x the configured worker"}}
+		}
+	}
+	if enabled == 0 {
+		check.Detail = "all configured profiles are disabled"
+		return []Check{check}
+	}
+	return []Check{{ID: "acp.profiles", Status: StatusOK, Title: "ACP worker profiles", Detail: fmt.Sprintf("%d enabled profile(s) validated", enabled)}}
 }
 
 func checkSandbox(settings *config.Settings) []Check {

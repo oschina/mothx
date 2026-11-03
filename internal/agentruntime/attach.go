@@ -77,6 +77,10 @@ func AttachSessionResources(resources AttachedResources) (*SessionRuntime, error
 	if entrySource == SourceUnknown {
 		entrySource = resources.Source
 	}
+	replayedMode, err := replayPersistedMode(resources.Manager, resolved, entrySource)
+	if err != nil {
+		return nil, err
+	}
 	attachments, err := NewAttachmentService(resources.Manager.GetSessionDir(), DefaultAttachmentPolicy())
 	if err != nil {
 		return nil, err
@@ -87,7 +91,7 @@ func AttachSessionResources(resources AttachedResources) (*SessionRuntime, error
 	}
 	runtime := &SessionRuntime{
 		ID: resources.ID, Source: resolved.Source, EntrySource: entrySource,
-		Policy: PolicyForSource(resolved.Source, ""), WorkDir: resources.WorkDir,
+		Policy: PolicyForSource(resolved.Source, ""), WorkDir: resources.WorkDir, Mode: replayedMode,
 		Manager: resources.Manager, Inputs: inputs, Attachments: attachments, Registry: resources.Registry, SandboxMgr: resources.SandboxMgr,
 		SkillsMgr: resources.SkillsMgr, MCPClients: resources.MCPClients,
 		Providers:    resources.Providers,

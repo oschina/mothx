@@ -1,6 +1,8 @@
 package agentruntime
 
 import (
+	"strings"
+
 	"github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/tools"
 	"github.com/oschina/mothx/internal/workflow"
@@ -26,6 +28,11 @@ type ToolGroupPolicy struct {
 	// WorkflowTools optionally narrows the workflow set by tool name with the
 	// same team semantics as SubAgentTools. Nil means the full canonical set.
 	WorkflowTools map[string]bool
+	// Mode optionally overrides the mode used for Router-only availability. An
+	// adapter that projects a locally edited mode (for example the TUI /mode
+	// command) passes it here instead of duplicating registration logic. Empty
+	// means use the Runtime's persisted/resolved mode.
+	Mode string
 }
 
 // SynchronizeToolGroups reconciles the registry's optional tool groups against
@@ -54,7 +61,13 @@ func SynchronizeToolGroups(rt *SessionRuntime, registry *tools.Registry, policy 
 	} else {
 		removeSubAgentTools(registry)
 	}
-	if policy.Delegate {
+	// Router always exposes the blocking delegate tool: it is the only way the
+	// read-only lead can reach its activated external worker.
+	mode := strings.TrimSpace(policy.Mode)
+	if mode == "" {
+		_, _, _, mode, _ = rt.ConfigSnapshot()
+	}
+	if policy.Delegate || mode == ModeRouter {
 		agent.RegisterDelegateSubAgentTool(registry, manager)
 	} else {
 		registry.Remove(delegateSubAgentToolName)

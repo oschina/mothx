@@ -47,6 +47,26 @@ func TestSynchronizeToolGroupsLifecycle(t *testing.T) {
 	assertToolsPresent(t, registry, toolGroupNames(), false)
 }
 
+func TestSynchronizeToolGroupsRouterAlwaysExposesDelegate(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), nil)
+	manager := &agent.AgentManager{}
+	rt := &SessionRuntime{Mode: ModeRouter, Registry: registry}
+
+	SynchronizeToolGroups(rt, registry, ToolGroupPolicy{}, manager)
+	assertToolsPresent(t, registry, []string{"delegate_subagent"}, true)
+	assertToolsPresent(t, registry, agent.SubAgentToolNames(), false)
+
+	// Leaving Router removes it again unless the adapter policy asks for it.
+	rt.Mode = ModeYolo
+	SynchronizeToolGroups(rt, registry, ToolGroupPolicy{}, manager)
+	assertToolsPresent(t, registry, []string{"delegate_subagent"}, false)
+
+	// An adapter projecting a locally edited mode (TUI /mode) supplies it through
+	// policy.Mode instead of registering tools itself.
+	SynchronizeToolGroups(rt, registry, ToolGroupPolicy{Mode: ModeRouter}, manager)
+	assertToolsPresent(t, registry, []string{"delegate_subagent"}, true)
+}
+
 func TestSynchronizeToolGroupsPerToolSelection(t *testing.T) {
 	registry := tools.NewRegistry(t.TempDir(), nil)
 	manager := &agent.AgentManager{}

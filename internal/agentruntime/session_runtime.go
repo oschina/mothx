@@ -80,6 +80,12 @@ type SessionRuntime struct {
 	ExpertCenter *expert.Center
 	Submissions  *SubmissionCoordinator
 
+	// acpWorkerBusy is the MVP's per-session one-live-external-worker permit.
+	// It is intentionally Runtime-owned so no adapter can create a second
+	// worker side channel.
+	acpWorkerMu   sync.Mutex
+	acpWorkerBusy bool
+
 	// resourceSettings and the two capability flags record the shared resource
 	// assembly policy used to create this runtime. They let a lazily-bound
 	// session rebuild context and package skills after its persisted identity is
@@ -397,6 +403,13 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 	if err != nil {
 		return err
 	}
+	// Replay the persisted mode through the same source/mode resolver used by
+	// live switches. A session that was left in Router must not reopen as yolo
+	// merely because an adapter has no startup flag for it.
+	replayedMode, err := replayPersistedMode(manager, resolved, entrySource)
+	if err != nil {
+		return err
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -412,8 +425,31 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 	r.Inputs = inputs
 	r.Attachments = attachments
 	r.ExpertCenter = &expert.Center{ProjectDir: header.Cwd}
+	if replayedMode != "" {
+		r.Mode = replayedMode
+	}
 	r.publishPreparedExpertResourcesLocked(prepared)
 	return nil
+}
+
+// replayPersistedMode resolves the newest persisted mode entry for an attached
+// session through the shared source/mode resolver. It returns "" when the
+// session never persisted a mode, so a new session keeps its adapter/default
+// mode. This is what makes a persisted Router session reopen as Router in
+// adapters that have no Router startup flag.
+func replayPersistedMode(manager *session.Manager, source SourceResolution, entrySource RuntimeSource) (string, error) {
+	if manager == nil {
+		return "", nil
+	}
+	entry, ok := manager.GetLatestModeChange()
+	if !ok || strings.TrimSpace(entry.Mode) == "" {
+		return "", nil
+	}
+	_, mode, err := resolveManagerPolicy(manager, SourceResolutionInput{Current: source.Source, Requested: entrySource}, "", entry.Mode, ModeYolo)
+	if err != nil {
+		return "", err
+	}
+	return mode, nil
 }
 
 // ConfigureSession installs the initial per-session provider, model, mode, and
@@ -820,6 +856,39 @@ func (r *SessionRuntime) reloadPersistedConfig(manager *session.Manager) error {
 	return nil
 }
 
+// applyModeOption resolves, persists, and applies one mode value. The generic
+// config-option path and Router activation share it so both persist exactly the
+// same replay entry after the same source/mode resolution.
+func (r *SessionRuntime) applyModeOption(currentMode, value string) error {
+	resolution, mode, err := r.ResolvePolicy(currentMode, value, ModeYolo)
+	if err != nil {
+		return err
+	}
+	_ = resolution
+	if mode == ModeRouter {
+		// Router is not an independent execution mode: it is the read-only lead
+		// surface for one selected external worker. Selecting it without a
+		// persisted, eligible binding would expose the Router tool fence with no
+		// way to delegate. Activation is owned by ActivateRouter.
+		if _, ok := r.RouterBinding(); !ok {
+			return fmt.Errorf("Router mode requires an activated ACP worker profile; use /router <profile> or --router --acp-agent <profile>")
+		}
+	}
+	r.mu.RLock()
+	manager := r.Manager
+	r.mu.RUnlock()
+	if manager != nil {
+		if _, err := manager.AppendModeChange(mode); err != nil {
+			return err
+		}
+	}
+	r.mu.Lock()
+	r.Mode = mode
+	r.LastUsed = time.Now()
+	r.mu.Unlock()
+	return nil
+}
+
 // SetConfigOption validates, persists, and applies one mutable session option.
 // Persistence happens before the in-memory binding changes so failed requests
 // cannot leave a runtime ahead of its session history.
@@ -933,21 +1002,7 @@ func (r *SessionRuntime) SetConfigOption(id, value string) error {
 		r.mu.Unlock()
 		return nil
 	case ConfigOptionMode:
-		resolution, mode, err := r.ResolvePolicy(currentMode, value, ModeYolo)
-		if err != nil {
-			return err
-		}
-		_ = resolution
-		if manager != nil {
-			if _, err := manager.AppendModeChange(mode); err != nil {
-				return err
-			}
-		}
-		r.mu.Lock()
-		r.Mode = mode
-		r.LastUsed = time.Now()
-		r.mu.Unlock()
-		return nil
+		return r.applyModeOption(currentMode, value)
 	case ConfigOptionThinkingLevel:
 		if currentModel == nil || !currentModel.Reasoning {
 			return fmt.Errorf("config option %q is unavailable for model %q", ConfigOptionThinkingLevel, providerfactory.QualifiedModel(providerName, currentModel))
@@ -1118,6 +1173,10 @@ func (b Builder) Build(ctx context.Context, opts BuildOptions) (*SessionRuntime,
 	if err != nil {
 		return nil, err
 	}
+	replayedMode, err := replayPersistedMode(opts.Manager, resolved, opts.Source)
+	if err != nil {
+		return nil, err
+	}
 	var inputs *InputMaterializer
 	var attachments *AttachmentService
 	if opts.Manager != nil {
@@ -1136,6 +1195,7 @@ func (b Builder) Build(ctx context.Context, opts BuildOptions) (*SessionRuntime,
 		EntrySource:         opts.Source,
 		Policy:              PolicyForSource(resolved.Source, ""),
 		WorkDir:             opts.WorkDir,
+		Mode:                replayedMode,
 		Manager:             opts.Manager,
 		Inputs:              inputs,
 		Attachments:         attachments,

@@ -2072,6 +2072,7 @@ func (s *server) handleInitialize(req rpcRequest) {
 				"usageCacheProjection",
 				"attachmentList",
 				"manageSettings",
+				"manageACPProfiles",
 				"manageApplicationSettings",
 				"manageServeConfig",
 				"manageChannels",

@@ -634,6 +634,23 @@ Agent 声明“完成文件可作为交付制品”的唯一入口。它会先�
 
 Delegate 模式适用于大范围代码搜索、多步调查、聚焦实现或验证任务。不适用于单步操作、需要向用户澄清的任务或强依赖完整会话历史的有状态工作。
 
+#### Router 外部 worker
+
+在 Router 模式（`/router <id>` 或 `--router --acp-agent <id>`）下，`delegate_subagent` 始终指向已激活的外部 ACP worker。`agent` 必填且必须与已激活 profile 一致，不存在本地子 Agent 回退。lead 还需要提供有界任务契约：
+
+| 参数 | 说明 |
+|------|------|
+| `agent` | Router 必填：已激活的 ACP profile ID。 |
+| `role` | `investigate`（默认）、`implement`、`test`、`review` 或 `integrate`。 |
+| `read_scope` | worker 应读取的路径或搜索目标（有界）。 |
+| `write_scope` | worker 可修改的路径；写角色必填，且必须位于 profile 的 `writeRoots` 内。 |
+| `expected_deliverables` | `findings`、`changed-files`、`test-evidence` 或 `review`；默认值按角色决定。 |
+| `verification` | worker 必须报告的检查或证据；`implement`/`integrate`/`test` 必填。 |
+| `stop_conditions` | 明确的完成条件与非目标。 |
+
+返回值新增有界 `worker` 对象（`profileId`、`role`、`deliverables`、`evidence: "worker-reported"`、`outputTruncated`、`stopReason`）。请把该结论视为不可信证据：用只读工具核对声称的路径，不要在没有证据时把 `worker-reported` 升级为已验证。
+
+
 ---
 
 ### workflow_lint - Workflow 校验

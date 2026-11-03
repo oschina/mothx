@@ -78,6 +78,8 @@ func (s *server) handleManageRequest(req rpcRequest) {
 		s.handleManageSettingsGet(req)
 	case "mothx/manage/settings/patch":
 		s.handleManageSettingsPatch(req)
+	case "mothx/manage/acp/profiles/list":
+		s.handleManageACPProfilesList(req)
 	case "mothx/manage/application/get":
 		s.handleManageApplicationGet(req)
 	case "mothx/manage/application/patch":
@@ -648,6 +650,17 @@ func (s *server) handleManageSettingsGet(req rpcRequest) {
 // (providers, sandbox, webSearch) are merged at the raw JSON level so sibling
 // and unknown fields survive byte-identical. The response is the fresh
 // settings view model with masked keys.
+// handleManageACPProfilesList projects the shared Runtime profile catalog. It
+// is read-only and deliberately excludes argv, environment names, and paths.
+func (s *server) handleManageACPProfilesList(req rpcRequest) {
+	settings, err := s.manageSettings()
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "settings_unavailable", err.Error(), nil))
+		return
+	}
+	s.writeResponse(req.ID, map[string]any{"profiles": agentruntime.ListACPWorkerProfiles(settings)}, nil)
+}
+
 func (s *server) handleManageSettingsPatch(req rpcRequest) {
 	var envelope struct {
 		Patch map[string]json.RawMessage `json:"patch"`

@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/agentruntime"
 	browserfeature "github.com/oschina/mothx/internal/browser"
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/contextfiles"
@@ -648,7 +649,18 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 		if len(parts) > 1 {
 			switch parts[1] {
 			case "plan", "agent", "yolo", "os", "router":
+				if parts[1] == "router" {
+					if a.runtime == nil {
+						a.addCommandError(a.translator.Text(i18n.MsgCommandRouterUsage))
+						return nil
+					}
+					if _, ok := a.runtime.RouterBinding(); !ok {
+						a.addCommandError(a.translator.Text(i18n.MsgCommandRouterUsage))
+						return nil
+					}
+				}
 				a.mode = parts[1]
+				a.syncToolGroups()
 				// If agent is currently running, abort it so the new mode takes effect immediately
 				if a.isThinking && a.agent != nil {
 					a.pendingAbortReason = "mode change"
@@ -679,6 +691,40 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 				a.addCommandStatus(a.translator.Text(i18n.MsgCommandPermissionsRouter))
 			}
 		}
+	case "/router":
+		if len(parts) != 2 {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterUsage))
+			return nil
+		}
+		if a.isThinking {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandRunningCannotOpen, "/router"))
+			return nil
+		}
+		if err := a.ensureSession(); err != nil {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterFailed, err))
+			return nil
+		}
+		runtime, err := a.expertRuntime()
+		if err != nil {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterFailed, err))
+			return nil
+		}
+		sessionDir := ""
+		if a.session != nil {
+			sessionDir = a.session.GetSessionDir()
+		}
+		// Runtime names the worker; it fills the non-blocking approval strategy
+		// from the profile's validated policy and enforces the idle/idleness and
+		// source checks. The TUI never reads profile argv or credentials.
+		if err := runtime.ActivateRouter(context.Background(), sessionDir, a.settings, agentruntime.RouterBinding{ACPProfileID: parts[1]}); err != nil {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterFailed, err))
+			return nil
+		}
+		a.mode = agentruntime.ModeRouter
+		a.syncToolGroups()
+		a.resetAgent(fmt.Errorf("router activated"))
+		a.addCommandStatus(a.translator.Text(i18n.MsgCommandRouterActivated, parts[1]))
+		a.addCommandStatus(a.translator.Text(i18n.MsgCommandPermissionsRouter))
 	case "/model":
 		if len(parts) > 1 {
 			// Switch model directly

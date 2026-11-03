@@ -348,6 +348,10 @@ const (
 	MsgCommandPermissionsOS               MessageID = "commands.permissions.os"
 	MsgCommandPermissionsRouter           MessageID = "commands.permissions.router"
 	MsgCommandInvalidMode                 MessageID = "commands.invalid_mode"
+	MsgCommandRouterUsage                 MessageID = "commands.router.usage"
+	MsgCommandRouterDescription           MessageID = "commands.router.description"
+	MsgCommandRouterActivated             MessageID = "commands.router.activated"
+	MsgCommandRouterFailed                MessageID = "commands.router.failed"
 	MsgCommandModelNotFound               MessageID = "commands.model.not_found"
 	MsgCommandModelSwitched               MessageID = "commands.model.switched"
 	MsgCommandRunningCannotOpen           MessageID = "commands.running.cannot_open"
@@ -563,6 +567,10 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandPermissionsOS:               "  Permissions: BASH only, auto-execute (no sandbox; blacklisted commands still require approval)",
 		MsgCommandPermissionsRouter:           "  Permissions: READ/PLAN and configured worker delegation only (no local write or shell tools)",
 		MsgCommandInvalidMode:                 "Invalid mode",
+		MsgCommandRouterDescription:           "Activate Router mode with a configured ACP worker profile",
+		MsgCommandRouterUsage:                 "Usage: /router <acp-profile-id> (configure acpAgents in settings.json first)",
+		MsgCommandRouterActivated:             "✅ Router activated with ACP worker: %s",
+		MsgCommandRouterFailed:                "Router activation failed: %v",
 		MsgCommandModelNotFound:               "Model %q not found — available: %s",
 		MsgCommandModelSwitched:               "✅ Model switched to: %s (%s)",
 		MsgCommandRunningCannotOpen:           "Cannot open %s while the agent is running.",
@@ -1003,6 +1011,10 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandPermissionsOS:               "  权限：仅 BASH，自动执行（无沙箱；黑名单命令仍需审批）",
 		MsgCommandPermissionsRouter:           "  权限：仅 READ/PLAN 与已配置的 worker 委派（无本地写入或 shell 工具）",
 		MsgCommandInvalidMode:                 "无效模式",
+		MsgCommandRouterDescription:           "使用已配置的 ACP worker profile 激活 Router 模式",
+		MsgCommandRouterUsage:                 "用法：/router <acp-profile-id>（请先在 settings.json 配置 acpAgents）",
+		MsgCommandRouterActivated:             "✅ Router 已激活，ACP worker：%s",
+		MsgCommandRouterFailed:                "Router 激活失败：%v",
 		MsgCommandModelNotFound:               "未找到模型 %q——可用模型：%s",
 		MsgCommandModelSwitched:               "✅ 模型已切换到：%s（%s）",
 		MsgCommandRunningCannotOpen:           "Agent 运行时不能打开 %s。",

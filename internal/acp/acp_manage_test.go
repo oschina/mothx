@@ -2034,3 +2034,34 @@ func TestManageKnowledgeBaseRPCErrorMapsModelUnavailable(t *testing.T) {
 		t.Fatalf("error data = %#v, want knowledge_base_model_unavailable", rpcErr.Data)
 	}
 }
+
+// TestManageACPProfilesListProjectsSafeCatalog proves the additive management
+// projection exposes profile identity and policy but never argv, environment
+// names, or configuration paths.
+func TestManageACPProfilesListProjectsSafeCatalog(t *testing.T) {
+	configDir := t.TempDir()
+	writeManageSettings(t, configDir, func(settings *config.Settings) {
+		settings.ACPAgents = []config.ACPAgentProfile{{
+			ID: "codex", Title: "Codex", Command: []string{"/opt/secret-location/codex", "acp"},
+			Enabled: true, Environment: []string{"OPENAI_API_KEY_SHOULD_NOT_LEAK"},
+			PermissionPolicy: config.ACPPermissionAutoAllowOnce,
+		}}
+	})
+	output := &syncedBuffer{}
+	srv := newManageFixtureServer(output, t.TempDir())
+	result := manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/acp/profiles/list", nil))
+	profiles, ok := result["profiles"].([]any)
+	if !ok || len(profiles) != 1 {
+		t.Fatalf("profiles = %#v", result["profiles"])
+	}
+	profile := profiles[0].(map[string]any)
+	if profile["id"] != "codex" || profile["routerEligible"] != true {
+		t.Fatalf("profile = %#v", profile)
+	}
+	encoded := fmt.Sprint(result)
+	for _, secret := range []string{"/opt/secret-location", "OPENAI_API_KEY_SHOULD_NOT_LEAK", "secret-location"} {
+		if strings.Contains(encoded, secret) {
+			t.Fatalf("management projection leaked %q: %s", secret, encoded)
+		}
+	}
+}

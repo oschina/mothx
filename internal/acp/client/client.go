@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"sync"
 	"sync/atomic"
 )
@@ -53,6 +52,25 @@ type Message struct {
 // invoked without the client's transport locks held.
 type RequestHandler func(context.Context, Message) (any, *RPCError)
 
+// Process is one started external Agent process. The launcher owns process
+// containment and tree reaping; this package only uses its stdio pipes and
+// terminal contract.
+type Process interface {
+	Stdin() io.WriteCloser
+	Stdout() io.ReadCloser
+	// Wait blocks until the process (and its contained tree) has exited.
+	Wait() error
+	// Terminate kills the process tree. It is idempotent and safe after exit.
+	Terminate()
+}
+
+// Launcher starts one configured executable. The Runtime installs a
+// process-tree-contained implementation; tests may supply a local launcher.
+// This package never launches a process itself.
+type Launcher interface {
+	Start(ctx context.Context, argv []string, dir string, env []string, stderr io.Writer) (Process, error)
+}
+
 // Config configures one stdio ACP client process. Command is an argv vector;
 // callers are responsible for profile authorization and process containment.
 type Config struct {
@@ -62,6 +80,7 @@ type Config struct {
 	MaxMessageBytes int
 	Stderr          io.Writer
 	HandleRequest   RequestHandler
+	Launcher        Launcher
 }
 
 // Client owns one bidirectional JSON-RPC stdio connection.
@@ -69,9 +88,9 @@ type Client struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-	cmd    *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  io.ReadCloser
+	process Process
 
 	writer io.Writer
 	wmu    sync.Mutex
@@ -96,40 +115,34 @@ func Start(ctx context.Context, cfg Config) (*Client, error) {
 	if len(cfg.Command) == 0 || cfg.Command[0] == "" {
 		return nil, errors.New("ACP client command is required")
 	}
+	if cfg.Launcher == nil {
+		return nil, errors.New("ACP client launcher is required")
+	}
 	commandCtx, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(commandCtx, cfg.Command[0], cfg.Command[1:]...)
-	cmd.Dir = cfg.Dir
-	if cfg.Env != nil {
-		cmd.Env = append([]string(nil), cfg.Env...)
-	}
-	if cfg.Stderr != nil {
-		cmd.Stderr = cfg.Stderr
-	}
-	stdin, err := cmd.StdinPipe()
+	process, err := cfg.Launcher.Start(commandCtx, cfg.Command, cfg.Dir, cfg.Env, cfg.Stderr)
 	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("ACP client stdin: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		_ = stdin.Close()
-		cancel()
-		return nil, fmt.Errorf("ACP client stdout: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
-		_ = stdout.Close()
 		cancel()
 		return nil, fmt.Errorf("start ACP agent: %w", err)
 	}
+	if process == nil {
+		cancel()
+		return nil, errors.New("ACP client launcher returned no process")
+	}
+	stdin := process.Stdin()
+	stdout := process.Stdout()
+	if stdin == nil || stdout == nil {
+		process.Terminate()
+		cancel()
+		return nil, errors.New("ACP client process has no stdio pipes")
+	}
 
-	client := newClient(commandCtx, cancel, stdin, stdout, cmd, cfg)
+	client := newClient(commandCtx, cancel, stdin, stdout, process, cfg)
 	go client.readLoop()
 	go client.waitLoop()
 	return client, nil
 }
 
-func newClient(ctx context.Context, cancel context.CancelFunc, stdin io.WriteCloser, stdout io.ReadCloser, cmd *exec.Cmd, cfg Config) *Client {
+func newClient(ctx context.Context, cancel context.CancelFunc, stdin io.WriteCloser, stdout io.ReadCloser, process Process, cfg Config) *Client {
 	maxBytes := cfg.MaxMessageBytes
 	if maxBytes <= 0 {
 		maxBytes = DefaultMaxMessageBytes
@@ -139,7 +152,7 @@ func newClient(ctx context.Context, cancel context.CancelFunc, stdin io.WriteClo
 		cancel:        cancel,
 		stdin:         stdin,
 		stdout:        stdout,
-		cmd:           cmd,
+		process:       process,
 		writer:        stdin,
 		pending:       make(map[string]chan Message),
 		notifications: make(chan Message, 128),
@@ -253,6 +266,9 @@ func (c *Client) Close() error {
 	if c.stdout != nil {
 		_ = c.stdout.Close()
 	}
+	if c.process != nil {
+		c.process.Terminate()
+	}
 	<-c.done
 	// Close is best-effort teardown initiated by the owner. Transport errors
 	// that occurred before teardown remain observable through Err; an error
@@ -289,10 +305,10 @@ func (c *Client) readLoop() {
 }
 
 func (c *Client) waitLoop() {
-	if c.cmd == nil {
+	if c.process == nil {
 		return
 	}
-	if err := c.cmd.Wait(); err != nil {
+	if err := c.process.Wait(); err != nil {
 		c.finish(fmt.Errorf("ACP agent exited: %w", err))
 	}
 }

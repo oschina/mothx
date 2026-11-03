@@ -89,6 +89,8 @@ type cliFlags struct {
 	verbose           bool
 	debug             bool
 	expert            string
+	router            bool
+	acpAgent          string
 	multiAgent        bool
 	delegate          bool
 	workflows         bool
@@ -189,6 +191,8 @@ func registerRootFlags(fs *pflag.FlagSet, flags *cliFlags) {
 	fs.StringVarP(&flags.resume, "resume", "r", "", "Resume session by ID or path")
 	fs.StringVar(&flags.session, "session", "", "Use specific session file or ID")
 	fs.StringVar(&flags.expert, "expert", "", "Bind an expert bundle to this session (switching an existing expert requires a fork)")
+	fs.BoolVar(&flags.router, "router", false, "Activate Router mode (requires --acp-agent)")
+	fs.StringVar(&flags.acpAgent, "acp-agent", "", "Activate Router mode with this configured ACP worker profile ID (acpAgents in settings.json)")
 	fs.BoolVarP(&flags.print, "print", "P", false, "Print response and exit (non-interactive)")
 	fs.BoolVar(&flags.json, "json", false, "Stream print-mode output as one JSON object per line (NDJSON) to stdout (requires -P)")
 	registerSharedExecutionFlags(fs, flags, "Enable configured local web search tools for this run")
@@ -257,6 +261,8 @@ func (f *cliFlags) runOptions() runOptions {
 		verbose:         f.verbose,
 		debug:           f.debug,
 		expert:          f.expert,
+		router:          f.router,
+		acpAgent:        f.acpAgent,
 		multiAgent:      f.multiAgent,
 		delegate:        f.delegate,
 		workflows:       f.workflows,
@@ -327,6 +333,8 @@ type runOptions struct {
 	verbose         bool
 	debug           bool
 	expert          string
+	router          bool
+	acpAgent        string
 	multiAgent      bool
 	delegate        bool
 	workflows       bool
@@ -363,6 +371,27 @@ type runtimeSetup struct {
 	cronScheduler *cron.Scheduler
 	allow         *config.AllowConfig
 	cleanup       func()
+}
+
+// routerActivationProfile validates the Router activation flags. It returns an
+// empty profile when Router was not requested, so the caller can distinguish
+// "no activation" from an invalid request.
+func routerActivationProfile(opts runOptions) (string, error) {
+	profile := strings.TrimSpace(opts.acpAgent)
+	routerIntent := opts.router || strings.TrimSpace(opts.mode) == agentruntime.ModeRouter
+	if !routerIntent && profile == "" {
+		return "", nil
+	}
+	if profile == "" {
+		return "", fmt.Errorf("Router mode requires --acp-agent <profile-id>")
+	}
+	if !routerIntent {
+		return "", fmt.Errorf("--acp-agent requires --router (or --mode router)")
+	}
+	if opts.mode != "" && opts.mode != agentruntime.ModeRouter {
+		return "", fmt.Errorf("--acp-agent cannot be combined with --mode %s", opts.mode)
+	}
+	return profile, nil
 }
 
 func run(args []string, opts runOptions) error {
@@ -410,6 +439,40 @@ func run(args []string, opts runOptions) error {
 	extraContext := sharedRuntime.ExtraContext
 	ruleContent = sharedRuntime.RuleContent
 	skillsMgr := sharedRuntime.SkillsMgr
+
+	// A resumed session keeps its persisted mode even when this adapter has no
+	// startup flag for it. An explicit -M always wins, and /systeminit keeps its
+	// deliberate yolo override.
+	if strings.TrimSpace(opts.mode) == "" && !opts.systemInit {
+		if _, _, _, replayedMode, _ := sharedRuntime.ConfigSnapshot(); replayedMode != "" {
+			selection.mode = replayedMode
+		}
+	}
+
+	// Router activation is the same Runtime call the TUI command uses. The
+	// adapter only names the profile; Runtime validates eligibility, enforces an
+	// idle session, and persists mode + binding.
+	routerProfile, err := routerActivationProfile(opts)
+	if err != nil {
+		return err
+	}
+	if routerProfile != "" {
+		sessionDir := ""
+		if sessionSetup.manager != nil {
+			sessionDir = sessionSetup.manager.GetSessionDir()
+		}
+		if err := sharedRuntime.ActivateRouter(context.Background(), sessionDir, settings,
+			agentruntime.RouterBinding{ACPProfileID: routerProfile}); err != nil {
+			return fmt.Errorf("activate Router: %w", err)
+		}
+		selection.mode = agentruntime.ModeRouter
+		opts.mode = agentruntime.ModeRouter
+		// Activation can happen after the initial registry hooks ran. Reconcile
+		// the Runtime-owned tool groups so Router exposes its delegate immediately.
+		agentruntime.SynchronizeToolGroups(sharedRuntime, registry, agentruntime.ToolGroupPolicy{
+			MultiAgent: opts.multiAgent, Delegate: opts.delegate, Workflows: opts.workflows,
+		}, runtime.agentManager)
+	}
 
 	if opts.print {
 		startUpdateCheck(settings, func(notice string) {
@@ -592,7 +655,7 @@ func setupSession(cwd string, settings *config.Settings, opts runOptions) (sessi
 		}
 		return sessionSetup{manager: sess, info: fmt.Sprintf("📂 Resumed session: %s", sess.GetHeader().ID)}, nil
 	default:
-		if !opts.print && !opts.cron && strings.TrimSpace(opts.expert) == "" {
+		if !opts.print && !opts.cron && strings.TrimSpace(opts.expert) == "" && !opts.router && strings.TrimSpace(opts.acpAgent) == "" {
 			return sessionSetup{}, nil
 		}
 		sess, err := agentruntime.CreateSession(agentruntime.CreateSessionOptions{WorkDir: cwd, SessionDir: sessionDir})
@@ -751,7 +814,8 @@ func setupAgentRuntime(ctx context.Context, p provider.Provider, providerName st
 		if subAgentToolsEnabled {
 			agent.RegisterSubAgentTools(runtime.Registry, agentMgr)
 		}
-		if opts.delegate {
+		_, _, _, effectiveMode, _ := runtime.ConfigSnapshot()
+		if opts.delegate || effectiveMode == agentruntime.ModeRouter {
 			agent.RegisterDelegateSubAgentTool(runtime.Registry, agentMgr)
 		}
 		if opts.workflows {

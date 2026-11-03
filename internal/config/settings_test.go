@@ -161,6 +161,62 @@ func TestACPAgentProfileValidationAndLookup(t *testing.T) {
 	}
 }
 
+func TestACPAgentProfileRoleCeilings(t *testing.T) {
+	readOnly := ACPAgentProfile{ID: "reviewer", Command: []string{"/opt/reviewer"}, Enabled: true}
+	if err := readOnly.Validate(); err != nil {
+		t.Fatalf("read-only profile rejected: %v", err)
+	}
+	roles := readOnly.EffectiveRoles()
+	if len(roles) != 1 || roles[0] != ACPRoleInvestigate {
+		t.Fatalf("default roles = %#v, want investigate only", roles)
+	}
+	if readOnly.RoleAllows(ACPRoleImplement) {
+		t.Fatal("profile without a declared role allowed implement")
+	}
+
+	writer := ACPAgentProfile{
+		ID: "worker", Command: []string{"/opt/worker"}, Enabled: true,
+		Roles: []ACPAgentRole{ACPRoleImplement},
+	}
+	if err := writer.Validate(); err == nil {
+		t.Fatal("write role without write roots was accepted")
+	}
+	writer.WriteRoots = []string{"src"}
+	if err := writer.Validate(); err != nil {
+		t.Fatalf("writer profile rejected: %v", err)
+	}
+	if !writer.RoleAllows(ACPRoleImplement) {
+		t.Fatal("declared write role was not allowed")
+	}
+
+	writer.Roles = []ACPAgentRole{"deploy"}
+	if err := writer.Validate(); err == nil {
+		t.Fatal("unknown ACP role was accepted")
+	}
+	writer.Roles = []ACPAgentRole{ACPRoleImplement, ACPRoleImplement}
+	if err := writer.Validate(); err == nil {
+		t.Fatal("duplicate ACP role was accepted")
+	}
+	writer.Roles = []ACPAgentRole{ACPRoleImplement}
+	writer.WriteRoots = []string{"../escape"}
+	if err := writer.Validate(); err == nil {
+		t.Fatal("escaping write root was accepted")
+	}
+	writer.WriteRoots = []string{"/"}
+	if err := writer.Validate(); err == nil {
+		t.Fatal("filesystem-root write root was accepted")
+	}
+	writer.WriteRoots = []string{"src"}
+	writer.MaxConcurrentChildren = -1
+	if err := writer.Validate(); err == nil {
+		t.Fatal("negative concurrency was accepted")
+	}
+	writer.MaxConcurrentChildren = 1
+	if got := writer.EffectiveMaxConcurrentChildren(); got != 1 {
+		t.Fatalf("effective concurrency = %d", got)
+	}
+}
+
 func TestACPAgentProfileRejectsUnsafeCommandAndDuplicates(t *testing.T) {
 	settings := DefaultSettings()
 	settings.ACPAgents = []ACPAgentProfile{{ID: "worker", Command: []string{"codex"}, Enabled: true}}

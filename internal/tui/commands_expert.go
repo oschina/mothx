@@ -302,6 +302,7 @@ func (a *App) syncToolGroups() {
 		MultiAgent: a.multiAgent,
 		Delegate:   a.delegateMode,
 		Workflows:  a.workflows,
+		Mode:       a.mode,
 	}, a.agentMgr)
 }
 

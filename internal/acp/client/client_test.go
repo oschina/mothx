@@ -114,8 +114,9 @@ func TestReadFrameRejectsOversizedAndEncodeRejectsUnsupportedParams(t *testing.T
 
 func TestStartRunsACPHandshakeAndPromptOverRealStdio(t *testing.T) {
 	client, err := Start(context.Background(), Config{
-		Command: []string{os.Args[0], "-test.run=TestACPHelperProcess", "--"},
-		Env:     append(os.Environ(), "MOTHX_ACP_TEST_HELPER=1"),
+		Command:  []string{os.Args[0], "-test.run=TestACPHelperProcess", "--"},
+		Env:      append(os.Environ(), "MOTHX_ACP_TEST_HELPER=1"),
+		Launcher: testLauncher{},
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)

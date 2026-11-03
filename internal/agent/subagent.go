@@ -11,6 +11,8 @@ import (
 	"time"
 
 	agentpkg "github.com/oschina/mothx/agent"
+	ctxpkg "github.com/oschina/mothx/internal/context"
+	"github.com/oschina/mothx/internal/provider"
 	"github.com/oschina/mothx/internal/tools"
 )
 
@@ -71,6 +73,7 @@ func (t *DelegateSubAgentTool) PromptGuidelines() []string {
 		"Do NOT delegate tasks smaller than ~3 tool calls, tasks needing user clarification mid-way, or highly stateful work depending on conversation history",
 		"Write a specific task: state the exact goal, list relevant file paths/names, specify expected output format, and include stop conditions",
 		"Only one delegated sub-agent can run at a time; review its result before acting — treat the output as evidence, not ground truth",
+		"In Router mode, agent=<profile> is required and must name the session's activated worker; supply role, scope, deliverables, verification, and stop conditions as a bounded task contract",
 	}
 }
 func (t *DelegateSubAgentTool) Parameters() json.RawMessage {
@@ -83,7 +86,14 @@ func (t *DelegateSubAgentTool) Parameters() json.RawMessage {
 			"worktree": {"type": "string", "description": "Run the delegated sub-agent in its own isolated git worktree. Pass \"true\" to create one, or a worktree name. Defaults to inheriting the parent workspace."},
 			"tools": {"type": "array", "items": {"type": "string"}, "description": "Restrict sub-agent to specific tools (empty = all tools except nested sub-agent/delegate). Use to narrow scope, e.g. ['read', 'grep', 'find'] for investigation-only tasks."},
 			"max_iterations": {"type": "integer", "default": 50, "description": "Maximum tool-call iterations. Lower for simple tasks (10-20), higher for complex exploration (50-100)."},
-			"system_prompt_extra": {"type": "string", "description": "Additional context or constraints for the sub-agent. Use to pass domain knowledge, coding conventions, or specific instructions not in the task description."}
+			"system_prompt_extra": {"type": "string", "description": "Additional context or constraints for the sub-agent. Use to pass domain knowledge, coding conventions, or specific instructions not in the task description."},
+			"agent": {"type": "string", "description": "Router only: the activated external ACP worker profile ID. Required in Router mode and must match the session's activated profile."},
+			"role": {"type": "string", "enum": ["investigate", "implement", "test", "review", "integrate"], "description": "Router only: the task role. Defaults to investigate. implement/integrate require a write_scope inside the profile's configured write roots and verification evidence."},
+			"read_scope": {"type": "array", "items": {"type": "string"}, "description": "Router only: bounded paths or search targets the worker should read."},
+			"write_scope": {"type": "array", "items": {"type": "string"}, "description": "Router only: paths the worker may modify. Required for write roles and must stay inside the profile write roots."},
+			"expected_deliverables": {"type": "array", "items": {"type": "string", "enum": ["findings", "changed-files", "test-evidence", "review"]}, "description": "Router only: evidence the worker must return. Defaults are role-specific."},
+			"verification": {"type": "string", "description": "Router only: the check or evidence the worker must report. Required for implement/integrate/test roles."},
+			"stop_conditions": {"type": "array", "items": {"type": "string"}, "description": "Router only: explicit completion and non-goals."}
 		},
 		"required": ["task"]
 	}`)
@@ -97,6 +107,17 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 		return tools.ToolResult{}, fmt.Errorf("a delegated sub-agent is already running")
 	}
 	defer t.busy.Store(false)
+
+	parentMode, _ := ParentModeFromContext(ctx)
+	externalAgent, _ := params["agent"].(string)
+	externalAgent = strings.TrimSpace(externalAgent)
+	if parentMode == "router" {
+		if externalAgent == "" {
+			return tools.ToolResult{}, fmt.Errorf("Router delegation requires agent=<activated ACP worker profile>; local child fallback is not available")
+		}
+	} else if externalAgent != "" {
+		return tools.ToolResult{}, fmt.Errorf("agent is only available in Router mode")
+	}
 
 	started := time.Now()
 	task, _ := params["task"].(string)
@@ -141,10 +162,17 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 		parentRunCtx = ctx
 	}
 	policy := DefaultSubAgentPolicy()
-	runCtx, cancel := context.WithTimeout(parentRunCtx, policy.TimeoutPerAgent)
+	runCtx := parentRunCtx
+	cancel := func() {}
+	if externalAgent == "" {
+		// Local delegated children keep their bounded per-agent budget. An
+		// external Router worker is long-running by design: cancellation and the
+		// shared safety boundaries decide its lifetime, never an elapsed clock.
+		runCtx, cancel = context.WithTimeout(parentRunCtx, policy.TimeoutPerAgent)
+	}
 	defer cancel()
 
-	a, err := t.manager.Create(AgentOptions{
+	options := AgentOptions{
 		ParentID: parentID,
 		Mode:     mode,
 		WorkDir:  workDir,
@@ -156,7 +184,20 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 		ExcludeTools:      []string{"question"},
 		SystemPromptExtra: extra,
 		MaxIterations:     maxIter,
-	})
+	}
+	if externalAgent != "" {
+		role, _ := params["role"].(string)
+		verification, _ := params["verification"].(string)
+		options.ExternalAgent = externalAgent
+		options.ExternalTask = task
+		options.ExternalRole = strings.TrimSpace(role)
+		options.ExternalVerification = verification
+		options.ExternalReadScope = stringSliceParam(params["read_scope"])
+		options.ExternalWriteScope = stringSliceParam(params["write_scope"])
+		options.ExternalDeliverable = stringSliceParam(params["expected_deliverables"])
+		options.ExternalStopConditions = stringSliceParam(params["stop_conditions"])
+	}
+	a, err := t.manager.Create(options)
 	if err != nil {
 		return tools.ToolResult{}, fmt.Errorf("create delegated sub-agent: %w", err)
 	}
@@ -207,6 +248,9 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 				canceled = true
 				runErr = normalizeSubAgentRunError(a.ID(), runCtx, e.Error)
 				t.manager.MarkCanceled(a.ID(), runErr)
+			case agentpkg.TaskIncomplete:
+				runErr = normalizeSubAgentRunError(a.ID(), runCtx, e.Error)
+				t.manager.MarkIncomplete(a.ID(), runErr)
 			default:
 				t.manager.MarkDone(a.ID(), lastAssistantResponse(a))
 			}
@@ -239,6 +283,11 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 		"tool_calls":     toolCallCount,
 		"tool_breakdown": toolNames,
 	}
+	if provider, ok := a.(ChildCompletionProvider); ok {
+		if metadata := provider.CompletionMetadata(); len(metadata) > 0 {
+			result["worker"] = metadata
+		}
+	}
 	if runErr != nil {
 		result["status"] = "error"
 		result["error"] = runErr.Error()
@@ -254,6 +303,23 @@ func (t *DelegateSubAgentTool) Execute(ctx context.Context, params map[string]an
 	}
 	data, _ := json.Marshal(result)
 	return tools.NewTextToolResult(string(data)), nil
+}
+
+func stringSliceParam(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		if values, ok := value.([]string); ok {
+			return append([]string(nil), values...)
+		}
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			out = append(out, text)
+		}
+	}
+	return out
 }
 
 func (t *SubAgentSpawnTool) Name() string { return "subagent_spawn" }
@@ -697,6 +763,16 @@ func ForwardChildAgentEvent(ctx context.Context, ch chan<- Event, childID agentp
 		StopReason:    e.StopReason,
 		Error:         e.Error,
 		Status:        TaskStatus(e.Status),
+		// Plan/usage/approval projections are additive: existing consumers that
+		// ignore them keep their behavior, while external-child streams keep the
+		// canonical metadata the Runtime produced.
+		Plan:           taskPlanFromPublic(e.Plan),
+		Usage:          usageFromPublic(e.Usage),
+		ContextUsage:   contextUsageFromPublic(e.ContextUsage),
+		ApprovalID:     e.ApprovalID,
+		ApprovalTool:   e.ApprovalTool,
+		ApprovalArgs:   e.ApprovalArgs,
+		ApprovalResult: e.ApprovalResult,
 	}
 	if len(meta) > 0 {
 		ev.MemberID = meta[0].MemberID
@@ -720,6 +796,9 @@ func ForwardChildAgentEvent(ctx context.Context, ch chan<- Event, childID agentp
 		agentpkg.EventToolExecutionStart,
 		agentpkg.EventToolExecutionEnd,
 		agentpkg.EventToolResult,
+		agentpkg.EventPlanUpdate,
+		agentpkg.EventUsage,
+		agentpkg.EventToolApprovalResponse,
 		agentpkg.EventStatus,
 		agentpkg.EventDone,
 		agentpkg.EventError,
@@ -727,6 +806,38 @@ func ForwardChildAgentEvent(ctx context.Context, ch chan<- Event, childID agentp
 		return sendParentEvent(ctx, ch, ev)
 	default:
 		return false
+	}
+}
+
+func taskPlanFromPublic(plan *agentpkg.TaskPlan) *tools.TaskPlan {
+	if plan == nil {
+		return nil
+	}
+	steps := make([]tools.PlanStep, 0, len(plan.Steps))
+	for _, step := range plan.Steps {
+		steps = append(steps, tools.PlanStep{Title: step.Title, Status: step.Status})
+	}
+	return &tools.TaskPlan{Title: plan.Title, Steps: steps, Note: plan.Note}
+}
+
+func usageFromPublic(usage *agentpkg.Usage) *provider.Usage {
+	if usage == nil {
+		return nil
+	}
+	return &provider.Usage{
+		Input: usage.InputTokens, Output: usage.OutputTokens,
+		CacheRead: usage.CacheRead, CacheWrite: usage.CacheWrite, TotalTokens: usage.TotalTokens,
+	}
+}
+
+func contextUsageFromPublic(usage *agentpkg.ContextUsage) *ctxpkg.ContextUsage {
+	if usage == nil {
+		return nil
+	}
+	return &ctxpkg.ContextUsage{
+		TotalTokens: usage.TotalTokens, Input: usage.Input,
+		CacheRead: usage.CacheRead, CacheWrite: usage.CacheWrite,
+		ContextWindow: usage.ContextWindow, Percent: usage.Percent,
 	}
 }
 

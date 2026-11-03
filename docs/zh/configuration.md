@@ -1161,6 +1161,38 @@ Agent 模式下：
 
 使用 [`mothx worktree`](cli-reference.md#worktree---隔离-git-worktree) 或对应的 ACP/Desktop 控件创建、列出、重置与删除 worktree。
 
+### acpAgents
+
+`acpAgents` 是 MothX 可用作 Router worker 的外部 ACP 编码 Agent 全局白名单。MothX 不会从 `PATH` 自动发现可执行文件，不会接受模型工具调用传入的命令，也不会通过 shell 字符串启动。
+
+```json
+{
+  "acpAgents": [
+    {
+      "id": "codex",
+      "title": "Codex ACP",
+      "command": ["/opt/codex/bin/codex", "acp"],
+      "enabled": true,
+      "environment": ["OPENAI_API_KEY"],
+      "roles": ["investigate", "implement", "test", "review"],
+      "writeRoots": ["src"],
+      "maxConcurrentChildren": 1,
+      "permissionPolicy": "auto_allow_once"
+    }
+  ]
+}
+```
+
+- `id` 是唯一暴露给模型的值。`command` 是 argv 数组，`command[0]` 必须是绝对路径。
+- `environment` 只列变量**名称**；启动时从 `env.json` 或进程环境读取值，不会展示给模型，也不会写入事件。
+- `roles` 是能力上限。未声明 `roles` 的 profile 只读（`investigate`）。写角色（`implement`、`integrate`）必须至少声明一个相对 `writeRoots`，任务的 write scope 必须位于其中。
+- `maxConcurrentChildren` 默认 `1`（Router MVP 只允许一个阻塞 worker），上限为 8。
+- Router 的 `permissionPolicy` 只能是 `auto_allow_once` 或 `auto_reject`；`interactive` profile 不能作为 Router worker 激活。MothX 只会选择远端 Agent 实际提供的一次性选项，绝不会自动选择 `allow_always`/`reject_always`。
+
+在 TUI 中使用 `/router <id>`，或在 CLI 中使用 `mothx --router --acp-agent <id>` 激活。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化 profile 与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
+
+**信任边界：** 选择 profile 意味着信任该可执行文件可以访问会话工作目录、你允许的环境变量以及它自行选择的网络。Router 的只读工具列表约束的是 MothX lead，而不是外部 Agent。运行 `mothx doctor` 可以在不启动任何进程的情况下检查 profile 形状与可执行文件可用性。
+
 ### maintenance（后台维护）
 
 Runtime 自有的后台维护配置。它们不是用户自动化任务：MothX 复用共享的 cron 生命周期来调度，并且不会出现在 Web UI 与 Desktop 的定时任务视图、`/api/cron` 管理接口以及 `cron` 工具里。

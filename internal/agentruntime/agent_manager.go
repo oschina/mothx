@@ -123,6 +123,10 @@ func NewAgentManager(opts AgentManagerOptions) (*agent.AgentManager, error) {
 		},
 	)
 	manager := agent.NewAgentManager(factory)
+	// The Runtime installs the external-child backend for the whole manager.
+	// Agent Core never imports ACP; the backend resolves the activated profile,
+	// validates the task contract, and returns an event/input proxy.
+	manager.SetChildBackend(ACPChildBackend{Runtime: opts.Runtime, Settings: effectiveSettings})
 	// The session mailbox is installed for every session, not only for teams: a
 	// member's question or completion must reach an active lead wherever members
 	// can run (multi-agent, delegate, or workflow modes), and subagent_wait must

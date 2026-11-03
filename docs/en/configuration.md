@@ -1161,6 +1161,38 @@ Isolated git worktrees managed by the shared Runtime (`agentruntime.WorktreeMana
 
 Create, list, reset, and remove worktrees with [`mothx worktree`](cli-reference.md#worktree---isolated-git-worktrees), or the equivalent ACP/Desktop controls.
 
+### acpAgents
+
+`acpAgents` is the global allowlist of external ACP coding agents MothX may use as Router workers. MothX never discovers executables from `PATH`, never accepts a command from a model tool call, and never runs a shell string.
+
+```json
+{
+  "acpAgents": [
+    {
+      "id": "codex",
+      "title": "Codex ACP",
+      "command": ["/opt/codex/bin/codex", "acp"],
+      "enabled": true,
+      "environment": ["OPENAI_API_KEY"],
+      "roles": ["investigate", "implement", "test", "review"],
+      "writeRoots": ["src"],
+      "maxConcurrentChildren": 1,
+      "permissionPolicy": "auto_allow_once"
+    }
+  ]
+}
+```
+
+- `id` is the only value exposed to the model. `command` is an argv array and `command[0]` must be an absolute path.
+- `environment` lists variable **names**; values are read from `env.json` or the process environment at launch and are never shown to the model or written to events.
+- `roles` is the capability ceiling. A profile with no `roles` is read-only (`investigate`). Write roles (`implement`, `integrate`) require at least one relative `writeRoots` entry, and a task's write scope must stay inside it.
+- `maxConcurrentChildren` defaults to `1` (the Router MVP is one blocking worker) and is bounded at 8.
+- `permissionPolicy` is `auto_allow_once` or `auto_reject` for Router; `interactive` profiles cannot be activated as Router workers. MothX only selects a one-time option the remote Agent actually offered and never auto-selects `allow_always`/`reject_always`.
+
+Activate Router with `/router <id>` in the TUI or `mothx --router --acp-agent <id>`. Activation requires an idle session whose source is not forced to yolo, and persists the profile selection plus Router mode through the normal session replay entries. The TUI/CLI never read profile argv or start the worker themselves.
+
+**Trust boundary:** choosing a profile means trusting that executable with the session working directory, the environment variables you allowlisted, and any network access it chooses. Router's read-only tool list constrains MothX's own lead, not the external Agent. Run `mothx doctor` to validate profile shape and executable availability without launching anything.
+
 ### maintenance
 
 Runtime-owned background housekeeping. These are not user automation tasks: MothX schedules them through the shared cron lifecycle, and they stay out of the cron views in the Web UI and Desktop, the `/api/cron` management surface, and the `cron` tool.

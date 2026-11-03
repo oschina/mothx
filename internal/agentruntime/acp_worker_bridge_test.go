@@ -20,8 +20,14 @@ func TestACPWorkerBridgeRunsOneTextTurnOverStdio(t *testing.T) {
 			ID: "helper", Command: []string{os.Args[0], "-test.run=TestACPWorkerBridgeHelperProcess", "--"}, Enabled: true,
 			Environment: []string{"MOTHX_ACP_BRIDGE_HELPER"}, PermissionPolicy: config.ACPPermissionAutoAllowOnce,
 		},
-		WorkDir: t.TempDir(),
-		Task:    "inspect this task",
+		WorkDir:  t.TempDir(),
+		Launcher: acpProcessLauncher{},
+		Contract: SubagentTaskContract{
+			Objective:            "inspect this task",
+			Role:                 SubagentRoleInvestigate,
+			ExpectedDeliverables: []SubagentDeliverable{SubagentDeliverableFindings},
+			TargetProfile:        "helper",
+		},
 		OnNotification: func(message acpclient.Message) {
 			notifications <- message
 		},
@@ -31,6 +37,9 @@ func TestACPWorkerBridgeRunsOneTextTurnOverStdio(t *testing.T) {
 	}
 	if result.SessionID != "bridge-session" || result.StopReason != "end_turn" || result.AgentInfo.Name != "bridge-helper" {
 		t.Fatalf("result = %#v", result)
+	}
+	if result.Output != "bridge output" {
+		t.Fatalf("bridge output = %q, want the streamed worker text", result.Output)
 	}
 	select {
 	case message := <-notifications:
@@ -70,8 +79,15 @@ func TestACPWorkerBridgeHelperProcess(t *testing.T) {
 		case "session/new":
 			result = acpclient.NewSessionResult{SessionID: "bridge-session"}
 		case "session/prompt":
-			_, _ = writer.WriteString(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"bridge-session","update":{"sessionUpdate":"agent_message_chunk"}}}` + "\n")
+			text := "bridge output"
+			if os.Getenv("MOTHX_ACP_BRIDGE_PARTIAL") == "1" {
+				text = "partial output"
+			}
+			_, _ = writer.WriteString(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"bridge-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + text + `"}}}}` + "\n")
 			_ = writer.Flush()
+			if os.Getenv("MOTHX_ACP_BRIDGE_PARTIAL") == "1" {
+				os.Exit(1)
+			}
 			result = acpclient.PromptResult{StopReason: "end_turn"}
 		case "session/close":
 			result = map[string]any{}
@@ -85,5 +101,28 @@ func TestACPWorkerBridgeHelperProcess(t *testing.T) {
 		if request.Method == "session/close" {
 			os.Exit(0)
 		}
+	}
+}
+
+func TestACPWorkerBridgeKeepsSafePartialOutputOnFailure(t *testing.T) {
+	t.Setenv("MOTHX_ACP_BRIDGE_HELPER", "1")
+	t.Setenv("MOTHX_ACP_BRIDGE_PARTIAL", "1")
+	result, err := (ACPWorkerBridge{}).Run(context.Background(), ACPWorkerInvocation{
+		Profile: config.ACPAgentProfile{
+			ID: "helper", Command: []string{os.Args[0], "-test.run=TestACPWorkerBridgeHelperProcess", "--"}, Enabled: true,
+			Environment: []string{"MOTHX_ACP_BRIDGE_HELPER", "MOTHX_ACP_BRIDGE_PARTIAL"}, PermissionPolicy: config.ACPPermissionAutoAllowOnce,
+		},
+		WorkDir:  t.TempDir(),
+		Launcher: acpProcessLauncher{},
+		Contract: SubagentTaskContract{
+			Objective: "inspect this task", Role: SubagentRoleInvestigate,
+			ExpectedDeliverables: []SubagentDeliverable{SubagentDeliverableFindings}, TargetProfile: "helper",
+		},
+	})
+	if err == nil {
+		t.Fatal("worker exit before the prompt response was treated as success")
+	}
+	if result.Output != "partial output" {
+		t.Fatalf("partial output = %q, want the safe streamed text", result.Output)
 	}
 }

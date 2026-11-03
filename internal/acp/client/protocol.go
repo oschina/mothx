@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -59,6 +60,110 @@ type CancelParams struct {
 
 type CloseSessionParams struct {
 	SessionID string `json:"sessionId"`
+}
+
+// SessionUpdate is the decoded payload of one session/update notification.
+// Fields are protocol representation only; Runtime decides which variants map
+// to canonical events. All content is untrusted.
+type SessionUpdate struct {
+	SessionUpdate string          `json:"sessionUpdate"`
+	MessageID     string          `json:"messageId,omitempty"`
+	Content       *ContentBlock   `json:"content,omitempty"`
+	ToolCallID    string          `json:"toolCallId,omitempty"`
+	Title         string          `json:"title,omitempty"`
+	Kind          string          `json:"kind,omitempty"`
+	Status        string          `json:"status,omitempty"`
+	RawInput      json.RawMessage `json:"rawInput,omitempty"`
+	RawOutput     json.RawMessage `json:"rawOutput,omitempty"`
+	Entries       []PlanEntry     `json:"entries,omitempty"`
+	Used          int             `json:"used,omitempty"`
+	Size          int             `json:"size,omitempty"`
+}
+
+// PlanEntry is one ACP plan step.
+type PlanEntry struct {
+	Content  string `json:"content"`
+	Priority string `json:"priority,omitempty"`
+	Status   string `json:"status,omitempty"`
+}
+
+// PermissionToolCall is the ACP tool-call context carried by a permission
+// request. Every field is Agent-authored and therefore untrusted.
+type PermissionToolCall struct {
+	ToolCallID string          `json:"toolCallId"`
+	Title      string          `json:"title,omitempty"`
+	Kind       string          `json:"kind,omitempty"`
+	RawInput   json.RawMessage `json:"rawInput,omitempty"`
+}
+
+// PermissionOption is one option the remote Agent offered. MothX never invents
+// an option ID.
+type PermissionOption struct {
+	OptionID string `json:"optionId"`
+	Name     string `json:"name,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+}
+
+// PermissionRequest is the session/request_permission request payload.
+type PermissionRequest struct {
+	SessionID string             `json:"sessionId"`
+	ToolCall  PermissionToolCall `json:"toolCall"`
+	Options   []PermissionOption `json:"options"`
+}
+
+// PermissionResult is the response shape for session/request_permission.
+type PermissionResult struct {
+	Outcome PermissionOutcome `json:"outcome"`
+}
+
+// PermissionOutcome is either a selected offered option or ACP's cancelled
+// outcome.
+type PermissionOutcome struct {
+	Outcome  string `json:"outcome"`
+	OptionID string `json:"optionId,omitempty"`
+}
+
+// PermissionSelected answers with one offered option.
+func PermissionSelected(optionID string) PermissionResult {
+	return PermissionResult{Outcome: PermissionOutcome{Outcome: "selected", OptionID: optionID}}
+}
+
+// PermissionCancelled answers ACP's cancellation outcome.
+func PermissionCancelled() PermissionResult {
+	return PermissionResult{Outcome: PermissionOutcome{Outcome: "cancelled"}}
+}
+
+// DecodeSessionUpdate decodes a session/update notification. It returns false
+// for any other method or malformed params.
+func DecodeSessionUpdate(message Message) (SessionUpdate, bool) {
+	if message.Method != "session/update" {
+		return SessionUpdate{}, false
+	}
+	var params struct {
+		Update SessionUpdate `json:"update"`
+	}
+	if err := json.Unmarshal(message.Params, &params); err != nil {
+		return SessionUpdate{}, false
+	}
+	if params.Update.SessionUpdate == "" {
+		return SessionUpdate{}, false
+	}
+	return params.Update, true
+}
+
+// DecodePermissionRequest decodes a session/request_permission reverse request.
+func DecodePermissionRequest(message Message) (PermissionRequest, bool) {
+	if message.Method != "session/request_permission" {
+		return PermissionRequest{}, false
+	}
+	var request PermissionRequest
+	if err := json.Unmarshal(message.Params, &request); err != nil {
+		return PermissionRequest{}, false
+	}
+	if request.SessionID == "" {
+		return PermissionRequest{}, false
+	}
+	return request, true
 }
 
 // Initialize completes ACP version negotiation for this connection.

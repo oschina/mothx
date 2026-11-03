@@ -189,6 +189,18 @@ type AgentOptions struct {
 	MultiAgent    *bool // optional prompt override
 	DelegateMode  *bool // optional prompt override
 	Workflows     *bool // optional prompt override
+
+	// External child request. Agent Core keeps these values opaque; the
+	// Runtime-installed child backend validates them into its own contract.
+	// They are ignored by the local factory path.
+	ExternalAgent          string
+	ExternalTask           string
+	ExternalRole           string
+	ExternalReadScope      []string
+	ExternalWriteScope     []string
+	ExternalDeliverable    []string
+	ExternalVerification   string
+	ExternalStopConditions []string
 }
 
 // Create creates a new Agent with per-agent Registry.

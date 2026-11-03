@@ -65,6 +65,23 @@ const (
 	ACPPermissionInteractive   ACPPermissionPolicy = "interactive"
 )
 
+// ACPAgentRole is a task role a Router profile may be trusted with. The
+// configuration declares a ceiling; a task contract may narrow it but never
+// widen it. Write roles require at least one declared WriteRoots entry.
+type ACPAgentRole string
+
+const (
+	ACPRoleInvestigate ACPAgentRole = "investigate"
+	ACPRoleImplement   ACPAgentRole = "implement"
+	ACPRoleTest        ACPAgentRole = "test"
+	ACPRoleReview      ACPAgentRole = "review"
+	ACPRoleIntegrate   ACPAgentRole = "integrate"
+)
+
+// maxACPConcurrentChildren bounds per-profile concurrent external workers so a
+// configured value cannot turn into unbounded process fan-out.
+const maxACPConcurrentChildren = 8
+
 // ACPAgentProfile is an administrator-configured local ACP stdio Agent. The
 // model only ever receives its ID; command and environment values remain
 // Runtime configuration.
@@ -75,6 +92,53 @@ type ACPAgentProfile struct {
 	Enabled          bool                `json:"enabled"`
 	Environment      []string            `json:"environment,omitempty"`
 	PermissionPolicy ACPPermissionPolicy `json:"permissionPolicy,omitempty"`
+	Roles            []ACPAgentRole      `json:"roles,omitempty"`
+	WriteRoots       []string            `json:"writeRoots,omitempty"`
+	// MaxConcurrentChildren is the live-worker ceiling for this profile.
+	// Empty/zero means one, matching the serial Router MVP.
+	MaxConcurrentChildren int `json:"maxConcurrentChildren,omitempty"`
+}
+
+// EffectiveRoles returns the declared role ceiling. A profile that declares no
+// roles is read-only: investigate only.
+func (p ACPAgentProfile) EffectiveRoles() []ACPAgentRole {
+	if len(p.Roles) == 0 {
+		return []ACPAgentRole{ACPRoleInvestigate}
+	}
+	return append([]ACPAgentRole(nil), p.Roles...)
+}
+
+// RoleAllows reports whether this profile's declared ceiling includes role.
+// Write roles additionally require a declared write root, so a profile cannot
+// become write-capable by declaring a role alone.
+func (p ACPAgentProfile) RoleAllows(role ACPAgentRole) bool {
+	if ACPRoleWrites(role) && len(p.WriteRoots) == 0 {
+		return false
+	}
+	for _, allowed := range p.EffectiveRoles() {
+		if allowed == role {
+			return true
+		}
+	}
+	return false
+}
+
+// ACPRoleWrites reports whether role is expected to modify the workspace. It is
+// a contract/prompt ceiling, not a filesystem sandbox.
+func ACPRoleWrites(role ACPAgentRole) bool {
+	return role == ACPRoleImplement || role == ACPRoleIntegrate
+}
+
+// EffectiveMaxConcurrentChildren applies the serial-MVP default and the shared
+// upper bound to a validated profile.
+func (p ACPAgentProfile) EffectiveMaxConcurrentChildren() int {
+	if p.MaxConcurrentChildren <= 0 {
+		return 1
+	}
+	if p.MaxConcurrentChildren > maxACPConcurrentChildren {
+		return maxACPConcurrentChildren
+	}
+	return p.MaxConcurrentChildren
 }
 
 // EffectivePermissionPolicy returns the safe non-blocking default for a
@@ -99,6 +163,8 @@ func (s *Settings) ACPAgentProfile(id string) (ACPAgentProfile, bool) {
 		if profile.ID == id && profile.Enabled && profile.Validate() == nil {
 			profile.Command = append([]string(nil), profile.Command...)
 			profile.Environment = append([]string(nil), profile.Environment...)
+			profile.Roles = append([]ACPAgentRole(nil), profile.Roles...)
+			profile.WriteRoots = append([]string(nil), profile.WriteRoots...)
 			return profile, true
 		}
 	}
@@ -123,12 +189,69 @@ func (p ACPAgentProfile) Validate() error {
 			return fmt.Errorf("ACP agent profile %q has invalid environment name %q", p.ID, name)
 		}
 	}
+	seenRoles := map[ACPAgentRole]bool{}
+	for _, role := range p.Roles {
+		if !validACPRole(role) {
+			return fmt.Errorf("ACP agent profile %q has invalid role %q", p.ID, role)
+		}
+		if seenRoles[role] {
+			return fmt.Errorf("ACP agent profile %q declares role %q twice", p.ID, role)
+		}
+		seenRoles[role] = true
+	}
+	writeCapable := false
+	for _, role := range p.EffectiveRoles() {
+		if ACPRoleWrites(role) {
+			writeCapable = true
+		}
+	}
+	if writeCapable && len(p.WriteRoots) == 0 {
+		return fmt.Errorf("ACP agent profile %q declares a write role without writeRoots", p.ID)
+	}
+	for _, root := range p.WriteRoots {
+		if err := validateACPWriteRoot(root); err != nil {
+			return fmt.Errorf("ACP agent profile %q: %w", p.ID, err)
+		}
+	}
+	if p.MaxConcurrentChildren < 0 || p.MaxConcurrentChildren > maxACPConcurrentChildren {
+		return fmt.Errorf("ACP agent profile %q maxConcurrentChildren must be 0 (default 1) or between 1 and %d", p.ID, maxACPConcurrentChildren)
+	}
 	switch p.PermissionPolicy {
 	case "", ACPPermissionAutoAllowOnce, ACPPermissionAutoReject, ACPPermissionInteractive:
 		return nil
 	default:
 		return fmt.Errorf("ACP agent profile %q has invalid permission policy %q", p.ID, p.PermissionPolicy)
 	}
+}
+
+func validACPRole(role ACPAgentRole) bool {
+	switch role {
+	case ACPRoleInvestigate, ACPRoleImplement, ACPRoleTest, ACPRoleReview, ACPRoleIntegrate:
+		return true
+	default:
+		return false
+	}
+}
+
+// validateACPWriteRoot keeps declared roots relative to the Runtime-resolved
+// child work directory and inside it. It is a contract ceiling, not a sandbox:
+// the profile process remains the trust boundary.
+func validateACPWriteRoot(root string) error {
+	trimmed := strings.TrimSpace(root)
+	if trimmed == "" {
+		return fmt.Errorf("writeRoots entries must not be empty")
+	}
+	if filepath.IsAbs(trimmed) {
+		return fmt.Errorf("writeRoots entry %q must be relative to the child work directory", root)
+	}
+	cleaned := filepath.Clean(trimmed)
+	if filepath.IsAbs(cleaned) || filepath.VolumeName(cleaned) != "" {
+		return fmt.Errorf("writeRoots entry %q must be relative to the child work directory", root)
+	}
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("writeRoots entry %q escapes the child work directory", root)
+	}
+	return nil
 }
 
 // ValidateACPAgentProfiles rejects duplicate IDs and malformed configured

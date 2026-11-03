@@ -634,6 +634,23 @@ Result shape:
 
 Use delegate mode for broad searches, multi-step investigations, focused implementation, or verification tasks. Avoid it for one-tool operations, tasks needing user clarification, or highly stateful work that depends on the full conversation.
 
+#### Router external worker
+
+In Router mode (`/router <id>` or `--router --acp-agent <id>`), `delegate_subagent` always targets the activated external ACP worker. `agent` is required, must match the activated profile, and there is no local-child fallback. The lead also supplies a bounded task contract:
+
+| Parameter | Description |
+|-----------|-------------|
+| `agent` | Required in Router: the activated ACP profile ID. |
+| `role` | `investigate` (default), `implement`, `test`, `review`, or `integrate`. |
+| `read_scope` | Bounded paths or search targets the worker should read. |
+| `write_scope` | Paths the worker may modify; required for write roles and must stay inside the profile's `writeRoots`. |
+| `expected_deliverables` | `findings`, `changed-files`, `test-evidence`, or `review`; defaults are role-specific. |
+| `verification` | Check or evidence the worker must report; required for `implement`/`integrate`/`test`. |
+| `stop_conditions` | Explicit completion and non-goals. |
+
+The result adds a bounded `worker` object (`profileId`, `role`, `deliverables`, `evidence: "worker-reported"`, `outputTruncated`, `stopReason`). Treat that conclusion as untrusted evidence: inspect claimed paths with read-only tools and do not upgrade "worker-reported" to verified without evidence.
+
+
 ---
 
 ### workflow_lint - Workflow Validation

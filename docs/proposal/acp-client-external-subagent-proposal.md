@@ -1,8 +1,8 @@
 # ACP Client External Sub-agent Proposal
 
-> Status: In Progress (MVP foundations)
+> Status: Implemented (Phases 0–3, 2026-11-03; Phase 4 follow-ups remain deliberate)
 >
-> Date: 2026-11-02
+> Date: 2026-11-02 · Completed: 2026-11-03
 >
 > Related: `docs/proposal/agent-core-runtime-unification-proposal.md`,
 > `docs/proposal/multi-agent-architecture-plan.md`,
@@ -13,11 +13,11 @@
 ## 1. Summary
 
 MothX already acts as an ACP **Agent/Server** through `mothx acp`: Desktop and
-other ACP clients create MothX sessions and send it prompts. It does not yet
-act as an ACP **Client** that starts another ACP-compliant coding agent and
-uses that agent as one of MothX's sub-agents.
+other ACP clients create MothX sessions and send it prompts. Before this
+proposal it did not act as an ACP **Client** that starts another ACP-compliant
+coding agent and uses that agent as one of MothX's sub-agents.
 
-This proposal adds that missing direction without creating a second Agent
+This proposal added that missing direction without creating a second Agent
 Runtime:
 
 1. an administrator/user configures a named, local ACP Agent profile, such as
@@ -40,12 +40,13 @@ Runtime-resolved profile ID. An external ACP Agent is therefore an explicit
 user-configured execution dependency, not a provider endpoint and not an MCP
 server.
 
-## Implementation Status (2026-11-02)
+## Implementation Status (2026-11-03)
 
-The first shared-Runtime foundations are implemented. They are intentionally
-not yet exposed as a usable Router delegation command: no adapter may launch an
-external ACP Agent until the remaining canonical child/decision/lifecycle work
-is complete.
+Phases 0–3 are implemented. Router now launches exactly one blocking external
+ACP worker through the shared Runtime, with canonical child events, decisions,
+bounded output, process-tree containment, diagnostics, and bilingual docs. The
+Phase 4 follow-ups remain deliberately out of scope and are listed at the end
+of this document.
 
 | Area | Status | Implemented boundary |
 | --- | --- | --- |
@@ -53,9 +54,13 @@ is complete.
 | ACP profile configuration | Implemented | `settings.json` `acpAgents` schema; absolute argv, duplicate ID, environment-name, enabled-state, and permission-policy validation. |
 | Router session binding | Implemented | Replayable `router_binding` session entry for selected profile and non-blocking strategy, supported by legacy store, EventStore, display projection, fork, and Runtime resolution. |
 | ACP stdio client | Implemented | Transport-only `internal/acp/client`: NDJSON JSON-RPC correlation, notifications, reverse requests, v1 initialize/session helpers, frame bounds, and real subprocess tests. |
-| ACP Worker Bridge | Implemented foundation | Runtime-owned one-turn `initialize -> session/new -> session/prompt -> close` bridge with notification callback and cancellation notification. |
-| Router `delegate_subagent` | Not yet wired | Must use the bridge through the manager-reserved external child path; local-child fallback remains prohibited. |
-| Decision and process containment | Not yet wired | Router `auto_allow_once`/`auto_reject` must persist through `DecisionService`; a platform process-tree launcher must replace direct subprocess ownership. |
+| ACP Worker Bridge | Implemented | Runtime-owned one-turn `initialize -> session/new -> session/prompt -> close` bridge with typed update decoding, bounded output, partial-output preservation, cancellation notification, and a caller-supplied process launcher. |
+| Router `delegate_subagent` | Implemented | `AgentManager` reserves/binds an external child through a Runtime-installed backend; `delegate_subagent` requires the activated profile in Router and rejects local fallback, while non-Router `agent` calls are rejected. |
+| Profile role ceiling and task contract | Implemented | `roles`, `writeRoots`, and `maxConcurrentChildren` on `acpAgents`; Runtime `SubagentTaskContract` validation narrows a model request to the profile's role/write ceiling with bounded objectives, scopes, deliverables, verification, and stop conditions. |
+| TUI/CLI Router activation | Implemented | `/router <profile>` and `--router --acp-agent <profile>` call the same Runtime `ActivateRouter`: validates the profile and source policy, requires an idle session, then persists the Router binding before the mode entry. Router selection without a binding is rejected, and every attach path replays the persisted mode. |
+| External delegation and child projection | Implemented | One blocking worker per session; a Runtime-owned `agent.Agent` proxy projects ACP text/thought/tool/plan/usage updates into canonical child events, owns the single `EventRunFinished`, and returns a bounded `worker-reported` envelope. Cancellation answers pending decisions as cancelled and reaps the process tree. |
+| Diagnostics and docs | Implemented | `mothx doctor` checks profile shape/executable availability without launching; bilingual configuration and tool-contract docs added; `mothx/manage/acp/profiles/list` projects the safe Runtime catalog. Executable/profile writes intentionally stay on the local settings path. |
+| Decision and process containment | Implemented | Remote `session/request_permission` records a canonical decision and answers immediately with an offered one-time option; the Runtime process launcher contains the tree with a Unix process group / Windows Job Object and `internal/acp/client` owns no process. |
 
 The focused package suite covering these foundations passes; the detailed
 record, including one self-delegation budget observation, is in
@@ -188,6 +193,8 @@ reviewed with the existing settings schema, but its intended shape is:
       "command": ["/opt/codex/bin/codex", "acp"],
       "enabled": true,
       "environment": ["OPENAI_API_KEY"],
+      "roles": ["investigate", "implement", "test", "review"],
+      "writeRoots": ["src"],
       "maxConcurrentChildren": 2,
       "permissionPolicy": "auto_allow_once"
     }
@@ -1030,7 +1037,7 @@ be a shared Runtime execution policy, not a Desktop or ACP-client exception.
 
 ## 11. Implementation Plan
 
-### Phase 0: Contract and configuration (in progress)
+### Phase 0: Contract and configuration (implemented 2026-11-03)
 
 1. [x] Add the profile schema/validation in `internal/config`, including stable ID,
    argv validation, enabled state, limits, environment variable-name allowlist,
@@ -1046,28 +1053,34 @@ be a shared Runtime execution policy, not a Desktop or ACP-client exception.
    worker session permit, and a profile-selected non-blocking approval strategy.
    It must render a dedicated Router prompt and frozen tool surface, never the
    ordinary YOLO prompt or tool set.
-4. [ ] Define Runtime-owned ACP profile role ceilings and the
+4. [x] Define Runtime-owned ACP profile role ceilings and the
    `SubagentTaskContract` validation boundary. Model arguments may narrow a
    contract but cannot turn an investigate profile into a write-capable worker,
    broaden a write scope, or select an unconfigured target.
-5. [ ] Implement the TUI/CLI activation projection first: both persist the same
+5. [x] Implement the TUI/CLI activation projection first: both persist the same
    selected Router profile on the session and neither owns an ACP process,
    decision, or policy fallback. Non-Router adapters still honor that persisted
-   restrictive profile on attach.
+   restrictive profile on attach. (2026-11-03: `SessionRuntime.ActivateRouter`
+   plus `/router <profile>` and `--router --acp-agent <profile>`.)
 6. [x] Add the `RouterBinding` session domain entry, canonical replay,
    replay, idle-only mutation fence, and immutable Run policy snapshot before
    exposing the TUI/CLI control.
 7. [x] Add focused settings compatibility tests. Sparse settings changes use
    `config.SaveGlobalSettingsPatch()`; no adapter reads/writes `settings.json`
    directly.
-8. [ ] Update architecture guard tests to ensure only Runtime/config code imports
+8. [x] Update architecture guard tests to ensure only Runtime/config code imports
    the ACP child client and that no adapter grows process launch logic.
+   `internal/architecture/acp_client_guard_test.go` now enforces the single
+   Runtime owner and the transport-only import ceiling; raw process launch moves
+   to the Runtime-owned launcher in Phase 2 item 8.
 
-### Phase 1: Protocol client (in progress)
+### Phase 1: Protocol client (implemented 2026-11-03)
 
-1. [ ] Extract only reusable ACP v1 envelope/types/NDJSON codec into
+1. [x] Extract only reusable ACP v1 envelope/types/NDJSON codec into
    `internal/acp/protocol` if that avoids server/client wire duplication. Keep
-   MothX ACP server behavior unchanged.
+   MothX ACP server behavior unchanged. (2026-11-03: typed update/permission
+   decoding lives in `internal/acp/client`; the server wire types stay private
+   to `internal/acp`, so no shared package was needed.)
 2. [x] Add `internal/acp/client` with a testable stdio transport constructor,
    one reader loop, serialized writer, request correlation, reverse-request
    dispatch, cancellation tracking, bounded stderr capture, and no process or
@@ -1081,7 +1094,7 @@ be a shared Runtime execution policy, not a Desktop or ACP-client exception.
    stdin/stdout. Do not test this with in-memory direct server method calls
    alone.
 
-### Phase 2: Runtime child adapter (in progress)
+### Phase 2: Runtime child adapter (implemented 2026-11-03)
 
 1. [x] Implement the synchronous MVP `ACPWorkerBridge` in
    `internal/agentruntime`, then use it from the ACP-backed `agent.Agent`
@@ -1090,49 +1103,54 @@ be a shared Runtime execution policy, not a Desktop or ACP-client exception.
    cancellation, and profile permit release. It does not create a second MothX
    session, provider, registry, Run-store row, decision store, queue, or
    background child manager.
-2. [ ] Add the narrow Runtime-installed external child resolver to
+2. [x] Add the narrow Runtime-installed external child resolver to
    `internal/agent.AgentManager` as a reserve/bind path; preserve its parent
    validation, policy cap, status state machine, cancellation registry, and
    terminal listeners while avoiding its local-factory-only `Create` path.
-3. [ ] For the TUI/CLI MVP, extend only `delegate_subagent` with the Runtime-bound
+   (2026-11-03: `agent.ChildBackend` + `ACPChildBackend`; `Create` keeps every
+   existing validation and registration step.)
+3. [x] For the TUI/CLI MVP, extend only `delegate_subagent` with the Runtime-bound
    ACP target. Router exposes no asynchronous spawn/status/send/wait tool and
    rejects a missing/mismatched `agent` target. Keep local delegation behavior
    unchanged outside Router.
-4. [ ] Register the feature exclusively through
+4. [x] Register the feature exclusively through
    `agentruntime.SynchronizeToolGroups`/the shared agent-manager construction
    path so every entry point receives the same availability and prompt
    guidance. No adapter may register a special ACP-child tool instance.
-5. [ ] Project external child events through the existing `ForwardChildAgentEvent`,
+5. [x] Project external child events through the existing `ForwardChildAgentEvent`,
    mailbox, status, ACP subagent list/messages, and Desktop panel paths. Do not
    create an `mothx/acp-child/*` UI protocol.
 6. [x] Apply Router's frozen lead tool allowlist at both provider advertisement and
    Agent Core execution authorization. In Router, require the selected
    Router-eligible ACP profile and reject local/mismatched child targets before
    launching the one blocking worker.
-7. [ ] Persist/project the bounded task contract and evidence classification as
+7. [x] Persist/project the bounded task contract and evidence classification as
    canonical child metadata. Keep full remote transcript as a child projection;
    inject only a bounded, explicitly untrusted completion envelope into the
    lead context.
-8. [ ] Add the Runtime-owned process-tree launcher/reaper before enabling ACP
+8. [x] Add the Runtime-owned process-tree launcher/reaper before enabling ACP
    profiles. Cancellation must terminate descendants through the platform
    containment handle after the ACP cancellation grace.
 
 ### Phase 3: Decisions, operational UI, and docs
 
-1. Wire remote ACP permission requests into `DecisionService` and each
+1. [x] Wire remote ACP permission requests into `DecisionService` and each
    existing adapter's canonical decision projection. Test resolve, expiry,
    reconnect/replay, parent cancellation, and shutdown.
-2. Add configuration management through the shared configuration service and
+2. [x] Add configuration management through the shared configuration service and
    additive ACP management projections only after the backing Runtime service
    exists. Desktop remains an ACP projection and does not read settings files.
-3. Document profile setup, trust boundary, profile diagnostics, and the exact
+   (2026-11-03: `agentruntime.ListACPWorkerProfiles` plus the read-only
+   `mothx/manage/acp/profiles/list` projection. Writes remain on the deliberate
+   local settings path because the profile is executable-code trust.)
+3. [x] Document profile setup, trust boundary, profile diagnostics, and the exact
    tool-call contract in both English and Chinese user documentation.
-4. Provide `mothx doctor` checks for executable availability and invalid
+4. [x] Provide `mothx doctor` checks for executable availability and invalid
    profile shape without launching an Agent or exposing secret values.
 
-### Phase 4: Deliberate follow-ups
+### Phase 4: Deliberate follow-ups (not implemented)
 
-Only after Phase 1 is stable, separately evaluate:
+The MVP is stable; evaluate these separately:
 
 - capability-negotiated images/resources/attachments with explicit disclosure;
 - client-owned filesystem/terminal bridges backed by shared Runtime sandbox

@@ -25,8 +25,12 @@ type ManagedAgentStatus struct {
 	State             string
 	Result            string
 	Error             string
-	StartedAt         time.Time
-	UpdatedAt         time.Time
+	// Metadata is an opaque, bounded child-backend projection (for example the
+	// Router profile and declared evidence class). It never carries remote
+	// message bodies or configuration secrets.
+	Metadata  map[string]any
+	StartedAt time.Time
+	UpdatedAt time.Time
 }
 
 // AgentStatusListener observes lifecycle transitions of managed agents. It is
@@ -59,6 +63,33 @@ type AgentManager struct {
 	// is installed by the runtime assembly layer; internal/agent never runs git.
 	worktreeProvider WorktreeProvider
 	worktreePerChild bool
+
+	// childBackend is an optional Runtime-installed child constructor. Agent
+	// Core never imports the external protocol; it only knows whether the
+	// backend handled this validated request.
+	childBackend ChildBackend
+}
+
+// ChildBackend constructs a child after AgentManager has validated the parent,
+// mode, and sub-agent policy. It is installed by the Runtime during assembly.
+//
+// handled=false asks the manager to keep the existing local AgentFactory path.
+// A backend must return a fully functional agentpkg.Agent and must not bypass
+// the manager's status, cancellation, event-forwarding, or terminal contracts.
+type ChildBackend interface {
+	CreateChild(opts AgentOptions) (agentpkg.Agent, bool, error)
+}
+
+// ChildMetadataProvider is an optional interface on an external child. Its
+// output is bounded display metadata, never a policy input.
+type ChildMetadataProvider interface {
+	ChildMetadata() map[string]any
+}
+
+// ChildCompletionProvider is an optional interface for the bounded envelope a
+// blocking delegation may merge into its result.
+type ChildCompletionProvider interface {
+	CompletionMetadata() map[string]any
 }
 
 // WorktreeProvider materializes (or reuses) an isolated worktree for baseCwd
@@ -106,6 +137,17 @@ func (m *AgentManager) SetMemberContext(members *MemberDefRegistry, mailbox *Mem
 	if m.factory != nil {
 		m.factory.memberMailbox = mailbox
 	}
+}
+
+// SetChildBackend installs the Runtime-owned external child constructor. It
+// must be set during assembly, before any sub-agent is created.
+func (m *AgentManager) SetChildBackend(backend ChildBackend) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.childBackend = backend
+	m.mu.Unlock()
 }
 
 // SetWorktreeProvider installs the Runtime-owned worktree resolver. It must be
@@ -326,6 +368,12 @@ func (m *AgentManager) Create(opts AgentOptions) (agentpkg.Agent, error) {
 	if opts.Mode == "" {
 		opts.Mode = "yolo"
 	}
+	// An external child is driven by the Runtime backend's own role/profile
+	// policy. Agent Core only needs a neutral bookkeeping mode so parent
+	// inheritance (including Router) cannot reject a request the backend owns.
+	if opts.ExternalAgent != "" {
+		opts.Mode = "agent"
+	}
 	resolvedMode, err := factory.resolveAgentMode(opts.Session, opts.Mode)
 	if err != nil {
 		return nil, err
@@ -338,14 +386,33 @@ func (m *AgentManager) Create(opts AgentOptions) (agentpkg.Agent, error) {
 		}
 	}
 
-	a := factory.Create(opts)
+	var a agentpkg.Agent
+	handled := false
+	if opts.ExternalAgent != "" && m.childBackend == nil {
+		return nil, fmt.Errorf("external child %q requires a Runtime-installed child backend", opts.ExternalAgent)
+	}
+	if m.childBackend != nil {
+		created, backendHandled, err := m.childBackend.CreateChild(opts)
+		if err != nil {
+			return nil, err
+		}
+		if backendHandled {
+			if created == nil {
+				return nil, fmt.Errorf("external child backend returned no agent")
+			}
+			a, handled = created, true
+		}
+	}
+	if !handled {
+		a = factory.Create(opts)
+	}
 	m.agents[opts.ID] = a
 	if opts.ParentID != "" {
 		m.parentOf[opts.ID] = opts.ParentID
 		m.children[opts.ParentID] = append(m.children[opts.ParentID], opts.ID)
 	}
 	now := time.Now()
-	m.statuses[opts.ID] = ManagedAgentStatus{
+	status := ManagedAgentStatus{
 		ID:                opts.ID,
 		ParentID:          opts.ParentID,
 		MemberID:          opts.MemberID,
@@ -357,6 +424,10 @@ func (m *AgentManager) Create(opts AgentOptions) (agentpkg.Agent, error) {
 		StartedAt:         now,
 		UpdatedAt:         now,
 	}
+	if provider, ok := a.(ChildMetadataProvider); ok {
+		status.Metadata = provider.ChildMetadata()
+	}
+	m.statuses[opts.ID] = status
 
 	return a, nil
 }
@@ -368,9 +439,18 @@ func modeOfManagedAgent(a agentpkg.Agent) string {
 	return ""
 }
 
+// runtimeConfigProvider is implemented by external child proxies that carry a
+// neutral mode/config snapshot without embedding a local AgentLoopConfig.
+type runtimeConfigProvider interface {
+	RuntimeConfig() (AgentLoopConfig, bool)
+}
+
 func runtimeConfigOfManagedAgent(a agentpkg.Agent) (AgentLoopConfig, bool) {
 	if adapter, ok := a.(*AgentAdapter); ok && adapter != nil && adapter.inner != nil {
 		return adapter.inner.config, true
+	}
+	if provider, ok := a.(runtimeConfigProvider); ok {
+		return provider.RuntimeConfig()
 	}
 	return AgentLoopConfig{}, false
 }
@@ -616,15 +696,31 @@ func (m *AgentManager) Status(id agentpkg.AgentID) (ManagedAgentStatus, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	st, ok := m.statuses[id]
-	return st, ok
+	if !ok {
+		return st, false
+	}
+	st.Metadata = cloneStatusMetadata(st.Metadata)
+	return st, true
 }
 
 // Statuses returns a sorted copy of all tracked agent statuses.
+func cloneStatusMetadata(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func (m *AgentManager) Statuses() []ManagedAgentStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	statuses := make([]ManagedAgentStatus, 0, len(m.statuses))
 	for _, st := range m.statuses {
+		st.Metadata = cloneStatusMetadata(st.Metadata)
 		statuses = append(statuses, st)
 	}
 	sort.Slice(statuses, func(i, j int) bool {
