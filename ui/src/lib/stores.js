@@ -606,6 +606,32 @@ export async function patchSessionRuntime(id, patch) {
   });
 }
 
+export async function listACPWorkerProfiles() {
+  const body = await request('/api/acp/profiles');
+  return body?.profiles || [];
+}
+
+export async function getSessionRouter(sessionID) {
+  if (!sessionID) return null;
+  return request(`/api/sessions/${encodeURIComponent(sessionID)}/router`);
+}
+
+export async function activateSessionRouter(sessionID, profileIds) {
+  if (!sessionID) throw new Error('session ID is required');
+  return request(`/api/sessions/${encodeURIComponent(sessionID)}/router`, {
+    method: 'POST',
+    ...jsonBody({ profileIds })
+  });
+}
+
+export async function deactivateSessionRouter(sessionID) {
+  if (!sessionID) throw new Error('session ID is required');
+  return request(`/api/sessions/${encodeURIComponent(sessionID)}/router`, {
+    method: 'POST',
+    ...jsonBody({ deactivate: true })
+  });
+}
+
 export async function cancelResponsesRun(sessionID, localRunID) {
   if (!sessionID || !localRunID) throw new Error('session ID and response run ID are required');
   return request(`/api/responses/runs/${encodeURIComponent(localRunID)}/cancel?session_id=${encodeURIComponent(sessionID)}`, {

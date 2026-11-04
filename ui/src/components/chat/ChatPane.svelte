@@ -33,6 +33,10 @@
     getSessionCapabilityEvents,
     getSessionRuntime,
     patchSessionRuntime,
+    listACPWorkerProfiles,
+    getSessionRouter,
+    activateSessionRouter,
+    deactivateSessionRouter,
     activeApproval,
     sessionToolOptions,
     sessionToolsFor,
@@ -97,6 +101,7 @@
   import { canRetryError, errorDisplayMessage, normalizeErrorInfo, requiresRetryConfirmation } from '../../lib/run-error.js';
   import { route, navigate } from '../../lib/router.js';
   import { createSessionRuntimeManager, displayModeFromSnapshot } from '../../lib/chat-runtime-state.js';
+  import { createRouterSelectionManager } from '../../lib/router-selection.js';
   import { readSessionPreferences, writeSessionPreferences } from '../../lib/session-prefs.js';
   import { clearComposerDraft, readComposerDraft, writeComposerDraft } from '../../lib/composer-drafts.js';
   import { getScrollPosition, saveScrollPosition } from '../../lib/scroll-positions.js';
@@ -262,6 +267,11 @@
   let runtimeDisplayMode = 'work';
   let workToolsExpanded = false;
   let runtimeUpdating = false;
+  // Router worker selection. The catalog and the activation live on the
+  // server; the composer only projects them and forwards the user's choice.
+  let routerSelection = { catalog: [], selectable: [], selection: [], loading: false, error: '' };
+  let routerPanelOpen = false;
+  let routerSessionState = { enabled: false, profileIds: [], primaryProfile: '', mode: '' };
   let approvalHistory = [];
   let runEventCursor = 0;
   let skillPicker;
@@ -318,6 +328,52 @@
     onNewSessionMode: (mode) => { newSessionMode = mode; },
     onUpdatingChange: (flag) => { runtimeUpdating = flag; }
   });
+  const routerManager = createRouterSelectionManager({
+    listWorkers: listACPWorkerProfiles,
+    activate: (profileIds) => activateSessionRouter(sessionID, profileIds),
+    deactivate: () => deactivateSessionRouter(sessionID),
+    onState: (next) => { routerSelection = next; }
+  });
+
+  // Entering Router is an explicit choice: the composer loads the catalog so
+  // the user can name a worker, and the Runtime refuses a Router session that
+  // has no bound worker.
+  async function openRouterPanel() {
+    routerPanelOpen = true;
+    await routerManager.load();
+    try {
+      routerSessionState = (await getSessionRouter(sessionID)) || routerSessionState;
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  async function activateRouter() {
+    const result = await routerManager.activate();
+    if (!result.ok) {
+      setError(new Error(result.error));
+      return;
+    }
+    routerSessionState = result.state || routerSessionState;
+    routerPanelOpen = false;
+    // The Runtime persisted Router mode; re-read the canonical snapshot so the
+    // composer shows the resolved mode instead of an optimistic guess.
+    await runtimeManager.load(sessionID, runLifecycleVersion);
+    await refreshSessions();
+  }
+
+  async function deactivateRouter() {
+    const result = await routerManager.deactivate();
+    if (!result.ok) {
+      setError(new Error(result.error));
+      return;
+    }
+    routerSessionState = result.state || routerSessionState;
+    routerPanelOpen = false;
+    await runtimeManager.load(sessionID, runLifecycleVersion);
+    await refreshSessions();
+  }
+
   $: chatView = viewMode || ($route.query?.view === 'trajectory' ? 'trajectory' : 'chat');
   $: activeSession = ($sessions || []).find((item) => item?.id === sessionID);
   $: channelBadge = activeSession?.channelLabel || $t('sessions.local');
@@ -3113,7 +3169,53 @@
               {#each ['plan', 'agent', 'yolo', 'os'] as mode}
                 <button type="button" class:active={runtimeMode === mode} disabled={runtimeUpdating || busy} on:click={() => runtimeManager.setMode(mode)}>{mode}</button>
               {/each}
+              <button
+                type="button"
+                class:active={runtimeMode === 'router'}
+                disabled={runtimeUpdating || busy || routerSelection.loading}
+                title={$t('chat.runtime.routerMode')}
+                on:click={() => (routerPanelOpen ? (routerPanelOpen = false) : openRouterPanel())}
+              >router</button>
             </div>
+            {#if routerPanelOpen}
+              <div class="composer-router-panel">
+                <span class="composer-config-label">{$t('chat.runtime.routerWorker')}</span>
+                {#if routerSelection.loading}
+                  <span class="composer-router-hint">{$t('chat.runtime.routerSelect')}</span>
+                {:else if routerSelection.selectable.length === 0}
+                  <span class="composer-router-hint">{$t('chat.runtime.routerNone')}</span>
+                {:else}
+                  <div class="composer-router-workers" role="group" aria-label={$t('chat.runtime.routerWorker')}>
+                    {#each routerSelection.selectable as worker (worker.id)}
+                      <label class="composer-router-worker">
+                        <input
+                          type="checkbox"
+                          checked={routerSelection.selection.includes(worker.id)}
+                          disabled={routerSelection.loading}
+                          on:change={() => routerManager.toggle(worker.id)}
+                        />
+                        <span>{worker.title}</span>
+                        {#if worker.parallelBaseWorkspaceWrites}
+                          <span class="composer-router-flag">{$t('chat.runtime.routerParallel')}</span>
+                        {/if}
+                      </label>
+                    {/each}
+                  </div>
+                  {#if routerSelection.error}
+                    <span class="composer-router-error">{routerSelection.error}</span>
+                  {/if}
+                  {#if runtimeMode === 'router'}
+                    <button type="button" class="composer-router-action" disabled={routerSelection.loading} on:click={deactivateRouter}>
+                      {$t('chat.runtime.routerLeave')}
+                    </button>
+                  {:else}
+                    <button type="button" class="composer-router-action" disabled={routerSelection.loading} on:click={activateRouter}>
+                      {$t('chat.runtime.routerActivate')}
+                    </button>
+                  {/if}
+                {/if}
+              </div>
+            {/if}
             <span class="composer-config-label">{$t('chat.runtime.displayMode')}</span>
             <div class="composer-display-group" role="group" aria-label={$t('chat.runtime.displayMode')}>
               <button type="button" class:active={runtimeDisplayMode === 'work'} disabled={runtimeUpdating || busy} on:click={() => { workToolsExpanded = false; runtimeDisplayMode = 'work'; runtimeManager.setDisplayMode('work'); }}>{$t('chat.runtime.work')}</button>

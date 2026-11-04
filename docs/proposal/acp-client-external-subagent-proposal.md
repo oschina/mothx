@@ -75,7 +75,7 @@ base-workspace writers are available behind an explicit per-profile opt-in.
 | ACP Worker Bridge | Implemented | Runtime-owned bridge with `initialize -> session/new|resume|load -> session/prompt` turns, typed update decoding, bounded output, partial-output preservation, cancellation notification, and a caller-supplied process launcher. One prompt runs at a time per remote session. |
 | Router `delegate_subagent` | Implemented | `AgentManager` reserves/binds an external child through a Runtime-installed backend; `delegate_subagent` requires a bound profile in Router and rejects local fallback, while non-Router `agent` calls are rejected. |
 | Profile role ceiling and task contract | Implemented | `roles`, `writeRoots`, and `maxConcurrentChildren` on `acpAgents`; Runtime `SubagentTaskContract` validation narrows a model request to the profile's role/write ceiling with bounded objectives, scopes, deliverables, verification, and stop conditions. |
-| TUI/CLI Router activation | Implemented | `/router <profile>[,<profile>...]` and `--router --acp-agent <profile>[,<profile>...]` call the same Runtime `ActivateRouter`: validates every profile and the source policy, requires an idle session, then persists the ordered Router allowlist before the mode entry. The first profile is the default target. Router selection without a binding is rejected, and every attach path replays the persisted mode. |
+| Router activation (TUI/CLI/WebUI) | Implemented | `/router <profile>[,<profile>...]`, `--router --acp-agent <profile>[,<profile>...]`, and the WebUI's `POST /api/sessions/<id>/router` all call the same Runtime `ActivateRouter`: validates every profile and the source policy, requires an idle session, then persists the ordered Router allowlist before the mode entry. The first profile is the default target. Router selection without a binding is rejected, and every attach path replays the persisted mode. The WebUI additionally projects the worker catalog through `GET /api/acp/profiles`, which is the same Runtime catalog the TUI panel renders, so eligibility stays one fact. |
 | External delegation and child projection | Implemented | External workers are blocking or asynchronous; a Runtime-owned `agent.Agent` proxy projects ACP text/thought/tool/plan/usage updates into canonical child events, owns the single `EventRunFinished`, and returns a bounded `worker-reported` envelope. Cancellation answers pending decisions as cancelled and reaps the process tree. |
 | Diagnostics and docs | Implemented | `mothx doctor` checks profile shape/executable availability without launching; bilingual configuration and tool-contract docs added; `mothx/manage/acp/profiles/list` projects the safe Runtime catalog. Executable/profile writes intentionally stay on the local settings path. |
 | Decision and process containment | Implemented | Remote `session/request_permission` records a canonical decision and answers immediately with an offered one-time option; the Runtime process launcher contains the tree with a Unix process group / Windows Job Object and `internal/acp/client` owns no process. |
@@ -810,6 +810,11 @@ not permit a TUI subprocess runner, a CLI-only settings format, or a separate
 Router policy. If another adapter later opens the same persisted session, it
 must honor the resolved Router profile and its restrictive tool surface even if
 that adapter has no control for creating new Router sessions yet.
+
+The WebUI now exposes activation too (`POST /api/sessions/<id>/router` plus the
+`GET /api/acp/profiles` catalog), still delegating to the same Runtime
+activation path. Channel sessions remain excluded by design: WeChat and Feishu
+are source-forced to yolo, so they can never select Router.
 
 The deliberately narrow MVP is:
 
