@@ -672,6 +672,7 @@ func (r *SessionRuntime) ConfigureCapabilities(sandboxEnabled, browserEnabled, w
 	r.SandboxEnabled = sandboxEnabled
 	r.BrowserEnabled = browserEnabled
 	r.WebSearchEnabled = webSearchEnabled
+	r.resourceBrowser = browserEnabled
 	if r.Registry != nil && r.SandboxMgr != nil {
 		active := r.SandboxMgr.GetActive()
 		if !sandboxEnabled {
@@ -712,6 +713,7 @@ func (r *SessionRuntime) SetCapabilityOption(id string, enabled bool) error {
 		return fmt.Errorf("unknown capability config option %q", id)
 	}
 	r.SandboxEnabled, r.BrowserEnabled, r.WebSearchEnabled = sandboxEnabled, browserEnabled, webSearchEnabled
+	r.resourceBrowser = browserEnabled
 	if r.Registry != nil && r.SandboxMgr != nil {
 		active := r.SandboxMgr.GetActive()
 		if !sandboxEnabled {
@@ -1265,6 +1267,7 @@ func (b Builder) Build(ctx context.Context, opts BuildOptions) (*SessionRuntime,
 		RuleContent:         resources.RuleContent,
 		LastUsed:            time.Now(),
 		ArtifactEnabled:     opts.ArtifactEnabled,
+		BrowserEnabled:      opts.Browser,
 		WebSearchEnabled:    b.Settings.IsWebSearchEnabled(),
 		imageGenerationTool: registryExposesImageGeneration(registry),
 		resourceSettings:    b.Settings,
@@ -1396,6 +1399,7 @@ func (r *SessionRuntime) RefreshResources(settings *config.Settings, opts Refres
 	r.resourceSettings = settings
 	r.resourceWorkflows = opts.Workflows
 	r.resourceBrowser = opts.Browser
+	r.BrowserEnabled = opts.Browser
 	r.LastUsed = time.Now()
 	return nil
 }
@@ -1534,6 +1538,7 @@ func (r *SessionRuntime) SynchronizeCoreTools(browserEnabled, webSearchEnabled b
 	// reconcile tools against a stale flag and silently drop web search.
 	r.BrowserEnabled = browserEnabled
 	r.WebSearchEnabled = webSearchEnabled
+	r.resourceBrowser = browserEnabled
 	r.synchronizeCoreToolsLocked(browserEnabled, webSearchEnabled, r.resourceSettings)
 }
 

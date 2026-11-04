@@ -1048,6 +1048,14 @@ func (a *App) activateSession(sess *session.Manager) error {
 	if err := a.bindRuntimeSession(sess); err != nil {
 		return err
 	}
+	// A browser toggle can happen before the first prompt creates a session.
+	// Persist that already-applied Runtime capability now that there is a
+	// session owner, so reopening the session preserves the user's choice.
+	if a.browserEnabled {
+		if err := a.runtime.SetCapabilityOption(agentruntime.ConfigOptionBrowser, true); err != nil {
+			return err
+		}
+	}
 	a.session = sess
 	// The TUI directory always mirrors what the Runtime bound: BindSession made
 	// header.Cwd the authoritative WorkDir, so committing a different value (or

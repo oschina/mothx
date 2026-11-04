@@ -97,6 +97,7 @@ func AttachSessionResources(resources AttachedResources) (*SessionRuntime, error
 		Providers:    resources.Providers,
 		ExtraContext: resources.ExtraContext, RuleContent: resources.RuleContent, AdditionalDirectories: additionalDirectories, LastUsed: time.Now(),
 		ArtifactEnabled:     resources.ArtifactEnabled,
+		BrowserEnabled:      resources.Browser,
 		WebSearchEnabled:    resources.Settings.IsWebSearchEnabled(),
 		imageGenerationTool: registryExposesImageGeneration(resources.Registry),
 		resourceSettings:    resources.Settings,

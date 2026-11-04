@@ -171,21 +171,18 @@ func (a *App) enableBrowserTool() {
 		a.addCommandError(a.translator.Text(i18n.MsgCommandToolRegistryUnavailable))
 		return
 	}
-	cwd := a.currentCwd()
-	globalSkillsDir := ""
-	if a.settings != nil {
-		globalSkillsDir = a.settings.GetGlobalSkillsDir()
-	}
-	a.skillsMgr = skills.NewManagerWithProjectDirs(globalSkillsDir, skills.ProjectSkillDirs(cwd))
-	if err := a.skillsMgr.Load(); err != nil {
+	if a.runtime != nil {
+		if err := a.setRuntimeBrowserCapability(true); err != nil {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandBrowserSkillLoadFailed, err))
+			return
+		}
+	} else if err := a.reloadBrowserSkills(); err != nil {
 		a.addCommandError(a.translator.Text(i18n.MsgCommandBrowserSkillLoadFailed, err))
 		return
 	}
 
-	a.registry.Register(tools.NewSkillRefTool(a.skillsMgr))
-	browserfeature.RegisterTool(a.registry)
 	a.browserEnabled = true
-	a.browserSkillInBase = false
+	a.browserSkillInBase = a.runtime != nil
 	a.browserSkillContext = a.skillsMgr.BuildSkillContext(browserfeature.SkillName)
 	a.markBuiltinActiveSkills()
 	a.rebuildExtraContext()
@@ -199,17 +196,56 @@ func (a *App) disableBrowserTool() {
 		a.addCommandError(a.translator.Text(i18n.MsgCommandBrowserRunning))
 		return
 	}
-	browserfeature.RemoveTool(a.registry)
-	a.browserEnabled = false
 	delete(a.activeSkills, browserfeature.SkillName)
-	if a.browserSkillInBase && a.browserSkillContext != "" {
-		a.baseExtraContext = strings.Replace(a.baseExtraContext, a.browserSkillContext, "", 1)
+	if a.runtime != nil {
+		if err := a.setRuntimeBrowserCapability(false); err != nil {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandBrowserSkillLoadFailed, err))
+			return
+		}
+	} else {
+		browserfeature.RemoveTool(a.registry)
+		if a.browserSkillInBase && a.browserSkillContext != "" {
+			a.baseExtraContext = strings.Replace(a.baseExtraContext, a.browserSkillContext, "", 1)
+		}
 	}
+	a.browserEnabled = false
 	a.browserSkillInBase = false
 	a.browserSkillContext = ""
 	a.rebuildExtraContext()
 	a.resetAgent(fmt.Errorf("browser tool changed"))
 	a.addCommandStatus(a.translator.Text(i18n.MsgCommandBrowserStatus, "OFF"))
+}
+
+func (a *App) reloadBrowserSkills() error {
+	cwd := a.currentCwd()
+	globalSkillsDir := ""
+	if a.settings != nil {
+		globalSkillsDir = a.settings.GetGlobalSkillsDir()
+	}
+	a.skillsMgr = skills.NewManagerWithProjectDirs(globalSkillsDir, skills.ProjectSkillDirs(cwd))
+	if err := a.skillsMgr.Load(); err != nil {
+		return err
+	}
+	a.registry.Register(tools.NewSkillRefTool(a.skillsMgr))
+	browserfeature.RegisterTool(a.registry)
+	return nil
+}
+
+// setRuntimeBrowserCapability keeps the browser tool and its skill on the
+// shared Runtime path. A first-session BindSession reloads Runtime resources,
+// so a TUI-local registry mutation would otherwise disappear before the next
+// prompt is built.
+func (a *App) setRuntimeBrowserCapability(enabled bool) error {
+	if err := a.runtime.SetCapabilityOption(agentruntime.ConfigOptionBrowser, enabled); err != nil {
+		return err
+	}
+	if err := a.runtime.RefreshResources(a.settings, agentruntime.RefreshOptions{
+		Workflows: a.workflows, Browser: enabled,
+	}); err != nil {
+		return err
+	}
+	a.SetRuntime(a.runtime)
+	return nil
 }
 
 // handleAllowEditPathCommand manages the auto-edit path whitelist (allow.json).
