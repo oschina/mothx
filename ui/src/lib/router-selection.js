@@ -20,7 +20,6 @@ export function normalizeWorkerCatalog(profiles) {
       // Accept both the wire name and the normalized one so the projection is
       // idempotent: a re-normalized catalog must not lose its eligibility.
       eligible: Boolean(profile.routerEligible ?? profile.eligible),
-      roles: Array.isArray(profile.roles) ? profile.roles : [],
       maxConcurrentChildren: Number(profile.maxConcurrentChildren) || 1,
       parallelBaseWorkspaceWrites: Boolean(profile.parallelBaseWorkspaceWrites),
       invalidReason: profile.invalidReason || ''

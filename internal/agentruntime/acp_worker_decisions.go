@@ -45,10 +45,14 @@ func (r *SessionRuntime) acquireACPWorkerPermitForRole(limit int, role SubagentR
 // writeScope is the contract's declared scope. When parallel base writes are
 // allowed, a writer whose scope overlaps a live base writer is still refused:
 // that overlap is statically visible, and refusing it is the one part of the
-// risk that can be checked without confining the worker's own tools.
+// risk that can be checked without confining the worker's own tools. A writer
+// with no declared scope is treated as overlapping every other writer.
 func (r *SessionRuntime) acquireACPWorkerPermitForWorkspace(limit int, role SubagentRole, isolated, allowParallelBaseWrites bool, writeScope []string) (func(), error) {
 	if r == nil {
 		return nil, fmt.Errorf("agent runtime is nil")
+	}
+	if strings.TrimSpace(string(role)) == "" {
+		role = SubagentRoleInvestigate
 	}
 	if limit <= 0 {
 		limit = 1

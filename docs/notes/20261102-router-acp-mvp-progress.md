@@ -2,8 +2,11 @@
 
 > Status: Phases 0–3 and Phase 4 transport/continuation slices of
 > [`acp-client-external-subagent-proposal.md`](../proposal/acp-client-external-subagent-proposal.md)
-> are implemented, including the ACP standard remote transport. The remaining
-> deliberate follow-up is parallel base-workspace writers.
+> are implemented, including the ACP standard remote transport. Parallel
+> base-workspace writers are available behind the explicit profile opt-in.
+> The 2026-11-04 follow-up removed profile-level role/write-root authorization:
+> roles and task scopes are per delegation, and legacy `roles`/`writeRoots`
+> fields remain parse-compatible but are ignored.
 >
 > Validation: `go build ./...`, `go test ./...`, focused `-race` runs, and
 > `GOOS=windows go build ./internal/agentruntime ./internal/acp/client` all
@@ -106,7 +109,7 @@ executable-code trust), and there are exactly two supported surfaces: the global
 read-only catalog (`agentruntime.ListACPWorkerProfiles`) for eligibility and
 writes only through `config.SaveACPAgentProfiles`, which validates the complete
 candidate set (non-empty `command[0]`, duplicate IDs, environment names,
-roles/`writeRoots`, concurrency) before persisting. That keeps one validation
+concurrency, transport, and permission policy) before persisting. That keeps one validation
 owner and one write owner; no adapter parses or writes `settings.json` itself.
 `mothx/manage/acp/profiles/list` remains a read-only projection for ACP clients.
 
@@ -207,23 +210,28 @@ note.
 
 ## Second slice (2026-11-03)
 
-### 1. ACP profile role ceiling
+### 1. ACP profile and dynamic task scope
 
-`acpAgents` profiles now declare:
+`acpAgents` profiles declare launch and concurrency policy, not role authority:
 
 ```json
 {
-  "roles": ["investigate", "implement", "test", "review"],
-  "writeRoots": ["src"],
-  "maxConcurrentChildren": 1
+  "command": ["codex-acp"],
+  "enabled": true,
+  "maxConcurrentChildren": 1,
+  "permissionPolicy": "auto_allow_once"
 }
 ```
 
-- A profile with no `roles` is read-only (`investigate` only), so an omitted
-  field cannot silently make a profile write-capable.
-- Write roles (`implement`, `integrate`) require at least one `writeRoots`
-  entry; roots must stay relative to, and inside, the Runtime-resolved child
-  work directory.
+- `role` is an optional per-delegation semantic hint and defaults to
+  `investigate` when omitted.
+- `write_scope` is optional task metadata used for prompting, audit, and
+  overlap checks. A write role without a scope remains valid but receives no
+  MothX `fs/write_text_file` bridge.
+- Legacy `roles` and `writeRoots` fields still load for settings compatibility,
+  but they are ignored and are no longer projected by the TUI or management
+  APIs. An external ACP Agent runs its own tools, so neither field can confine
+  its writes.
 - `maxConcurrentChildren` defaults to one concurrent read-only worker per
   session and is bounded at 8. Read-only roles may fan out up to this ceiling and share the
   stable worktree. A write role (`implement`/`integrate`) remains exclusive
@@ -232,7 +240,7 @@ note.
   `EffectiveEnforcedChildren`; `mothx doctor` (`acp.profiles.concurrency`) and
   the `/router` panel report the configured and enforced values. Parallel writes
   stay gated on a Runtime-owned per-worker worktree and managed change sets.
-- Profile lookup copies `Roles`/`WriteRoots` so a caller cannot mutate global
+- Profile lookup still copies legacy slices so a caller cannot mutate global
   configuration through the returned value.
 
 ### 2. `SubagentTaskContract` validation boundary
@@ -243,15 +251,15 @@ contract (`objective`, `role`, `readScope`, `writeScope`,
 `Validate(profile)`:
 
 - the target profile must be the selected one;
-- the role must be inside the profile's declared ceiling;
-- a read-only role may not declare a write scope, and a write role requires a
-  non-empty one inside the declared write roots;
+- `role` is optional and defaults to `investigate`; any known role is accepted;
+- `write_scope` is optional for every role and is checked only for
+  normalization (relative paths that do not escape the working directory);
 - deliverables are role-specific, deduplicated, and bounded;
 - `implement`/`integrate`/`test` require verification evidence;
 - objective, scope entries, verification, stop conditions, and the total
   contract are byte-bounded.
 
-This is a contract/prompt ceiling, not a filesystem sandbox: the external
+This is task metadata and bounded prompting, not a filesystem sandbox: the external
 Agent's process policy remains the real containment boundary.
 
 ### 3. Router rejects interactive profiles
@@ -403,7 +411,7 @@ completion envelope is bounded.
 `mothx doctor` adds `acp.profiles` (shape, executable presence/executable bit,
 no launch). `agentruntime.ListACPWorkerProfiles` and the read-only
 `mothx/manage/acp/profiles/list` projection expose safe descriptors (ID, title,
-enabled/eligible, roles, policy, concurrency) and never argv/environment/paths.
+enabled/eligible, policy, concurrency) and never argv/environment/paths.
 Executable-profile writes remain on the deliberate local settings path.
 Bilingual configuration and `delegate_subagent` documentation describe setup,
 the trust boundary, diagnostics, and the exact contract.
@@ -550,10 +558,10 @@ surface, handle-only waiting without a mailbox, and synchronous permit refusal.
   and honor ACP's 1-based `line`/`limit`. `session/new` forwards the same
   Runtime-authorized session roots as `additionalDirectories`, so an Agent that
   honors ACP's session root set and the MothX bridge agree on what is readable.
-  A write-role task whose profile declares `writeRoots` also gets
-  `fs/write_text_file`; each request must resolve inside both the task
-  `writeScope` and profile `writeRoots` and uses the shared file lock and atomic
-  write path. Profiles with `"terminal": true` get the terminal bridge; commands
+  A Registry-backed connection advertises `fs/write_text_file`; a write-role
+  task with a non-empty `writeScope` may use it. Each request must resolve
+  inside that task scope and uses the shared file lock and atomic write path.
+  Profiles with `"terminal": true` get the terminal bridge; commands
   run through the shared sandbox, process-group containment, and a bounded
   non-interactive output buffer. Terminal/URL authentication remains unimplemented.
 - The client gained a synchronous notification handler so a following JSON-RPC

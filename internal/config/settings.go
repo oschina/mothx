@@ -75,9 +75,11 @@ const (
 	ACPAgentTransportHTTP      ACPAgentTransport = "http"
 )
 
-// ACPAgentRole is a task role a Router profile may be trusted with. The
-// configuration declares a ceiling; a task contract may narrow it but never
-// widen it. Write roles require at least one declared WriteRoots entry.
+// ACPAgentRole is a legacy settings vocabulary. Router roles are now supplied
+// per delegation by the model and validated by internal/agentruntime; a profile
+// no longer grants or restricts a role.
+//
+// Deprecated: retained only so older settings.json values unmarshal unchanged.
 type ACPAgentRole string
 
 const (
@@ -109,8 +111,14 @@ type ACPAgentProfile struct {
 	Enabled          bool                `json:"enabled"`
 	Environment      []string            `json:"environment,omitempty"`
 	PermissionPolicy ACPPermissionPolicy `json:"permissionPolicy,omitempty"`
-	Roles            []ACPAgentRole      `json:"roles,omitempty"`
-	WriteRoots       []string            `json:"writeRoots,omitempty"`
+	// Roles and WriteRoots are deprecated settings-compatibility fields.
+	// External ACP Agents run their own tools, so a profile-level role ceiling
+	// or write-root list cannot confine them. Role and write_scope are
+	// per-delegation task metadata owned by internal/agentruntime; these values
+	// are accepted but ignored. Removing the JSON fields would strand existing
+	// settings files, so they remain here until a deliberate schema migration.
+	Roles      []ACPAgentRole `json:"roles,omitempty"`
+	WriteRoots []string       `json:"writeRoots,omitempty"`
 	// TerminalAccess opts this profile into the client-owned ACP terminal
 	// bridge. It is explicit executable trust: commands run through the shared
 	// Runtime sandbox but are chosen by the external Agent, not MothX's model.
@@ -156,36 +164,6 @@ func (p ACPAgentProfile) EffectiveTransport() ACPAgentTransport {
 // launching a local process.
 func (p ACPAgentProfile) IsRemote() bool {
 	return p.EffectiveTransport() != ACPAgentTransportStdio
-}
-
-// EffectiveRoles returns the declared role ceiling. A profile that declares no
-// roles is read-only: investigate only.
-func (p ACPAgentProfile) EffectiveRoles() []ACPAgentRole {
-	if len(p.Roles) == 0 {
-		return []ACPAgentRole{ACPRoleInvestigate}
-	}
-	return append([]ACPAgentRole(nil), p.Roles...)
-}
-
-// RoleAllows reports whether this profile's declared ceiling includes role.
-// Write roles additionally require a declared write root, so a profile cannot
-// become write-capable by declaring a role alone.
-func (p ACPAgentProfile) RoleAllows(role ACPAgentRole) bool {
-	if ACPRoleWrites(role) && len(p.WriteRoots) == 0 {
-		return false
-	}
-	for _, allowed := range p.EffectiveRoles() {
-		if allowed == role {
-			return true
-		}
-	}
-	return false
-}
-
-// ACPRoleWrites reports whether role is expected to modify the workspace. It is
-// a contract/prompt ceiling, not a filesystem sandbox.
-func ACPRoleWrites(role ACPAgentRole) bool {
-	return role == ACPRoleImplement || role == ACPRoleIntegrate
 }
 
 // EffectiveMaxConcurrentChildren is the configured live-worker ceiling of a
@@ -274,30 +252,9 @@ func (p ACPAgentProfile) Validate() error {
 			return fmt.Errorf("ACP agent profile %q has invalid environment name %q", p.ID, name)
 		}
 	}
-	seenRoles := map[ACPAgentRole]bool{}
-	for _, role := range p.Roles {
-		if !validACPRole(role) {
-			return fmt.Errorf("ACP agent profile %q has invalid role %q", p.ID, role)
-		}
-		if seenRoles[role] {
-			return fmt.Errorf("ACP agent profile %q declares role %q twice", p.ID, role)
-		}
-		seenRoles[role] = true
-	}
-	writeCapable := false
-	for _, role := range p.EffectiveRoles() {
-		if ACPRoleWrites(role) {
-			writeCapable = true
-		}
-	}
-	if writeCapable && len(p.WriteRoots) == 0 {
-		return fmt.Errorf("ACP agent profile %q declares a write role without writeRoots", p.ID)
-	}
-	for _, root := range p.WriteRoots {
-		if err := validateACPWriteRoot(root); err != nil {
-			return fmt.Errorf("ACP agent profile %q: %w", p.ID, err)
-		}
-	}
+	// Roles and WriteRoots are intentionally not validated. They are ignored
+	// legacy fields; rejecting stale or hand-edited values here would keep the
+	// exact configuration friction this schema change removes.
 	// maxConcurrentChildren applies to read-only workers and isolated implement
 	// workers; a base-workspace writer is still exclusive. Rejecting a larger
 	// value would change the meaning of an existing settings.json field.
@@ -339,36 +296,6 @@ func validateACPRemoteURL(profileID string, transport ACPAgentTransport, raw str
 		if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
 			return fmt.Errorf("ACP agent profile %q url must use http:// or https://", profileID)
 		}
-	}
-	return nil
-}
-
-func validACPRole(role ACPAgentRole) bool {
-	switch role {
-	case ACPRoleInvestigate, ACPRoleImplement, ACPRoleTest, ACPRoleReview, ACPRoleIntegrate:
-		return true
-	default:
-		return false
-	}
-}
-
-// validateACPWriteRoot keeps declared roots relative to the Runtime-resolved
-// child work directory and inside it. It is a contract ceiling, not a sandbox:
-// the profile process remains the trust boundary.
-func validateACPWriteRoot(root string) error {
-	trimmed := strings.TrimSpace(root)
-	if trimmed == "" {
-		return fmt.Errorf("writeRoots entries must not be empty")
-	}
-	if filepath.IsAbs(trimmed) {
-		return fmt.Errorf("writeRoots entry %q must be relative to the child work directory", root)
-	}
-	cleaned := filepath.Clean(trimmed)
-	if filepath.IsAbs(cleaned) || filepath.VolumeName(cleaned) != "" {
-		return fmt.Errorf("writeRoots entry %q must be relative to the child work directory", root)
-	}
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("writeRoots entry %q escapes the child work directory", root)
 	}
 	return nil
 }

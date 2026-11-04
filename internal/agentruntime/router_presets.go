@@ -101,8 +101,9 @@ func FindACPAgentPreset(id string) (ACPAgentPreset, bool) {
 	return ACPAgentPreset{}, false
 }
 
-// ACPAgentProfileFromPreset expands a preset into a ready-to-edit profile with the
-// safe defaults: investigate-only, non-blocking approval, enabled.
+// ACPAgentProfileFromPreset expands a preset into a ready-to-edit profile with a
+// non-blocking approval policy and enabled state. Role and write scope are
+// supplied per delegation, never stored on the profile.
 func ACPAgentProfileFromPreset(preset ACPAgentPreset) config.ACPAgentProfile {
 	return config.ACPAgentProfile{
 		ID:               preset.ID,
@@ -110,6 +111,5 @@ func ACPAgentProfileFromPreset(preset ACPAgentPreset) config.ACPAgentProfile {
 		Command:          append([]string(nil), preset.Command...),
 		Enabled:          true,
 		PermissionPolicy: config.ACPPermissionAutoAllowOnce,
-		Roles:            []config.ACPAgentRole{config.ACPRoleInvestigate},
 	}
 }

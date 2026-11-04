@@ -642,9 +642,9 @@ Delegate 模式适用于大范围代码搜索、多步调查、聚焦实现或�
 | 参数 | 说明 |
 |------|------|
 | `agent` | Router 必填：已绑定的 ACP profile ID 之一（第一个为默认值）。 |
-| `role` | `investigate`（默认）、`implement`、`test`、`review` 或 `integrate`。 |
+| `role` | 可选语义提示：`investigate`（默认）、`implement`、`test`、`review` 或 `integrate`。它不授予也不限制文件系统访问。 |
 | `read_scope` | worker 应读取的路径或搜索目标（有界）。 |
-| `write_scope` | worker 可修改的路径；写角色必填，且必须位于 profile 的 `writeRoots` 内。 |
+| `write_scope` | 可选任务元数据，用于说明 worker 预期修改的路径。它参与提示词、审计与重叠检查，但不是外部 ACP Agent 的沙箱。写入角色传入非空 scope 时，MothX 才会提供受该任务范围约束的 write bridge。 |
 | `expected_deliverables` | `findings`、`changed-files`、`test-evidence` 或 `review`；默认值按角色决定。 |
 | `verification` | worker 必须报告的检查或证据；`implement`/`integrate`/`test` 必填。 |
 | `stop_conditions` | 明确的完成条件与非目标。 |
@@ -677,7 +677,7 @@ Router 下还提供 `subagent_spawn`，用于启动异步外部 worker。它接�
 
 结果包含 `integrationId`、`status`、已应用文件与每个 child 的证据。缺失、截断、失败或 digest 不匹配的快照会在写入前被拒绝。git apply 冲突会作为结构化 `conflict` 证据返回，且工具错误为 nil，便于 lead 用只读工具检查主工作区并决定如何恢复；返回前会先回滚同一次调用中更早应用的快照。已经应用过的 `{handle, digest}` 是幂等的。集成证据通过 migration 57 持久化在 `session_child_runs` 的 `integration_id`、`integration_digest`、`integration_status`、`integration_error` 与 `integrated_at` 字段。
 
-当 Runtime 绑定了工作区 Registry 时，外部 worker 还可以请求 `fs/read_text_file`。Runtime 会通过会话工作区根与符号链接围栏解析绝对路径，只返回不超过 1 MiB 的合法 UTF-8 文本，并支持 ACP 可选的 1-based `line`/`limit`。只有当 Agent 声明 `sessionCapabilities.additionalDirectories` 时，`session/new` 才会以 `cwd` 加 `additionalDirectories` 的形式发送同一组 Runtime 授权根；`session/load` 与 `session/resume` 遵循同一规则。声明了 `writeRoots` 的 profile 在写角色任务中还会获得 `fs/write_text_file`；每次写入都必须解析到任务 `writeScope` 与 profile `writeRoots` 内，并复用共享文件锁和原子写入路径。设置 `"terminal": true` 的 profile 还会获得 `terminal/create`、`terminal/output`、`terminal/wait_for_exit`、`terminal/kill`、`terminal/release`；命令通过共享沙箱与进程组回收执行，并使用有界、非交互的输出缓冲。不实现终端认证或 URL 认证。
+当 Runtime 绑定了工作区 Registry 时，外部 worker 还可以请求 `fs/read_text_file`。Runtime 会通过会话工作区根与符号链接围栏解析绝对路径，只返回不超过 1 MiB 的合法 UTF-8 文本，并支持 ACP 可选的 1-based `line`/`limit`。只有当 Agent 声明 `sessionCapabilities.additionalDirectories` 时，`session/new` 才会以 `cwd` 加 `additionalDirectories` 的形式发送同一组 Runtime 授权根；`session/load` 与 `session/resume` 遵循同一规则。绑定 Registry 的连接会在能力并集中广播 `fs/write_text_file`；带非空 `write_scope` 的写入角色任务可以使用它。每次写入都必须解析到该任务 scope 内，并复用共享文件锁和原子写入路径。这个桥是可选便利能力，不是 containment：外部 Agent 自己的工具仍在 MothX 写入范围之外。设置 `"terminal": true` 的 profile 还会获得 `terminal/create`、`terminal/output`、`terminal/wait_for_exit`、`terminal/kill`、`terminal/release`；命令通过共享沙箱与进程组回收执行，并使用有界、非交互的输出缓冲。不实现终端认证或 URL 认证。
 
 `attachments` 接受请求 manifest 中的 Runtime 输入资源 ID。Runtime 会校验归属、大小和哈希，再按 Agent 在 ACP `promptCapabilities` 中声明的能力协商发送：`image` 内容、`audio` 内容，或使用 `embeddedContext` 的嵌入 `resource`。不支持的类型不会被静默丢弃；worker prompt 会明确说明未内联的原因、Runtime 资源 ID 与会话相对路径。由于隔离 worker 运行在全新的 worktree 中，该路径仅用于说明来源，并不保证文件存在于 worker 的工作区。
 

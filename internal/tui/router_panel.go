@@ -34,12 +34,9 @@ type routerPanelState struct {
 	Cursor        int
 	ChoosingColon bool
 	ColonCursor   int
-	ChoosingRole  bool
-	RoleCursor    int
 	Editing       bool
 	EditingIndex  int
 	Draft         config.ACPAgentProfile
-	Roles         map[config.ACPAgentRole]bool
 	FormCursor    int
 	InputField    string
 	Input         editor.Model
@@ -61,22 +58,13 @@ var routerPanelPermissionOptions = []config.ACPPermissionPolicy{
 	config.ACPPermissionAutoReject,
 }
 
-// routerPanelRoleOptions is the fixed role vocabulary, in display order.
-var routerPanelRoleOptions = []config.ACPAgentRole{
-	config.ACPRoleInvestigate,
-	config.ACPRoleImplement,
-	config.ACPRoleTest,
-	config.ACPRoleReview,
-	config.ACPRoleIntegrate,
-}
-
 func (a *App) openRouterPanel() {
 	// Viewing and editing configuration is safe while a run is active: the panel
 	// never touches Runtime resources, and activation itself is fenced by the
 	// shared Runtime (idle check + source policy). Do not add an adapter-local
 	// "running" gate here.
 	a.input = a.input.Blur()
-	a.routerPanel = routerPanelState{Open: true, EditingIndex: -1, Roles: map[config.ACPAgentRole]bool{}}
+	a.routerPanel = routerPanelState{Open: true, EditingIndex: -1}
 	a.loadRouterPanelProfiles()
 	a.scheduleRender()
 }
@@ -141,7 +129,6 @@ func (a *App) beginRouterPanelCreate() {
 	a.routerPanel.Editing = true
 	a.routerPanel.EditingIndex = -1
 	a.routerPanel.Draft = config.ACPAgentProfile{Enabled: true, PermissionPolicy: config.ACPPermissionAutoReject}
-	a.routerPanel.Roles = map[config.ACPAgentRole]bool{config.ACPRoleInvestigate: true}
 	a.routerPanel.FormCursor = 0
 	a.routerPanel.InputField = ""
 }
@@ -150,7 +137,6 @@ func (a *App) beginRouterPanelCreate() {
 func (a *App) beginRouterPanelCreateFromPreset(preset agentruntime.ACPAgentPreset) {
 	a.routerPanel.ChoosingPreset = false
 	a.routerPanel.Draft = agentruntime.ACPAgentProfileFromPreset(preset)
-	a.routerPanel.Roles = map[config.ACPAgentRole]bool{config.ACPRoleInvestigate: true}
 	a.routerPanel.FormCursor = 0
 	a.routerPanel.InputField = ""
 	a.routerPanel.Error = ""
@@ -161,7 +147,6 @@ func (a *App) beginRouterPanelCreateFromPreset(preset agentruntime.ACPAgentPrese
 func (a *App) beginRouterPanelCreateFromScratch() {
 	a.routerPanel.ChoosingPreset = false
 	a.routerPanel.Draft = config.ACPAgentProfile{Enabled: true, PermissionPolicy: config.ACPPermissionAutoReject}
-	a.routerPanel.Roles = map[config.ACPAgentRole]bool{config.ACPRoleInvestigate: true}
 	a.routerPanel.FormCursor = 0
 	a.routerPanel.InputField = ""
 	a.routerPanel.Error = ""
@@ -175,10 +160,6 @@ func (a *App) beginRouterPanelEdit(index int) {
 	a.routerPanel.Editing = true
 	a.routerPanel.EditingIndex = index
 	a.routerPanel.Draft = a.routerPanel.Profiles[index]
-	a.routerPanel.Roles = map[config.ACPAgentRole]bool{}
-	for _, role := range a.routerPanel.Draft.EffectiveRoles() {
-		a.routerPanel.Roles[role] = true
-	}
 	a.routerPanel.FormCursor = 0
 	a.routerPanel.InputField = ""
 	a.routerPanel.Error = ""
@@ -193,7 +174,6 @@ func (a *App) closeRouterPanelForm() {
 	a.routerPanel.ChoosingPreset = false
 	a.routerPanel.PresetCursor = 0
 	a.routerPanel.Draft = config.ACPAgentProfile{}
-	a.routerPanel.Roles = map[config.ACPAgentRole]bool{}
 	a.routerPanel.FormCursor = 0
 	a.routerPanel.InputField = ""
 	a.routerPanel.Input = editor.Model{}
@@ -208,7 +188,6 @@ type routerPanelField struct {
 
 func (a *App) routerPanelFormFields() []routerPanelField {
 	draft := a.routerPanel.Draft
-	roles := a.routerPanelRolesValue()
 	enabled := a.translator.Text(i18n.MsgRouterPanelValueOff)
 	if draft.Enabled {
 		enabled = a.translator.Text(i18n.MsgRouterPanelValueOn)
@@ -230,8 +209,6 @@ func (a *App) routerPanelFormFields() []routerPanelField {
 		{Key: "command", Title: a.translator.Text(i18n.MsgRouterPanelFieldCommand), Description: valueOrDefault(strings.Join(draft.Command, " "), a.translator.Text(i18n.MsgRouterPanelValueRequired))},
 		{Key: "environment", Title: a.translator.Text(i18n.MsgRouterPanelFieldEnvironment), Description: valueOrDefault(strings.Join(draft.Environment, ", "), unknown)},
 		{Key: "permission", Title: a.translator.Text(i18n.MsgRouterPanelFieldPermission), Description: valueOrDefault(string(draft.PermissionPolicy), string(config.ACPPermissionAutoReject))},
-		{Key: "roles", Title: a.translator.Text(i18n.MsgRouterPanelFieldRoles), Description: roles},
-		{Key: "writeRoots", Title: a.translator.Text(i18n.MsgRouterPanelFieldWriteRoots), Description: valueOrDefault(strings.Join(draft.WriteRoots, ", "), unknown)},
 		{Key: "terminal", Title: a.translator.Text(i18n.MsgRouterPanelFieldTerminal), Description: terminal},
 		{Key: "parallelWrites", Title: a.translator.Text(i18n.MsgRouterPanelFieldParallelWrites), Description: parallelWrites},
 		{Key: "enabled", Title: a.translator.Text(i18n.MsgRouterPanelFieldEnabled), Description: enabled},
@@ -239,19 +216,6 @@ func (a *App) routerPanelFormFields() []routerPanelField {
 		{Key: "cancel", Title: a.translator.Text(i18n.MsgRouterPanelFieldCancel), Description: a.translator.Text(i18n.MsgRouterPanelFieldCancelHint)},
 	}
 	return fields
-}
-
-func (a *App) routerPanelRolesValue() string {
-	names := make([]string, 0, len(routerPanelRoleOptions))
-	for _, role := range routerPanelRoleOptions {
-		if a.routerPanel.Roles[role] {
-			names = append(names, string(role))
-		}
-	}
-	if len(names) == 0 {
-		return a.translator.Text(i18n.MsgRouterPanelValueNone)
-	}
-	return strings.Join(names, ", ")
 }
 
 func (a *App) beginRouterPanelFieldInput(field string) {
@@ -276,8 +240,6 @@ func (a *App) routerPanelFieldPlaceholder(field string) string {
 		return "opencode acp   (or /absolute/path/to/worker acp)"
 	case "environment":
 		return "NAME, NAME (never NAME=value)"
-	case "writeRoots":
-		return "src, internal (relative to the session directory)"
 	default:
 		return field
 	}
@@ -298,8 +260,6 @@ func (a *App) routerPanelFieldValue(field string) string {
 		return strings.Join(draft.Command, " ")
 	case "environment":
 		return strings.Join(draft.Environment, ", ")
-	case "writeRoots":
-		return strings.Join(draft.WriteRoots, ", ")
 	}
 	return ""
 }
@@ -322,8 +282,6 @@ func (a *App) submitRouterPanelFieldInput() {
 		draft.Command = strings.Fields(value)
 	case "environment":
 		draft.Environment = splitRouterPanelList(value)
-	case "writeRoots":
-		draft.WriteRoots = splitRouterPanelList(value)
 	}
 	a.routerPanel.InputField = ""
 	a.routerPanel.Input = editor.Model{}
@@ -350,13 +308,6 @@ func (a *App) routerPanelDraftProfiles() []config.ACPAgentProfile {
 	draft.ID = strings.TrimSpace(draft.ID)
 	draft.Title = strings.TrimSpace(draft.Title)
 	draft.PermissionPolicy = a.routerPanelEffectivePermission(draft.PermissionPolicy)
-	roles := make([]config.ACPAgentRole, 0, len(routerPanelRoleOptions))
-	for _, role := range routerPanelRoleOptions {
-		if a.routerPanel.Roles[role] {
-			roles = append(roles, role)
-		}
-	}
-	draft.Roles = roles
 
 	profiles := append([]config.ACPAgentProfile(nil), a.routerPanel.Profiles...)
 	if a.routerPanel.EditingIndex < 0 {
@@ -384,8 +335,8 @@ func (a *App) routerPanelEffectivePermission(current config.ACPPermissionPolicy)
 func (a *App) saveRouterPanelDraft() {
 	profiles := a.routerPanelDraftProfiles()
 	// A profile is executable-code trust: the shared config owner validates the
-	// complete candidate set (IDs, absolute argv, env names, roles/writeRoots,
-	// concurrency, duplicates) before anything is written.
+	// complete candidate set (IDs, absolute argv, env names, concurrency,
+	// duplicates) before anything is written.
 	if err := config.ValidateACPAgentProfileSet(profiles); err != nil {
 		a.routerPanel.Error = a.translator.Text(i18n.MsgRouterPanelInvalidProfile, err)
 		return
@@ -486,20 +437,6 @@ func (a *App) handleRouterPanelKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		a.scheduleRender()
 		return true, nil
 	}
-	if a.routerPanel.ChoosingRole {
-		switch {
-		case msg.Type == tea.KeyEsc:
-			a.routerPanel.ChoosingRole = false
-		case msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && string(msg.Runes) == "k"):
-			a.routerPanel.RoleCursor = max(0, a.routerPanel.RoleCursor-1)
-		case msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && string(msg.Runes) == "j"):
-			a.routerPanel.RoleCursor = min(len(routerPanelRoleOptions)-1, a.routerPanel.RoleCursor+1)
-		case msg.Type == tea.KeySpace || msg.Type == tea.KeyEnter || (msg.Type == tea.KeyRunes && string(msg.Runes) == "t"):
-			a.toggleRouterPanelRole(routerPanelRoleOptions[a.routerPanel.RoleCursor])
-		}
-		a.scheduleRender()
-		return true, nil
-	}
 	if a.routerPanel.ChoosingPreset {
 		presets := agentruntime.ACPAgentPresets()
 		// One extra row at the end opens a blank form for a custom agent.
@@ -543,9 +480,6 @@ func (a *App) handleRouterPanelKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 						a.routerPanel.ColonCursor = i
 					}
 				}
-			case "roles":
-				a.routerPanel.ChoosingRole = true
-				a.routerPanel.RoleCursor = 0
 			case "enabled":
 				a.routerPanel.Draft.Enabled = !a.routerPanel.Draft.Enabled
 			case "terminal":
@@ -599,28 +533,6 @@ func (a *App) handleRouterPanelKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	}
 	a.scheduleRender()
 	return true, nil
-}
-
-// toggleRouterPanelRole flips one role. It always leaves at least one role
-// selected so a profile can never be saved with an empty ceiling.
-func (a *App) toggleRouterPanelRole(role config.ACPAgentRole) {
-	next := !a.routerPanel.Roles[role]
-	if !next && len(a.selectedRouterPanelRoles()) <= 1 {
-		a.routerPanel.Message = a.translator.Text(i18n.MsgRouterPanelRoleRequired)
-		return
-	}
-	a.routerPanel.Roles[role] = next
-	a.routerPanel.Message = ""
-}
-
-func (a *App) selectedRouterPanelRoles() []config.ACPAgentRole {
-	roles := make([]config.ACPAgentRole, 0, len(routerPanelRoleOptions))
-	for _, role := range routerPanelRoleOptions {
-		if a.routerPanel.Roles[role] {
-			roles = append(roles, role)
-		}
-	}
-	return roles
 }
 
 func (a *App) deleteRouterPanelProfile() {
@@ -679,20 +591,6 @@ func (a *App) renderRouterPanel() string {
 			lines = append(lines, fmt.Sprintf("%s %s", cursor, option))
 		}
 		lines = append(lines, "", a.translator.Text(i18n.MsgRouterPanelChooseHint))
-	case a.routerPanel.ChoosingRole:
-		lines = append(lines, a.translator.Text(i18n.MsgRouterPanelChooseRole)+":")
-		for i, role := range routerPanelRoleOptions {
-			cursor := " "
-			if i == a.routerPanel.RoleCursor {
-				cursor = ">"
-			}
-			state := "[ ]"
-			if a.routerPanel.Roles[role] {
-				state = "[x]"
-			}
-			lines = append(lines, fmt.Sprintf("%s %s %s", cursor, state, role))
-		}
-		lines = append(lines, "", a.translator.Text(i18n.MsgRouterPanelChooseRoleHint))
 	case a.routerPanel.Editing:
 		lines = append(lines, a.translator.Text(i18n.MsgRouterPanelConfigure))
 		for i, field := range a.routerPanelFormFields() {

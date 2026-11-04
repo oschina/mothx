@@ -203,8 +203,6 @@ func TestACPWorkerPoolSharesOneConnectionAcrossReadAndWriteSessions(t *testing.T
 		Transport: string(config.ACPAgentTransportWebSocket),
 		URL:       "ws" + strings.TrimPrefix(server.URL, "http"),
 		Enabled:   true, PermissionPolicy: config.ACPPermissionAutoAllowOnce,
-		Roles:      []config.ACPAgentRole{config.ACPRoleInvestigate, config.ACPRoleImplement},
-		WriteRoots: []string{"src"},
 	}
 	pool := newACPConnectionPool()
 	defer pool.Close()
@@ -224,7 +222,7 @@ func TestACPWorkerPoolSharesOneConnectionAcrossReadAndWriteSessions(t *testing.T
 		return nil, &acpclient.RPCError{Code: -32601, Message: "fs/write_text_file is not available for this task"}
 	}
 	writeInvocation := ACPWorkerInvocation{
-		Profile: profile, WorkDir: workDir, pool: pool, ReadTextFile: true, WriteTextFile: true,
+		Profile: profile, WorkDir: workDir, pool: pool, ReadTextFile: true,
 		Contract: SubagentTaskContract{
 			Objective: "implement this task", Role: SubagentRoleImplement,
 			WriteScope: []string{"src"}, Verification: "go test ./...",
@@ -275,7 +273,7 @@ func TestACPWorkerPoolSharesOneConnectionAcrossReadAndWriteSessions(t *testing.T
 		t.Fatalf("connections = %d, want one shared initialized connection", connections.Load())
 	}
 	if !writeAdvertised.Load() {
-		t.Fatal("shared connection did not advertise the profile's write capability union")
+		t.Fatal("shared connection did not advertise the Runtime-enforced write bridge")
 	}
 }
 

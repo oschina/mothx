@@ -42,12 +42,6 @@ func TestSaveACPAgentProfilesRejectsInvalidSetBeforeWriting(t *testing.T) {
 	if err := SaveACPAgentProfiles([]ACPAgentProfile{emptyCommand}); err == nil {
 		t.Fatal("an empty command[0] was persisted")
 	}
-	writeRoleWithoutRoots := acpProfileFixture()
-	writeRoleWithoutRoots.WriteRoots = nil
-	if err := SaveACPAgentProfiles([]ACPAgentProfile{writeRoleWithoutRoots}); err == nil {
-		t.Fatal("a write role without writeRoots was persisted")
-	}
-
 	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -98,6 +92,52 @@ func TestSaveACPAgentProfilesPersistsNormalizedSparseList(t *testing.T) {
 	}
 	if _, ok := loaded.ACPAgentProfile("codex"); !ok {
 		t.Fatal("the saved profile is not resolvable through the Runtime-facing accessor")
+	}
+}
+
+func TestSaveACPAgentProfilesAcceptsLegacyRoleWithoutWriteRoots(t *testing.T) {
+	t.Setenv("MOTHX_DIR", t.TempDir())
+	profile := acpProfileFixture()
+	profile.Roles = []ACPAgentRole{ACPRoleImplement, "deploy"}
+	profile.WriteRoots = nil
+	if err := SaveACPAgentProfiles([]ACPAgentProfile{profile}); err != nil {
+		t.Fatalf("legacy role fields are still treated as authorization: %v", err)
+	}
+	loaded, err := LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, ok := loaded.ACPAgentProfile("codex")
+	if !ok {
+		t.Fatal("the profile is not resolvable")
+	}
+	if len(stored.Roles) != 2 || stored.Roles[0] != ACPRoleImplement || stored.Roles[1] != "deploy" {
+		t.Fatalf("legacy roles were not preserved: %#v", stored.Roles)
+	}
+	if len(stored.WriteRoots) != 0 {
+		t.Fatalf("legacy writeRoots = %#v, want empty", stored.WriteRoots)
+	}
+}
+
+func TestSaveACPAgentProfilesAcceptsMothxSelfACPTarget(t *testing.T) {
+	t.Setenv("MOTHX_DIR", t.TempDir())
+	profile := ACPAgentProfile{
+		ID: "mothx", Command: []string{"mothx", "acp"}, Enabled: true,
+		PermissionPolicy: ACPPermissionAutoAllowOnce,
+	}
+	if err := SaveACPAgentProfiles([]ACPAgentProfile{profile}); err != nil {
+		t.Fatalf("MothX self-ACP profile was rejected: %v", err)
+	}
+	loaded, err := LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, ok := loaded.ACPAgentProfile("mothx")
+	if !ok {
+		t.Fatal("MothX self-ACP profile is not resolvable")
+	}
+	if len(stored.Roles) != 0 || len(stored.WriteRoots) != 0 {
+		t.Fatalf("self-ACP profile unexpectedly gained legacy authorization fields: %#v", stored)
 	}
 }
 

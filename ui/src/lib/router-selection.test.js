@@ -9,8 +9,8 @@ import {
 } from './router-selection.js';
 
 const CATALOG = [
-  { id: 'codex', title: 'Codex', enabled: true, routerEligible: true, roles: ['investigate'], maxConcurrentChildren: 3 },
-  { id: 'reviewer', enabled: true, routerEligible: true, roles: ['review'] },
+  { id: 'codex', title: 'Codex', enabled: true, routerEligible: true, maxConcurrentChildren: 3 },
+  { id: 'reviewer', enabled: true, routerEligible: true },
   { id: 'helper', enabled: false, routerEligible: true },
   { id: 'interactive', enabled: true, routerEligible: false },
   { id: 'broken', enabled: true, routerEligible: false, invalidReason: 'empty command[0]' }
@@ -21,6 +21,7 @@ test('normalizeWorkerCatalog keeps the invalid reason and drops unusable rows', 
   assert.equal(normalized.length, 5);
   const broken = normalized.find((worker) => worker.id === 'broken');
   assert.equal(broken.invalidReason, 'empty command[0]');
+  assert.equal('roles' in normalized[0], false);
   assert.equal(normalizeWorkerCatalog(null).length, 0);
   assert.equal(normalizeWorkerCatalog([{ title: 'no id' }]).length, 0);
 });

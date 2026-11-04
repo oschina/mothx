@@ -23,6 +23,14 @@ func TestLegacyProfileShapesStillValidate(t *testing.T) {
 			PermissionPolicy: config.ACPPermissionAutoAllowOnce,
 			Roles:            []config.ACPAgentRole{config.ACPRoleImplement}, WriteRoots: []string{"src"},
 		},
+		"legacy write role without roots": {
+			ID: "writer-no-roots", Command: []string{"/opt/c", "acp"}, Enabled: true,
+			Roles: []config.ACPAgentRole{config.ACPRoleImplement},
+		},
+		"legacy unknown role and absolute root": {
+			ID: "legacy-garbage", Command: []string{"/opt/c", "acp"}, Enabled: true,
+			Roles: []config.ACPAgentRole{"deploy", "deploy"}, WriteRoots: []string{"/", "../escape"},
+		},
 		"interactive policy": {
 			ID: "interactive", Command: []string{"/opt/d", "acp"}, Enabled: true,
 			PermissionPolicy: config.ACPPermissionInteractive,

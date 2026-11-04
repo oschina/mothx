@@ -72,6 +72,9 @@ func TestListACPWorkerProfilesOmitsSecrets(t *testing.T) {
 	if strings.Contains(text, "OPENAI_API_KEY") || strings.Contains(text, "/opt/codex") {
 		t.Fatalf("the profile projection leaked configuration details: %s", text)
 	}
+	if strings.Contains(text, `"roles"`) || strings.Contains(text, `"writeRoots"`) {
+		t.Fatalf("the profile projection still exposes legacy authorization fields: %s", text)
+	}
 }
 
 // Router activation must go through the shared Runtime path, so the WebUI

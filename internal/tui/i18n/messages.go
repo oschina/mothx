@@ -367,9 +367,6 @@ const (
 	MsgRouterPanelSetField                MessageID = "router_panel.set_field"
 	MsgRouterPanelChoosePermission        MessageID = "router_panel.choose_permission"
 	MsgRouterPanelChooseHint              MessageID = "router_panel.choose_hint"
-	MsgRouterPanelChooseRole              MessageID = "router_panel.choose_role"
-	MsgRouterPanelChooseRoleHint          MessageID = "router_panel.choose_role_hint"
-	MsgRouterPanelRoleRequired            MessageID = "router_panel.role_required"
 	MsgRouterPanelStateEligible           MessageID = "router_panel.state.eligible"
 	MsgRouterPanelStateIneligible         MessageID = "router_panel.state.ineligible"
 	MsgRouterPanelStateInvalid            MessageID = "router_panel.state.invalid"
@@ -385,8 +382,6 @@ const (
 	MsgRouterPanelFieldCommand            MessageID = "router_panel.field.command"
 	MsgRouterPanelFieldEnvironment        MessageID = "router_panel.field.environment"
 	MsgRouterPanelFieldPermission         MessageID = "router_panel.field.permission"
-	MsgRouterPanelFieldRoles              MessageID = "router_panel.field.roles"
-	MsgRouterPanelFieldWriteRoots         MessageID = "router_panel.field.write_roots"
 	MsgRouterPanelFieldTerminal           MessageID = "router_panel.field.terminal"
 	MsgRouterPanelFieldParallelWrites     MessageID = "router_panel.field.parallel_writes"
 	MsgRouterPanelFieldEnabled            MessageID = "router_panel.field.enabled"
@@ -397,7 +392,6 @@ const (
 	MsgRouterPanelValueOn                 MessageID = "router_panel.value.on"
 	MsgRouterPanelValueOff                MessageID = "router_panel.value.off"
 	MsgRouterPanelValueUnset              MessageID = "router_panel.value.unset"
-	MsgRouterPanelValueNone               MessageID = "router_panel.value.none"
 	MsgRouterPanelValueRequired           MessageID = "router_panel.value.required"
 	MsgCommandModelNotFound               MessageID = "commands.model.not_found"
 	MsgCommandModelSwitched               MessageID = "commands.model.switched"
@@ -633,9 +627,6 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelSetField:                "Set %s",
 		MsgRouterPanelChoosePermission:        "Choose a permission policy",
 		MsgRouterPanelChooseHint:              "Up/Down: choose  Enter: confirm  Esc: cancel",
-		MsgRouterPanelChooseRole:              "Toggle worker roles",
-		MsgRouterPanelChooseRoleHint:          "Up/Down: choose  Space/Enter: toggle  Esc: done",
-		MsgRouterPanelRoleRequired:            "A profile needs at least one role.",
 		MsgRouterPanelStateEligible:           "eligible",
 		MsgRouterPanelStateIneligible:         "disabled",
 		MsgRouterPanelStateInvalid:            "invalid",
@@ -651,8 +642,6 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelFieldCommand:            "Command",
 		MsgRouterPanelFieldEnvironment:        "Environment",
 		MsgRouterPanelFieldPermission:         "Permission",
-		MsgRouterPanelFieldRoles:              "Roles",
-		MsgRouterPanelFieldWriteRoots:         "Write roots",
 		MsgRouterPanelFieldTerminal:           "Terminal bridge",
 		MsgRouterPanelFieldParallelWrites:     "Parallel workspace writes",
 		MsgRouterPanelFieldEnabled:            "Enabled",
@@ -663,7 +652,6 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelValueOn:                 "on",
 		MsgRouterPanelValueOff:                "off",
 		MsgRouterPanelValueUnset:              "unset",
-		MsgRouterPanelValueNone:               "none",
 		MsgRouterPanelValueRequired:           "required",
 		MsgCommandModelNotFound:               "Model %q not found — available: %s",
 		MsgCommandModelSwitched:               "✅ Model switched to: %s (%s)",
@@ -1124,9 +1112,6 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelSetField:                "设置 %s",
 		MsgRouterPanelChoosePermission:        "选择权限策略",
 		MsgRouterPanelChooseHint:              "上下键：选择  Enter：确认  Esc：取消",
-		MsgRouterPanelChooseRole:              "切换 worker 角色",
-		MsgRouterPanelChooseRoleHint:          "上下键：选择  空格/Enter：切换  Esc：完成",
-		MsgRouterPanelRoleRequired:            "profile 至少需要一个角色。",
 		MsgRouterPanelStateEligible:           "可用",
 		MsgRouterPanelStateIneligible:         "已禁用",
 		MsgRouterPanelStateInvalid:            "无效",
@@ -1142,8 +1127,6 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelFieldCommand:            "命令",
 		MsgRouterPanelFieldEnvironment:        "环境变量",
 		MsgRouterPanelFieldPermission:         "权限策略",
-		MsgRouterPanelFieldRoles:              "角色",
-		MsgRouterPanelFieldWriteRoots:         "写入根目录",
 		MsgRouterPanelFieldTerminal:           "终端桥",
 		MsgRouterPanelFieldParallelWrites:     "并行写入工作区",
 		MsgRouterPanelFieldEnabled:            "启用",
@@ -1154,7 +1137,6 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelValueOn:                 "开",
 		MsgRouterPanelValueOff:                "关",
 		MsgRouterPanelValueUnset:              "未设置",
-		MsgRouterPanelValueNone:               "无",
 		MsgRouterPanelValueRequired:           "必填",
 		MsgCommandModelNotFound:               "未找到模型 %q——可用模型：%s",
 		MsgCommandModelSwitched:               "✅ 模型已切换到：%s（%s）",

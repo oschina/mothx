@@ -11,7 +11,6 @@ import (
 	"unicode/utf8"
 
 	acpclient "github.com/oschina/mothx/internal/acp/client"
-	"github.com/oschina/mothx/internal/config"
 )
 
 const maxACPReadTextFileBytes = 1 << 20
@@ -67,19 +66,17 @@ func (r *SessionRuntime) handleACPReadTextFile(ctx context.Context, message acpc
 	return acpclient.ReadTextFileResult{Content: sliceACPTextLines(content, request.Line, request.Limit)}, nil
 }
 
-// acpWriteTextFileAvailable reports whether this child's contract may use the
+// acpWriteTextFileAvailable reports whether this child's task may use the
 // client-owned write bridge. The remote Agent still owns its own tools; this
-// bridge only opts into a MothX-mediated write path when policy can enforce the
-// task write scope, profile write roots, and shared workspace fence.
-func (r *SessionRuntime) acpWriteTextFileAvailable(profile config.ACPAgentProfile, contract SubagentTaskContract) bool {
-	return r.acpWriteTextFileAvailableIn(nil, profile, contract)
+// bridge only opts into a MothX-mediated write path when the per-task role and
+// non-empty write scope make such a path meaningful. A missing write scope is
+// unscoped task metadata, so MothX does not advertise a bridge it cannot bound.
+func (r *SessionRuntime) acpWriteTextFileAvailable(contract SubagentTaskContract) bool {
+	return r.acpWriteTextFileAvailableIn(nil, contract)
 }
 
-func (r *SessionRuntime) acpWriteTextFileAvailableIn(workspace *acpWorkerWorkspace, profile config.ACPAgentProfile, contract SubagentTaskContract) bool {
-	if r == nil || !subagentRoleWrites(contract.Role) || len(profile.WriteRoots) == 0 {
-		return false
-	}
-	if !profile.RoleAllows(config.ACPAgentRole(contract.Role)) {
+func (r *SessionRuntime) acpWriteTextFileAvailableIn(workspace *acpWorkerWorkspace, contract SubagentTaskContract) bool {
+	if r == nil || !subagentRoleWrites(contract.EffectiveRole()) || len(contract.WriteScope) == 0 {
 		return false
 	}
 	r.mu.RLock()
@@ -90,8 +87,7 @@ func (r *SessionRuntime) acpWriteTextFileAvailableIn(workspace *acpWorkerWorkspa
 // handleACPWriteTextFile is the only client-owned write method MothX
 // advertises. It accepts only an existing write-role contract, resolves the
 // path through the shared workspace roots/symlink fence, and requires the
-// resolved path to stay inside both the task write scope and the profile's
-// declared write roots.
+// resolved path to stay inside the task write scope.
 func (r *SessionRuntime) handleACPWriteTextFile(ctx context.Context, message acpclient.Message, scope acpWorkerRequestScope) (any, *acpclient.RPCError) {
 	request, ok := acpclient.DecodeWriteTextFileRequest(message)
 	if !ok {
@@ -103,7 +99,7 @@ func (r *SessionRuntime) handleACPWriteTextFile(ctx context.Context, message acp
 	if !filepath.IsAbs(filepath.FromSlash(request.Path)) {
 		return nil, &acpclient.RPCError{Code: -32602, Message: "fs/write_text_file path must be absolute"}
 	}
-	if !r.acpWriteTextFileAvailableIn(scope.Workspace, scope.Profile, scope.Contract) {
+	if !r.acpWriteTextFileAvailableIn(scope.Workspace, scope.Contract) {
 		return nil, &acpclient.RPCError{Code: -32601, Message: "fs/write_text_file is not available for this task"}
 	}
 	r.mu.RLock()
@@ -117,7 +113,7 @@ func (r *SessionRuntime) handleACPWriteTextFile(ctx context.Context, message acp
 	if err != nil {
 		return nil, &acpclient.RPCError{Code: -32001, Message: "path is outside the session workspace roots"}
 	}
-	if !acpWritePathAuthorized(resolved, scope.WorkDir, scope.Contract.WriteScope, scope.Profile.WriteRoots) {
+	if !acpWritePathAuthorized(resolved, scope.WorkDir, scope.Contract.WriteScope) {
 		return nil, &acpclient.RPCError{Code: -32001, Message: "path is outside the task write scope"}
 	}
 	if info, statErr := os.Stat(resolved); statErr == nil && info.IsDir() {
@@ -130,10 +126,10 @@ func (r *SessionRuntime) handleACPWriteTextFile(ctx context.Context, message acp
 }
 
 // acpWritePathAuthorized compares the symlink-resolved target with the
-// symlink-resolved work directory before checking the task/profile scopes.
-// Checking the lexical path alone would let an in-workspace symlink redirect a
-// write outside the declared scope.
-func acpWritePathAuthorized(resolvedPath, workDir string, writeScope, writeRoots []string) bool {
+// symlink-resolved work directory before checking the task scope. Checking the
+// lexical path alone would let an in-workspace symlink redirect a write outside
+// the declared scope.
+func acpWritePathAuthorized(resolvedPath, workDir string, writeScope []string) bool {
 	resolvedRoot, err := filepath.EvalSymlinks(workDir)
 	if err != nil {
 		return false
@@ -142,7 +138,7 @@ func acpWritePathAuthorized(resolvedPath, workDir string, writeScope, writeRoots
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return false
 	}
-	return subagentWriteWithinRoots(rel, writeScope) && subagentWriteWithinRoots(rel, writeRoots)
+	return subagentWriteWithinRoots(rel, writeScope)
 }
 
 func readBoundedACPTextFile(ctx context.Context, path string) (string, error) {

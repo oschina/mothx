@@ -389,7 +389,6 @@ export interface ACPWorkerProfileView {
   transport?: string;
   enabled?: boolean;
   routerEligible?: boolean;
-  roles?: string[];
   permissionPolicy?: string;
   maxConcurrentChildren?: number;
   parallelBaseWorkspaceWrites?: boolean;

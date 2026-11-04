@@ -1541,7 +1541,7 @@ func writeExpertHTTPError(w http.ResponseWriter, err error) {
 
 // acpWorkerProfileCatalog is the narrow Router projection the HTTP adapter
 // needs. The WebUI adapter stays a projection: it never reads acpAgents
-// itself, because eligibility, role ceilings, and the validation verdict stay
+// itself, because eligibility and the validation verdict stay
 // behind the shared Runtime catalog.
 type acpWorkerProfileCatalog interface {
 	ListACPWorkerProfiles() []openaiapi.ACPWorkerProfileSummary

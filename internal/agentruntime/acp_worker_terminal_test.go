@@ -223,10 +223,7 @@ func TestACPTerminalDoesNotInheritFullParentEnvironment(t *testing.T) {
 func TestACPWriteTextFileRejectsOversizedContent(t *testing.T) {
 	workDir := t.TempDir()
 	runtime := &SessionRuntime{Registry: tools.NewRegistry(workDir, nil)}
-	profile := config.ACPAgentProfile{
-		ID: "helper", Roles: []config.ACPAgentRole{config.ACPRoleImplement},
-		WriteRoots: []string{"."},
-	}
+	profile := config.ACPAgentProfile{ID: "helper"}
 	scope := acpWorkerRequestScope{
 		ChildID: "agent-child", Profile: profile, WorkDir: workDir,
 		Contract: SubagentTaskContract{

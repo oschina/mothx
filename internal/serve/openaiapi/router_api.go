@@ -20,7 +20,6 @@ type ACPWorkerProfileSummary struct {
 	Transport             config.ACPAgentTransport   `json:"transport"`
 	Enabled               bool                       `json:"enabled"`
 	RouterEligible        bool                       `json:"routerEligible"`
-	Roles                 []config.ACPAgentRole      `json:"roles,omitempty"`
 	PermissionPolicy      config.ACPPermissionPolicy `json:"permissionPolicy"`
 	MaxConcurrentChildren int                        `json:"maxConcurrentChildren"`
 	ParallelBaseWorkspace bool                       `json:"parallelBaseWorkspaceWrites,omitempty"`
@@ -28,8 +27,8 @@ type ACPWorkerProfileSummary struct {
 }
 
 // ListACPWorkerProfiles projects the shared Runtime catalog for the WebUI.
-// The HTTP adapter never reads acpAgents itself: eligibility, role ceilings,
-// and the validation verdict all stay behind the Runtime catalog.
+// The HTTP adapter never reads acpAgents itself: eligibility and the validation
+// verdict all stay behind the Runtime catalog.
 func (s *Server) ListACPWorkerProfiles() []ACPWorkerProfileSummary {
 	if s == nil || s.settings == nil {
 		return nil
@@ -43,7 +42,6 @@ func (s *Server) ListACPWorkerProfiles() []ACPWorkerProfileSummary {
 			Transport:             descriptor.Transport,
 			Enabled:               descriptor.Enabled,
 			RouterEligible:        descriptor.RouterEligible,
-			Roles:                 descriptor.Roles,
 			PermissionPolicy:      descriptor.PermissionPolicy,
 			MaxConcurrentChildren: descriptor.MaxConcurrentChildren,
 			ParallelBaseWorkspace: descriptor.ParallelBaseWorkspaceWrites,

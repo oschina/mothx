@@ -79,10 +79,7 @@ func TestACPWorkspaceBridgeIsScopedToIsolatedWorktree(t *testing.T) {
 	}
 	scope := acpWorkerRequestScope{
 		ChildID: "agent-child", Workspace: workspace, WorkDir: worktreeDir,
-		Profile: config.ACPAgentProfile{
-			ID: "helper", Roles: []config.ACPAgentRole{config.ACPRoleImplement},
-			WriteRoots: []string{"src"},
-		},
+		Profile: config.ACPAgentProfile{ID: "helper"},
 		Contract: SubagentTaskContract{
 			Role: SubagentRoleImplement, WriteScope: []string{"src"}, TargetProfile: "helper",
 		},
@@ -163,13 +160,20 @@ func TestACPWorkerClientCapabilitiesAdvertiseReadOnlyFilesystem(t *testing.T) {
 	}
 }
 
+func TestACPWorkerPoolCapabilitiesAdvertiseDynamicWriteBridge(t *testing.T) {
+	read, write, terminal := acpWorkerPoolCapabilities(ACPWorkerInvocation{
+		Profile:      config.ACPAgentProfile{ID: "mothx"},
+		ReadTextFile: true,
+	})
+	if !read || !write || terminal {
+		t.Fatalf("registry-backed capabilities = read:%t write:%t terminal:%t, want read+write only", read, write, terminal)
+	}
+}
+
 func TestACPWriteTextFileWritesInsideScopedRoots(t *testing.T) {
 	workDir := t.TempDir()
 	runtime := &SessionRuntime{Registry: tools.NewRegistry(workDir, nil)}
-	profile := config.ACPAgentProfile{
-		ID: "helper", Roles: []config.ACPAgentRole{config.ACPRoleImplement},
-		WriteRoots: []string{"src"},
-	}
+	profile := config.ACPAgentProfile{ID: "helper"}
 	scope := acpWorkerRequestScope{
 		ChildID: "agent-child", Profile: profile, WorkDir: workDir,
 		Contract: SubagentTaskContract{
@@ -178,8 +182,8 @@ func TestACPWriteTextFileWritesInsideScopedRoots(t *testing.T) {
 		},
 		Strategy: config.ACPPermissionAutoAllowOnce,
 	}
-	if !runtime.acpWriteTextFileAvailable(profile, scope.Contract) {
-		t.Fatal("write bridge is not available for a write contract with declared roots")
+	if !runtime.acpWriteTextFileAvailable(scope.Contract) {
+		t.Fatal("write bridge is not available for a write contract with a task scope")
 	}
 	handler := runtime.newACPRequestHandler(scope, nil)
 	target := filepath.Join(workDir, "src", "new.go")
@@ -204,10 +208,7 @@ func TestACPWriteTextFileWritesInsideScopedRoots(t *testing.T) {
 func TestACPWriteTextFileRejectsReadOnlyAndOutOfScopePaths(t *testing.T) {
 	workDir := t.TempDir()
 	runtime := &SessionRuntime{Registry: tools.NewRegistry(workDir, nil)}
-	profile := config.ACPAgentProfile{
-		ID: "helper", Roles: []config.ACPAgentRole{config.ACPRoleImplement},
-		WriteRoots: []string{"src"},
-	}
+	profile := config.ACPAgentProfile{ID: "helper"}
 	writeContract := SubagentTaskContract{
 		Role: SubagentRoleImplement, WriteScope: []string{"src"},
 		TargetProfile: "helper",
@@ -219,7 +220,7 @@ func TestACPWriteTextFileRejectsReadOnlyAndOutOfScopePaths(t *testing.T) {
 			Role: SubagentRoleInvestigate, TargetProfile: "helper",
 		},
 	}
-	if runtime.acpWriteTextFileAvailable(profile, readOnly.Contract) {
+	if runtime.acpWriteTextFileAvailable(readOnly.Contract) {
 		t.Fatal("write bridge advertised for a read-only contract")
 	}
 	params, _ := json.Marshal(acpclient.WriteTextFileParams{
@@ -247,6 +248,32 @@ func TestACPWriteTextFileRejectsReadOnlyAndOutOfScopePaths(t *testing.T) {
 	}
 }
 
+func TestACPWriteTextFileRequiresTaskWriteScope(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &SessionRuntime{Registry: tools.NewRegistry(workDir, nil)}
+	contract := SubagentTaskContract{
+		Role: SubagentRoleImplement, TargetProfile: "helper",
+	}
+	if runtime.acpWriteTextFileAvailable(contract) {
+		t.Fatal("write bridge advertised for a write role with no task scope")
+	}
+	scope := acpWorkerRequestScope{
+		ChildID: "writer", Profile: config.ACPAgentProfile{ID: "helper"},
+		WorkDir: workDir, Contract: contract,
+	}
+	params, _ := json.Marshal(acpclient.WriteTextFileParams{
+		SessionID: "remote", Path: filepath.Join(workDir, "new.go"), Content: "package root\n",
+	})
+	if _, rpcErr := runtime.newACPRequestHandler(scope, nil)(t.Context(), acpclient.Message{
+		JSONRPC: "2.0", ID: json.RawMessage("25"), Method: "fs/write_text_file", Params: params,
+	}); rpcErr == nil || rpcErr.Code != -32601 {
+		t.Fatalf("unscoped write = %#v, want method unavailable", rpcErr)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "new.go")); !os.IsNotExist(err) {
+		t.Fatalf("unscoped write created a file: %v", err)
+	}
+}
+
 func TestACPWriteTextFileResolvesSymlinkBeforeScopeCheck(t *testing.T) {
 	workDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workDir, "src"), 0o755); err != nil {
@@ -261,10 +288,7 @@ func TestACPWriteTextFileResolvesSymlinkBeforeScopeCheck(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	runtime := &SessionRuntime{Registry: tools.NewRegistry(workDir, nil)}
-	profile := config.ACPAgentProfile{
-		ID: "helper", Roles: []config.ACPAgentRole{config.ACPRoleImplement},
-		WriteRoots: []string{"src"},
-	}
+	profile := config.ACPAgentProfile{ID: "helper"}
 	scope := acpWorkerRequestScope{
 		ChildID: "agent-child", Profile: profile, WorkDir: workDir,
 		Contract: SubagentTaskContract{

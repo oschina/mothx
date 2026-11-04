@@ -20,7 +20,6 @@ type ACPWorkerProfileDescriptor struct {
 	Endpoint              string                     `json:"endpoint,omitempty"`
 	Enabled               bool                       `json:"enabled"`
 	RouterEligible        bool                       `json:"routerEligible"`
-	Roles                 []config.ACPAgentRole      `json:"roles,omitempty"`
 	PermissionPolicy      config.ACPPermissionPolicy `json:"permissionPolicy"`
 	MaxConcurrentChildren int                        `json:"maxConcurrentChildren"`
 	// MaxConcurrentChildrenEnforced is the live-worker ceiling actually applied by
@@ -46,7 +45,6 @@ func ListACPWorkerProfiles(settings *config.Settings) []ACPWorkerProfileDescript
 		descriptor := ACPWorkerProfileDescriptor{
 			ID: profile.ID, Title: profile.Title, Transport: profile.EffectiveTransport(),
 			Endpoint: safeACPEndpoint(profile), Enabled: profile.Enabled,
-			Roles:                 profile.EffectiveRoles(),
 			PermissionPolicy:      profile.EffectivePermissionPolicy(),
 			MaxConcurrentChildren: profile.EffectiveMaxConcurrentChildren(),
 

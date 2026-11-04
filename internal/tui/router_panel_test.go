@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -66,7 +65,6 @@ func TestRouterPanelSaveUsesSharedValidation(t *testing.T) {
 		Command: []string{"  "},
 		Enabled: true,
 	}
-	app.routerPanel.Roles = map[config.ACPAgentRole]bool{config.ACPRoleInvestigate: true}
 	app.saveRouterPanelDraft()
 
 	if app.routerPanel.Error == "" {
@@ -116,19 +114,16 @@ func TestRouterPanelActivationGoesThroughRuntimeFence(t *testing.T) {
 	}
 }
 
-// TestRouterPanelRoleToggleKeepsACeiling guards the invariant that a profile
-// can never be saved with an empty role ceiling.
-func TestRouterPanelRoleToggleKeepsACeiling(t *testing.T) {
+// Role and write roots are per-delegation metadata, so the profile editor must
+// not expose profile-level authorization fields.
+func TestRouterPanelOmitsLegacyRoleFields(t *testing.T) {
 	app := newRouterCommandApp(t)
 	app.openRouterPanel()
 	app.beginRouterPanelCreate()
-
-	app.toggleRouterPanelRole(config.ACPRoleInvestigate)
-	if len(app.selectedRouterPanelRoles()) != 1 {
-		t.Fatalf("clearing the last role was allowed: %#v", app.selectedRouterPanelRoles())
-	}
-	if !strings.Contains(app.routerPanel.Message, "role") && app.routerPanel.Message == "" {
-		t.Fatal("no feedback was shown when the last role toggle was refused")
+	for _, field := range app.routerPanelFormFields() {
+		if field.Key == "roles" || field.Key == "writeRoots" {
+			t.Fatalf("legacy profile field %q is still exposed: %#v", field.Key, field)
+		}
 	}
 }
 

@@ -37,7 +37,11 @@ type ACPChildBackend struct {
 // the AgentManager resolves it. Integration writes the base workspace directly,
 // and read-only/test/review workers keep sharing the stable session workspace.
 func (b ACPChildBackend) ChildWorktree(opts agentcore.AgentOptions) *agentcore.WorktreeSpec {
-	if SubagentRole(strings.TrimSpace(opts.ExternalRole)) == SubagentRoleImplement {
+	role := SubagentRole(strings.TrimSpace(opts.ExternalRole))
+	if role == "" {
+		role = SubagentRoleInvestigate
+	}
+	if role == SubagentRoleImplement {
 		return &agentcore.WorktreeSpec{}
 	}
 	return nil
@@ -114,10 +118,11 @@ func (b ACPChildBackend) CreateChild(opts agentcore.AgentOptions) (agentpkg.Agen
 	// Reserve the live-worker slot at construction, not when the asynchronous
 	// Run goroutine happens to start. subagent_spawn must return a synchronous
 	// error for a second worker instead of a handle whose status later fails.
-	isolatedWrite := contract.Role == SubagentRoleImplement &&
+	role := contract.EffectiveRole()
+	isolatedWrite := role == SubagentRoleImplement &&
 		acpWorkDirIsIsolated(b.Runtime.WorkDir, workDir, resolution)
 	release, err := b.Runtime.acquireACPWorkerPermitForWorkspace(
-		profile.EffectiveEnforcedChildren(), contract.Role, isolatedWrite,
+		profile.EffectiveEnforcedChildren(), role, isolatedWrite,
 		profile.EffectiveAllowParallelBaseWorkspaceWrites(),
 		contract.WriteScope,
 	)
@@ -546,7 +551,7 @@ func (p *acpChildProxy) ensureRemote(ctx context.Context, emit func(agentpkg.Eve
 		Launcher:              p.launcher,
 		HandleRequest:         handler,
 		ReadTextFile:          p.runtime.acpReadTextFileAvailableIn(p.workspace),
-		WriteTextFile:         p.runtime.acpWriteTextFileAvailableIn(p.workspace, p.profile, p.contract),
+		WriteTextFile:         p.runtime.acpWriteTextFileAvailableIn(p.workspace, p.contract),
 		TerminalAccess:        terminalAccess,
 		pool:                  pool,
 	})
@@ -800,7 +805,7 @@ func (p *acpChildProxy) ChildMetadata() map[string]any {
 	}
 	metadata := map[string]any{
 		"external": true, "backend": "acp", "profileId": p.profile.ID,
-		"role": string(p.contract.Role), "deliverables": deliverables,
+		"role": string(p.contract.EffectiveRole()), "deliverables": deliverables,
 		"evidence": "worker-reported",
 	}
 	p.mu.Lock()

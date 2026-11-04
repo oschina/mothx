@@ -186,24 +186,14 @@ func (c *acpWorkerConnection) start(ctx context.Context, invocation ACPWorkerInv
 // acpWorkerPoolCapabilities computes the capability union a reusable
 // connection must advertise. ACP negotiates client capabilities once per
 // connection, not per session, while write authorization is per task. A
-// profile that can ever write therefore advertises the write bridge on its
-// shared connection; each session's request handler still rejects writes when
-// its own role/write scope does not allow them.
+// Registry-backed connection therefore advertises the write bridge regardless
+// of which task opens it first; each session's request handler still rejects
+// writes when its own role or write scope does not allow them.
 func acpWorkerPoolCapabilities(invocation ACPWorkerInvocation) (readTextFile, writeTextFile, terminalAccess bool) {
 	readTextFile = invocation.ReadTextFile
 	terminalAccess = invocation.TerminalAccess
-	writeTextFile = invocation.WriteTextFile
-	if !writeTextFile && readTextFile && acpProfileHasWriteBridge(invocation.Profile) {
-		writeTextFile = true
-	}
+	writeTextFile = invocation.WriteTextFile || readTextFile
 	return readTextFile, writeTextFile, terminalAccess
-}
-
-func acpProfileHasWriteBridge(profile config.ACPAgentProfile) bool {
-	if len(profile.WriteRoots) == 0 {
-		return false
-	}
-	return profile.RoleAllows(config.ACPRoleImplement) || profile.RoleAllows(config.ACPRoleIntegrate)
 }
 
 // startACPClient selects the transport declared by the validated profile.
@@ -563,10 +553,10 @@ func (p *acpConnectionPool) Close() {
 func acpConnectionKey(invocation ACPWorkerInvocation, env []string) string {
 	// Capability flags are deliberately excluded except for the ones that
 	// cannot be restored after initialize (Registry availability and terminal
-	// opt-in). The write bridge is part of the profile's advertised union so a
-	// read-only worker and a write worker for the same profile/workdir reuse
-	// one initialized process/connection; the per-session handler enforces the
-	// actual write role, task scope, and profile roots.
+	// opt-in). A Registry-backed connection advertises the write bridge as part
+	// of its union, so read-only and write tasks for the same profile/workdir
+	// reuse one initialized process/connection; the per-session handler
+	// enforces the actual task role and write scope.
 	return strings.Join([]string{
 		strings.TrimSpace(invocation.Profile.ID),
 		strings.TrimSpace(invocation.WorkDir),

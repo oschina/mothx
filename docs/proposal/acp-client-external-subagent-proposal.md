@@ -74,14 +74,14 @@ base-workspace writers are available behind an explicit per-profile opt-in.
 | ACP standard remote transport | Implemented | The same transport-only client supports WebSocket and streamable HTTP/SSE from the ACP remote transport RFD: cookie affinity, HTTP/2 for `https://`, `initialize` 200 plus subsequent 202 POSTs, one connection-scoped SSE stream, one session-scoped SSE stream per isolated session, required `Acp-Connection-Id`/`Acp-Session-Id` routing, reverse-request responses on the session stream, JSON-RPC batch rejection, bounded frames, and DELETE/close lifecycle. Runtime selects it from `transport`/`url` profile policy and keys the connection pool by transport plus endpoint. |
 | ACP Worker Bridge | Implemented | Runtime-owned bridge with `initialize -> session/new|resume|load -> session/prompt` turns, typed update decoding, bounded output, partial-output preservation, cancellation notification, and a caller-supplied process launcher. One prompt runs at a time per remote session. |
 | Router `delegate_subagent` | Implemented | `AgentManager` reserves/binds an external child through a Runtime-installed backend; `delegate_subagent` requires a bound profile in Router and rejects local fallback, while non-Router `agent` calls are rejected. |
-| Profile role ceiling and task contract | Implemented | `roles`, `writeRoots`, and `maxConcurrentChildren` on `acpAgents`; Runtime `SubagentTaskContract` validation narrows a model request to the profile's role/write ceiling with bounded objectives, scopes, deliverables, verification, and stop conditions. |
+| Dynamic task contract | Implemented | `maxConcurrentChildren` remains profile policy. `role` is an optional per-delegation semantic hint defaulting to `investigate`; `write_scope` is optional task metadata used for prompting, audit, and overlap checks. Neither is profile authorization or a filesystem sandbox. Legacy `roles`/`writeRoots` values still parse but are ignored and are no longer projected by the TUI or management APIs. |
 | Router activation (TUI/CLI/WebUI/Desktop) | Implemented | `/router <profile>[,<profile>...]`, `--router --acp-agent <profile>[,<profile>...]`, the WebUI's `POST /api/sessions/<id>/router`, and the Desktop's `mothx/manage/router/activate` all call the same Runtime `ActivateRouter`: validates every profile and the source policy, requires an idle session, then persists the ordered Router allowlist before the mode entry. The first profile is the default target. Router selection without a binding is rejected, and every attach path replays the persisted mode. The WebUI and Desktop project the worker catalog through the same Runtime catalog the TUI panel renders, so eligibility stays one fact. Desktop stays a pure ACP projection: the selection is a `mothx/manage/*` projection, gated on the `manageRouter` feature key, and never enters Electron-owned storage. |
 | External delegation and child projection | Implemented | External workers are blocking or asynchronous; a Runtime-owned `agent.Agent` proxy projects ACP text/thought/tool/plan/usage updates into canonical child events, owns the single `EventRunFinished`, and returns a bounded `worker-reported` envelope. Cancellation answers pending decisions as cancelled and reaps the process tree. |
 | Diagnostics and docs | Implemented | `mothx doctor` checks profile shape/executable availability without launching; bilingual configuration and tool-contract docs added; `mothx/manage/acp/profiles/list` projects the safe Runtime catalog. Executable/profile writes intentionally stay on the local settings path. |
 | Decision and process containment | Implemented | Remote `session/request_permission` records a canonical decision and answers immediately with an offered one-time option; the Runtime process launcher contains the tree with a Unix process group / Windows Job Object and `internal/acp/client` owns no process. |
 | Router target projection | Implemented | The Runtime publishes the session's bound worker allowlist into both `delegate_subagent` and `subagent_spawn`: a single bound worker is a `const`, multiple bound workers are an ordered `enum`, and the first ID is the default. Unbound configured profiles appear only as correction context. A wrong `agent` value fails with the accepted names instead of a generic rule. |
 | Router async spawn | Implemented | `subagent_spawn` accepts the same bound `agent` allowlist and bounded task contract and returns a manager handle immediately. `subagent_status`, `subagent_wait(handle: ...)`, `subagent_send`, and `subagent_destroy` project/observe the existing child lifecycle. External completions also enter the session mailbox keyed by the child handle. Read-only roles fan out to the profile ceiling; a workspace writer remains exclusive. `subagent_answer` and local-only parameters are not exposed. |
-| ACP multi-session transport | Implemented | One Runtime-owned connection pool starts and initializes at most one process per profile/workdir, advertises the union of client capabilities any session on that profile may enforce, then creates isolated remote sessions with session-scoped notification/reverse-request routing. Read-only and write-role sessions share that connection; each session's request handler still enforces its own role, write scope, and profile roots. Process lifetime is Runtime-owned and closed by `SessionRuntime.Close`; a dead transport is never silently replayed. |
+| ACP multi-session transport | Implemented | One Runtime-owned connection pool starts and initializes at most one process per profile/workdir, advertises the union of client capabilities its per-session handlers can enforce, then creates isolated remote sessions with session-scoped notification/reverse-request routing. Read-only and write-role sessions share that connection; each session's request handler still enforces its own task role and non-empty write scope. Process lifetime is Runtime-owned and closed by `SessionRuntime.Close`; a dead transport is never silently replayed. |
 | Multi-turn external child | Implemented | A spawned child keeps its remote session alive between turns. `subagent_send` sends one follow-up prompt on the same session; the local sub-agent wall-clock budget does not apply. `subagent_destroy` closes it. |
 | Remote resume/reconnect | Implemented | The remote session ID is retained after a transport loss. A later turn prefers capability-gated `session/resume` (no history replay) and falls back to `session/load` when only that capability is advertised; a missing capability fails the turn rather than silently creating a fresh session. In-flight prompts are never replayed after output or side effects. |
 | Durable child history | Implemented | Migration 55 creates `session_child_runs`; migration 56 adds worktree/change-set fields and migration 57 adds integration evidence. DAO/session owners persist contract, transcript, backend, profile, remote session ID, workdir, worktree identity, base revision, change-set snapshot/error, integration result, status, and timestamps. The Runtime installs one recorder for local children; the ACP proxy persists its remote identity through the same record. |
@@ -90,7 +90,7 @@ base-workspace writers are available behind an explicit per-profile opt-in.
 | Change-set snapshot | Implemented | On every external-child terminal path the Runtime captures a bounded, immutable snapshot from the registered worktree: base/head revision, changed-path statuses, unified/binary patch, and bounded untracked-file content with digests. Migration 56 persists `worktree_id`, `base_revision`, `change_set_json`, and `change_set_error` in `session_child_runs`; a truncated or failed snapshot is explicit and never silently integrated. |
 | Change-set integration | Implemented | Router exposes `subagent_integrate(changes: [{handle, digest}])`. The Runtime loads only durable child evidence, re-verifies the digest, successful terminal status, truncation state, and managed-worktree identity, then acquires one exclusive base-workspace lane. It applies the tracked patch with `git apply --check` followed by apply and installs untracked bytes through a component-wise symlink fence and atomic rename. It never copies or mutates the child worktree and never starts another Agent. A multi-selection is transactional within the Runtime: if a later snapshot conflicts, snapshots applied by that same call are reversed and their evidence is updated. Migration 57 records `integration_id`, `integration_digest`, `integration_status`, `integration_error`, and `integrated_at`; repeated identical selections are idempotent, and a git conflict is returned as structured evidence. |
 | Capability-negotiated attachments | Implemented | The tool passes only Runtime input resource IDs; the Runtime verifies ownership/size/hash and the bridge advertises/delivers ACP `image`, `audio`, or embedded `resource` content only when the Agent's `promptCapabilities` supports it. Embedded resources use an opaque Runtime URN rather than a `file://` URI, because a managed per-child worktree does not contain the session-workspace attachment path. Unsupported content is disclosed with its Runtime resource ID and session-relative path instead of being silently dropped. |
-| Filesystem and terminal bridges | Implemented | The bridge advertises `fs.readTextFile` only when the Runtime has a Registry, `fs.writeTextFile` only for a write-role contract whose profile declares `writeRoots`, and `terminal` only when the profile opts in. Reads resolve through the shared workspace roots and symlink fence with line/limit slicing; writes must resolve inside both the task `writeScope` and profile `writeRoots`, then use the shared file lock and atomic write path. Terminal commands run through the shared sandbox and process-group containment with a bounded, UTF-8-safe, non-interactive output buffer and the worker's restricted environment; terminal/URL authentication is not implemented. `session/new`/`session/load`/`session/resume` send `additionalDirectories` only when the Agent advertises that session capability. |
+| Filesystem and terminal bridges | Implemented | The bridge advertises `fs.readTextFile` only when the Runtime has a Registry, advertises `fs.writeTextFile` as part of a Registry-backed connection's capability union, and permits a write only for a write-role task with a non-empty `write_scope`. Reads resolve through the shared workspace roots and symlink fence with line/limit slicing; writes must resolve inside the task scope, then use the shared file lock and atomic write path. This bridge is convenience, not containment: the external Agent's own tools remain outside it. `terminal` is advertised only when the profile opts in. Terminal commands run through the shared sandbox and process-group containment with a bounded, UTF-8-safe, non-interactive output buffer and the worker's restricted environment; terminal/URL authentication is not implemented. `session/new`/`session/load`/`session/resume` send `additionalDirectories` only when the Agent advertises that session capability. |
 | Known-agent preset picker | Implemented | `agentruntime.ACPAgentPresets()` holds verified launch recipes; the TUI `/router` panel opens on that picker instead of a blank form, because the most common configuration mistake is assuming `codex acp` / `claude acp` start an ACP server. |
 
 The focused package suite covering these foundations passes; the detailed
@@ -324,8 +324,6 @@ reviewed with the existing settings schema, but its intended shape is:
       "command": ["codex-acp"],
       "enabled": true,
       "environment": ["OPENAI_API_KEY"],
-      "roles": ["investigate", "implement", "test", "review"],
-      "writeRoots": ["src"],
       "maxConcurrentChildren": 1,
       "permissionPolicy": "auto_allow_once"
     }
@@ -346,6 +344,11 @@ Rules:
   from MothX's existing secret/environment mechanism and are never persisted in
   this profile, displayed to the model, copied into events, or returned by ACP
   management APIs.
+- `roles` and `writeRoots` are deprecated compatibility fields. Older settings
+  continue to load, but the values are ignored and are not exposed by the TUI
+  or management projections. A task's optional `role` and `write_scope` are
+  supplied per delegation; neither can confine an external Agent that runs its
+  own tools.
 - The child process works in the resolved child work directory. Phase 1 does
   not accept a profile-owned or model-supplied directory override.
 - `enabled`, profile limits, and the permission policy are authoritative
@@ -603,9 +606,9 @@ that behavior on its own. Therefore the MVP policy is deliberately stricter:
    until an OS-level profile sandbox enforces them;
 3. the lead inspects files after completion, but cannot declare local test
    success without worker evidence;
-4. read-only fan-out relies on the profile's declared no-write roles and
-   Runtime-owned admission; it is not an OS-level write sandbox, so the lead
-   must still treat worker claims and workspace effects as untrusted.
+4. read-only fan-out relies on the task role as a scheduling and prompt hint,
+   not an OS-level write sandbox, so the lead must still treat worker claims
+   and workspace effects as untrusted.
 
 Parallel code changes require a later Runtime-owned worktree/integration
 feature: one managed worktree per worker, explicit artifact/diff/commit
@@ -659,9 +662,9 @@ them without inventing task semantics:
 
 ```text
 objective              required, bounded outcome
-role                   investigate | implement | test | review | integrate
+role                   optional; investigate | implement | test | review | integrate (default investigate)
 read_scope             relevant paths or search targets
-write_scope            required for implement/integrate; empty for read-only roles
+write_scope            optional task metadata; non-empty enables MothX's write bridge for write roles
 expected_deliverables  findings | changed-files | test-evidence | review
 verification           command/evidence the worker must return, not execute locally
 stop_conditions        explicit completion and non-goals
@@ -763,8 +766,8 @@ safety boundaries remain the termination authority.
 
 #### E. Treat ACP profile interoperability as an observed capability contract
 
-Profiles should declare only policies MothX controls, such as permitted roles,
-write capability, Router eligibility, environment names, and sandbox wrapper.
+Profiles should declare only policies MothX controls, such as Router
+eligibility, concurrency, environment names, and sandbox wrapper.
 They must not blindly trust a vendor claim that an Agent is "safe" or
 read-only. At launch, the Runtime observes standard ACP facts from
 `initialize` and records a bounded compatibility result:
@@ -774,7 +777,7 @@ read-only. At launch, the Runtime observes standard ACP facts from
 | `v1-basic` | ACP v1 negotiation, `session/new`, `session/prompt`, and prompt response work | Eligible for read-only fan-out; it receives no enforced read-only security claim. |
 | `v1-streaming` | Also sends valid ordered `session/update` events | Eligible for normal Router progress/transcript projection. |
 | `v1-permission` | Also issues/handles valid `session/request_permission` when it needs approval | Eligible where the profile policy requires interactive approval. |
-| `router-worker` | Operator explicitly enables roles/write policy and the observed ACP baseline succeeds | Eligible for `implement`, `test`, `review`, or later `integrate` according to its declared ceiling. |
+| `router-worker` | Operator explicitly enables the profile and the observed ACP baseline succeeds | Eligible for any per-delegation role hint; the role does not grant filesystem authority. |
 
 The profile may pin expected executable identity/version or an operator-managed
 binary digest for diagnostics. A changed identity/version causes a visible
@@ -1079,12 +1082,12 @@ Do not include `elicitation`, `session.notices`, `session.compaction`, or
 `session.configOptions` until their respective client-side handling and
 projection contracts are implemented. Omission means unsupported in ACP v1.
 The values above are the base shape: `fs.readTextFile` is `true` only with an
-attached Registry, and `fs.writeTextFile` is `true` only for a write-role task
-whose profile declares `writeRoots` and allows that role. `terminal` is `true`
-only when the profile sets `"terminal": true`. A pooled process
-advertises the union actually enforced by its per-session handlers. No
-`mothx.dev` extension is required or assumed between MothX and a third-party
-Agent.
+attached Registry, and a Registry-backed connection advertises
+`fs.writeTextFile` as part of its capability union. Per-session handlers still
+require a write-role task with a non-empty `write_scope`; the profile no longer
+has a role ceiling or write-root list. `terminal` is `true` only when the
+profile sets `"terminal": true`. No `mothx.dev` extension is required or
+assumed between MothX and a third-party Agent.
 
 ### 8.2 Incoming Agent requests and notifications
 
@@ -1094,7 +1097,7 @@ Agent.
 | `session/request_permission` request | Persist/replay through the parent Runtime `DecisionService`, project a canonical approval event with child identity, then return the selected ACP option ID or `cancelled`. |
 | `$/cancel_request` notification | Cancel only the matching outstanding reverse request; stale IDs are harmless. The original request receives a valid result or JSON-RPC `-32800` (Request cancelled). |
 | `fs/read_text_file` request | Resolve the absolute path through the shared Runtime workspace roots and symlink fence — the same `cwd` plus `additionalDirectories` sent in `session/new` — enforce the text-size/UTF-8 bound, apply ACP `line`/`limit`, and return only the requested content. |
-| `fs/write_text_file` request | Advertise only for a write-role task whose profile declares `writeRoots`. Resolve the symlink target through the shared workspace fence, require it inside both the task `writeScope` and the profile `writeRoots`, then write through the shared file lock and atomic-write path. |
+| `fs/write_text_file` request | Available only to a write-role task with a non-empty `write_scope`. Resolve the symlink target through the shared workspace fence, require it inside the task `writeScope`, then write through the shared file lock and atomic-write path. This is an optional MothX-mediated bridge, not containment of the Agent's own tools. |
 | `terminal/*` request | Available only when the profile opts in with `"terminal": true`. Run the argv through the shared workspace/sandbox command path with process-group containment, a bounded output buffer, and no interactive stdin. Terminal authentication and URL authentication are not implemented. |
 | `elicitation/create`, terminal authentication, unknown standard request | Respond with `-32601` (or `-32602` for invalid parameters) because MothX did not advertise the capability. Never silently emulate it. |
 | Unknown notification | Ignore after bounded diagnostic logging, as ACP permits. Do not error the child merely because a newer Agent sent a notification MothX does not understand. |
@@ -1200,10 +1203,12 @@ Controls in this proposal:
   concurrency, task-size limits, and whether the MothX tool itself is usable
   in the parent mode/source.
 - MothX advertises `fs/read_text_file` constrained to the same workspace roots
-  and symlink fence as local read tools, plus `fs/write_text_file` only for a
-  write-role task inside its declared write scope and the profile's write
-  roots. `terminal` is opt-in per profile; it runs argv through the shared
-  sandbox path and never implements terminal or URL authentication.
+  and symlink fence as local read tools, plus `fs/write_text_file` as a
+  Registry-backed capability union. A write request is accepted only for a
+  write-role task with a non-empty declared write scope; the profile has no
+  role/write-root authority. `terminal` is opt-in per profile; it runs argv
+  through the shared sandbox path and never implements terminal or URL
+  authentication.
 - All remote content (including title, command text, paths, diffs, URLs,
   plans, and permission labels) is untrusted. Renderers escape terminal
   controls, sanitize markup, do not auto-open links/fetch URIs, and use existing
@@ -1239,10 +1244,10 @@ be a shared Runtime execution policy, not a Desktop or ACP-client exception.
    worker session permit, and a profile-selected non-blocking approval strategy.
    It must render a dedicated Router prompt and frozen tool surface, never the
    ordinary YOLO prompt or tool set.
-4. [x] Define Runtime-owned ACP profile role ceilings and the
-   `SubagentTaskContract` validation boundary. Model arguments may narrow a
-   contract but cannot turn an investigate profile into a write-capable worker,
-   broaden a write scope, or select an unconfigured target.
+4. [x] Define the Runtime-owned `SubagentTaskContract` validation boundary.
+   `role` is an optional per-delegation hint and `write_scope` is optional task
+   metadata; neither is profile authorization. Model arguments still cannot
+   select an unconfigured target or escape the Runtime workspace.
 5. [x] Implement the TUI/CLI activation projection first: both persist the same
    selected Router profile on the session and neither owns an ACP process,
    decision, or policy fallback. Non-Router adapters still honor that persisted
@@ -1459,16 +1464,19 @@ Still deliberate:
 - The Runtime admits read-only ACP workers up to the profile ceiling and keeps
   write-role execution exclusive. Cancellation, process failure, and
   terminalization release each permit exactly once.
-- Runtime validates every Router `SubagentTaskContract`, clamps it to the
-  selected profile role/write ceiling, bounds parent-visible completion output,
-  and labels worker conclusions as untrusted evidence rather than user input.
+- Runtime validates every Router `SubagentTaskContract`, bounds parent-visible
+  completion output, and labels worker conclusions as untrusted evidence rather
+  than user input. The task role is a prompt/admission hint, never a profile
+  ceiling or filesystem sandbox.
 - ACP profile preflight accepts only observed standard v1 capabilities; a
   changed external Agent identity/version cannot silently enable an extension,
   broader worker role, or automatic permission policy.
 - The read-only filesystem bridge resolves absolute paths through the shared
   workspace roots and symlink fence, honors ACP `line`/`limit`, rejects
-  oversized or non-UTF-8 files. Write and terminal capabilities are advertised
-  only under their separate role/profile gates and are enforced per session.
+  oversized or non-UTF-8 files. The write bridge is advertised in a
+  Registry-backed connection's capability union and accepts only a write-role
+  task with a non-empty write scope; terminal remains profile-opted-in. Both
+  are enforced per session.
 - The blocking ACP delegate returns the existing delegate result envelope shape.
   The asynchronous spawn returns the existing manager handle and uses the same
   status/list projection. Its completion enters the existing session mailbox
@@ -1528,7 +1536,7 @@ process cleanup, and any persistence.
 | Parse stderr or process exit as completion | ACP completion is the `session/prompt` response; process output/exit is not a safe terminal semantic. |
 | Automatically reconnect/replay a failed prompt | The remote Agent may have already executed side effects. |
 | Implement a second external-child status/event/decision store | Breaks the one Runtime and one event/decision model; existing AgentManager and DecisionService already own those facts. |
-| Advertise write-filesystem/terminal support without shared bounds | MothX would promise a security-sensitive mutation or command-execution capability without the Runtime workspace fence, role/write-root checks, process containment, and profile opt-in now used by the bridge. |
+| Advertise write-filesystem/terminal support without shared bounds | MothX would promise a security-sensitive mutation or command-execution capability without the Runtime workspace fence, task write-scope check, process containment, and profile terminal opt-in now used by the bridge. Profile roles or write roots are not used because they cannot confine an external Agent's own tools. |
 
 ## 14. Resolved and Remaining Decisions
 

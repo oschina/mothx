@@ -185,52 +185,39 @@ func TestACPAgentProfileParallelBaseWritesDefaultToExclusive(t *testing.T) {
 	}
 }
 
-func TestACPAgentProfileRoleCeilings(t *testing.T) {
-	readOnly := ACPAgentProfile{ID: "reviewer", Command: []string{"/opt/reviewer"}, Enabled: true}
-	if err := readOnly.Validate(); err != nil {
-		t.Fatalf("read-only profile rejected: %v", err)
-	}
-	roles := readOnly.EffectiveRoles()
-	if len(roles) != 1 || roles[0] != ACPRoleInvestigate {
-		t.Fatalf("default roles = %#v, want investigate only", roles)
-	}
-	if readOnly.RoleAllows(ACPRoleImplement) {
-		t.Fatal("profile without a declared role allowed implement")
+func TestACPAgentProfileLegacyRoleAndWriteRootsAreIgnored(t *testing.T) {
+	// Roles and write roots are per-delegation metadata now. Old settings that
+	// still contain them must keep loading, but they must not grant or restrict
+	// anything at the profile level.
+	for name, profile := range map[string]ACPAgentProfile{
+		"no legacy fields": {
+			ID: "worker", Command: []string{"/opt/worker"}, Enabled: true,
+		},
+		"write role without roots": {
+			ID: "worker", Command: []string{"/opt/worker"}, Enabled: true,
+			Roles: []ACPAgentRole{ACPRoleImplement},
+		},
+		"unknown duplicate role": {
+			ID: "worker", Command: []string{"/opt/worker"}, Enabled: true,
+			Roles: []ACPAgentRole{"deploy", "deploy"},
+		},
+		"escaping write root": {
+			ID: "worker", Command: []string{"/opt/worker"}, Enabled: true,
+			WriteRoots: []string{"../escape"}, Roles: []ACPAgentRole{ACPRoleImplement},
+		},
+		"filesystem-root write root": {
+			ID: "worker", Command: []string{"/opt/worker"}, Enabled: true,
+			WriteRoots: []string{"/"}, Roles: []ACPAgentRole{ACPRoleIntegrate},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := profile.Validate(); err != nil {
+				t.Fatalf("legacy profile fields made the profile invalid: %v", err)
+			}
+		})
 	}
 
-	writer := ACPAgentProfile{
-		ID: "worker", Command: []string{"/opt/worker"}, Enabled: true,
-		Roles: []ACPAgentRole{ACPRoleImplement},
-	}
-	if err := writer.Validate(); err == nil {
-		t.Fatal("write role without write roots was accepted")
-	}
-	writer.WriteRoots = []string{"src"}
-	if err := writer.Validate(); err != nil {
-		t.Fatalf("writer profile rejected: %v", err)
-	}
-	if !writer.RoleAllows(ACPRoleImplement) {
-		t.Fatal("declared write role was not allowed")
-	}
-
-	writer.Roles = []ACPAgentRole{"deploy"}
-	if err := writer.Validate(); err == nil {
-		t.Fatal("unknown ACP role was accepted")
-	}
-	writer.Roles = []ACPAgentRole{ACPRoleImplement, ACPRoleImplement}
-	if err := writer.Validate(); err == nil {
-		t.Fatal("duplicate ACP role was accepted")
-	}
-	writer.Roles = []ACPAgentRole{ACPRoleImplement}
-	writer.WriteRoots = []string{"../escape"}
-	if err := writer.Validate(); err == nil {
-		t.Fatal("escaping write root was accepted")
-	}
-	writer.WriteRoots = []string{"/"}
-	if err := writer.Validate(); err == nil {
-		t.Fatal("filesystem-root write root was accepted")
-	}
-	writer.WriteRoots = []string{"src"}
+	writer := ACPAgentProfile{ID: "worker", Command: []string{"/opt/worker"}, Enabled: true}
 	writer.MaxConcurrentChildren = -1
 	if err := writer.Validate(); err == nil {
 		t.Fatal("negative concurrency was accepted")

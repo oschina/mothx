@@ -166,8 +166,6 @@ try {
         command: [process.execPath, join(configDir, 'fake-worker.cjs')],
         enabled: true,
         permissionPolicy: 'auto_allow_once',
-        roles: ['investigate'],
-        writeRoots: ['src'],
       },
       {
         id: 'disabled-worker',

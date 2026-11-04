@@ -8,16 +8,14 @@ import (
 	"github.com/oschina/mothx/internal/config"
 )
 
-// contractProfile is a fully enabled Router worker that may implement inside
-// src/ and run tests.
+// contractProfile is a fully enabled Router worker. Role and write scope are
+// deliberately absent: they are per-task metadata, not profile configuration.
 func contractProfile() config.ACPAgentProfile {
 	return config.ACPAgentProfile{
-		ID:         "codex",
-		Title:      "Codex",
-		Command:    []string{"/opt/codex", "acp"},
-		Enabled:    true,
-		Roles:      []config.ACPAgentRole{config.ACPRoleInvestigate, config.ACPRoleImplement, config.ACPRoleTest, config.ACPRoleReview},
-		WriteRoots: []string{"src"},
+		ID:      "codex",
+		Title:   "Codex",
+		Command: []string{"/opt/codex", "acp"},
+		Enabled: true,
 	}
 }
 
@@ -59,37 +57,69 @@ func TestSubagentTaskContractJSONNeverContainsAttachmentBytes(t *testing.T) {
 	}
 }
 
-func TestSubagentTaskContractRejectsRoleOutsideProfileCeiling(t *testing.T) {
-	profile := contractProfile()
-	profile.Roles = []config.ACPAgentRole{config.ACPRoleInvestigate}
-	profile.WriteRoots = nil
-
+func TestSubagentTaskContractAcceptsDynamicRoles(t *testing.T) {
 	contract := validContract()
 	contract.Role = SubagentRoleInvestigate
 	contract.WriteScope = nil
 	contract.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableFindings}
 	contract.Verification = ""
-	if err := contract.Validate(profile); err != nil {
+	if err := contract.Validate(contractProfile()); err != nil {
 		t.Fatalf("investigate contract rejected: %v", err)
 	}
 
 	contract.Role = SubagentRoleImplement
 	contract.WriteScope = []string{"src/retry_test.go"}
-	contract.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableChangedFiles}
-	if err := contract.Validate(profile); err == nil {
-		t.Fatal("implement contract was accepted by an investigate-only profile")
+	contract.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableChangedFiles, SubagentDeliverableTestEvidence}
+	contract.Verification = "go test ./internal/agentruntime"
+	if err := contract.Validate(contractProfile()); err != nil {
+		t.Fatalf("implement contract was rejected without a profile role ceiling: %v", err)
 	}
 }
 
-func TestSubagentTaskContractRejectsWriteOutsideProfileRoots(t *testing.T) {
+func TestSubagentTaskContractAllowsWriteScopeWithoutProfileRoots(t *testing.T) {
 	contract := validContract()
 	contract.WriteScope = []string{"internal/retry_test.go"}
-	err := contract.Validate(contractProfile())
-	if err == nil {
-		t.Fatal("write outside the profile write roots was accepted")
+	if err := contract.Validate(contractProfile()); err != nil {
+		t.Fatalf("dynamic write scope was constrained by ignored profile fields: %v", err)
 	}
-	if !strings.Contains(err.Error(), "write scope") {
-		t.Fatalf("error = %v, want a write-scope rejection", err)
+}
+
+func TestSubagentTaskContractDefaultsOmittedRoleAndScope(t *testing.T) {
+	contract := validContract()
+	contract.Role = ""
+	contract.WriteScope = nil
+	contract.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableFindings}
+	contract.Verification = ""
+	if err := contract.Validate(contractProfile()); err != nil {
+		t.Fatalf("optional role and write scope were treated as required: %v", err)
+	}
+	if contract.EffectiveRole() != SubagentRoleInvestigate {
+		t.Fatalf("effective role = %q, want %q", contract.EffectiveRole(), SubagentRoleInvestigate)
+	}
+	if !strings.Contains(contract.RenderPrompt("/tmp/work"), "## Role\ninvestigate") {
+		t.Fatalf("prompt did not render the default role:\n%s", contract.RenderPrompt("/tmp/work"))
+	}
+}
+
+func TestSubagentTaskContractAllowsWriteRoleWithoutScope(t *testing.T) {
+	contract := validContract()
+	contract.WriteScope = nil
+	if err := contract.Validate(contractProfile()); err != nil {
+		t.Fatalf("write role without optional scope was rejected: %v", err)
+	}
+	if !strings.Contains(contract.RenderPrompt("/tmp/work"), "not a filesystem restriction") {
+		t.Fatalf("unscoped write-role prompt did not disclose the metadata semantics:\n%s", contract.RenderPrompt("/tmp/work"))
+	}
+}
+
+func TestSubagentTaskContractAllowsScopeHintOnReadOnlyRole(t *testing.T) {
+	contract := validContract()
+	contract.Role = SubagentRoleInvestigate
+	contract.WriteScope = []string{"src"}
+	contract.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableFindings}
+	contract.Verification = ""
+	if err := contract.Validate(contractProfile()); err != nil {
+		t.Fatalf("write_scope should be optional task metadata for every role: %v", err)
 	}
 }
 
@@ -102,17 +132,6 @@ func TestSubagentTaskContractRejectsUnboundedOrMismatchedFields(t *testing.T) {
 		"unknown role":      func(c *SubagentTaskContract, _ *config.ACPAgentProfile) { c.Role = "deploy" },
 		"mismatched target": func(c *SubagentTaskContract, _ *config.ACPAgentProfile) { c.TargetProfile = "claude" },
 		"missing target":    func(c *SubagentTaskContract, _ *config.ACPAgentProfile) { c.TargetProfile = "" },
-		"write on read-only role": func(c *SubagentTaskContract, p *config.ACPAgentProfile) {
-			c.Role = SubagentRoleReview
-			c.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableReview}
-			c.Verification = ""
-		},
-		"write role without write scope": func(c *SubagentTaskContract, _ *config.ACPAgentProfile) { c.WriteScope = nil },
-		"read role with write scope": func(c *SubagentTaskContract, p *config.ACPAgentProfile) {
-			c.Role = SubagentRoleInvestigate
-			c.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableFindings}
-			c.Verification = ""
-		},
 		"deliverable not allowed for role": func(c *SubagentTaskContract, _ *config.ACPAgentProfile) {
 			c.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableReview}
 		},
@@ -167,22 +186,18 @@ func TestSubagentTaskContractRejectsUnboundedOrMismatchedFields(t *testing.T) {
 	}
 }
 
-// TestSubagentTaskContractRejectsWriteRootEscapeThroughProfile pins that a
-// misconfigured profile is rejected at configuration time, not silently
-// normalized into a broader write ceiling.
-func TestSubagentTaskContractWriteRootContainment(t *testing.T) {
-	profile := contractProfile()
-	profile.WriteRoots = []string{"src"}
-
+// A task write scope is normalized independently of any profile field or
+// prefix-matching heuristic.
+func TestSubagentTaskContractWriteScopeNormalization(t *testing.T) {
 	inside := validContract()
 	inside.WriteScope = []string{"src/nested/file.go"}
-	if err := inside.Validate(profile); err != nil {
-		t.Fatalf("nested write inside the declared root rejected: %v", err)
+	if err := inside.Validate(contractProfile()); err != nil {
+		t.Fatalf("nested write scope rejected: %v", err)
 	}
 
-	sibling := validContract()
+	sibling := inside
 	sibling.WriteScope = []string{"src-other/file.go"}
-	if err := sibling.Validate(profile); err == nil {
-		t.Fatal("sibling directory with the same prefix was treated as a write root")
+	if err := sibling.Validate(contractProfile()); err != nil {
+		t.Fatalf("sibling write scope rejected: %v", err)
 	}
 }

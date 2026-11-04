@@ -25,8 +25,8 @@ func TestRouterPanelCreateStartsWithPresetPicker(t *testing.T) {
 	}
 }
 
-// Choosing a preset must fill command, id, title, roles, and permission so the
-// saved profile is immediately usable.
+// Choosing a preset must fill command, id, title, and permission so the saved
+// profile is immediately usable. Role and write scope belong to each task.
 func TestRouterPanelPresetFillsUsableProfile(t *testing.T) {
 	app := newRouterCommandApp(t)
 	t.Setenv("MOTHX_DIR", t.TempDir())
@@ -56,8 +56,8 @@ func TestRouterPanelPresetFillsUsableProfile(t *testing.T) {
 	if app.routerPanel.Draft.ID != "opencode" || app.routerPanel.Draft.Title == "" {
 		t.Fatalf("preset did not fill id/title: %#v", app.routerPanel.Draft)
 	}
-	if len(app.selectedRouterPanelRoles()) == 0 {
-		t.Fatal("preset left the role ceiling empty")
+	if len(app.routerPanel.Draft.Roles) != 0 || len(app.routerPanel.Draft.WriteRoots) != 0 {
+		t.Fatalf("preset seeded profile-level authorization fields: %#v", app.routerPanel.Draft)
 	}
 
 	app.saveRouterPanelDraft()
