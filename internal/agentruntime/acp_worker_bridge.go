@@ -65,6 +65,10 @@ type ACPWorkerResult struct {
 	Output     string
 	Truncated  bool
 	ToolCalls  int
+	// DroppedUpdates counts session updates the Runtime discarded because the
+	// Agent emitted them faster than they could be projected. A non-zero value
+	// means the transcript is missing its beginning.
+	DroppedUpdates uint64
 }
 
 // ACPWorkerBridge owns one ACP v1 worker connection. It is intentionally not

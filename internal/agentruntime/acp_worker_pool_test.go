@@ -214,6 +214,58 @@ func TestACPWorkerBridgeOmitsAdditionalDirectoriesWithoutCapability(t *testing.T
 	}
 }
 
+// TestACPWorkerSessionEnqueueNeverBlocks proves the per-session notification
+// buffer cannot stall the pooled connection's read loop. The ACP client
+// delivers notifications on that shared loop, so a blocking enqueue would
+// delay every other session hosted by the same process.
+func TestACPWorkerSessionEnqueueNeverBlocks(t *testing.T) {
+	session := &acpWorkerSession{done: make(chan struct{})}
+	session.cond = sync.NewCond(&session.mu)
+
+	blocked := make(chan struct{})
+	go func() {
+		defer close(blocked)
+		for i := 0; i < maxACPWorkerPendingNotifications*2; i++ {
+			session.enqueue(acpclient.Message{Method: "session/update"})
+		}
+	}()
+	select {
+	case <-blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("enqueue blocked on a full notification buffer")
+	}
+
+	session.mu.Lock()
+	pending := len(session.pending)
+	accepted := session.accepted
+	dropped := session.dropped
+	session.mu.Unlock()
+	if pending > maxACPWorkerPendingNotifications {
+		t.Fatalf("pending = %d, want at most %d", pending, maxACPWorkerPendingNotifications)
+	}
+	if accepted != uint64(maxACPWorkerPendingNotifications*2) {
+		t.Fatalf("accepted = %d, want %d", accepted, maxACPWorkerPendingNotifications*2)
+	}
+	if dropped == 0 {
+		t.Fatal("dropped = 0, want the overflow to be dropped rather than buffered")
+	}
+
+	// waitForPending must still return once every accepted notification was
+	// projected or dropped: a dropped notification no longer exists, so
+	// counting it as handled is what keeps the wait from deadlocking.
+	session.stop()
+	done := make(chan struct{})
+	go func() {
+		session.waitForPending()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitForPending did not return after the session stopped")
+	}
+}
+
 func TestACPWorkerPoolHelperProcess(t *testing.T) {
 	if os.Getenv("MOTHX_ACP_POOL_HELPER") != "1" {
 		return

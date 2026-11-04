@@ -120,6 +120,9 @@ func (ACPWorkerBridge) Open(ctx context.Context, invocation ACPWorkerInvocation)
 	// replay now; otherwise those updates would enter the first new turn.
 	if strings.TrimSpace(invocation.ResumeSessionID) != "" && !supportsSessionResume(conn.init.AgentCapabilities) {
 		session.start()
+		// A dropped replay update means the loaded history is incomplete. The
+		// turn still proceeds: the Runtime reports it as truncated evidence
+		// rather than refusing to resume a session the Agent can serve.
 		session.waitForPending()
 	}
 	return worker, nil
@@ -248,8 +251,15 @@ func (w *acpRemoteWorker) Prompt(ctx context.Context, prompt []acpclient.Content
 		SessionID: session.id,
 		Prompt:    prompt,
 	})
-	session.waitForPending()
+	dropped := session.waitForPending()
 	result := turn.result(agentInfo, session.id)
+	if dropped > 0 {
+		// The oldest notifications were discarded because the Agent outran the
+		// projection. The transcript is missing its beginning, so the turn is
+		// incomplete rather than a shorter successful answer.
+		result.Truncated = true
+		result.DroppedUpdates = dropped
+	}
 	if err != nil {
 		if ctx.Err() == nil {
 			w.mu.Lock()

@@ -311,6 +311,7 @@ type acpChildProxy struct {
 
 	truncated          bool
 	stopReason         string
+	droppedUpdates     uint64
 	changeSetJSON      string
 	changeSetDigest    string
 	changeSetError     string
@@ -415,6 +416,7 @@ func (p *acpChildProxy) Run(ctx context.Context, userMsg string) <-chan agentpkg
 		p.mu.Lock()
 		p.truncated = result.Truncated
 		p.stopReason = result.StopReason
+		p.droppedUpdates = result.DroppedUpdates
 		if remote.Dead() {
 			p.remote = nil
 		}
@@ -820,9 +822,13 @@ func (p *acpChildProxy) ChildMetadata() map[string]any {
 func (p *acpChildProxy) CompletionMetadata() map[string]any {
 	p.mu.Lock()
 	truncated, stopReason := p.truncated, p.stopReason
+	droppedUpdates := p.droppedUpdates
 	p.mu.Unlock()
 	metadata := p.ChildMetadata()
 	metadata["outputTruncated"] = truncated
 	metadata["stopReason"] = stopReason
+	if droppedUpdates > 0 {
+		metadata["droppedUpdates"] = droppedUpdates
+	}
 	return metadata
 }

@@ -49,16 +49,22 @@ type acpWorkerSession struct {
 	handleRequest  acpclient.RequestHandler
 	onNotification func(acpclient.Message)
 
-	queue chan acpclient.Message
-	stopC chan struct{}
-	done  chan struct{}
+	done chan struct{}
 
-	mu       sync.Mutex
-	cond     *sync.Cond
-	started  bool
-	closed   bool
+	mu   sync.Mutex
+	cond *sync.Cond
+	// pending holds notifications this session has not projected yet. It is a
+	// slice rather than a channel because the ACP client delivers
+	// notifications on the shared connection's read loop: a blocking send
+	// would stall every other session hosted by the same pooled process.
+	pending []acpclient.Message
+	started bool
+	closed  bool
+	// accepted counts notifications this session took ownership of, and
+	// handled counts the ones that were projected (or dropped by the bound).
 	accepted uint64
 	handled  uint64
+	dropped  uint64
 }
 
 func newACPConnectionPool() *acpConnectionPool {
@@ -254,6 +260,13 @@ const (
 	maxEarlyACPNotifications = 128
 )
 
+// maxACPWorkerPendingNotifications bounds the per-session notification
+// backlog. The ACP client delivers notifications on the pooled connection's
+// read loop, so this buffer must stay bounded: an untrusted Agent that emits
+// updates faster than they can be projected must not be able to stall the
+// other sessions hosted by the same process.
+const maxACPWorkerPendingNotifications = 512
+
 func (c *acpWorkerConnection) retainEarlyNotificationLocked(sessionID string, message acpclient.Message) {
 	if sessionID == "" {
 		return
@@ -350,8 +363,6 @@ func (c *acpWorkerConnection) registerSession(sessionID string, handler acpclien
 		id:             sessionID,
 		handleRequest:  handler,
 		onNotification: onNotification,
-		queue:          make(chan acpclient.Message, 128),
-		stopC:          make(chan struct{}),
 		done:           make(chan struct{}),
 	}
 	session.cond = sync.NewCond(&session.mu)
@@ -394,18 +405,45 @@ func (c *acpWorkerConnection) closeSession(ctx context.Context, session *acpWork
 func (s *acpWorkerSession) run() {
 	defer close(s.done)
 	for {
-		select {
-		case message := <-s.queue:
-			if s.onNotification != nil {
-				s.onNotification(message)
-			}
-			s.mu.Lock()
-			s.handled++
-			s.cond.Broadcast()
-			s.mu.Unlock()
-		case <-s.stopC:
+		message, ok := s.next()
+		if !ok {
 			return
 		}
+		if s.onNotification != nil {
+			s.onNotification(message)
+		}
+		// The handled counter advances only after the projection completed.
+		// waitForPending reads it to prove that every accepted notification
+		// reached the turn, so counting earlier would let a caller observe a
+		// result before its text was applied.
+		s.mu.Lock()
+		s.handled++
+		s.cond.Broadcast()
+		s.mu.Unlock()
+	}
+}
+
+// next waits for the next pending notification and returns it. The second
+// return value is false once the session is closed and no pending work
+// remains.
+func (s *acpWorkerSession) next() (acpclient.Message, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for {
+		// A closed session stops projecting immediately: the remaining
+		// backlog belongs to a cancelled or already-terminal turn, and
+		// draining it here would delay stop() behind the projection.
+		if s.closed {
+			s.pending = nil
+			return acpclient.Message{}, false
+		}
+		if len(s.pending) > 0 {
+			message := s.pending[0]
+			s.pending[0] = acpclient.Message{}
+			s.pending = s.pending[1:]
+			return message, true
+		}
+		s.cond.Wait()
 	}
 }
 
@@ -425,6 +463,12 @@ func (s *acpWorkerSession) start() {
 	go s.run()
 }
 
+// enqueue takes ownership of one notification for this session. It never
+// blocks: the caller runs on the pooled connection's read loop, where a stall
+// would delay every other session sharing that process. When the bound is
+// reached the oldest pending notification is dropped so the live stream stays
+// the freshest available view, and the drop is counted as handled so
+// waitForPending cannot deadlock on a notification that no longer exists.
 func (s *acpWorkerSession) enqueue(message acpclient.Message) {
 	s.mu.Lock()
 	if s.closed {
@@ -432,23 +476,30 @@ func (s *acpWorkerSession) enqueue(message acpclient.Message) {
 		return
 	}
 	s.accepted++
-	s.mu.Unlock()
-	select {
-	case s.queue <- message:
-	case <-s.stopC:
+	if len(s.pending) >= maxACPWorkerPendingNotifications {
+		s.pending = s.pending[1:]
+		s.dropped++
 	}
+	s.pending = append(s.pending, message)
+	s.cond.Broadcast()
+	s.mu.Unlock()
 }
 
 // waitForPending blocks until every notification accepted before this call has
-// been projected. A snapshot count avoids the sync.WaitGroup Add/Wait race
-// when an Agent emits updates after a prompt response.
-func (s *acpWorkerSession) waitForPending() {
+// been projected or dropped. A snapshot count avoids the sync.WaitGroup
+// Add/Wait race when an Agent emits updates after a prompt response. The
+// returned count is the number of notifications dropped because the buffer
+// was full: the oldest ones are discarded, so the projected transcript is
+// missing its beginning and the caller must report the turn as incomplete.
+func (s *acpWorkerSession) waitForPending() uint64 {
 	s.mu.Lock()
 	target := s.accepted
-	for s.handled < target && !s.closed {
+	for s.handled+s.dropped < target && !s.closed {
 		s.cond.Wait()
 	}
+	dropped := s.dropped
 	s.mu.Unlock()
+	return dropped
 }
 
 func (s *acpWorkerSession) stop() {
@@ -464,7 +515,6 @@ func (s *acpWorkerSession) stop() {
 	s.closed = true
 	started := s.started
 	s.cond.Broadcast()
-	close(s.stopC)
 	s.mu.Unlock()
 	if started {
 		<-s.done
