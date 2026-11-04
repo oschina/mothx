@@ -29,14 +29,24 @@ func (r *SessionRuntime) acquireACPWorkerPermit(limit int) (func(), error) {
 // acquireACPWorkerPermitForWorkspace for an implementation worker in a managed
 // worktree so it can run alongside readers while integration stays exclusive.
 func (r *SessionRuntime) acquireACPWorkerPermitForRole(limit int, role SubagentRole) (func(), error) {
-	return r.acquireACPWorkerPermitForWorkspace(limit, role, false)
+	return r.acquireACPWorkerPermitForWorkspace(limit, role, false, false, nil)
 }
 
 // acquireACPWorkerPermitForWorkspace applies the profile fan-out ceiling and the
 // base-workspace write lane separately. Read-only workers and isolated
-// implementation workers may share the ceiling; any base-workspace writer is
-// exclusive in both directions.
-func (r *SessionRuntime) acquireACPWorkerPermitForWorkspace(limit int, role SubagentRole, isolated bool) (func(), error) {
+// implementation workers may share the ceiling. A base-workspace writer is
+// exclusive in both directions unless the profile explicitly opts into parallel
+// base-workspace writes, in which case it shares the ordinary ceiling.
+//
+// allowParallelBaseWrites is the profile's explicit trust decision. An external
+// Agent runs its own tools, so a disjoint write_scope does not prove the workers
+// will not touch the same file; the caller that enables this accepts that risk.
+//
+// writeScope is the contract's declared scope. When parallel base writes are
+// allowed, a writer whose scope overlaps a live base writer is still refused:
+// that overlap is statically visible, and refusing it is the one part of the
+// risk that can be checked without confining the worker's own tools.
+func (r *SessionRuntime) acquireACPWorkerPermitForWorkspace(limit int, role SubagentRole, isolated, allowParallelBaseWrites bool, writeScope []string) (func(), error) {
 	if r == nil {
 		return nil, fmt.Errorf("agent runtime is nil")
 	}
@@ -45,13 +55,27 @@ func (r *SessionRuntime) acquireACPWorkerPermitForWorkspace(limit int, role Suba
 	}
 	writes := subagentRoleWrites(role)
 	baseWriter := writes && !isolated
+	// A parallel base writer still consumes the ordinary ceiling; only the
+	// bidirectional exclusivity is relaxed. A profile that opts in with the
+	// default ceiling of one still serializes.
+	parallelBaseWriter := baseWriter && allowParallelBaseWrites && limit > 1
 	r.acpWorkerMu.Lock()
 	defer r.acpWorkerMu.Unlock()
-	if baseWriter && r.acpWorkersLive > 0 {
+	if baseWriter && !parallelBaseWriter && r.acpWorkersLive > 0 {
 		return nil, fmt.Errorf("an external base-workspace writer requires exclusive access; wait for the current external worker to finish")
 	}
-	if r.acpBaseWritersLive > 0 {
+	if r.acpBaseWritersLive > 0 && !parallelBaseWriter {
 		return nil, fmt.Errorf("an external base-workspace writer is active; wait for it to finish before starting another worker")
+	}
+	if parallelBaseWriter {
+		for _, live := range r.acpBaseWriterScopes {
+			if subagentWriteScopesOverlap(live.Scope, writeScope) {
+				return nil, fmt.Errorf(
+					"an external base-workspace writer is already modifying %q; this task's write scope overlaps it",
+					strings.Join(live.Scope, ", "),
+				)
+			}
+		}
 	}
 	if r.acpWorkersLive >= limit {
 		if limit == 1 {
@@ -60,8 +84,13 @@ func (r *SessionRuntime) acquireACPWorkerPermitForWorkspace(limit int, role Suba
 		return nil, fmt.Errorf("this session already has %d live external ACP workers (limit %d)", r.acpWorkersLive, limit)
 	}
 	r.acpWorkersLive++
-	if baseWriter {
+	if baseWriter && !parallelBaseWriter {
 		r.acpBaseWritersLive++
+	}
+	scopeEntry := -1
+	if parallelBaseWriter {
+		scopeEntry = len(r.acpBaseWriterScopes)
+		r.acpBaseWriterScopes = append(r.acpBaseWriterScopes, acpBaseWriterScope{Scope: append([]string(nil), writeScope...)})
 	}
 	var once sync.Once
 	return func() {
@@ -70,12 +99,21 @@ func (r *SessionRuntime) acquireACPWorkerPermitForWorkspace(limit int, role Suba
 			if r.acpWorkersLive > 0 {
 				r.acpWorkersLive--
 			}
-			if baseWriter && r.acpBaseWritersLive > 0 {
+			if baseWriter && !parallelBaseWriter && r.acpBaseWritersLive > 0 {
 				r.acpBaseWritersLive--
+			}
+			if scopeEntry >= 0 && scopeEntry < len(r.acpBaseWriterScopes) {
+				r.acpBaseWriterScopes = append(r.acpBaseWriterScopes[:scopeEntry], r.acpBaseWriterScopes[scopeEntry+1:]...)
 			}
 			r.acpWorkerMu.Unlock()
 		})
 	}, nil
+}
+
+// acpBaseWriterScope is the declared write scope of one live parallel
+// base-workspace writer.
+type acpBaseWriterScope struct {
+	Scope []string
 }
 
 // acpWorkerRequestScope is the already-resolved authorization context for one

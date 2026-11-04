@@ -116,7 +116,11 @@ func (b ACPChildBackend) CreateChild(opts agentcore.AgentOptions) (agentpkg.Agen
 	// error for a second worker instead of a handle whose status later fails.
 	isolatedWrite := contract.Role == SubagentRoleImplement &&
 		acpWorkDirIsIsolated(b.Runtime.WorkDir, workDir, resolution)
-	release, err := b.Runtime.acquireACPWorkerPermitForWorkspace(profile.EffectiveEnforcedChildren(), contract.Role, isolatedWrite)
+	release, err := b.Runtime.acquireACPWorkerPermitForWorkspace(
+		profile.EffectiveEnforcedChildren(), contract.Role, isolatedWrite,
+		profile.EffectiveAllowParallelBaseWorkspaceWrites(),
+		contract.WriteScope,
+	)
 	if err != nil {
 		return nil, true, err
 	}

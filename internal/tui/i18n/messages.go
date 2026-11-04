@@ -388,6 +388,7 @@ const (
 	MsgRouterPanelFieldRoles              MessageID = "router_panel.field.roles"
 	MsgRouterPanelFieldWriteRoots         MessageID = "router_panel.field.write_roots"
 	MsgRouterPanelFieldTerminal           MessageID = "router_panel.field.terminal"
+	MsgRouterPanelFieldParallelWrites     MessageID = "router_panel.field.parallel_writes"
 	MsgRouterPanelFieldEnabled            MessageID = "router_panel.field.enabled"
 	MsgRouterPanelFieldSave               MessageID = "router_panel.field.save"
 	MsgRouterPanelFieldSaveHint           MessageID = "router_panel.field.save_hint"
@@ -653,6 +654,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelFieldRoles:              "Roles",
 		MsgRouterPanelFieldWriteRoots:         "Write roots",
 		MsgRouterPanelFieldTerminal:           "Terminal bridge",
+		MsgRouterPanelFieldParallelWrites:     "Parallel workspace writes",
 		MsgRouterPanelFieldEnabled:            "Enabled",
 		MsgRouterPanelFieldSave:               "Save profile",
 		MsgRouterPanelFieldSaveHint:           "Validate and write acpAgents to settings.json",
@@ -1143,6 +1145,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelFieldRoles:              "角色",
 		MsgRouterPanelFieldWriteRoots:         "写入根目录",
 		MsgRouterPanelFieldTerminal:           "终端桥",
+		MsgRouterPanelFieldParallelWrites:     "并行写入工作区",
 		MsgRouterPanelFieldEnabled:            "启用",
 		MsgRouterPanelFieldSave:               "保存 profile",
 		MsgRouterPanelFieldSaveHint:           "校验并写入 settings.json 的 acpAgents",

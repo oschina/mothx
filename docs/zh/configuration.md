@@ -1201,6 +1201,7 @@ patch、未跟踪内容与摘要）写入持久化子级历史。Router lead 通
 - `roles` 是能力上限。未声明 `roles` 的 profile 只读（`investigate`）。写角色（`implement`、`integrate`）必须至少声明一个相对 `writeRoots`，任务的 write scope 必须位于其中。
 - `terminal`（默认 `false`）允许该 profile 使用客户端维护的 ACP 终端桥。启用后远端 Agent 可以请求 MothX 执行 argv 命令；MothX 会通过共享工作区沙箱、进程组回收和有界输出缓冲执行。不实现终端认证或 URL 认证。仅对你已经信任其自主选择命令的 Agent 可执行文件启用。
 - `maxConcurrentChildren` 默认为 `1`，上限为 `8`。只读 Router worker 可以按该上限并发；Runtime 会对同一 profile/workdir 复用一个已初始化的 ACP 连接，承载多个相互隔离的远程 session。该连接会广播该 profile 上任一 session 可能执行的客户端能力并集（例如 profile 声明写角色与 `writeRoots` 时广播 `fs.writeTextFile`），但每个 session 的 handler 仍会拒绝超出自身任务角色/范围（role/scope）的写入。在 Runtime 受管独立 worktree 中执行的 `implement` worker 不会写主工作区，因此可以与 reader 并存。主工作区 writer（包括 `subagent_integrate`）双向独占，所以任一外部 worker 存活时 Runtime 会拒绝它，writer 存活时也会拒绝新的 reader。每个只读 fan-out 结果通过 `subagent_wait(handle: ...)` 分别等待。
+- `allowParallelBaseWorkspaceWrites` 默认为 `false`，用于放宽上面那条独占规则：允许写入角色的 worker 以会话工作区（而非 Runtime 受管的独立 worktree）为目标时并发运行。这是显式的可执行代码信任，而不是性能默认值：外部 ACP Agent 会运行自己的工具，MothX 无法把它的写入限制在声明的 `write_scope` 内，两个 worker 仍可能改到同一个文件。只有在任务按模块划分工作区时才应开启，并且需要把 `maxConcurrentChildren` 设为大于 1，因为上限依然生效。Runtime 仍会拒绝与存活 base writer 的声明 `write_scope` 重叠的并行 writer，因为这种重叠是静态可见的。`mothx doctor` 会报告该开关，`/router` 面板以「并行写入工作区」暴露它。受管独立 worktree 加 `subagent_integrate` 仍是更安全的默认方案。
 - Router 的 `permissionPolicy` 只能是 `auto_allow_once` 或 `auto_reject`；`interactive` profile 不能作为 Router worker 激活。MothX 只会选择远端 Agent 实际提供的一次性选项，绝不会自动选择 `allow_always`/`reject_always`。
 
 可以在 `settings.json` 中编辑 `acpAgents`，也可以使用 TUI 的 `/router` 面板：面板会列出 profile 及其由 Runtime 解析出的可用性，并支持新增、编辑、删除和激活。面板只通过共享配置层写入，因此无效候选（stdio 的空 `command[0]`、缺失或不匹配的远程 `url`、重复 ID、写角色缺少 `writeRoots`、内联明文密钥）会在写入前被拒绝。在面板中按 `t`、在 TUI 中使用 `/router <id>[,<id>...]`，或在 CLI 中使用 `mothx --router --acp-agent <id>[,<id>...]` 激活。第一个 profile 是默认目标，有序列表是会话绑定的允许列表；Runtime 会逐个校验 profile 并记录对应的非阻塞策略。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化选择与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
@@ -1298,8 +1299,9 @@ Serve 的 Web UI 在**设置 → MCP**中提供全局文件编辑器，也可从
 
 面板支持在当前作用域的 `mcp.json` 中新增、编辑、删除、启用、关闭和重新加载 MCP
 服务器。按 `a` 后先选择传输类型，再逐项配置名称、命令或端点、参数、环境变量、请求头和
-启用状态；回车或 `e` 编辑选中服务器，空格启用或关闭，按 `d` 再按 `y` 删除。变更只会修改
-配置；请执行 `/reload`，让当前 TUI 会话加载新的 MCP 工具集合。
+启用状态；回车或 `e` 编辑选中服务器，空格启用或关闭，按 `d` 再按 `y` 删除。保存后会
+就地重连受影响的服务器，当前会话无需重启客户端即可使用新的 MCP 工具集合；已在执行的
+运行仍使用构建时冻结的工具集合，变更在下一次运行时生效。
 
 示例：
 

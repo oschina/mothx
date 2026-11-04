@@ -161,6 +161,30 @@ func TestACPAgentProfileValidationAndLookup(t *testing.T) {
 	}
 }
 
+// The parallel base-workspace opt-in must default to off, so every existing
+// settings.json profile keeps the exclusive base-workspace writer lane.
+func TestACPAgentProfileParallelBaseWritesDefaultToExclusive(t *testing.T) {
+	profile := ACPAgentProfile{
+		ID: "codex", Command: []string{"/opt/codex"}, Enabled: true,
+		PermissionPolicy: ACPPermissionAutoAllowOnce,
+	}
+	if profile.EffectiveAllowParallelBaseWorkspaceWrites() {
+		t.Fatal("a profile without the opt-in allows parallel base-workspace writes")
+	}
+	if err := profile.Validate(); err != nil {
+		t.Fatalf("a profile without the opt-in stopped validating: %v", err)
+	}
+
+	optIn := profile
+	optIn.AllowParallelBaseWorkspaceWrites = true
+	if !optIn.EffectiveAllowParallelBaseWorkspaceWrites() {
+		t.Fatal("the explicit opt-in was not honored")
+	}
+	if err := optIn.Validate(); err != nil {
+		t.Fatalf("the explicit opt-in stopped validating: %v", err)
+	}
+}
+
 func TestACPAgentProfileRoleCeilings(t *testing.T) {
 	readOnly := ACPAgentProfile{ID: "reviewer", Command: []string{"/opt/reviewer"}, Enabled: true}
 	if err := readOnly.Validate(); err != nil {

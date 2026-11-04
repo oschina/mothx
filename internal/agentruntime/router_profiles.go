@@ -24,10 +24,14 @@ type ACPWorkerProfileDescriptor struct {
 	PermissionPolicy      config.ACPPermissionPolicy `json:"permissionPolicy"`
 	MaxConcurrentChildren int                        `json:"maxConcurrentChildren"`
 	// MaxConcurrentChildrenEnforced is the live-worker ceiling actually applied by
-	// this release. It currently matches the configured read-only ceiling; write
-	// roles remain exclusive regardless of this value.
-	MaxConcurrentChildrenEnforced int    `json:"maxConcurrentChildrenEnforced"`
-	InvalidReason                 string `json:"invalidReason,omitempty"`
+	// this release. It matches the configured ceiling.
+	MaxConcurrentChildrenEnforced int `json:"maxConcurrentChildrenEnforced"`
+	// ParallelBaseWorkspaceWrites reports that the profile opted into
+	// concurrent base-workspace writers. MothX cannot confine an external
+	// Agent's own tools to the declared write scope, so this is explicit
+	// operator trust and stays visible in every management projection.
+	ParallelBaseWorkspaceWrites bool   `json:"parallelBaseWorkspaceWrites,omitempty"`
+	InvalidReason               string `json:"invalidReason,omitempty"`
 }
 
 // ListACPWorkerProfiles is the shared Runtime catalog used by management
@@ -47,6 +51,7 @@ func ListACPWorkerProfiles(settings *config.Settings) []ACPWorkerProfileDescript
 			MaxConcurrentChildren: profile.EffectiveMaxConcurrentChildren(),
 
 			MaxConcurrentChildrenEnforced: profile.EffectiveEnforcedChildren(),
+			ParallelBaseWorkspaceWrites:   profile.EffectiveAllowParallelBaseWorkspaceWrites(),
 		}
 		if err := profile.Validate(); err != nil {
 			descriptor.InvalidReason = err.Error()

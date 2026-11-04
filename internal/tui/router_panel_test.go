@@ -161,3 +161,35 @@ func TestRouterPanelEditsTerminalBridgeOptIn(t *testing.T) {
 		t.Fatalf("terminal field projection = %q, want enabled", field.Description)
 	}
 }
+
+// The parallel base-workspace writer opt-in is explicit executable trust, so
+// the profile form must expose it and default it to off.
+func TestRouterPanelEditsParallelBaseWorkspaceWrites(t *testing.T) {
+	app := newRouterCommandApp(t)
+	app.openRouterPanel()
+	app.beginRouterPanelCreate()
+	app.beginRouterPanelCreateFromScratch()
+
+	fields := app.routerPanelFormFields()
+	parallelIndex := -1
+	for i, field := range fields {
+		if field.Key == "parallelWrites" {
+			parallelIndex = i
+			break
+		}
+	}
+	if parallelIndex < 0 {
+		t.Fatal("the profile form does not expose parallel base-workspace writes")
+	}
+	if app.routerPanel.Draft.AllowParallelBaseWorkspaceWrites {
+		t.Fatal("parallel base-workspace writes must default to off")
+	}
+	app.routerPanel.FormCursor = parallelIndex
+	app.handleRouterPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if !app.routerPanel.Draft.AllowParallelBaseWorkspaceWrites {
+		t.Fatal("the parallel writes field did not toggle opt-in")
+	}
+	if field := app.routerPanelFormFields()[parallelIndex]; field.Description != app.translator.Text(i18n.MsgRouterPanelValueOn) {
+		t.Fatalf("parallel writes field projection = %q, want enabled", field.Description)
+	}
+}

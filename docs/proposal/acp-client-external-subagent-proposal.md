@@ -1,6 +1,6 @@
 # ACP Client External Sub-agent Proposal
 
-> Status: Implemented Phases 0–4 (multi-session process reuse, multi-turn sessions with capability-gated `session/resume`/`session/load`, multi-profile target selection, read-only and isolated-write fan-out, capability-negotiated attachments, scoped filesystem and opt-in terminal bridges, durable child history, managed per-child worktrees with bounded change-set snapshots, a Runtime-owned exclusive change-set integration lane, and the ACP standard remote transport over WebSocket and streamable HTTP/SSE). Terminal/URL authentication is explicitly out of scope, and direct parallel base-workspace writers remain deliberately deferred behind per-child worktrees plus the exclusive integration lane.
+> Status: Implemented Phases 0–4 (multi-session process reuse, multi-turn sessions with capability-gated `session/resume`/`session/load`, multi-profile target selection, read-only and isolated-write fan-out, capability-negotiated attachments, scoped filesystem and opt-in terminal bridges, durable child history, managed per-child worktrees with bounded change-set snapshots, a Runtime-owned exclusive change-set integration lane, opt-in parallel base-workspace writers with static scope-overlap refusal, and the ACP standard remote transport over WebSocket and streamable HTTP/SSE). Terminal/URL authentication is explicitly out of scope.
 >
 > Date: 2026-11-02 · Completed: 2026-11-04
 >
@@ -61,8 +61,8 @@ one Runtime-owned exclusive base-workspace lane instead of starting another
 external Agent. An idle session also wakes into a new canonical lead Run when
 worker completions arrive in its mailbox, coalescing a burst into one Run and
 projecting it through the same Runtime event path. The ACP standard remote
-transport is implemented over WebSocket and streamable HTTP/SSE; parallel
-base-workspace writers remain the only deliberate follow-up.
+transport is implemented over WebSocket and streamable HTTP/SSE. Parallel
+base-workspace writers are available behind an explicit per-profile opt-in.
 
 | Area | Status | Implemented boundary |
 | --- | --- | --- |
@@ -1546,16 +1546,15 @@ Resolved:
 Remaining:
 
 1. Parallel base-workspace writers beyond the current exclusive Runtime
-   integration lane (per-child worktrees, immutable snapshots, and
-   `subagent_integrate` are implemented).
-   This is intentionally gated rather than a missing mechanism: an external
+   integration lane is now available behind an explicit per-profile opt-in
+   (`allowParallelBaseWorkspaceWrites`); per-child worktrees, immutable
+   snapshots, and `subagent_integrate` remain the default.
+   The gate was deliberate rather than a missing mechanism: an external
    Agent's own tools are not confined to the Runtime filesystem bridge, so
    disjoint `write_scope` values cannot prove that two base-workspace writers
-   will not touch the same file. Multi-selection integration is now
-   transactional (a later conflict reverses the snapshots applied by that
-   call), but a future slice still must preflight every selected snapshot,
-   record a canonical conflict policy for overlapping paths, and prove that
-   non-bridge worker writes cannot race the base workspace. Until then,
-   parallel implementation uses managed per-child worktrees plus the single
-   exclusive integration lane; direct base-workspace writers remain serialized
-   in both directions.
+   will not touch the same file. The opt-in is therefore explicit operator
+   trust, it keeps the configured `maxConcurrentChildren` ceiling, and the
+   Runtime still refuses a parallel writer whose declared `write_scope`
+   overlaps a live base writer, because that overlap is statically visible.
+   `mothx doctor` and the `/router` panel report the opt-in so the residual
+   risk stays visible.

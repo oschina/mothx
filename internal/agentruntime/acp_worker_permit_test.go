@@ -117,24 +117,133 @@ func TestACPWorkerPermitAllowsIsolatedWriterBesideReaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, true)
+	writer, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, true, false, nil)
 	if err != nil {
 		t.Fatalf("isolated writer beside reader: %v", err)
 	}
-	if _, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleIntegrate, false); err == nil ||
+	if _, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleIntegrate, false, false, nil); err == nil ||
 		!strings.Contains(err.Error(), "exclusive") {
 		t.Fatalf("base writer beside live workers = %v", err)
 	}
 	writer()
 	reader()
 
-	base, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleIntegrate, false)
+	base, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleIntegrate, false, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, true); err == nil ||
+	if _, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, true, false, nil); err == nil ||
 		!strings.Contains(err.Error(), "base-workspace writer is active") {
 		t.Fatalf("isolated writer beside base writer = %v", err)
 	}
 	base()
+}
+
+// A profile that does not opt in keeps the exclusive base-workspace lane. This
+// is the default for every existing settings.json profile.
+func TestACPWorkerPermitBaseWriterStaysExclusiveByDefault(t *testing.T) {
+	runtime := &SessionRuntime{}
+	writer, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, false, false, []string{"internal/a"})
+	if err != nil {
+		t.Fatalf("first base writer: %v", err)
+	}
+	if _, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, false, false, []string{"internal/b"}); err == nil ||
+		!strings.Contains(err.Error(), "exclusive") {
+		t.Fatalf("second base writer without the opt-in = %v, want a refusal", err)
+	}
+	writer()
+}
+
+// The explicit opt-in admits parallel base-workspace writers, but only when
+// their declared scopes cannot collide.
+func TestACPWorkerPermitParallelBaseWritersAllowDisjointScopes(t *testing.T) {
+	runtime := &SessionRuntime{}
+	first, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, false, true, []string{"internal/alpha"})
+	if err != nil {
+		t.Fatalf("first parallel base writer: %v", err)
+	}
+	second, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, false, true, []string{"internal/beta"})
+	if err != nil {
+		t.Fatalf("second parallel base writer with a disjoint scope: %v", err)
+	}
+	// The ordinary ceiling still applies: the third writer fills it.
+	third, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, false, true, []string{"internal/gamma"})
+	if err != nil {
+		t.Fatalf("third parallel base writer filling the ceiling: %v", err)
+	}
+	if _, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, false, true, []string{"internal/delta"}); err == nil ||
+		!strings.Contains(err.Error(), "live external ACP workers") {
+		t.Fatal("a fourth parallel base writer was admitted past the ceiling")
+	}
+	third()
+	second()
+	first()
+
+	// A released slot is reusable and the scope bookkeeping must not leak.
+	reused, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, false, true, []string{"internal/alpha"})
+	if err != nil {
+		t.Fatalf("parallel base writer after release: %v", err)
+	}
+	reused()
+}
+
+// A statically visible overlap is refused even when the profile allows
+// parallel base writers. The scope is the contract the worker was given, so
+// this is the one part of the risk that can be checked without confining the
+// worker's own tools.
+func TestACPWorkerPermitParallelBaseWritersRefuseOverlappingScopes(t *testing.T) {
+	cases := []struct {
+		name  string
+		left  []string
+		right []string
+	}{
+		{name: "identical scope", left: []string{"internal/alpha"}, right: []string{"internal/alpha"}},
+		{name: "nested scope", left: []string{"internal"}, right: []string{"internal/alpha"}},
+		{name: "file inside scope", left: []string{"internal/alpha"}, right: []string{"internal/alpha/one.go"}},
+		{name: "empty scope", left: nil, right: []string{"internal/alpha"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := &SessionRuntime{}
+			release, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, false, true, tc.left)
+			if err != nil {
+				t.Fatalf("first parallel base writer: %v", err)
+			}
+			defer release()
+			if _, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, false, true, tc.right); err == nil ||
+				!strings.Contains(err.Error(), "overlaps") {
+				t.Fatalf("overlapping scope was admitted: %v", err)
+			}
+		})
+	}
+}
+
+// The opt-in still serializes when the ceiling is one: raising concurrency is
+// what enables parallel writers, not the flag alone.
+func TestACPWorkerPermitParallelBaseWritersRespectCeilingOfOne(t *testing.T) {
+	runtime := &SessionRuntime{}
+	release, err := runtime.acquireACPWorkerPermitForWorkspace(1, SubagentRoleImplement, false, true, []string{"internal/alpha"})
+	if err != nil {
+		t.Fatalf("first base writer: %v", err)
+	}
+	defer release()
+	if _, err := runtime.acquireACPWorkerPermitForWorkspace(1, SubagentRoleImplement, false, true, []string{"internal/beta"}); err == nil {
+		t.Fatal("a second base writer was admitted with a ceiling of one")
+	}
+}
+
+// A read-only worker may always join a parallel base writer: the reader does
+// not modify the workspace.
+func TestACPWorkerPermitAllowsReaderBesideParallelBaseWriter(t *testing.T) {
+	runtime := &SessionRuntime{}
+	writer, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, false, true, []string{"internal/alpha"})
+	if err != nil {
+		t.Fatalf("parallel base writer: %v", err)
+	}
+	defer writer()
+	reader, err := runtime.acquireACPWorkerPermitForRole(3, SubagentRoleInvestigate)
+	if err != nil {
+		t.Fatalf("reader beside a parallel base writer: %v", err)
+	}
+	reader()
 }

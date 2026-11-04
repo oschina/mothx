@@ -374,6 +374,20 @@ func checkACPAgents(settings *config.Settings) []Check {
 		check.Detail = "all configured profiles are disabled"
 		return []Check{check}
 	}
+	// Report the parallel base-workspace opt-in explicitly. MothX cannot
+	// confine an external Agent's own tools to the declared write scope, so an
+	// operator who enables this accepts a real risk that must stay visible.
+	for _, profile := range settings.ACPAgents {
+		if !profile.Enabled || !profile.EffectiveAllowParallelBaseWorkspaceWrites() {
+			continue
+		}
+		return []Check{
+			{ID: "acp.profiles", Status: StatusOK, Title: "ACP worker profiles", Detail: fmt.Sprintf("%d enabled profile(s) validated", enabled)},
+			{ID: "acp.profiles.parallel_base_writes", Status: StatusWarn, Title: "Parallel base-workspace writes enabled",
+				Detail: fmt.Sprintf("profile %q allows write-role workers to modify the session workspace concurrently", profile.ID),
+				Fix:    "Ensure the tasks partition the workspace by module, or remove allowParallelBaseWorkspaceWrites to serialize base-workspace writers"},
+		}
+	}
 	return []Check{{ID: "acp.profiles", Status: StatusOK, Title: "ACP worker profiles", Detail: fmt.Sprintf("%d enabled profile(s) validated", enabled)}}
 }
 

@@ -656,15 +656,34 @@ escape rejection, conflict evidence, and the tool-selection projection.
 ## Remaining (Phase 4 deliberate follow-ups)
 
 Phases 0–3 and the transport/attachment/fan-out/integration/continuation
-slices above are implemented as of 2026-11-04. The remaining items are
-deliberate follow-ups:
+slices above are implemented as of 2026-11-04. Terminal or URL authentication
+flows remain explicitly out of scope.
 
-- terminal or URL authentication flows (explicitly out of scope);
-- parallel base-workspace writers beyond the current exclusive integration
-  lane.
+Change-set capture, selection, and application are implemented.
 
-Change-set capture, selection, and application are implemented. Parallel base
-workspace writers still require their own conflict-resolution policy.
+### Parallel base-workspace writers (2026-11-04)
+
+Parallel base-workspace writers are available behind an explicit per-profile
+opt-in, `allowParallelBaseWorkspaceWrites`. The default stays exclusive, so
+every existing `settings.json` profile keeps its current behavior.
+
+- The opt-in relaxes only the bidirectional exclusivity of the base-workspace
+  write lane. A parallel writer still consumes the ordinary
+  `maxConcurrentChildren` ceiling, and a ceiling of one still serializes.
+- The Runtime still refuses a parallel writer whose declared `write_scope`
+  overlaps a live base writer. The scope is the contract the worker was given,
+  so this is the one part of the risk that can be checked without confining the
+  worker's own tools.
+- The residual risk is real and stated in the product: an external ACP Agent
+  runs its own tools, so MothX cannot confine its writes to the declared
+  `write_scope`. Two workers can still touch the same file. The opt-in is
+  therefore explicit operator trust for operators who partition the workspace
+  by module.
+- `mothx doctor` reports the opt-in as a warning, and the `/router` panel
+  exposes it as "Parallel workspace writes", so the risk stays visible rather
+  than being a silent behavior change.
+- Per-child worktrees plus the exclusive `subagent_integrate` lane remain the
+  safer default and are unchanged.
 
 ### Automatic mailbox wakeups (2026-11-04)
 

@@ -91,6 +91,11 @@ type SessionRuntime struct {
 	acpWorkerMu        sync.Mutex
 	acpWorkersLive     int
 	acpBaseWritersLive int
+	// acpBaseWriterScopes records the declared write scope of every live
+	// base-workspace writer so a parallel writer can be refused when its scope
+	// overlaps one that is already running. The scope is the contract the worker
+	// was given; it cannot prove what the worker's own tools really touch.
+	acpBaseWriterScopes []acpBaseWriterScope
 	// acpConnections owns reusable external ACP processes. The pool is created
 	// lazily by the Runtime and closed only by Close/Shutdown.
 	acpConnections *acpConnectionPool

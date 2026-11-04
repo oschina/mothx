@@ -118,6 +118,23 @@ type ACPAgentProfile struct {
 	// MaxConcurrentChildren is the live-worker ceiling for this profile.
 	// Empty/zero means one, matching the serial Router MVP.
 	MaxConcurrentChildren int `json:"maxConcurrentChildren,omitempty"`
+	// AllowParallelBaseWorkspaceWrites lets write-role workers that target the
+	// session workspace (no managed worktree) run concurrently up to
+	// MaxConcurrentChildren instead of taking the workspace exclusively.
+	//
+	// This is explicit executable trust, not a performance default. An external
+	// ACP Agent runs its own tools, so MothX cannot confine its writes to the
+	// declared write_scope: two workers can still touch the same file. Enable it
+	// only when the operator partitions work by module and accepts that risk.
+	// Per-child worktrees plus subagent_integrate remain the safer default.
+	AllowParallelBaseWorkspaceWrites bool `json:"allowParallelBaseWorkspaceWrites,omitempty"`
+}
+
+// EffectiveAllowParallelBaseWorkspaceWrites reports whether this profile permits
+// concurrent base-workspace writers. It requires the explicit opt-in; the zero
+// value keeps the exclusive default for every existing settings.json profile.
+func (p ACPAgentProfile) EffectiveAllowParallelBaseWorkspaceWrites() bool {
+	return p.AllowParallelBaseWorkspaceWrites
 }
 
 // EffectiveTransport returns the validated transport, defaulting to stdio for

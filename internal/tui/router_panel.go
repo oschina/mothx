@@ -217,6 +217,10 @@ func (a *App) routerPanelFormFields() []routerPanelField {
 	if draft.TerminalAccess {
 		terminal = a.translator.Text(i18n.MsgRouterPanelValueOn)
 	}
+	parallelWrites := a.translator.Text(i18n.MsgRouterPanelValueOff)
+	if draft.AllowParallelBaseWorkspaceWrites {
+		parallelWrites = a.translator.Text(i18n.MsgRouterPanelValueOn)
+	}
 	unknown := a.translator.Text(i18n.MsgRouterPanelValueUnset)
 	fields := []routerPanelField{
 		{Key: "id", Title: a.translator.Text(i18n.MsgRouterPanelFieldID), Description: valueOrDefault(draft.ID, a.translator.Text(i18n.MsgRouterPanelValueRequired))},
@@ -229,6 +233,7 @@ func (a *App) routerPanelFormFields() []routerPanelField {
 		{Key: "roles", Title: a.translator.Text(i18n.MsgRouterPanelFieldRoles), Description: roles},
 		{Key: "writeRoots", Title: a.translator.Text(i18n.MsgRouterPanelFieldWriteRoots), Description: valueOrDefault(strings.Join(draft.WriteRoots, ", "), unknown)},
 		{Key: "terminal", Title: a.translator.Text(i18n.MsgRouterPanelFieldTerminal), Description: terminal},
+		{Key: "parallelWrites", Title: a.translator.Text(i18n.MsgRouterPanelFieldParallelWrites), Description: parallelWrites},
 		{Key: "enabled", Title: a.translator.Text(i18n.MsgRouterPanelFieldEnabled), Description: enabled},
 		{Key: "save", Title: a.translator.Text(i18n.MsgRouterPanelFieldSave), Description: a.translator.Text(i18n.MsgRouterPanelFieldSaveHint)},
 		{Key: "cancel", Title: a.translator.Text(i18n.MsgRouterPanelFieldCancel), Description: a.translator.Text(i18n.MsgRouterPanelFieldCancelHint)},
@@ -545,6 +550,8 @@ func (a *App) handleRouterPanelKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 				a.routerPanel.Draft.Enabled = !a.routerPanel.Draft.Enabled
 			case "terminal":
 				a.routerPanel.Draft.TerminalAccess = !a.routerPanel.Draft.TerminalAccess
+			case "parallelWrites":
+				a.routerPanel.Draft.AllowParallelBaseWorkspaceWrites = !a.routerPanel.Draft.AllowParallelBaseWorkspaceWrites
 			case "save":
 				a.saveRouterPanelDraft()
 			case "cancel":

@@ -374,3 +374,40 @@ func subagentWriteWithinRoots(path string, roots []string) bool {
 	}
 	return false
 }
+
+// subagentWriteScopesOverlap reports whether two relative write scopes may
+// touch the same file.
+//
+// A scope names a directory or a file. Two scopes collide when they are the
+// same path, when one contains the other, or when either is a file that lives
+// under the other scope's directory. Distinct sibling directories are disjoint:
+// that separation is exactly the partitioning an operator relies on when they
+// opt into parallel base-workspace writers.
+func subagentWriteScopesOverlap(left, right []string) bool {
+	if len(left) == 0 || len(right) == 0 {
+		// An empty scope means the contract did not narrow the writer at all, so
+		// it can touch anything the other scope touches.
+		return true
+	}
+	for _, leftRoot := range left {
+		leftCleaned := filepath.Clean(strings.TrimSpace(leftRoot))
+		if leftCleaned == "" || leftCleaned == "." {
+			return true
+		}
+		for _, rightRoot := range right {
+			rightCleaned := filepath.Clean(strings.TrimSpace(rightRoot))
+			if rightCleaned == "" || rightCleaned == "." {
+				return true
+			}
+			if leftCleaned == rightCleaned {
+				return true
+			}
+			// One scope nested in the other is an overlap.
+			if subagentWriteWithinRoots(leftCleaned, []string{rightCleaned}) ||
+				subagentWriteWithinRoots(rightCleaned, []string{leftCleaned}) {
+				return true
+			}
+		}
+	}
+	return false
+}
