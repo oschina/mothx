@@ -65,6 +65,16 @@ const (
 	ACPPermissionInteractive   ACPPermissionPolicy = "interactive"
 )
 
+// ACPAgentTransport is the wire transport used to reach one configured ACP
+// worker. Empty means the original local stdio form.
+type ACPAgentTransport string
+
+const (
+	ACPAgentTransportStdio     ACPAgentTransport = "stdio"
+	ACPAgentTransportWebSocket ACPAgentTransport = "websocket"
+	ACPAgentTransportHTTP      ACPAgentTransport = "http"
+)
+
 // ACPAgentRole is a task role a Router profile may be trusted with. The
 // configuration declares a ceiling; a task contract may narrow it but never
 // widen it. Write roles require at least one declared WriteRoots entry.
@@ -79,40 +89,56 @@ const (
 )
 
 // maxACPConcurrentChildren is the schema bound for a profile's live-worker
-// ceiling. It is validated, not enforced: this release honors one worker per
-// session (see effectiveACPConcurrentChildren), so a larger configured value is
-// accepted for forward compatibility and reported as not-yet-effective rather
-// than rejected.
-//
-// Rejecting it would change the meaning of an existing settings.json field and
-// strand every user who configured the value on a previous build; a validated
-// ceiling plus an honest doctor/panel projection is the compatible behavior.
+// ceiling. Read-only roles and implement workers in Runtime-managed per-child
+// worktrees may use the configured ceiling; a base-workspace writer remains
+// exclusive in both directions.
 const maxACPConcurrentChildren = 8
 
-// effectiveACPConcurrentChildren is the live-external-worker ceiling this release
-// actually enforces for one session.
-//
-// It is one because a Router worker operates on the shared session worktree and
-// the read-only lead has no local write tool with which to resolve a conflict
-// between two external writers. Raising it belongs with the Runtime-owned
-// per-worker worktree that would make parallelism safe.
-const effectiveACPConcurrentChildren = 1
-
-// ACPAgentProfile is an administrator-configured local ACP stdio Agent. The
-// model only ever receives its ID; command and environment values remain
-// Runtime configuration.
+// ACPAgentProfile is an administrator-configured ACP Agent. The model only
+// ever receives its ID; command, URL, and environment values remain Runtime
+// configuration.
 type ACPAgentProfile struct {
-	ID               string              `json:"id"`
-	Title            string              `json:"title,omitempty"`
-	Command          []string            `json:"command"`
+	ID      string   `json:"id"`
+	Title   string   `json:"title,omitempty"`
+	Command []string `json:"command"`
+	// Transport is empty/"stdio" for a local child process, or the ACP remote
+	// transport RFD's "websocket" / "http" profile. URL is required exactly for
+	// remote transports.
+	Transport        string              `json:"transport,omitempty"`
+	URL              string              `json:"url,omitempty"`
 	Enabled          bool                `json:"enabled"`
 	Environment      []string            `json:"environment,omitempty"`
 	PermissionPolicy ACPPermissionPolicy `json:"permissionPolicy,omitempty"`
 	Roles            []ACPAgentRole      `json:"roles,omitempty"`
 	WriteRoots       []string            `json:"writeRoots,omitempty"`
+	// TerminalAccess opts this profile into the client-owned ACP terminal
+	// bridge. It is explicit executable trust: commands run through the shared
+	// Runtime sandbox but are chosen by the external Agent, not MothX's model.
+	TerminalAccess bool `json:"terminal,omitempty"`
 	// MaxConcurrentChildren is the live-worker ceiling for this profile.
 	// Empty/zero means one, matching the serial Router MVP.
 	MaxConcurrentChildren int `json:"maxConcurrentChildren,omitempty"`
+}
+
+// EffectiveTransport returns the validated transport, defaulting to stdio for
+// every existing settings.json profile.
+func (p ACPAgentProfile) EffectiveTransport() ACPAgentTransport {
+	switch ACPAgentTransport(strings.ToLower(strings.TrimSpace(p.Transport))) {
+	case "", ACPAgentTransportStdio:
+		return ACPAgentTransportStdio
+	case ACPAgentTransportWebSocket:
+		return ACPAgentTransportWebSocket
+	case ACPAgentTransportHTTP:
+		return ACPAgentTransportHTTP
+	default:
+		return ACPAgentTransport(strings.ToLower(strings.TrimSpace(p.Transport)))
+	}
+}
+
+// IsRemote reports whether this profile reaches an ACP endpoint without
+// launching a local process.
+func (p ACPAgentProfile) IsRemote() bool {
+	return p.EffectiveTransport() != ACPAgentTransportStdio
 }
 
 // EffectiveRoles returns the declared role ceiling. A profile that declares no
@@ -146,14 +172,7 @@ func ACPRoleWrites(role ACPAgentRole) bool {
 }
 
 // EffectiveMaxConcurrentChildren is the configured live-worker ceiling of a
-// validated profile, bounded by the schema maximum. It reflects the user's
-// intent for management projections.
-//
-// It is not the enforced limit: this release admits at most
-// EffectiveEnforcedChildren per session, so a larger configured value is
-// accepted and reported as not yet effective instead of being rejected. Keeping
-// the two separate means a settings.json written by an earlier build keeps
-// loading.
+// validated profile, bounded by the schema maximum.
 func (p ACPAgentProfile) EffectiveMaxConcurrentChildren() int {
 	if p.MaxConcurrentChildren <= 0 {
 		return 1
@@ -164,10 +183,12 @@ func (p ACPAgentProfile) EffectiveMaxConcurrentChildren() int {
 	return p.MaxConcurrentChildren
 }
 
-// EffectiveEnforcedChildren is the number of live external workers this release
-// actually admits for one session. It is the value the Runtime permit consumes.
+// EffectiveEnforcedChildren is the live-external-worker ceiling the Runtime
+// admits for one session. Read-only workers and isolated implement workers may
+// share it; base-workspace writers are serialized separately by the role-aware
+// permit, and integration uses the same exclusive lane.
 func (p ACPAgentProfile) EffectiveEnforcedChildren() int {
-	return effectiveACPConcurrentChildren
+	return p.EffectiveMaxConcurrentChildren()
 }
 
 // EffectivePermissionPolicy returns the safe non-blocking default for a
@@ -210,8 +231,26 @@ func (p ACPAgentProfile) Validate() error {
 	if !validACPProfileID(p.ID) {
 		return fmt.Errorf("invalid ACP agent profile id %q", p.ID)
 	}
-	if len(p.Command) == 0 || strings.TrimSpace(p.Command[0]) == "" {
-		return fmt.Errorf("ACP agent profile %q requires command[0]", p.ID)
+	switch p.EffectiveTransport() {
+	case ACPAgentTransportStdio:
+		if len(p.Command) == 0 || strings.TrimSpace(p.Command[0]) == "" {
+			return fmt.Errorf("ACP agent profile %q requires command[0]", p.ID)
+		}
+		if strings.TrimSpace(p.URL) != "" {
+			return fmt.Errorf("ACP agent profile %q must not set url with the stdio transport", p.ID)
+		}
+	case ACPAgentTransportWebSocket, ACPAgentTransportHTTP:
+		if len(p.Command) > 0 {
+			return fmt.Errorf("ACP agent profile %q must not set command with the %s transport", p.ID, p.EffectiveTransport())
+		}
+		if len(p.Environment) > 0 {
+			return fmt.Errorf("ACP agent profile %q must not set environment with the %s transport", p.ID, p.EffectiveTransport())
+		}
+		if err := validateACPRemoteURL(p.ID, p.EffectiveTransport(), p.URL); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("ACP agent profile %q has invalid transport %q", p.ID, p.Transport)
 	}
 	for _, name := range p.Environment {
 		if !validEnvironmentName(name) {
@@ -242,10 +281,9 @@ func (p ACPAgentProfile) Validate() error {
 			return fmt.Errorf("ACP agent profile %q: %w", p.ID, err)
 		}
 	}
-	// maxConcurrentChildren is a forward-compatible ceiling: this release runs one
-	// worker per session worktree, so a value above one is accepted and reported as
-	// not yet effective. Rejecting it would change the meaning of an existing
-	// settings.json field and break users who configured it on an earlier build.
+	// maxConcurrentChildren applies to read-only workers and isolated implement
+	// workers; a base-workspace writer is still exclusive. Rejecting a larger
+	// value would change the meaning of an existing settings.json field.
 	if p.MaxConcurrentChildren < 0 || p.MaxConcurrentChildren > maxACPConcurrentChildren {
 		return fmt.Errorf("ACP agent profile %q maxConcurrentChildren must be 0 (default 1) or between 1 and %d", p.ID, maxACPConcurrentChildren)
 	}
@@ -255,6 +293,37 @@ func (p ACPAgentProfile) Validate() error {
 	default:
 		return fmt.Errorf("ACP agent profile %q has invalid permission policy %q", p.ID, p.PermissionPolicy)
 	}
+}
+
+func validateACPRemoteURL(profileID string, transport ACPAgentTransport, raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fmt.Errorf("ACP agent profile %q requires url with the %s transport", profileID, transport)
+	}
+	endpoint, err := url.Parse(trimmed)
+	if err != nil {
+		return fmt.Errorf("ACP agent profile %q has invalid url: %w", profileID, err)
+	}
+	if endpoint.Host == "" {
+		return fmt.Errorf("ACP agent profile %q url requires a host", profileID)
+	}
+	if endpoint.User != nil {
+		return fmt.Errorf("ACP agent profile %q url must not embed credentials", profileID)
+	}
+	if endpoint.Fragment != "" {
+		return fmt.Errorf("ACP agent profile %q url must not contain a fragment", profileID)
+	}
+	switch transport {
+	case ACPAgentTransportWebSocket:
+		if endpoint.Scheme != "ws" && endpoint.Scheme != "wss" {
+			return fmt.Errorf("ACP agent profile %q url must use ws:// or wss://", profileID)
+		}
+	case ACPAgentTransportHTTP:
+		if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
+			return fmt.Errorf("ACP agent profile %q url must use http:// or https://", profileID)
+		}
+	}
+	return nil
 }
 
 func validACPRole(role ACPAgentRole) bool {

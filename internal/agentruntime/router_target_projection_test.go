@@ -112,6 +112,49 @@ func TestDelegateToolGuidanceNamesRouterRequirement(t *testing.T) {
 	}
 }
 
+func TestRouterSpawnToolCarriesActivatedWorker(t *testing.T) {
+	runtime, registry := newRouterToolRuntime(t, "opencode")
+	defer runtime.Close()
+
+	tool, ok := registry.Get("subagent_spawn")
+	if !ok {
+		t.Fatal("subagent_spawn was not registered in Router mode")
+	}
+	spawn, ok := tool.(*agent.SubAgentSpawnTool)
+	if !ok {
+		t.Fatalf("subagent_spawn has unexpected type %T", tool)
+	}
+	target, ok := spawn.RouterTarget()
+	if !ok || target.ID != "opencode" {
+		t.Fatalf("spawn target = %#v, ok=%v", target, ok)
+	}
+	if !strings.Contains(spawn.Description(), "opencode") || !strings.Contains(spawn.Description(), "asynchronous") {
+		t.Fatalf("spawn description does not describe the Router worker: %s", spawn.Description())
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Const string `json:"const"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(spawn.Parameters(), &schema); err != nil {
+		t.Fatalf("spawn parameters are not valid JSON: %v", err)
+	}
+	if schema.Properties["agent"].Const != "opencode" {
+		t.Fatalf("spawn agent schema does not pin the worker: %s", spawn.Parameters())
+	}
+	required := strings.Join(schema.Required, ",")
+	if !strings.Contains(required, "agent") || !strings.Contains(required, "task") {
+		t.Fatalf("spawn required fields = %v, want task and agent", schema.Required)
+	}
+	if _, ok := schema.Properties["member"]; ok {
+		t.Fatal("Router spawn schema advertises the local expert-team member parameter")
+	}
+	if _, ok := schema.Properties["mode"]; ok {
+		t.Fatal("Router spawn schema advertises a local-only mode parameter")
+	}
+}
+
 // Leaving Router mode must clear the target, or a stale profile ID would keep
 // being advertised in a normal session.
 func TestRouterTargetClearedOutsideRouterMode(t *testing.T) {
@@ -134,5 +177,20 @@ func TestRouterTargetClearedOutsideRouterMode(t *testing.T) {
 	}
 	if target, ok := delegate.RouterTarget(); ok {
 		t.Fatalf("a stale Router target survived leaving Router mode: %#v", target)
+	}
+
+	// Re-enabling the ordinary async toolset must install a fresh spawn tool with
+	// no stale external target.
+	SynchronizeToolGroups(runtime, registry, ToolGroupPolicy{MultiAgent: true, Mode: ModeYolo}, manager)
+	tool, ok = registry.Get("subagent_spawn")
+	if !ok {
+		t.Fatal("subagent_spawn is missing after enabling multi-agent outside Router")
+	}
+	spawn, ok := tool.(*agent.SubAgentSpawnTool)
+	if !ok {
+		t.Fatalf("subagent_spawn has unexpected type %T", tool)
+	}
+	if target, ok := spawn.RouterTarget(); ok {
+		t.Fatalf("a stale Router target survived into the ordinary spawn tool: %#v", target)
 	}
 }

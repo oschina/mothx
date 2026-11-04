@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	agentpkg "github.com/oschina/mothx/agent"
 	"github.com/oschina/mothx/internal/sandbox"
 	"github.com/oschina/mothx/internal/tools"
 )
@@ -211,6 +212,46 @@ func TestSubAgentWaitToolContextCanceled(t *testing.T) {
 	_, err := tool.Execute(ctx, map[string]any{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want wrapped context.Canceled", err)
+	}
+}
+
+func TestSubAgentWaitToolHandleWithoutMailbox(t *testing.T) {
+	manager := NewAgentManager(nil)
+	manager.Register(&stubBackendAgent{id: "external-child"})
+	manager.MarkRunning(agentpkg.AgentID("external-child"))
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		manager.MarkDone(agentpkg.AgentID("external-child"), "worker result")
+	}()
+
+	tool := NewSubAgentWaitTool(manager)
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"handle":     "external-child",
+		"timeout_ms": float64(10000),
+	})
+	if err != nil {
+		t.Fatalf("wait for handle: %v", err)
+	}
+	var parsed struct {
+		Message  string `json:"message"`
+		TimedOut bool   `json:"timed_out"`
+		Handle   string `json:"handle"`
+		Status   string `json:"status"`
+		Result   string `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(result.Text), &parsed); err != nil {
+		t.Fatalf("parse wait result %q: %v", result.Text, err)
+	}
+	if parsed.TimedOut || parsed.Handle != "external-child" || parsed.Status != "done" || parsed.Result != "worker result" {
+		t.Fatalf("handle wait result = %#v", parsed)
+	}
+}
+
+func TestSubAgentWaitToolHandleMissing(t *testing.T) {
+	tool := NewSubAgentWaitTool(NewAgentManager(nil))
+	if _, err := tool.Execute(context.Background(), map[string]any{"handle": "missing"}); err == nil ||
+		!strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing handle error = %v", err)
 	}
 }
 

@@ -231,6 +231,11 @@ type sessionRuntime struct {
 	registry  *tools.Registry
 	cancel    context.CancelFunc
 	promptID  string
+	// mailboxWakeCancel cancels the context used by an automatic continuation's
+	// permission/question bridge. It is adapter-local because it bounds
+	// protocol requests, never the Runtime Run itself.
+	mailboxWakeCancel context.CancelFunc
+	mailboxWakeCtx    context.Context
 	// runID is the canonical durable run identity. promptID remains the ACP
 	// request key used by $/cancel_request and must not be conflated with it.
 	runID            string
@@ -2558,13 +2563,15 @@ func (s *server) handleNewSession(req rpcRequest) {
 	runRuntime.SetRunStore(agentruntime.RunStore{SessionDir: s.currentSettings().GetSessionDir()})
 	runtime.SetExecution(runRuntime)
 	runRuntime.SetEventSink(agentruntime.SessionRunEventSink{SessionDir: s.currentSettings().GetSessionDir()})
-	s.sessions[id] = &sessionRuntime{
+	rt := &sessionRuntime{
 		runtime: runtime, execution: runRuntime,
 		decisions: &agentruntime.DecisionService{},
 		id:        id, mgr: mgr, registry: registry, mcp: mcpClients, agentMgr: teamAgentMgr,
 	}
-	runtime.SetDecisions(s.sessions[id].decisions)
+	s.sessions[id] = rt
+	runtime.SetDecisions(rt.decisions)
 	s.mu.Unlock()
+	s.enableSessionMailboxWake(rt)
 	s.writeResponse(req.ID, newSessionResult{SessionID: id, Modes: sessionModes(runtime), ConfigOptions: s.sessionConfigOptions(id)}, nil)
 	_ = s.notifyAvailableCommands(id)
 }
@@ -3054,6 +3061,7 @@ func (s *server) openSessionRuntime(sessionID, cwd string, servers []mcp.ServerC
 		rt.closeResources()
 		return nil, err
 	}
+	s.enableSessionMailboxWake(rt)
 	return rt, nil
 }
 
@@ -3065,6 +3073,7 @@ func (s *server) installSessionRuntime(rt *sessionRuntime) {
 	if old != nil {
 		_ = s.shutdownSessionRuntime(old)
 	}
+	s.enableSessionMailboxWake(rt)
 }
 
 func (s *server) availableCommands() []availableCommand {
@@ -3700,6 +3709,12 @@ func (s *server) cancelSessionRun(rt *sessionRuntime, expectedRunID string) bool
 	// localCancel is the adapter-owned primitive for the admission window and
 	// any state where the shared matrix cannot reach the in-memory execution.
 	localCancel := func() bool {
+		rt.cancelMu.Lock()
+		wakeCancel := rt.mailboxWakeCancel
+		rt.cancelMu.Unlock()
+		if wakeCancel != nil {
+			wakeCancel()
+		}
 		if rt.execution != nil && rt.execution.Cancel() {
 			return true
 		}

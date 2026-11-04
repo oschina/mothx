@@ -41,23 +41,23 @@ func TestLegacyProfileShapesStillValidate(t *testing.T) {
 	}
 }
 
-// The enforced ceiling must be one no matter what was configured, because the
-// safety argument for serial workers does not depend on user intent.
-func TestEnforcedChildrenIsAlwaysOne(t *testing.T) {
-	for _, configured := range []int{-1, 0, 1, 2, 8} {
+// Read-only workers may use the configured ceiling. Write roles still enforce
+// workspace exclusivity in the Runtime permit.
+func TestEnforcedChildrenMatchesConfiguredCeiling(t *testing.T) {
+	for configured, want := range map[int]int{-1: 1, 0: 1, 1: 1, 2: 2, 8: 8} {
 		profile := config.ACPAgentProfile{
 			ID: "p", Command: []string{"/opt/p", "acp"}, Enabled: true,
 			MaxConcurrentChildren: configured,
 		}
-		if got := profile.EffectiveEnforcedChildren(); got != 1 {
-			t.Fatalf("configured %d enforced %d workers, want 1", configured, got)
+		if got := profile.EffectiveEnforcedChildren(); got != want {
+			t.Fatalf("configured %d enforced %d workers, want %d", configured, got, want)
 		}
 	}
 }
 
-// A profile above the enforced ceiling must still be eligible as a Router worker:
-// the ceiling limits parallelism, not eligibility.
-func TestCappedProfileRemainsRouterEligible(t *testing.T) {
+// A configured concurrency ceiling remains visible to management projections
+// and does not affect Router eligibility.
+func TestConcurrentProfileRemainsRouterEligible(t *testing.T) {
 	settings := config.DefaultSettings()
 	settings.ACPAgents = []config.ACPAgentProfile{{
 		ID: "codex", Command: []string{"/opt/codex/bin/codex", "acp"}, Enabled: true,
@@ -74,7 +74,7 @@ func TestCappedProfileRemainsRouterEligible(t *testing.T) {
 	if got.MaxConcurrentChildren != 4 {
 		t.Fatalf("configured ceiling reported as %d, want 4", got.MaxConcurrentChildren)
 	}
-	if got.MaxConcurrentChildrenEnforced != 1 {
-		t.Fatalf("enforced ceiling reported as %d, want 1", got.MaxConcurrentChildrenEnforced)
+	if got.MaxConcurrentChildrenEnforced != 4 {
+		t.Fatalf("enforced ceiling reported as %d, want 4", got.MaxConcurrentChildrenEnforced)
 	}
 }

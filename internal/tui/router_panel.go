@@ -213,15 +213,22 @@ func (a *App) routerPanelFormFields() []routerPanelField {
 	if draft.Enabled {
 		enabled = a.translator.Text(i18n.MsgRouterPanelValueOn)
 	}
+	terminal := a.translator.Text(i18n.MsgRouterPanelValueOff)
+	if draft.TerminalAccess {
+		terminal = a.translator.Text(i18n.MsgRouterPanelValueOn)
+	}
 	unknown := a.translator.Text(i18n.MsgRouterPanelValueUnset)
 	fields := []routerPanelField{
 		{Key: "id", Title: a.translator.Text(i18n.MsgRouterPanelFieldID), Description: valueOrDefault(draft.ID, a.translator.Text(i18n.MsgRouterPanelValueRequired))},
 		{Key: "title", Title: a.translator.Text(i18n.MsgRouterPanelFieldTitle), Description: valueOrDefault(draft.Title, unknown)},
+		{Key: "transport", Title: a.translator.Text(i18n.MsgRouterPanelFieldTransport), Description: string(draft.EffectiveTransport())},
+		{Key: "url", Title: a.translator.Text(i18n.MsgRouterPanelFieldURL), Description: valueOrDefault(draft.URL, unknown)},
 		{Key: "command", Title: a.translator.Text(i18n.MsgRouterPanelFieldCommand), Description: valueOrDefault(strings.Join(draft.Command, " "), a.translator.Text(i18n.MsgRouterPanelValueRequired))},
 		{Key: "environment", Title: a.translator.Text(i18n.MsgRouterPanelFieldEnvironment), Description: valueOrDefault(strings.Join(draft.Environment, ", "), unknown)},
 		{Key: "permission", Title: a.translator.Text(i18n.MsgRouterPanelFieldPermission), Description: valueOrDefault(string(draft.PermissionPolicy), string(config.ACPPermissionAutoReject))},
 		{Key: "roles", Title: a.translator.Text(i18n.MsgRouterPanelFieldRoles), Description: roles},
 		{Key: "writeRoots", Title: a.translator.Text(i18n.MsgRouterPanelFieldWriteRoots), Description: valueOrDefault(strings.Join(draft.WriteRoots, ", "), unknown)},
+		{Key: "terminal", Title: a.translator.Text(i18n.MsgRouterPanelFieldTerminal), Description: terminal},
 		{Key: "enabled", Title: a.translator.Text(i18n.MsgRouterPanelFieldEnabled), Description: enabled},
 		{Key: "save", Title: a.translator.Text(i18n.MsgRouterPanelFieldSave), Description: a.translator.Text(i18n.MsgRouterPanelFieldSaveHint)},
 		{Key: "cancel", Title: a.translator.Text(i18n.MsgRouterPanelFieldCancel), Description: a.translator.Text(i18n.MsgRouterPanelFieldCancelHint)},
@@ -256,6 +263,10 @@ func (a *App) routerPanelFieldPlaceholder(field string) string {
 		return "codex (lowercase ascii, digits, - and _)"
 	case "title":
 		return "Codex"
+	case "transport":
+		return "stdio | websocket | http"
+	case "url":
+		return "wss://agent.example/acp   (remote transports only)"
 	case "command":
 		return "opencode acp   (or /absolute/path/to/worker acp)"
 	case "environment":
@@ -274,6 +285,10 @@ func (a *App) routerPanelFieldValue(field string) string {
 		return draft.ID
 	case "title":
 		return draft.Title
+	case "transport":
+		return string(draft.EffectiveTransport())
+	case "url":
+		return draft.URL
 	case "command":
 		return strings.Join(draft.Command, " ")
 	case "environment":
@@ -293,6 +308,10 @@ func (a *App) submitRouterPanelFieldInput() {
 		draft.ID = value
 	case "title":
 		draft.Title = value
+	case "transport":
+		draft.Transport = strings.ToLower(value)
+	case "url":
+		draft.URL = value
 	case "command":
 		// The command is argv: split on whitespace, never shell-expanded.
 		draft.Command = strings.Fields(value)
@@ -524,6 +543,8 @@ func (a *App) handleRouterPanelKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 				a.routerPanel.RoleCursor = 0
 			case "enabled":
 				a.routerPanel.Draft.Enabled = !a.routerPanel.Draft.Enabled
+			case "terminal":
+				a.routerPanel.Draft.TerminalAccess = !a.routerPanel.Draft.TerminalAccess
 			case "save":
 				a.saveRouterPanelDraft()
 			case "cancel":
@@ -701,11 +722,6 @@ func (a *App) renderRouterPanel() string {
 			}
 			if profile.ID == active && active != "" {
 				state += " " + a.translator.Text(i18n.MsgRouterPanelStateActive)
-			}
-			// Report a configured ceiling this release cannot honor, so the user is
-			// never left believing parallel workers are running.
-			if descriptor.RouterEligible && profile.MaxConcurrentChildren > descriptor.MaxConcurrentChildrenEnforced {
-				state += " " + a.translator.Text(i18n.MsgRouterPanelStateCapped)
 			}
 			label := profile.Title
 			if strings.TrimSpace(label) == "" {

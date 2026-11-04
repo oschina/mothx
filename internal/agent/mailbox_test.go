@@ -116,6 +116,26 @@ func TestMemberMailboxDrainSteeringErrorShortPayloadKeepsNextStep(t *testing.T) 
 	}
 }
 
+func TestMemberMailboxExternalCompletionNamesChildHandle(t *testing.T) {
+	m := NewMemberMailbox()
+	m.Enqueue(MemberCompletion{
+		MemberID: "agent-child-1", DisplayName: "ACP worker opencode",
+		Status: MemberStatusError, Payload: "worker exited", External: true,
+	})
+	msgs := m.DrainSteering()
+	if len(msgs) != 1 {
+		t.Fatalf("drained %d messages, want 1", len(msgs))
+	}
+	content := msgs[0].Content
+	if !strings.Contains(content, "member: agent-child-1（ACP worker opencode）") {
+		t.Fatalf("external completion lost the child handle: %q", content)
+	}
+	if !strings.Contains(content, `subagent_send(handle:"agent-child-1"`) ||
+		strings.Contains(content, `subagent_spawn(member:`) {
+		t.Fatalf("external completion used the member-only next step: %q", content)
+	}
+}
+
 func TestMemberMailboxPendingSummaryDoesNotDrain(t *testing.T) {
 	m := NewMemberMailbox()
 	if summary := m.PendingSummary(); summary != nil {

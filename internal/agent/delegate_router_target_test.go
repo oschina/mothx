@@ -98,6 +98,66 @@ func TestDelegateSchemaUsesConstWithMultipleProfiles(t *testing.T) {
 	}
 }
 
+// A Router session may bind several workers. The schema must then enumerate the
+// bound allowlist and permit each value, rather than pinning only the default.
+func TestDelegateSchemaEnumeratesBoundWorkers(t *testing.T) {
+	tool := NewDelegateSubAgentTool(nil)
+	tool.SetRouterTarget(&RouterTarget{
+		ID:       "opencode",
+		Accepted: []string{"opencode", "codex"},
+		Available: []string{
+			"opencode", "codex", "claude-code",
+		},
+	})
+
+	var schema struct {
+		Properties map[string]struct {
+			Enum        []string `json:"enum"`
+			Const       string   `json:"const"`
+			Description string   `json:"description"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(tool.Parameters(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	field := schema.Properties["agent"]
+	if field.Const != "" {
+		t.Fatalf("multi-worker schema pinned a single const: %q", field.Const)
+	}
+	if got := strings.Join(field.Enum, ","); got != "opencode,codex" {
+		t.Fatalf("agent enum = %v", field.Enum)
+	}
+	if !strings.Contains(field.Description, "claude-code") || !strings.Contains(field.Description, "not accepted") {
+		t.Fatalf("description does not explain the unbound profile: %q", field.Description)
+	}
+	if strings.Contains(field.Description, "not accepted: opencode") ||
+		strings.Contains(field.Description, "not accepted: codex") {
+		t.Fatalf("description lists a bound worker as unaccepted: %q", field.Description)
+	}
+}
+
+// Execute must accept a non-default bound worker; otherwise the schema and the
+// runtime contract disagree.
+func TestDelegateAcceptsNonDefaultBoundWorker(t *testing.T) {
+	state := &routerTargetState{}
+	state.SetRouterTarget(&RouterTarget{ID: "opencode", Accepted: []string{"opencode", "codex"}})
+	ctx := ContextWithParentMode(context.Background(), "router")
+	got, err := resolveRouterExternalAgent(ctx, state, map[string]any{
+		"task": "inspect", "agent": "codex",
+	})
+	if err != nil {
+		t.Fatalf("resolve bound worker: %v", err)
+	}
+	if got != "codex" {
+		t.Fatalf("resolved worker = %q", got)
+	}
+	if _, err := resolveRouterExternalAgent(ctx, state, map[string]any{
+		"task": "inspect", "agent": "claude-code",
+	}); err == nil || !strings.Contains(err.Error(), "opencode, codex") {
+		t.Fatalf("unbound worker error = %v", err)
+	}
+}
+
 // With exactly one eligible profile the schema must be the tightest form: const.
 func TestDelegateSchemaUsesConstForSingleWorker(t *testing.T) {
 	tool := NewDelegateSubAgentTool(nil)

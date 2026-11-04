@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.10.2
 	github.com/creack/pty v1.1.17
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
+	github.com/gorilla/websocket v1.5.3
 	github.com/larksuite/oapi-sdk-go/v3 v3.9.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
@@ -39,7 +40,6 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect

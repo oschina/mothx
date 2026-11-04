@@ -40,6 +40,14 @@ func (a *App) ShowUpdateNotice(notice string) {
 }
 
 func (a *App) listenAgentEvents() tea.Cmd {
+	if a.mailboxWakeProjection {
+		// A Runtime-owned continuation is delivered through mailboxWakeEventMsg.
+		// It has no adapter event channel, and re-arming the foreground listener
+		// here would either block on a nil channel or attach the wake projection
+		// to an unrelated run.
+		a.mailboxWakeProjection = false
+		return nil
+	}
 	eventCh := a.eventCh
 	return func() tea.Msg {
 		var next agent.Event

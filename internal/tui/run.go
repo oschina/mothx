@@ -19,20 +19,27 @@ import (
 // tuiRun adapts the Bubble Tea stream to the shared execution lifecycle. It
 // intentionally does not own rendering or event translation.
 type tuiRun struct {
-	execution      *agentruntime.ExecutionRuntime
-	decisions      *agentruntime.DecisionService
-	sessionID      string
-	id             string
-	sessionDir     string
-	workDir        string
-	model          string
-	mode           string
-	artifacts      *agentruntime.ArtifactCollector
-	coordinator    *agentruntime.SubmissionCoordinator
-	submission     *agentruntime.ExecutionHandle
-	submissionDone chan error
-	submissionOnce sync.Once
-	admitted       bool
+	execution  *agentruntime.ExecutionRuntime
+	decisions  *agentruntime.DecisionService
+	sessionID  string
+	id         string
+	sessionDir string
+	workDir    string
+	model      string
+	mode       string
+	// agent is the Runtime-built Agent for an automatic continuation. The
+	// foreground run keeps the cached App.agent instead.
+	agent *agent.Agent
+	// runtimeOwnedTerminal is set for an automatic continuation. The Runtime
+	// already owns and persists that Run's terminal transaction, so the TUI
+	// only renders its canonical terminal event and never calls finish.
+	runtimeOwnedTerminal bool
+	artifacts            *agentruntime.ArtifactCollector
+	coordinator          *agentruntime.SubmissionCoordinator
+	submission           *agentruntime.ExecutionHandle
+	submissionDone       chan error
+	submissionOnce       sync.Once
+	admitted             bool
 }
 
 func (r *tuiRun) registerDecision(id string, kind agentruntime.DecisionKind) error {
@@ -259,6 +266,10 @@ func (r *tuiRun) stop() bool {
 	if r == nil || r.execution == nil {
 		return false
 	}
+	// A pending approval/question cannot survive the cancellation of its Run.
+	// Resolve it here because abort/quit paths may detach the Run before its
+	// terminal event is observed.
+	r.clearDecisions("cancelled")
 	if r.sessionID == "" || r.sessionDir == "" {
 		return r.cancel()
 	}
@@ -289,6 +300,12 @@ func (r *tuiRun) stop() bool {
 
 func (r *tuiRun) finish(state agentruntime.RunState) {
 	if r == nil || r.execution == nil {
+		return
+	}
+	// An automatic continuation's terminal transaction belongs to the Runtime.
+	// Cancel/quit paths may still reach finish through resetAgent, so the
+	// adapter must not write a second terminal state or finish the submission.
+	if r.runtimeOwnedTerminal {
 		return
 	}
 	r.clearDecisions(decisionTerminalStatus(state))

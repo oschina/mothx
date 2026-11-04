@@ -53,7 +53,17 @@ func SynchronizeToolGroups(rt *SessionRuntime, registry *tools.Registry, policy 
 		workflow.RemoveTools(registry)
 		return
 	}
-	if SubAgentToolsEnabled(rt, policy.MultiAgent) {
+	mode := strings.TrimSpace(policy.Mode)
+	if mode == "" {
+		_, _, _, mode, _ = rt.ConfigSnapshot()
+	}
+	if mode == ModeRouter {
+		// Each Router worker is one bounded external turn. Reconcile the entire
+		// async group so a prior multi-agent selection cannot leave send/answer
+		// (or a local-only tool) alive in the Router surface.
+		removeSubAgentTools(registry)
+		agent.RegisterRouterSubAgentTools(registry, manager)
+	} else if SubAgentToolsEnabled(rt, policy.MultiAgent) {
 		agent.RegisterSubAgentTools(registry, manager)
 		if !team {
 			trimToolSelection(registry, agent.SubAgentToolNames(), policy.SubAgentTools)
@@ -61,12 +71,8 @@ func SynchronizeToolGroups(rt *SessionRuntime, registry *tools.Registry, policy 
 	} else {
 		removeSubAgentTools(registry)
 	}
-	// Router always exposes the blocking delegate tool: it is the only way the
-	// read-only lead can reach its activated external worker.
-	mode := strings.TrimSpace(policy.Mode)
-	if mode == "" {
-		_, _, _, mode, _ = rt.ConfigSnapshot()
-	}
+	// Router always exposes the blocking delegate tool. The async spawn surface is
+	// installed above; both target the same activated external worker.
 	if policy.Delegate || mode == ModeRouter {
 		agent.RegisterDelegateSubAgentTool(registry, manager)
 		// Router has exactly one activated worker. Publish it to the tool so the
@@ -90,6 +96,9 @@ func removeSubAgentTools(registry *tools.Registry) {
 	for _, name := range agent.SubAgentToolNames() {
 		registry.Remove(name)
 	}
+	for _, name := range agent.RouterOnlySubAgentToolNames() {
+		registry.Remove(name)
+	}
 }
 
 // trimToolSelection re-applies an explicit per-tool selection after a full
@@ -107,40 +116,42 @@ func trimToolSelection(registry *tools.Registry, names []string, selection map[s
 	}
 }
 
-// publishRouterTarget pushes the session's activated ACP worker into the blocking
-// delegate tool. It runs on every tool-group synchronization, so activation,
-// binding changes, and leaving Router mode are all reflected without rebuilding
-// the tool instance.
+// publishRouterTarget pushes the session's activated ACP worker into every tool
+// that can start an external child. It runs on every tool-group synchronization,
+// so activation, binding changes, and leaving Router mode are all reflected
+// without rebuilding the tool instance.
 func publishRouterTarget(rt *SessionRuntime, registry *tools.Registry, mode string) {
 	if registry == nil {
 		return
 	}
-	tool, ok := registry.Get(delegateSubAgentToolName)
-	if !ok {
-		return
-	}
-	delegate, ok := tool.(*agent.DelegateSubAgentTool)
-	if !ok {
-		return
-	}
-	if mode != ModeRouter {
-		delegate.SetRouterTarget(nil)
-		return
-	}
-	binding, hasBinding := rt.RouterBinding()
-	if !hasBinding || strings.TrimSpace(binding.ACPProfileID) == "" {
-		delegate.SetRouterTarget(nil)
-		return
-	}
-	target := &agent.RouterTarget{ID: binding.ACPProfileID}
-	// Offer the other configured profiles only as context for a correction; the
-	// binding stays the single accepted value.
-	if settings := rt.SettingsSnapshot(); settings != nil {
-		for _, descriptor := range ListACPWorkerProfiles(settings) {
-			if descriptor.RouterEligible {
-				target.Available = append(target.Available, descriptor.ID)
+	var target *agent.RouterTarget
+	if mode == ModeRouter {
+		if binding, hasBinding := rt.RouterBinding(); hasBinding && strings.TrimSpace(binding.ACPProfileID) != "" {
+			target = &agent.RouterTarget{
+				ID:       binding.ACPProfileID,
+				Accepted: binding.ProfileIDs(),
+			}
+			// Other configured-but-unbound profiles appear only as correction
+			// context; the bound allowlist is the accepted schema surface.
+			if settings := rt.SettingsSnapshot(); settings != nil {
+				for _, descriptor := range ListACPWorkerProfiles(settings) {
+					if descriptor.RouterEligible {
+						target.Available = append(target.Available, descriptor.ID)
+					}
+				}
 			}
 		}
 	}
-	delegate.SetRouterTarget(target)
+	for _, name := range []string{delegateSubAgentToolName, "subagent_spawn"} {
+		tool, ok := registry.Get(name)
+		if !ok {
+			continue
+		}
+		switch typed := tool.(type) {
+		case *agent.DelegateSubAgentTool:
+			typed.SetRouterTarget(target)
+		case *agent.SubAgentSpawnTool:
+			typed.SetRouterTarget(target)
+		}
+	}
 }

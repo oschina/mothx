@@ -11,7 +11,7 @@ import (
 	"github.com/oschina/mothx/internal/dao"
 )
 
-const currentSchemaVersion = 54
+const currentSchemaVersion = 57
 
 type schemaMigration struct {
 	version int
@@ -843,6 +843,96 @@ var schemaMigrations = []schemaMigration{
 		}
 		return nil
 	}},
+	{version: 55, name: "create_session_child_runs", apply: func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS session_child_runs (
+			child_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+			parent_run_id TEXT NOT NULL DEFAULT '',
+			backend TEXT NOT NULL DEFAULT 'acp',
+			profile_id TEXT NOT NULL DEFAULT '',
+			remote_session_id TEXT NOT NULL DEFAULT '',
+			work_dir TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			contract_json TEXT NOT NULL DEFAULT '{}',
+			transcript_json TEXT NOT NULL DEFAULT '[]',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`); err != nil {
+			return fmt.Errorf("create session child runs: %w", err)
+		}
+		_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_session_child_runs_session
+			ON session_child_runs(session_id, updated_at)`)
+		return err
+	}},
+	{version: 56, name: "add_child_run_worktree_change_set", apply: func(tx *sql.Tx) error {
+		columns := []struct {
+			name       string
+			definition string
+		}{
+			{"worktree_id", `TEXT NOT NULL DEFAULT ''`},
+			{"base_revision", `TEXT NOT NULL DEFAULT ''`},
+			{"change_set_json", `TEXT NOT NULL DEFAULT ''`},
+			{"change_set_error", `TEXT NOT NULL DEFAULT ''`},
+		}
+		for _, column := range columns {
+			exists, err := sqliteColumnExists(tx, "session_child_runs", column.name)
+			if err != nil {
+				return err
+			}
+			if exists {
+				continue
+			}
+			if _, err := tx.Exec(`ALTER TABLE session_child_runs ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
+				return fmt.Errorf("add child run worktree fields: %w", err)
+			}
+		}
+		return nil
+	}},
+	{version: 57, name: "add_child_run_integration_evidence", apply: func(tx *sql.Tx) error {
+		columns := []struct {
+			name       string
+			definition string
+		}{
+			{"integration_id", `TEXT NOT NULL DEFAULT ''`},
+			{"integration_digest", `TEXT NOT NULL DEFAULT ''`},
+			{"integration_status", `TEXT NOT NULL DEFAULT ''`},
+			{"integration_error", `TEXT NOT NULL DEFAULT ''`},
+			{"integrated_at", `TEXT NOT NULL DEFAULT ''`},
+		}
+		for _, column := range columns {
+			exists, err := sqliteColumnExists(tx, "session_child_runs", column.name)
+			if err != nil {
+				return err
+			}
+			if exists {
+				continue
+			}
+			if _, err := tx.Exec(`ALTER TABLE session_child_runs ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
+				return fmt.Errorf("add child run integration fields: %w", err)
+			}
+		}
+		return nil
+	}},
+}
+
+func sqliteColumnExists(tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func createResponseRuntimeTables(tx *sql.Tx) error {

@@ -37,6 +37,8 @@ const (
 	agentEventSinkKey
 	// parentRunContextKey carries the parent agent run context through tool timeouts.
 	parentRunContextKey
+	// parentRunIDKey carries the canonical parent Run ID for child history.
+	parentRunIDKey
 	// parentModeKey carries the parent agent's execution mode (plan/agent/yolo/os) for sub-agent inheritance.
 	parentModeKey
 	// workDirKey carries the executing agent's working directory so child-agent
@@ -132,6 +134,19 @@ func ContextWithParentRunContext(ctx context.Context, parent context.Context) co
 func ParentRunContextFromContext(ctx context.Context) (context.Context, bool) {
 	parent, ok := ctx.Value(parentRunContextKey).(context.Context)
 	return parent, ok
+}
+
+// ContextWithParentRunID attaches the parent canonical Run ID to a tool
+// context. Child history uses it to link a local or external child to the Run
+// that spawned it without reinterpreting adapter state.
+func ContextWithParentRunID(ctx context.Context, runID string) context.Context {
+	return context.WithValue(ctx, parentRunIDKey, runID)
+}
+
+// ParentRunIDFromContext extracts the parent canonical Run ID.
+func ParentRunIDFromContext(ctx context.Context) (string, bool) {
+	runID, ok := ctx.Value(parentRunIDKey).(string)
+	return runID, ok && runID != ""
 }
 
 // ContextWithParentMode attaches the parent agent's execution mode to the context.
@@ -955,8 +970,10 @@ func (a *Agent) RunWithUserMessage(ctx context.Context, msg provider.Message) <-
 		}
 		a.mu.Unlock()
 
-		// Save to session
-		if a.config.Session != nil && !a.config.RuntimeOwnsUserEntry {
+		// Save to session. A system-injected seed (an automatic Runtime
+		// continuation) is execution context, not a user turn, so it must not
+		// become a fake durable user entry.
+		if a.config.Session != nil && !a.config.RuntimeOwnsUserEntry && !msg.SystemInjected {
 			msgID, err := a.config.Session.AppendMessage(msg)
 			if err != nil {
 				a.emitRunFinished(ch, TaskFailed, "session_save", err, nil, nil)
@@ -2706,6 +2723,7 @@ func (a *Agent) executeSingleToolCallWithRecovery(ctx context.Context, tc provid
 	toolCtx = ContextWithAgentID(toolCtx, a.id)
 	toolCtx = ContextWithEventChan(toolCtx, ch)
 	toolCtx = ContextWithParentRunContext(toolCtx, ctx)
+	toolCtx = ContextWithParentRunID(toolCtx, a.config.RunID)
 	toolCtx = ContextWithParentMode(toolCtx, a.config.Mode)
 	toolCtx = ContextWithWorkDir(toolCtx, a.registry.GetWorkDir())
 	toolCtx = tools.ContextWithQuestionAsker(toolCtx, a)

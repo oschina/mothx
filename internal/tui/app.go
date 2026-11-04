@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -241,9 +242,14 @@ type App struct {
 	runTerminalHandled bool
 	agent              *agent.Agent
 	eventCh            <-chan agent.Event
-	width              int
-	height             int
-	ready              bool
+	// mailboxWakeProjection marks the single Bubble Tea update that is
+	// rendering a Runtime-owned automatic continuation. Its terminal facts are
+	// already persisted by the Runtime, so the adapter must not write a second
+	// terminal transition or subscribe the projection to the foreground stream.
+	mailboxWakeProjection bool
+	width                 int
+	height                int
+	ready                 bool
 
 	// Paste markers storage
 	pasteCounter int
@@ -673,6 +679,7 @@ func (a *App) SetAutoOpenAuthDialog(v bool) {
 // SetProgram stores the Bubble Tea program used for deferred UI updates.
 func (a *App) SetProgram(p *tea.Program) {
 	a.program = p
+	a.enableMailboxWake()
 	if a.printCond == nil {
 		a.printCond = sync.NewCond(&a.printMu)
 	}
@@ -1388,6 +1395,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, a.handleAgentEvent(msg.event)
 
+	case mailboxWakeStartedMsg:
+		return a.startMailboxWakeRun(msg)
+
+	case mailboxWakeEventMsg:
+		if a.run == nil || a.run.id != msg.run.RunID {
+			return a, nil
+		}
+		a.mailboxWakeProjection = true
+		return a, a.handleAgentEvent(msg.event)
+
+	case mailboxWakeAgentMsg:
+		return a.attachMailboxWakeAgent(msg)
+
+	case mailboxWakeFinishedMsg:
+		return a.finishMailboxWakeRun(msg)
+
 	case btwStreamStartMsg:
 		if msg.generation != a.btwGeneration {
 			return a, nil
@@ -1906,7 +1929,14 @@ func (a *App) abortPendingRequest(reason string) tea.Cmd {
 	completedRun := a.run
 	a.pendingAbortReason = reason
 	a.abortActiveESMAgent()
-	if a.agent != nil {
+	if completedRun != nil && completedRun.runtimeOwnedTerminal {
+		// The automatic continuation owns its own Agent; the cached foreground
+		// lead must not be aborted (and invalidated) just because the wake Run
+		// was cancelled. resetAgent below still projects the shared stop matrix
+		// for the wake Run's ExecutionRuntime.
+		a.finalizeAbortedRun()
+		a.resetAgent(errors.New("aborted"))
+	} else if a.agent != nil {
 		a.abortAndResetAgent("aborted")
 	} else {
 		a.finalizeAbortedRun()

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/oschina/mothx/internal/config"
-	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 // A profile configured on an earlier build with a higher ceiling must still be
@@ -38,9 +37,9 @@ func TestRouterPanelEditsLegacyConcurrencyProfile(t *testing.T) {
 	}
 }
 
-// The panel must not imply parallel workers are running when the release enforces
-// one, or the user has no way to learn the setting is inert.
-func TestRouterPanelReportsCappedConcurrency(t *testing.T) {
+// A configured read-only ceiling is effective, so the panel must not label it
+// as capped.
+func TestRouterPanelDoesNotReportCappedConcurrency(t *testing.T) {
 	app := newRouterCommandApp(t)
 	t.Setenv("MOTHX_DIR", t.TempDir())
 	app.openRouterPanel()
@@ -51,7 +50,7 @@ func TestRouterPanelReportsCappedConcurrency(t *testing.T) {
 	}}
 
 	rendered := stripANSI(app.renderRouterPanel())
-	if !strings.Contains(rendered, app.translator.Text(i18n.MsgRouterPanelStateCapped)) {
-		t.Fatalf("panel did not report the capped concurrency:\n%s", rendered)
+	if strings.Contains(rendered, "capped") || strings.Contains(rendered, "上限") {
+		t.Fatalf("panel reported an obsolete concurrency cap:\n%s", rendered)
 	}
 }

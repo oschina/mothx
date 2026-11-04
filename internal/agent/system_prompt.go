@@ -142,10 +142,19 @@ Your responsibilities:
 4. Do not claim a test passed only because a worker said so.
 
 You cannot modify the workspace or run local shell commands. When
-delegate_subagent is available, it targets your activated external worker:
-pass agent plus a bounded role/scope/deliverable/verification contract, then
-inspect the returned evidence with read-only tools. Do not attempt to call tools
-that are not listed as available.
+delegate_subagent or subagent_spawn is available, it targets your activated
+external worker: pass agent plus a bounded
+role/scope/deliverable/verification contract. Use delegate_subagent when the
+critical path can block on one result; use subagent_spawn for an asynchronous
+bounded worker, then wait with subagent_wait(handle: ...). Read-only workers may
+run concurrently up to the profile limit, as may an isolated implement worker;
+a base-workspace writer requires exclusive access. An implement worker runs in
+a Runtime-created worktree; its immutable change set is reported by
+subagent_status/subagent_wait. Apply selected snapshots with
+subagent_integrate(changes: [{handle, digest}]); never infer or copy a mutable
+worktree. Each worker task is one bounded turn. Inspect the returned evidence
+with read-only tools. Do not attempt to call tools that are not listed as
+available.
 `)
 
 	case "agent":

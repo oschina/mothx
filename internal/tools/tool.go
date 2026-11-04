@@ -413,6 +413,37 @@ func (r *Registry) GetAdditionalDirectories() []string {
 	return append([]string(nil), r.additionalDirs...)
 }
 
+// WorkspaceView builds a path/write projection rooted at workDir. It is used
+// by Runtime-owned bridges that must operate inside an isolated worktree
+// without widening the session registry's global roots. The view shares the
+// file-lock manager so concurrent writers still serialize on the same target.
+// It intentionally carries no tools: callers use only resolution, WriteFile,
+// sandbox, and environment projection.
+func (r *Registry) WorkspaceView(workDir string, sb sandbox.Sandbox, additional []string) *Registry {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	sandboxValue := sb
+	if sandboxValue == nil {
+		sandboxValue = r.sandbox
+	}
+	fileLocks := r.fileLocks
+	envVars := copyEnvVars(r.envVars)
+	imageHint := r.imageHint
+	r.mu.RUnlock()
+	return &Registry{
+		tools:          make(map[string]Tool),
+		workDir:        workDir,
+		sandbox:        sandboxValue,
+		jobManager:     NewJobManager(),
+		fileLocks:      fileLocks,
+		imageHint:      imageHint,
+		envVars:        envVars,
+		additionalDirs: append([]string(nil), additional...),
+	}
+}
+
 // ResolvePath resolves a user-provided path to an absolute path constrained to the work directory.
 func (r *Registry) ResolvePath(path string) (string, error) {
 	r.mu.RLock()
@@ -604,7 +635,9 @@ func (r *Registry) ModeTools(mode string) []provider.ToolDefinition {
 		var defs []provider.ToolDefinition
 		for _, t := range r.All() {
 			switch t.Name() {
-			case "read", "grep", "find", "ls", "plan", "skill_ref", "delegate_subagent":
+			case "read", "grep", "find", "ls", "plan", "skill_ref", "delegate_subagent",
+				"subagent_spawn", "subagent_status", "subagent_send", "subagent_wait",
+				"subagent_integrate", "subagent_destroy":
 				defs = append(defs, ToolDefinition(t))
 			}
 		}

@@ -23,6 +23,9 @@ func newRouterCommandApp(t *testing.T) *App {
 	settings.ACPAgents = []config.ACPAgentProfile{{
 		ID: "codex", Command: []string{"/opt/codex/bin/codex", "acp"}, Enabled: true,
 		PermissionPolicy: config.ACPPermissionAutoAllowOnce,
+	}, {
+		ID: "reviewer", Command: []string{"/opt/reviewer/bin/reviewer", "acp"}, Enabled: true,
+		PermissionPolicy: config.ACPPermissionAutoReject,
 	}}
 
 	manager, err := agentruntime.CreateSession(agentruntime.CreateSessionOptions{
@@ -60,6 +63,22 @@ func TestRouterCommandActivatesRuntimeBinding(t *testing.T) {
 	}
 	if !strings.Contains(output, "codex") {
 		t.Fatalf("activation status missing the worker: %s", output)
+	}
+}
+
+func TestRouterCommandActivatesMultipleWorkers(t *testing.T) {
+	app := newRouterCommandApp(t)
+	app.handleCommand("/router codex,reviewer")
+
+	binding, ok := app.runtime.RouterBinding()
+	if !ok {
+		t.Fatal("multi-worker binding was not persisted")
+	}
+	if got := binding.ProfileIDs(); len(got) != 2 || got[0] != "codex" || got[1] != "reviewer" {
+		t.Fatalf("bound profiles = %v", got)
+	}
+	if len(binding.Profiles) != 2 || binding.Profiles[1].ApprovalStrategy != config.ACPPermissionAutoReject {
+		t.Fatalf("profiles = %#v", binding.Profiles)
 	}
 }
 

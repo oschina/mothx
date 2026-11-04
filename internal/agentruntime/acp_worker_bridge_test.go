@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	agentpkg "github.com/oschina/mothx/agent"
 	acpclient "github.com/oschina/mothx/internal/acp/client"
 	"github.com/oschina/mothx/internal/config"
 )
@@ -67,12 +68,40 @@ func TestBoundACPTextDoesNotSplitRunes(t *testing.T) {
 	}
 }
 
+func TestACPWorkerTurnStreamsTextBeyondBoundedResult(t *testing.T) {
+	const chunkSize = 8 << 10
+	chunk := strings.Repeat("x", chunkSize)
+	streamed := 0
+	turn := newACPWorkerTurn(func(event agentpkg.Event) {
+		if event.Type == agentpkg.EventTextDelta {
+			streamed += len(event.TextDelta)
+		}
+	})
+	for range 4 {
+		turn.apply(acpclient.SessionUpdate{
+			SessionUpdate: "agent_message_chunk",
+			Content:       &acpclient.ContentBlock{Type: "text", Text: chunk},
+		})
+	}
+	result := turn.result(acpclient.Implementation{}, "session")
+	if streamed != 4*chunkSize {
+		t.Fatalf("streamed %d bytes, want every text delta (%d)", streamed, 4*chunkSize)
+	}
+	if len(result.Output) != maxSubagentResultBytes {
+		t.Fatalf("bounded result = %d bytes, want %d", len(result.Output), maxSubagentResultBytes)
+	}
+	if !result.Truncated {
+		t.Fatal("bounded result was not marked truncated")
+	}
+}
+
 func TestACPWorkerBridgeHelperProcess(t *testing.T) {
 	if os.Getenv("MOTHX_ACP_BRIDGE_HELPER") != "1" {
 		return
 	}
 	reader := bufio.NewReader(os.Stdin)
 	writer := bufio.NewWriter(os.Stdout)
+	newSessionAttempts := 0
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
@@ -83,6 +112,7 @@ func TestACPWorkerBridgeHelperProcess(t *testing.T) {
 			os.Exit(2)
 		}
 		var result any
+		var rpcErr *acpclient.RPCError
 		switch request.Method {
 		case "initialize":
 			result = acpclient.InitializeResult{
@@ -93,13 +123,31 @@ func TestACPWorkerBridgeHelperProcess(t *testing.T) {
 				},
 			}
 		case "session/new":
+			newSessionAttempts++
+			if os.Getenv("MOTHX_ACP_BRIDGE_FAIL_FIRST_NEW") == "1" && newSessionAttempts == 1 {
+				rpcErr = &acpclient.RPCError{Code: -32000, Message: "transient session failure"}
+				break
+			}
 			result = acpclient.NewSessionResult{SessionID: "bridge-session"}
 		case "session/prompt":
 			text := "bridge output"
 			if os.Getenv("MOTHX_ACP_BRIDGE_PARTIAL") == "1" {
 				text = "partial output"
 			}
-			_, _ = writer.WriteString(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"bridge-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + text + `"}}}}` + "\n")
+			if os.Getenv("MOTHX_ACP_BRIDGE_ECHO_PROMPT") == "1" {
+				var params acpclient.PromptParams
+				if err := json.Unmarshal(request.Params, &params); err == nil {
+					parts := make([]string, 0, len(params.Prompt))
+					for _, block := range params.Prompt {
+						if block.Type == "text" {
+							parts = append(parts, block.Text)
+						}
+					}
+					text = strings.Join(parts, "\n")
+				}
+			}
+			encodedText, _ := json.Marshal(text)
+			_, _ = writer.WriteString(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"bridge-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":` + string(encodedText) + `}}}}` + "\n")
 			_ = writer.Flush()
 			if os.Getenv("MOTHX_ACP_BRIDGE_PARTIAL") == "1" {
 				os.Exit(1)
@@ -111,8 +159,14 @@ func TestACPWorkerBridgeHelperProcess(t *testing.T) {
 			result = map[string]any{}
 		}
 		encodedResult, _ := json.Marshal(result)
-		response, _ := json.Marshal(acpclient.Message{JSONRPC: "2.0", ID: request.ID, Result: encodedResult})
-		_, _ = writer.Write(append(response, '\n'))
+		response := acpclient.Message{JSONRPC: "2.0", ID: request.ID}
+		if rpcErr != nil {
+			response.Error = rpcErr
+		} else {
+			response.Result = encodedResult
+		}
+		encodedResponse, _ := json.Marshal(response)
+		_, _ = writer.Write(append(encodedResponse, '\n'))
 		_ = writer.Flush()
 		if request.Method == "session/close" {
 			os.Exit(0)

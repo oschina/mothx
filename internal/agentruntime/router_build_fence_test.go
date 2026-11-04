@@ -81,6 +81,29 @@ func TestBuildAgentAllowsRouterWithBinding(t *testing.T) {
 	}
 }
 
+func TestBuildAgentRejectsRouterWithExpertTeam(t *testing.T) {
+	runtime := newRouterBuildRuntime(t)
+	p, providerName, model := mockBuildModel()
+	if err := runtime.SetRouterBinding(RouterBinding{
+		ACPProfileID: "codex", ApprovalStrategy: config.ACPPermissionAutoAllowOnce,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.mu.Lock()
+	runtime.Expert = &ExpertBinding{Team: true}
+	runtime.mu.Unlock()
+
+	agent, err := runtime.BuildAgent(AgentBuildOptions{
+		Provider: p, ProviderName: providerName, Model: model, Mode: ModeRouter,
+	})
+	if err == nil {
+		t.Fatalf("BuildAgent built a Router + team agent (id=%s)", agent.ID())
+	}
+	if !strings.Contains(err.Error(), "cannot be combined with an expert team") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // TestBuildAgentRejectsRouterWhenBindingIsInvalid proves a persisted but
 // unusable binding (interactive approval) does not unlock the Router surface.
 func TestBuildAgentRejectsRouterWhenBindingIsInvalid(t *testing.T) {

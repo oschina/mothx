@@ -102,6 +102,129 @@ func TestClientHandlesReverseRequest(t *testing.T) {
 	_ = client.Close()
 }
 
+func TestClientCancelsMatchingReverseRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverRead, clientWrite := io.Pipe()
+	clientRead, serverWrite := io.Pipe()
+	handlerStarted := make(chan struct{})
+	client := newClient(ctx, cancel, clientWrite, clientRead, nil, Config{
+		HandleRequest: func(ctx context.Context, request Message) (any, *RPCError) {
+			close(handlerStarted)
+			<-ctx.Done()
+			return map[string]any{"outcome": map[string]string{"outcome": "selected"}}, nil
+		},
+	})
+	go client.readLoop()
+
+	go func() {
+		_, _ = io.WriteString(serverWrite, `{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"child"}}`+"\n")
+		<-handlerStarted
+		_, _ = io.WriteString(serverWrite, `{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":7}}`+"\n")
+	}()
+	line, err := bufio.NewReader(serverRead).ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read cancelled reverse response: %v", err)
+	}
+	var response Message
+	if err := json.Unmarshal(line, &response); err != nil {
+		t.Fatalf("decode reverse response: %v", err)
+	}
+	if string(response.ID) != "7" || response.Error == nil || response.Error.Code != -32800 {
+		t.Fatalf("cancelled reverse response = %#v", response)
+	}
+	_ = serverWrite.Close()
+	_ = client.Close()
+}
+
+func TestClientIgnoresStaleCancelRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverRead, clientWrite := io.Pipe()
+	clientRead, serverWrite := io.Pipe()
+	client := newClient(ctx, cancel, clientWrite, clientRead, nil, Config{
+		HandleRequest: func(context.Context, Message) (any, *RPCError) {
+			return map[string]any{"ok": true}, nil
+		},
+	})
+	go client.readLoop()
+
+	go func() {
+		_, _ = io.WriteString(serverWrite, `{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":{"stale":true}}}`+"\n")
+		_, _ = io.WriteString(serverWrite, `{"jsonrpc":"2.0","id":9,"method":"fs/read_text_file","params":{"sessionId":"child"}}`+"\n")
+	}()
+	line, err := bufio.NewReader(serverRead).ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read reverse response: %v", err)
+	}
+	var response Message
+	if err := json.Unmarshal(line, &response); err != nil {
+		t.Fatalf("decode reverse response: %v", err)
+	}
+	if string(response.ID) != "9" || response.Error != nil {
+		t.Fatalf("stale cancel affected a later request: %#v", response)
+	}
+	_ = serverWrite.Close()
+	_ = client.Close()
+}
+
+func TestClientDistinguishesStringAndNumericRequestIDs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverRead, clientWrite := io.Pipe()
+	clientRead, serverWrite := io.Pipe()
+	handlerStarted := make(chan struct{})
+	client := newClient(ctx, cancel, clientWrite, clientRead, nil, Config{
+		HandleRequest: func(ctx context.Context, request Message) (any, *RPCError) {
+			if string(request.ID) == "7" {
+				close(handlerStarted)
+				<-ctx.Done()
+				return nil, nil
+			}
+			return map[string]any{"ok": true}, nil
+		},
+	})
+	go client.readLoop()
+
+	_, _ = io.WriteString(serverWrite, `{"jsonrpc":"2.0","id":7,"method":"terminal/output","params":{"sessionId":"child"}}`+"\n")
+	<-handlerStarted
+	_, _ = io.WriteString(serverWrite, `{"jsonrpc":"2.0","id":"7","method":"terminal/output","params":{"sessionId":"child"}}`+"\n")
+
+	reader := bufio.NewReader(serverRead)
+	responses := map[string]Message{}
+	for len(responses) < 1 {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("read reverse response: %v", err)
+		}
+		var response Message
+		if err := json.Unmarshal(line, &response); err != nil {
+			t.Fatalf("decode reverse response: %v", err)
+		}
+		responses[string(response.ID)] = response
+	}
+	if response := responses[`"7"`]; response.Error != nil {
+		t.Fatalf("string id was cancelled by numeric-id cancel: %#v", response)
+	}
+	_, _ = io.WriteString(serverWrite, `{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":7}}`+"\n")
+	for len(responses) < 2 {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("read cancelled reverse response: %v", err)
+		}
+		var response Message
+		if err := json.Unmarshal(line, &response); err != nil {
+			t.Fatalf("decode reverse response: %v", err)
+		}
+		responses[string(response.ID)] = response
+	}
+	if response := responses["7"]; response.Error == nil || response.Error.Code != -32800 {
+		t.Fatalf("numeric id was not cancelled: %#v", response)
+	}
+	_ = serverWrite.Close()
+	_ = client.Close()
+}
+
 func TestReadFrameRejectsOversizedAndEncodeRejectsUnsupportedParams(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("12345\n"))
 	if _, err := readFrame(reader, 4); err == nil {

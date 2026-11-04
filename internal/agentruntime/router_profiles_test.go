@@ -15,9 +15,10 @@ func TestListACPWorkerProfilesMarksRouterEligibility(t *testing.T) {
 		{ID: "interactive", Command: []string{"/opt/i", "acp"}, Enabled: true, PermissionPolicy: config.ACPPermissionInteractive},
 		{ID: "disabled", Command: []string{"/opt/d", "acp"}, Enabled: false},
 		{ID: "broken", Command: []string{" "}, Enabled: true},
+		{ID: "remote", Transport: "http", URL: "https://agent.example/acp?token=secret", Enabled: true, PermissionPolicy: config.ACPPermissionAutoAllowOnce},
 	}
 	profiles := ListACPWorkerProfiles(settings)
-	if len(profiles) != 5 {
+	if len(profiles) != 6 {
 		t.Fatalf("profiles = %d", len(profiles))
 	}
 	byID := map[string]ACPWorkerProfileDescriptor{}
@@ -38,5 +39,11 @@ func TestListACPWorkerProfilesMarksRouterEligibility(t *testing.T) {
 	}
 	if byID["broken"].InvalidReason == "" {
 		t.Fatal("invalid profile did not report a reason")
+	}
+	if byID["remote"].Transport != config.ACPAgentTransportHTTP || byID["remote"].Endpoint != "https://agent.example/acp" {
+		t.Fatalf("remote descriptor = %#v", byID["remote"])
+	}
+	if byID["worker-a"].Transport != config.ACPAgentTransportStdio || byID["worker-a"].Endpoint != "" {
+		t.Fatalf("stdio descriptor = %#v", byID["worker-a"])
 	}
 }

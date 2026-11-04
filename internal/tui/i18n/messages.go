@@ -375,17 +375,19 @@ const (
 	MsgRouterPanelStateInvalid            MessageID = "router_panel.state.invalid"
 	MsgRouterPanelStateActive             MessageID = "router_panel.state.active"
 	MsgRouterPanelStateInteractive        MessageID = "router_panel.state.interactive"
-	MsgRouterPanelStateCapped             MessageID = "router_panel.state.capped"
 	MsgRouterPanelChoosePreset            MessageID = "router_panel.choose_preset"
 	MsgRouterPanelPresetCustom            MessageID = "router_panel.preset.custom"
 	MsgRouterPanelPresetHint              MessageID = "router_panel.preset.hint"
 	MsgRouterPanelFieldID                 MessageID = "router_panel.field.id"
 	MsgRouterPanelFieldTitle              MessageID = "router_panel.field.title"
+	MsgRouterPanelFieldTransport          MessageID = "router_panel.field.transport"
+	MsgRouterPanelFieldURL                MessageID = "router_panel.field.url"
 	MsgRouterPanelFieldCommand            MessageID = "router_panel.field.command"
 	MsgRouterPanelFieldEnvironment        MessageID = "router_panel.field.environment"
 	MsgRouterPanelFieldPermission         MessageID = "router_panel.field.permission"
 	MsgRouterPanelFieldRoles              MessageID = "router_panel.field.roles"
 	MsgRouterPanelFieldWriteRoots         MessageID = "router_panel.field.write_roots"
+	MsgRouterPanelFieldTerminal           MessageID = "router_panel.field.terminal"
 	MsgRouterPanelFieldEnabled            MessageID = "router_panel.field.enabled"
 	MsgRouterPanelFieldSave               MessageID = "router_panel.field.save"
 	MsgRouterPanelFieldSaveHint           MessageID = "router_panel.field.save_hint"
@@ -612,7 +614,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandPermissionsRouter:           "  Permissions: READ/PLAN and configured worker delegation only (no local write or shell tools)",
 		MsgCommandInvalidMode:                 "Invalid mode",
 		MsgCommandRouterDescription:           "Manage ACP worker profiles and activate Router mode",
-		MsgCommandRouterUsage:                 "Usage: /router <acp-profile-id> (configure acpAgents in settings.json first)",
+		MsgCommandRouterUsage:                 "Usage: /router <acp-profile-id>[,<acp-profile-id>...] (configure acpAgents in settings.json first)",
 		MsgCommandRouterActivated:             "✅ Router activated with ACP worker: %s",
 		MsgCommandRouterFailed:                "Router activation failed: %v",
 		MsgRouterPanelTitle:                   "Router ACP Workers",
@@ -638,17 +640,19 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelStateInvalid:            "invalid",
 		MsgRouterPanelStateActive:             "(active)",
 		MsgRouterPanelStateInteractive:        "interactive only",
-		MsgRouterPanelStateCapped:             "concurrency capped to 1",
 		MsgRouterPanelChoosePreset:            "Pick a known agent, or start from scratch",
 		MsgRouterPanelPresetCustom:            "(custom agent)",
 		MsgRouterPanelPresetHint:              "Up/Down: choose  Enter: use  Esc: cancel",
 		MsgRouterPanelFieldID:                 "ID",
 		MsgRouterPanelFieldTitle:              "Title",
+		MsgRouterPanelFieldTransport:          "Transport",
+		MsgRouterPanelFieldURL:                "Endpoint URL",
 		MsgRouterPanelFieldCommand:            "Command",
 		MsgRouterPanelFieldEnvironment:        "Environment",
 		MsgRouterPanelFieldPermission:         "Permission",
 		MsgRouterPanelFieldRoles:              "Roles",
 		MsgRouterPanelFieldWriteRoots:         "Write roots",
+		MsgRouterPanelFieldTerminal:           "Terminal bridge",
 		MsgRouterPanelFieldEnabled:            "Enabled",
 		MsgRouterPanelFieldSave:               "Save profile",
 		MsgRouterPanelFieldSaveHint:           "Validate and write acpAgents to settings.json",
@@ -1100,7 +1104,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandPermissionsRouter:           "  权限：仅 READ/PLAN 与已配置的 worker 委派（无本地写入或 shell 工具）",
 		MsgCommandInvalidMode:                 "无效模式",
 		MsgCommandRouterDescription:           "管理 ACP worker profile 并激活 Router 模式",
-		MsgCommandRouterUsage:                 "用法：/router <acp-profile-id>（请先在 settings.json 配置 acpAgents）",
+		MsgCommandRouterUsage:                 "用法：/router <acp-profile-id>[,<acp-profile-id>...]（请先在 settings.json 配置 acpAgents）",
 		MsgCommandRouterActivated:             "✅ Router 已激活，ACP worker：%s",
 		MsgCommandRouterFailed:                "Router 激活失败：%v",
 		MsgRouterPanelTitle:                   "Router ACP Worker",
@@ -1126,17 +1130,19 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgRouterPanelStateInvalid:            "无效",
 		MsgRouterPanelStateActive:             "（当前）",
 		MsgRouterPanelStateInteractive:        "仅交互审批",
-		MsgRouterPanelStateCapped:             "并发上限为 1",
 		MsgRouterPanelChoosePreset:            "选择已知 Agent，或从头开始",
 		MsgRouterPanelPresetCustom:            "（自定义 Agent）",
 		MsgRouterPanelPresetHint:              "上下键：选择  Enter：使用  Esc：取消",
 		MsgRouterPanelFieldID:                 "ID",
 		MsgRouterPanelFieldTitle:              "标题",
+		MsgRouterPanelFieldTransport:          "传输",
+		MsgRouterPanelFieldURL:                "端点 URL",
 		MsgRouterPanelFieldCommand:            "命令",
 		MsgRouterPanelFieldEnvironment:        "环境变量",
 		MsgRouterPanelFieldPermission:         "权限策略",
 		MsgRouterPanelFieldRoles:              "角色",
 		MsgRouterPanelFieldWriteRoots:         "写入根目录",
+		MsgRouterPanelFieldTerminal:           "终端桥",
 		MsgRouterPanelFieldEnabled:            "启用",
 		MsgRouterPanelFieldSave:               "保存 profile",
 		MsgRouterPanelFieldSaveHint:           "校验并写入 settings.json 的 acpAgents",

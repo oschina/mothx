@@ -121,6 +121,7 @@ func (a *App) handleDelegateCommand(parts []string) {
 		a.delegateMode = true
 		a.syncToolGroups()
 		a.resetAgent(fmt.Errorf("delegate mode changed"))
+		a.restartMailboxWake()
 		a.addCommandStatus(a.translator.Text(i18n.MsgCommandDelegateChanged, "ON"))
 	case "off":
 		// Reset while the mode flag is still set: managed-agent cleanup keys off
@@ -129,6 +130,7 @@ func (a *App) handleDelegateCommand(parts []string) {
 		a.resetAgent(fmt.Errorf("delegate mode changed"))
 		a.delegateMode = false
 		a.syncToolGroups()
+		a.restartMailboxWake()
 		a.addCommandStatus(a.translator.Text(i18n.MsgCommandDelegateChanged, "OFF"))
 	default:
 		a.addCommandError(commandUsage(a.translator, "/delegate [on|off|status]"))
@@ -690,9 +692,10 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 			}
 		}
 	case "/router":
-		// `/router` opens the ACP worker manager; `/router <id>` activates that
-		// profile directly. Both end at the one shared activation path, and the
-		// panel never owns eligibility or approval policy.
+		// `/router` opens the ACP worker manager; `/router <id>[,<id>...]`
+		// activates that ordered worker allowlist directly. Both end at the one
+		// shared activation path, and the panel never owns eligibility or
+		// approval policy.
 		if len(parts) == 1 {
 			a.openRouterPanel()
 			return nil
@@ -721,7 +724,16 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 		// Runtime names the worker; it fills the non-blocking approval strategy
 		// from the profile's validated policy and enforces the idle/idleness and
 		// source checks. The TUI never reads profile argv or credentials.
-		if err := runtime.ActivateRouter(context.Background(), sessionDir, a.settings, agentruntime.RouterBinding{ACPProfileID: parts[1]}); err != nil {
+		profileIDs := splitRouterProfileIDs(parts[1])
+		if len(profileIDs) == 0 {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterUsage))
+			return nil
+		}
+		binding := agentruntime.RouterBinding{ACPProfileID: profileIDs[0]}
+		for _, profileID := range profileIDs {
+			binding.Profiles = append(binding.Profiles, agentruntime.RouterProfileBinding{ProfileID: profileID})
+		}
+		if err := runtime.ActivateRouter(context.Background(), sessionDir, a.settings, binding); err != nil {
 			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterFailed, err))
 			return nil
 		}
@@ -730,7 +742,7 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 		a.adoptRuntimeMode()
 		a.syncToolGroups()
 		a.resetAgent(fmt.Errorf("router activated"))
-		a.addCommandStatus(a.translator.Text(i18n.MsgCommandRouterActivated, parts[1]))
+		a.addCommandStatus(a.translator.Text(i18n.MsgCommandRouterActivated, strings.Join(profileIDs, ", ")))
 		a.addCommandStatus(a.translator.Text(i18n.MsgCommandPermissionsRouter))
 	case "/model":
 		if len(parts) > 1 {
@@ -980,6 +992,22 @@ func (a *App) markBuiltinActiveSkills() {
 			a.activeSkills[browserfeature.SkillName] = a.skillsMgr.BuildSkillContext(browserfeature.SkillName)
 		}
 	}
+}
+
+// splitRouterProfileIDs parses `/router id1,id2` into an ordered allowlist.
+// The TUI never validates profile eligibility; Runtime does that on activation.
+func splitRouterProfileIDs(raw string) []string {
+	seen := make(map[string]bool)
+	var ids []string
+	for _, part := range strings.Split(raw, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // getSessionDir returns the session directory path.

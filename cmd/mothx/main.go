@@ -192,7 +192,7 @@ func registerRootFlags(fs *pflag.FlagSet, flags *cliFlags) {
 	fs.StringVar(&flags.session, "session", "", "Use specific session file or ID")
 	fs.StringVar(&flags.expert, "expert", "", "Bind an expert bundle to this session (switching an existing expert requires a fork)")
 	fs.BoolVar(&flags.router, "router", false, "Activate Router mode (requires --acp-agent)")
-	fs.StringVar(&flags.acpAgent, "acp-agent", "", "Activate Router mode with this configured ACP worker profile ID (acpAgents in settings.json)")
+	fs.StringVar(&flags.acpAgent, "acp-agent", "", "Activate Router mode with one or more configured ACP worker profile IDs (comma-separated; first is the default; acpAgents in settings.json)")
 	fs.BoolVarP(&flags.print, "print", "P", false, "Print response and exit (non-interactive)")
 	fs.BoolVar(&flags.json, "json", false, "Stream print-mode output as one JSON object per line (NDJSON) to stdout (requires -P)")
 	registerSharedExecutionFlags(fs, flags, "Enable configured local web search tools for this run")
@@ -391,7 +391,27 @@ func routerActivationProfile(opts runOptions) (string, error) {
 	if opts.mode != "" && opts.mode != agentruntime.ModeRouter {
 		return "", fmt.Errorf("--acp-agent cannot be combined with --mode %s", opts.mode)
 	}
+	if len(parseRouterProfileIDs(profile)) == 0 {
+		return "", fmt.Errorf("--acp-agent requires at least one profile ID")
+	}
 	return profile, nil
+}
+
+// parseRouterProfileIDs normalizes the comma-separated --acp-agent allowlist.
+// The first ID is the default target; duplicates are ignored so a repeated
+// profile cannot widen or reorder the persisted selection.
+func parseRouterProfileIDs(raw string) []string {
+	seen := make(map[string]bool)
+	var ids []string
+	for _, part := range strings.Split(raw, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func run(args []string, opts runOptions) error {
@@ -457,12 +477,17 @@ func run(args []string, opts runOptions) error {
 		return err
 	}
 	if routerProfile != "" {
+		routerProfiles := parseRouterProfileIDs(routerProfile)
 		sessionDir := ""
 		if sessionSetup.manager != nil {
 			sessionDir = sessionSetup.manager.GetSessionDir()
 		}
+		binding := agentruntime.RouterBinding{ACPProfileID: routerProfiles[0]}
+		for _, profileID := range routerProfiles {
+			binding.Profiles = append(binding.Profiles, agentruntime.RouterProfileBinding{ProfileID: profileID})
+		}
 		if err := sharedRuntime.ActivateRouter(context.Background(), sessionDir, settings,
-			agentruntime.RouterBinding{ACPProfileID: routerProfile}); err != nil {
+			binding); err != nil {
 			return fmt.Errorf("activate Router: %w", err)
 		}
 		selection.mode = agentruntime.ModeRouter

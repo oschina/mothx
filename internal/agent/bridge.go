@@ -831,6 +831,7 @@ func NewAgentAdapter(a *Agent) *AgentAdapter {
 
 func (a *AgentAdapter) ID() agentpkg.AgentID       { return a.inner.id }
 func (a *AgentAdapter) ParentID() agentpkg.AgentID { return a.inner.parentID }
+func (a *AgentAdapter) WorkDir() string            { return workDirForAgent(a.inner) }
 func (a *AgentAdapter) Abort()                     { a.inner.Abort() }
 func (a *AgentAdapter) HandleApprovalResponse(id string, approved bool) {
 	a.inner.HandleApprovalResponse(id, approved)

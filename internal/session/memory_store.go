@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -118,12 +119,35 @@ func (m *MemoryStore) AppendModeChange(mode string) (string, error) {
 }
 
 func (m *MemoryStore) AppendRouterBinding(acpProfileID, approvalStrategy, policyRevision string) (string, error) {
+	return m.AppendRouterBindingSelection(RouterBindingSelection{
+		PrimaryProfileID: acpProfileID,
+		Profiles: []RouterProfileBinding{{
+			ProfileID: acpProfileID, ApprovalStrategy: approvalStrategy,
+		}},
+		PolicyRevision: policyRevision,
+	})
+}
+
+func (m *MemoryStore) AppendRouterBindingSelection(selection RouterBindingSelection) (string, error) {
+	selection = normalizeRouterBindingSelection(selection)
+	if selection.PrimaryProfileID == "" {
+		return "", fmt.Errorf("Router binding requires a primary ACP profile")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	id := GenerateID()
+	primaryStrategy := ""
+	for _, profile := range selection.Profiles {
+		if profile.ProfileID == selection.PrimaryProfileID {
+			primaryStrategy = profile.ApprovalStrategy
+			break
+		}
+	}
 	entry := RouterBindingEntry{
 		EntryBase:    EntryBase{Type: EntryRouterBinding, ID: id, ParentID: m.leafID, Timestamp: time.Now()},
-		ACPProfileID: acpProfileID, ApprovalStrategy: approvalStrategy, PolicyRevision: policyRevision,
+		ACPProfileID: selection.PrimaryProfileID, ApprovalStrategy: primaryStrategy,
+		Profiles:       append([]RouterProfileBinding(nil), selection.Profiles...),
+		PolicyRevision: selection.PolicyRevision,
 	}
 	m.entries = append(m.entries, entry)
 	m.leafID = &id

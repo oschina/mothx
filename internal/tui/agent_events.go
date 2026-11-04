@@ -29,7 +29,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 	}
 
 	var observedError *agentruntime.ErrorInfo
-	if a.run != nil && a.run.execution != nil {
+	if a.run != nil && a.run.execution != nil && !a.run.runtimeOwnedTerminal {
 		observation, err := a.run.execution.ObserveAgentEvent(event)
 		if err != nil {
 			// Preserve the operational detail in logs, while rendering only the
@@ -162,8 +162,8 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 							return nil
 						}
 					}
-					if a.agent != nil {
-						a.agent.HandleApprovalResponse(event.ApprovalID, approved)
+					if target := a.activeRunAgent(); target != nil {
+						target.HandleApprovalResponse(event.ApprovalID, approved)
 					}
 					return nil
 				})
@@ -202,8 +202,8 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 				return a.listenAgentEvents()
 			}
 			_ = a.run.decisions.Bind(event.QuestionID, func(value string) error {
-				if a.agent != nil {
-					a.agent.HandleQuestionResponse(event.QuestionID, value)
+				if target := a.activeRunAgent(); target != nil {
+					target.HandleQuestionResponse(event.QuestionID, value)
 				}
 				return nil
 			})
@@ -257,7 +257,14 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 				// the durable row and every later projection agree with the event.
 				state = agentruntime.RunStateIncomplete
 			}
-			a.run.finish(state)
+			if !a.run.runtimeOwnedTerminal {
+				a.run.finish(state)
+			} else {
+				// The Runtime owns the wake Run's terminal transaction, but the
+				// adapter still owns its pending decision projections. Resolve
+				// them exactly once when the canonical terminal event arrives.
+				a.run.clearDecisions(decisionTerminalStatus(state))
+			}
 			a.run = nil
 		}
 		// No tool can still be executing once the run is terminal.
@@ -272,7 +279,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 		switch event.Status {
 		case agent.TaskFailed:
 			a.commitActiveStream()
-			if a.agentManagementEnabled() && a.agentMgr != nil && a.agent != nil {
+			if a.managesTUILeadAgent() {
 				a.agentMgr.MarkError(a.agent.ID(), errors.New(a.formatAgentError(event, observedError)))
 			}
 			a.isThinking = false
@@ -286,7 +293,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 			return tea.Batch(a.timer.Stop(), a.listenAgentEvents(), a.finishESMRun(event.Error), nextPrompt)
 		case agent.TaskIncomplete:
 			a.commitActiveStream()
-			if a.agentManagementEnabled() && a.agentMgr != nil && a.agent != nil {
+			if a.managesTUILeadAgent() {
 				a.agentMgr.MarkIncomplete(a.agent.ID(), event.Error)
 			}
 			a.isThinking = false
@@ -310,7 +317,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 
 		case agent.TaskCanceled:
 			a.commitActiveStream()
-			if a.agentManagementEnabled() && a.agentMgr != nil && a.agent != nil {
+			if a.managesTUILeadAgent() {
 				a.agentMgr.MarkCanceled(a.agent.ID(), event.Error)
 			}
 			// Agent.Abort is intentionally terminal for an Agent instance. A
@@ -318,7 +325,9 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 			// the same abort path as an explicit TUI cancellation. Do not reuse
 			// that instance for the next prompt: its closed abort channel would
 			// cancel every subsequent run immediately.
-			a.resetAgent(errors.New("agent run canceled"))
+			if completedRun == nil || !completedRun.runtimeOwnedTerminal {
+				a.resetAgent(errors.New("agent run canceled"))
+			}
 			a.isThinking = false
 			a.finishRequestTimer()
 			// Cancellation is a normal terminal outcome, not an error.
@@ -337,7 +346,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 				a.addMessage(statusStyle.Render(attachmentText))
 			}
 			a.invalidateToolModalCache()
-			if a.agentManagementEnabled() && a.agentMgr != nil && a.agent != nil {
+			if a.managesTUILeadAgent() {
 				a.agentMgr.MarkDone(a.agent.ID(), "")
 			}
 			a.isThinking = false
@@ -372,7 +381,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 			a.addMessage(statusStyle.Render(attachmentText))
 		}
 		a.invalidateToolModalCache()
-		if a.agentManagementEnabled() && a.agentMgr != nil && a.agent != nil {
+		if a.managesTUILeadAgent() {
 			a.agentMgr.MarkDone(a.agent.ID(), "")
 		}
 		a.isThinking = false
@@ -407,7 +416,7 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 		}
 		a.finalizeInterruptedTools()
 		a.commitActiveStream()
-		if a.agentManagementEnabled() && a.agentMgr != nil && a.agent != nil {
+		if a.managesTUILeadAgent() {
 			a.agentMgr.MarkError(a.agent.ID(), errors.New(a.formatAgentError(event, observedError)))
 		}
 		a.isThinking = false

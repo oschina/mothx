@@ -1,6 +1,7 @@
-// Package client implements the client side of ACP v1 over a stdio transport.
-// It deliberately owns only JSON-RPC transport state. Runtime policy,
-// decisions, child lifecycle, and process-tree containment belong to callers.
+// Package client implements the client side of ACP v1 over stdio, WebSocket,
+// or streamable HTTP/SSE. It deliberately owns only JSON-RPC transport state.
+// Runtime policy, decisions, child lifecycle, and process-tree containment
+// belong to callers.
 package client
 
 import (
@@ -80,33 +81,48 @@ type Config struct {
 	MaxMessageBytes int
 	Stderr          io.Writer
 	HandleRequest   RequestHandler
-	Launcher        Launcher
+	// NotificationHandler, when set, receives notifications synchronously in
+	// stdout order before a following JSON-RPC response is dispatched. This is
+	// the multi-session routing path: a handler must enqueue quickly rather
+	// than perform slow rendering. When nil, Notifications() is used.
+	NotificationHandler func(Message)
+	Launcher            Launcher
 }
 
-// Client owns one bidirectional JSON-RPC stdio connection.
+// Client owns one bidirectional JSON-RPC ACP connection.
 type Client struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	stdin   io.WriteCloser
-	stdout  io.ReadCloser
-	process Process
-
-	writer io.Writer
-	wmu    sync.Mutex
+	transport frameTransport
+	wmu       sync.Mutex
+	closing   atomic.Bool
 
 	mu      sync.Mutex
 	pending map[string]chan Message
-	nextID  uint64
+	// reverse maps an in-flight Agent-to-Client request ID to its cancel
+	// function. ACP's $/cancel_request is scoped to one request ID, so it must
+	// not cancel the transport or unrelated reverse requests.
+	reverse map[string]*reverseCall
+	// inboundSessions maps a reverse request ID to its ACP session so a
+	// streamable HTTP response carries the required Acp-Session-Id header even
+	// though a JSON-RPC response body has no params.
+	inboundSessions map[string]string
+	nextID          uint64
 
 	notifications chan Message
 	handleRequest RequestHandler
+	handleNotify  func(Message)
 	maxBytes      int
 
 	done     chan struct{}
 	doneOnce sync.Once
 	errMu    sync.Mutex
 	err      error
+}
+
+type reverseCall struct {
+	cancel context.CancelFunc
 }
 
 // Start launches one configured ACP Agent subprocess and begins consuming its
@@ -147,18 +163,70 @@ func newClient(ctx context.Context, cancel context.CancelFunc, stdin io.WriteClo
 	if maxBytes <= 0 {
 		maxBytes = DefaultMaxMessageBytes
 	}
+	return newClientWithTransport(ctx, cancel, newStdioTransport(stdin, stdout, process, maxBytes), cfg)
+}
+
+// StartWebSocket connects one ACP Agent over the remote transport RFD's
+// first-class WebSocket profile. The caller owns profile authorization and
+// Runtime lifecycle; this function only establishes the JSON-RPC connection.
+func StartWebSocket(ctx context.Context, cfg RemoteConfig) (*Client, error) {
+	transport, err := dialWebSocket(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	connectionCtx, cancel := context.WithCancel(ctx)
+	client := newClientWithTransport(connectionCtx, cancel, transport, Config{
+		MaxMessageBytes:     cfg.MaxMessageBytes,
+		HandleRequest:       cfg.HandleRequest,
+		NotificationHandler: cfg.NotificationHandler,
+	})
+	go func() {
+		<-connectionCtx.Done()
+		_ = transport.Close()
+	}()
+	go client.readLoop()
+	return client, nil
+}
+
+// StartHTTP connects one ACP Agent over the remote transport RFD's streamable
+// HTTP profile. The transport opens a connection-scoped SSE stream after
+// initialize and one session-scoped stream per registered session.
+func StartHTTP(ctx context.Context, cfg RemoteConfig) (*Client, error) {
+	transport, err := newHTTPTransport(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	connectionCtx, cancel := context.WithCancel(ctx)
+	client := newClientWithTransport(connectionCtx, cancel, transport, Config{
+		MaxMessageBytes:     cfg.MaxMessageBytes,
+		HandleRequest:       cfg.HandleRequest,
+		NotificationHandler: cfg.NotificationHandler,
+	})
+	go func() {
+		<-connectionCtx.Done()
+		_ = transport.Close()
+	}()
+	go client.readLoop()
+	return client, nil
+}
+
+func newClientWithTransport(ctx context.Context, cancel context.CancelFunc, transport frameTransport, cfg Config) *Client {
+	maxBytes := cfg.MaxMessageBytes
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxMessageBytes
+	}
 	return &Client{
-		ctx:           ctx,
-		cancel:        cancel,
-		stdin:         stdin,
-		stdout:        stdout,
-		process:       process,
-		writer:        stdin,
-		pending:       make(map[string]chan Message),
-		notifications: make(chan Message, 128),
-		handleRequest: cfg.HandleRequest,
-		maxBytes:      maxBytes,
-		done:          make(chan struct{}),
+		ctx:             ctx,
+		cancel:          cancel,
+		transport:       transport,
+		pending:         make(map[string]chan Message),
+		reverse:         make(map[string]*reverseCall),
+		inboundSessions: make(map[string]string),
+		notifications:   make(chan Message, 128),
+		handleRequest:   cfg.HandleRequest,
+		handleNotify:    cfg.NotificationHandler,
+		maxBytes:        maxBytes,
+		done:            make(chan struct{}),
 	}
 }
 
@@ -219,7 +287,7 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	if err != nil {
 		return err
 	}
-	if err := c.write(Message{JSONRPC: "2.0", ID: id, Method: method, Params: encodedParams}); err != nil {
+	if err := c.writeContext(ctx, "", Message{JSONRPC: "2.0", ID: id, Method: method, Params: encodedParams}); err != nil {
 		return err
 	}
 	handleResponse := func(response Message) error {
@@ -238,6 +306,7 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 		return handleResponse(response)
 	case <-ctx.Done():
 		_ = c.Notify("$/cancel_request", map[string]json.RawMessage{"requestId": id})
+		c.completeRequest(id)
 		return ctx.Err()
 	case <-c.done:
 		// The final response may have been dispatched just before stdout hit
@@ -266,22 +335,36 @@ func (c *Client) Notify(method string, params any) error {
 	return c.write(Message{JSONRPC: "2.0", Method: method, Params: encodedParams})
 }
 
-// Close cancels the process context, closes pipes, and waits for the read and
-// process loops to report their terminal state. Runtime owns graceful ACP
-// session cancellation before calling Close.
+// SessionOpened tells the transport that one remote session now exists. The
+// streamable HTTP profile opens its session-scoped SSE stream here; other
+// transports treat it as a no-op.
+func (c *Client) SessionOpened(ctx context.Context, sessionID string) error {
+	if c == nil || c.transport == nil {
+		return errors.New("nil ACP client")
+	}
+	return c.transport.SessionOpened(ctx, sessionID)
+}
+
+// SessionClosed releases the transport resources attached to one remote
+// session. It never closes the shared ACP connection.
+func (c *Client) SessionClosed(sessionID string) {
+	if c == nil || c.transport == nil {
+		return
+	}
+	c.transport.SessionClosed(sessionID)
+}
+
+// Close cancels the connection context, closes the transport, and waits for
+// the read/process loops to report their terminal state. Runtime owns graceful
+// ACP session cancellation before calling Close.
 func (c *Client) Close() error {
 	if c == nil {
 		return nil
 	}
+	c.closing.Store(true)
 	c.cancel()
-	if c.stdin != nil {
-		_ = c.stdin.Close()
-	}
-	if c.stdout != nil {
-		_ = c.stdout.Close()
-	}
-	if c.process != nil {
-		c.process.Terminate()
+	if c.transport != nil {
+		_ = c.transport.Close()
 	}
 	<-c.done
 	// Close is best-effort teardown initiated by the owner. Transport errors
@@ -291,10 +374,13 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) readLoop() {
-	reader := bufio.NewReader(c.stdout)
 	for {
-		line, err := readFrame(reader, c.maxBytes)
+		line, err := c.transport.Receive()
 		if err != nil {
+			if c.closing.Load() {
+				c.finish(nil)
+				return
+			}
 			if errors.Is(err, io.EOF) {
 				// A cleanly exited Agent closes stdout after completing its final
 				// request. Callers still treat a missing prompt response as an
@@ -304,6 +390,13 @@ func (c *Client) readLoop() {
 				c.finish(err)
 			}
 			return
+		}
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) > 0 && trimmed[0] == '[' {
+			// ACP does not use JSON-RPC batches. Reject the frame without
+			// processing any entry and keep the connection usable.
+			_ = c.write(Message{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &RPCError{Code: -32600, Message: "JSON-RPC batches are not supported"}})
+			continue
 		}
 		var message Message
 		if err := json.Unmarshal(line, &message); err != nil {
@@ -319,10 +412,11 @@ func (c *Client) readLoop() {
 }
 
 func (c *Client) waitLoop() {
-	if c.process == nil {
+	waiter, ok := c.transport.(interface{ Wait() error })
+	if !ok {
 		return
 	}
-	if err := c.process.Wait(); err != nil {
+	if err := waiter.Wait(); err != nil {
 		c.finish(fmt.Errorf("ACP agent exited: %w", err))
 	}
 }
@@ -330,6 +424,14 @@ func (c *Client) waitLoop() {
 func (c *Client) dispatch(message Message) {
 	if message.Method != "" {
 		if len(message.ID) == 0 {
+			if message.Method == "$/cancel_request" {
+				c.cancelReverseRequest(message)
+				return
+			}
+			if c.handleNotify != nil {
+				c.handleNotify(message)
+				return
+			}
 			select {
 			case <-c.done:
 				return
@@ -341,7 +443,7 @@ func (c *Client) dispatch(message Message) {
 			}
 			return
 		}
-		go c.handleReverseRequest(message)
+		c.startReverseRequest(message)
 		return
 	}
 	if len(message.ID) == 0 {
@@ -356,16 +458,92 @@ func (c *Client) dispatch(message Message) {
 		// A late response to a locally cancelled request is safe to ignore.
 		return
 	}
+	c.completeRequest(message.ID)
 	responseCh <- message
 }
 
-func (c *Client) handleReverseRequest(message Message) {
+func (c *Client) completeRequest(id json.RawMessage) {
+	transport, ok := c.transport.(requestCompletionTransport)
+	if !ok {
+		return
+	}
+	transport.CompleteRequest(id)
+}
+
+// startReverseRequest registers a cancel handle before invoking the handler so
+// an Agent can cancel it immediately with $/cancel_request. Registration is
+// synchronous in the stdout read loop, which guarantees the handle exists
+// before a following notification is dispatched.
+func (c *Client) startReverseRequest(message Message) {
+	key, ok := canonicalRPCID(message.ID)
+	if !ok {
+		_ = c.respond(message.ID, nil, &RPCError{Code: -32600, Message: "invalid request id"})
+		return
+	}
+	ctx, cancel := context.WithCancel(c.ctx)
+	call := &reverseCall{cancel: cancel}
+	c.mu.Lock()
+	select {
+	case <-c.done:
+		c.mu.Unlock()
+		cancel()
+		return
+	default:
+	}
+	if _, exists := c.reverse[key]; exists {
+		c.mu.Unlock()
+		cancel()
+		_ = c.respond(message.ID, nil, &RPCError{Code: -32600, Message: "duplicate in-flight request id"})
+		return
+	}
+	c.reverse[key] = call
+	if sessionID := DecodeSessionID(message.Params); sessionID != "" {
+		c.inboundSessions[key] = sessionID
+	}
+	c.mu.Unlock()
+	go c.handleReverseRequest(ctx, key, call, message)
+}
+
+func (c *Client) handleReverseRequest(ctx context.Context, key string, call *reverseCall, message Message) {
+	defer func() {
+		c.removeReverseRequest(key, call)
+		call.cancel()
+	}()
 	if c.handleRequest == nil {
 		_ = c.respond(message.ID, nil, &RPCError{Code: -32601, Message: "method not found"})
 		return
 	}
-	result, rpcErr := c.handleRequest(c.ctx, message)
+	result, rpcErr := c.handleRequest(ctx, message)
+	if ctx.Err() != nil {
+		// ACP requires the original request to receive either a valid result or
+		// Request Cancelled after $/cancel_request. The handler may have returned
+		// its own error while unwinding; normalize it to the protocol code.
+		result = nil
+		rpcErr = &RPCError{Code: -32800, Message: "Request cancelled"}
+	}
 	_ = c.respond(message.ID, result, rpcErr)
+}
+
+func (c *Client) cancelReverseRequest(message Message) {
+	requestID, ok := DecodeCancelRequest(message)
+	if !ok {
+		return
+	}
+	c.mu.Lock()
+	call := c.reverse[requestID]
+	c.mu.Unlock()
+	if call != nil {
+		call.cancel()
+	}
+}
+
+func (c *Client) removeReverseRequest(key string, call *reverseCall) {
+	c.mu.Lock()
+	if c.reverse[key] == call {
+		delete(c.reverse, key)
+	}
+	delete(c.inboundSessions, key)
+	c.mu.Unlock()
 }
 
 func (c *Client) respond(id json.RawMessage, result any, rpcErr *RPCError) error {
@@ -373,10 +551,20 @@ func (c *Client) respond(id json.RawMessage, result any, rpcErr *RPCError) error
 	if err != nil {
 		return err
 	}
-	return c.write(Message{JSONRPC: "2.0", ID: id, Result: encodedResult, Error: rpcErr})
+	sessionID := ""
+	if key, ok := canonicalRPCID(id); ok {
+		c.mu.Lock()
+		sessionID = c.inboundSessions[key]
+		c.mu.Unlock()
+	}
+	return c.writeContext(c.ctx, sessionID, Message{JSONRPC: "2.0", ID: id, Result: encodedResult, Error: rpcErr})
 }
 
 func (c *Client) write(message Message) error {
+	return c.writeContext(c.ctx, "", message)
+}
+
+func (c *Client) writeContext(ctx context.Context, sessionID string, message Message) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	select {
@@ -391,8 +579,7 @@ func (c *Client) write(message Message) error {
 	if len(encoded) > c.maxBytes {
 		return fmt.Errorf("ACP outbound frame exceeds %d bytes", c.maxBytes)
 	}
-	encoded = append(encoded, '\n')
-	if _, err := c.writer.Write(encoded); err != nil {
+	if err := c.transport.Send(ctx, sessionID, encoded); err != nil {
 		return fmt.Errorf("write ACP message: %w", err)
 	}
 	return nil
@@ -411,6 +598,10 @@ func (c *Client) finish(err error) {
 		c.errMu.Unlock()
 		c.mu.Lock()
 		c.pending = make(map[string]chan Message)
+		for key, call := range c.reverse {
+			call.cancel()
+			delete(c.reverse, key)
+		}
 		c.mu.Unlock()
 		close(c.done)
 	})
@@ -432,6 +623,25 @@ func encodeParams(value any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("encode ACP params: %w", err)
 	}
 	return encoded, nil
+}
+
+// canonicalRPCID normalizes a JSON-RPC id without conflating a string id with a
+// numerically equal id. JSON-RPC treats "7" and 7 as different request ids.
+func canonicalRPCID(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var id any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&id); err != nil || id == nil {
+		return "", false
+	}
+	encoded, err := json.Marshal(id)
+	if err != nil {
+		return "", false
+	}
+	return string(encoded), true
 }
 
 func readFrame(reader *bufio.Reader, maxBytes int) ([]byte, error) {

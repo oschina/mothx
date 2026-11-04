@@ -10,14 +10,19 @@ import (
 // stubBackendAgent is a minimal agentpkg.Agent used to prove the manager's
 // backend interception without constructing a local AgentFactory child.
 type stubBackendAgent struct {
-	id     agentpkg.AgentID
-	parent agentpkg.AgentID
+	id       agentpkg.AgentID
+	parent   agentpkg.AgentID
+	events   []agentpkg.Event
+	metadata map[string]any
 }
 
 func (a *stubBackendAgent) ID() agentpkg.AgentID       { return a.id }
 func (a *stubBackendAgent) ParentID() agentpkg.AgentID { return a.parent }
 func (a *stubBackendAgent) Run(ctx context.Context, userMsg string) <-chan agentpkg.Event {
-	ch := make(chan agentpkg.Event)
+	ch := make(chan agentpkg.Event, len(a.events))
+	for _, event := range a.events {
+		ch <- event
+	}
 	close(ch)
 	return ch
 }
@@ -33,10 +38,21 @@ func (a *stubBackendAgent) GetContextUsage() *agentpkg.ContextUsage     { return
 func (a *stubBackendAgent) LoadHistoryMessages(msgs []agentpkg.Message) {}
 func (a *stubBackendAgent) HandleApprovalResponse(approvalID string, approved bool) {
 }
+func (a *stubBackendAgent) ChildMetadata() map[string]any {
+	if a.metadata == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(a.metadata))
+	for key, value := range a.metadata {
+		cloned[key] = value
+	}
+	return cloned
+}
 
 type stubChildBackend struct {
-	calls int
-	opts  AgentOptions
+	calls  int
+	opts   AgentOptions
+	events []agentpkg.Event
 }
 
 func (b *stubChildBackend) CreateChild(opts AgentOptions) (agentpkg.Agent, bool, error) {
@@ -45,7 +61,7 @@ func (b *stubChildBackend) CreateChild(opts AgentOptions) (agentpkg.Agent, bool,
 	}
 	b.calls++
 	b.opts = opts
-	return &stubBackendAgent{id: opts.ID, parent: opts.ParentID}, true, nil
+	return &stubBackendAgent{id: opts.ID, parent: opts.ParentID, events: append([]agentpkg.Event(nil), b.events...)}, true, nil
 }
 
 func TestAgentManagerChildBackendInterceptsValidatedChild(t *testing.T) {
@@ -97,5 +113,36 @@ func TestAgentManagerChildBackendUnhandledFallsBackToFactory(t *testing.T) {
 	// only asserts the decline decision is reported before construction.
 	if _, handled, err := backend.CreateChild(AgentOptions{ParentID: "lead"}); err != nil || handled {
 		t.Fatalf("backend decline = handled %v, err %v", handled, err)
+	}
+}
+
+func TestAgentManagerStatusRefreshesBackendMetadata(t *testing.T) {
+	manager := NewAgentManager(nil)
+	manager.Register(&stubBackendAgent{id: "lead"})
+	backend := &stubChildBackend{}
+	manager.SetChildBackend(backend)
+
+	child, err := manager.Create(AgentOptions{
+		ParentID: "lead", ExternalAgent: "codex", ExternalTask: "implement the fix",
+	})
+	if err != nil {
+		t.Fatalf("Create with backend: %v", err)
+	}
+	stub, ok := child.(*stubBackendAgent)
+	if !ok {
+		t.Fatalf("child type = %T", child)
+	}
+	stub.metadata = map[string]any{"phase": "ready"}
+	manager.MarkRunning(child.ID())
+	status, ok := manager.Status(child.ID())
+	if !ok || status.Metadata["phase"] != "ready" {
+		t.Fatalf("running status metadata = %#v", status.Metadata)
+	}
+
+	stub.metadata = map[string]any{"changeSetDigest": "sha256:abc", "changeSetTruncated": false}
+	manager.MarkDone(child.ID(), "done")
+	status, ok = manager.Status(child.ID())
+	if !ok || status.Metadata["changeSetDigest"] != "sha256:abc" {
+		t.Fatalf("terminal status metadata = %#v", status.Metadata)
 	}
 }

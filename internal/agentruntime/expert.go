@@ -274,6 +274,14 @@ func (r *SessionRuntime) SetExpert(expertID string) error {
 	if err != nil {
 		return err
 	}
+	if prepared.binding != nil && prepared.binding.Team {
+		r.mu.RLock()
+		mode := r.Mode
+		r.mu.RUnlock()
+		if mode == ModeRouter {
+			return fmt.Errorf("an expert team cannot be bound in Router mode; switch to another mode first")
+		}
+	}
 	if err := r.Manager.SetExpertBinding(nextID); err != nil {
 		return err
 	}

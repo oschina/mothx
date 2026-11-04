@@ -79,12 +79,21 @@ type SessionRuntime struct {
 	Mailbox      *agent.MemberMailbox
 	ExpertCenter *expert.Center
 	Submissions  *SubmissionCoordinator
+	// mailboxWake owns the Runtime continuation scheduler. It is started only
+	// when an adapter projects mailbox events and is cancelled by Shutdown/Close.
+	mailboxWakeMu     sync.Mutex
+	mailboxWakeCancel context.CancelFunc
+	mailboxWakeDone   chan struct{}
 
 	// acpWorkersLive counts this session's live external ACP workers against the
 	// profile ceiling. It is intentionally Runtime-owned so no adapter can create
 	// a second worker side channel.
-	acpWorkerMu    sync.Mutex
-	acpWorkersLive int
+	acpWorkerMu        sync.Mutex
+	acpWorkersLive     int
+	acpBaseWritersLive int
+	// acpConnections owns reusable external ACP processes. The pool is created
+	// lazily by the Runtime and closed only by Close/Shutdown.
+	acpConnections *acpConnectionPool
 
 	// resourceSettings and the two capability flags record the shared resource
 	// assembly policy used to create this runtime. They let a lazily-bound
@@ -225,6 +234,9 @@ func (r *SessionRuntime) Shutdown(ctx context.Context) error {
 	decisions := r.Decisions
 	submissions := r.Submissions
 	r.mu.RUnlock()
+	// Stop accepting new mailbox continuations before cancelling the active
+	// execution, so shutdown cannot race a fresh automatic Run into existence.
+	_ = r.stopMailboxWake(ctx)
 	runID := ""
 	var shutdownErr error
 	if execution != nil {
@@ -273,8 +285,12 @@ func (r *SessionRuntime) Close() {
 	r.MCPClients = nil
 	submissions := r.Submissions
 	r.Submissions = nil
+	acpConnections := r.acpConnections
+	r.acpConnections = nil
 	r.mu.Unlock()
+	r.cancelMailboxWake()
 	releaseSubmissionCoordinator(submissions)
+	acpConnections.Close()
 	mcp.CloseClients(clients)
 }
 

@@ -18,6 +18,34 @@ func NewWriteTool(r *Registry) *WriteTool {
 	return &WriteTool{registry: r}
 }
 
+// WriteFile resolves path through the workspace roots, acquires the shared
+// in-process file lock, and writes content atomically. It is the shared write
+// path for non-tool Runtime bridges so they cannot bypass the local tool's
+// path, lock, and atomicity rules.
+func (r *Registry) WriteFile(ctx context.Context, path, content, owner string) (string, error) {
+	if r == nil {
+		return "", fmt.Errorf("registry is nil")
+	}
+	resolved, err := r.ResolvePath(path)
+	if err != nil {
+		return "", err
+	}
+	release, err := r.acquireFileLock(ctx, resolved, owner)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+	if err := writeFileAtomic(resolved, []byte(content)); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
 func (t *WriteTool) Name() string { return "write" }
 
 func (t *WriteTool) Description() string {

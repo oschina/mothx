@@ -342,17 +342,15 @@ func checkACPAgents(settings *config.Settings) []Check {
 		return []Check{{ID: "acp.profiles", Status: StatusError, Title: "ACP worker profiles", Detail: err.Error(), Fix: "Fix acpAgents in settings.json (valid command, roles/writeRoots, environment names)"}}
 	}
 	enabled := 0
-	capped := make([]string, 0, len(settings.ACPAgents))
 	for _, profile := range settings.ACPAgents {
 		if !profile.Enabled {
 			continue
 		}
 		enabled++
-		// A ceiling this release cannot honor is not an error: the value keeps
-		// loading (compatibility) but the user must not believe parallel workers
-		// are running. Report it as information, not a configuration failure.
-		if profile.EffectiveMaxConcurrentChildren() > profile.EffectiveEnforcedChildren() {
-			capped = append(capped, fmt.Sprintf("%s=%d", profile.ID, profile.EffectiveMaxConcurrentChildren()))
+		if profile.IsRemote() {
+			// Validate already checked the URL shape and rejected embedded
+			// credentials. Doctor never connects to or launches a remote worker.
+			continue
 		}
 		// Resolve the way a real launch would: a bare command through PATH, a path
 		// as given. exec.LookPath reports "not found" for a missing bare command,
@@ -376,21 +374,8 @@ func checkACPAgents(settings *config.Settings) []Check {
 		check.Detail = "all configured profiles are disabled"
 		return []Check{check}
 	}
-	ok := Check{ID: "acp.profiles", Status: StatusOK, Title: "ACP worker profiles", Detail: fmt.Sprintf("%d enabled profile(s) validated", enabled)}
-	if len(capped) == 0 {
-		return []Check{ok}
-	}
-	// Valid configuration, but the configured parallelism is not active yet. This
-	// is informational so it never turns a working setup into a failing doctor run.
-	return []Check{ok, {
-		ID: "acp.profiles.concurrency", Status: StatusWarn, Title: "ACP worker concurrency",
-		Detail: fmt.Sprintf("%s configured above the enforced ceiling of %d; this release runs one external worker per session worktree", strings.Join(capped, ", "), effectiveACPIgnoredHint),
-		Fix:    "No action needed: the setting is accepted and kept for a later release that adds a per-worker worktree",
-	}}
+	return []Check{{ID: "acp.profiles", Status: StatusOK, Title: "ACP worker profiles", Detail: fmt.Sprintf("%d enabled profile(s) validated", enabled)}}
 }
-
-// effectiveACPIgnoredHint is the enforced live-worker ceiling reported to users.
-const effectiveACPIgnoredHint = 1
 
 func checkSandbox(settings *config.Settings) []Check {
 	if p, err := exec.LookPath("bwrap"); err == nil {

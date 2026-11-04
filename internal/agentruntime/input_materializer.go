@@ -517,6 +517,71 @@ func (m *InputMaterializer) Get(ctx context.Context, sessionID, resourceID strin
 	return record, err
 }
 
+// Read returns one Runtime-owned input resource after checking session
+// ownership, size, and content hash. It is the only handoff used when an
+// authorized external worker needs bytes inlined into its own protocol prompt.
+func (m *InputMaterializer) Read(ctx context.Context, sessionID, resourceID string) (InputResource, []byte, error) {
+	record, err := m.Get(ctx, sessionID, resourceID)
+	if err != nil {
+		return InputResource{}, nil, err
+	}
+	if record.Status == "deleted" || record.Status == "missing" {
+		return record, nil, fmt.Errorf("input resource %s is %s", resourceID, record.Status)
+	}
+	path, err := m.readResourcePath(record.RelativePath)
+	if err != nil {
+		return record, nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return record, nil, fmt.Errorf("open input resource: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return record, nil, fmt.Errorf("input resource %s is not a regular file", resourceID)
+	}
+	if info.Size() != record.Bytes {
+		return record, nil, fmt.Errorf("input resource %s failed integrity check: size mismatch", resourceID)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return record, nil, fmt.Errorf("read input resource: %w", err)
+	}
+	hash := sha256.Sum256(data)
+	if hex.EncodeToString(hash[:]) != strings.TrimSpace(record.SHA256) {
+		return record, nil, fmt.Errorf("input resource %s failed integrity check: hash mismatch", resourceID)
+	}
+	return record, data, nil
+}
+
+// readResourcePath resolves an input resource back to its private Runtime input
+// root, not merely somewhere lexically below the work directory. The canonical
+// root check rejects a symlinked resource directory or file that would otherwise
+// let a workspace mutation redirect an attachment read outside the workspace.
+func (m *InputMaterializer) readResourcePath(relativePath string) (string, error) {
+	path, err := m.resourcePath(relativePath)
+	if err != nil {
+		return "", err
+	}
+	workDir, err := filepath.EvalSymlinks(m.workDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve input work directory: %w", err)
+	}
+	root := filepath.Join(workDir, ".mothx", "tmp", "inputs")
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve input root: %w", err)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve input resource: %w", err)
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("input resource escaped the Runtime input root")
+	}
+	return resolvedPath, nil
+}
+
 func (m *InputMaterializer) getByItemKey(ctx context.Context, sessionID, itemKey string) (InputResource, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1009,8 +1074,8 @@ func (m *InputMaterializer) buildManifest(records []InputResource, delivery map[
 		} else if info, statErr := os.Stat(path); statErr != nil || !info.Mode().IsRegular() {
 			status = "missing"
 		}
-		fmt.Fprintf(&b, "- path: %s\n  name: %s\n  mediaType: %s\n  bytes: %d\n  status: %s\n",
-			record.RelativePath, record.Filename, record.MediaType, record.Bytes, status)
+		fmt.Fprintf(&b, "- id: %s\n  path: %s\n  name: %s\n  mediaType: %s\n  bytes: %d\n  status: %s\n",
+			record.ID, record.RelativePath, record.Filename, record.MediaType, record.Bytes, status)
 		if note := delivery[record.ID]; note != "" {
 			fmt.Fprintf(&b, "  delivered: %s\n", note)
 		}

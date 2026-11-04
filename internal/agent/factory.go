@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -145,6 +146,16 @@ type WorktreeSpec struct {
 	Optional bool
 }
 
+// WorktreeResolution is the Runtime-owned identity of a materialized worktree.
+// AgentManager records it on the child options so a backend never has to infer
+// a worktree from its directory.
+type WorktreeResolution struct {
+	ID             string
+	Directory      string
+	RepositoryRoot string
+	BaseRevision   string
+}
+
 type AgentOptions struct {
 	ID       agentpkg.AgentID
 	ParentID agentpkg.AgentID
@@ -164,6 +175,10 @@ type AgentOptions struct {
 	// The Runtime resolves it before construction and replaces WorkDir with the
 	// materialized directory; internal/agent never runs git itself.
 	Worktree *WorktreeSpec
+	// WorktreeResolved is filled by AgentManager after a Runtime-owned provider
+	// resolves Worktree. It is trusted construction metadata, unlike a
+	// model-supplied WorkDir.
+	WorktreeResolved *WorktreeResolution
 	// ExcludeTools removes tools from the resolved child registry after the
 	// standard mode/tool filtering. Used for children whose callers cannot answer
 	// a tool's interactive contract (for example a blocking delegate child that
@@ -201,6 +216,13 @@ type AgentOptions struct {
 	ExternalDeliverable    []string
 	ExternalVerification   string
 	ExternalStopConditions []string
+	// ExternalAttachmentIDs are Runtime-owned input resource IDs. Agent Core
+	// passes the opaque IDs through; the Runtime backend resolves and verifies
+	// the bytes.
+	ExternalAttachmentIDs []string
+	// RuntimeContext carries the caller's request context into a Runtime child
+	// backend that must read session-owned resources during construction.
+	RuntimeContext context.Context
 }
 
 // Create creates a new Agent with per-agent Registry.

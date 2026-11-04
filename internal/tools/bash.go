@@ -246,17 +246,7 @@ func (t *BashTool) buildCommand(ctx context.Context, shell, command, workDir str
 }
 
 func (t *BashTool) configureCommand(cmd *exec.Cmd) {
-	// Bash tools are non-interactive. Prevent subprocesses from stealing the
-	// TUI terminal for auth prompts, and make cancellation kill descendants.
-	setSysProcAttr(cmd)
-	cmd.Stdin = strings.NewReader("")
-	cmd.Env = nonInteractiveEnv(cmd.Env)
-	cmd.Cancel = func() error {
-		return killCommandProcess(cmd)
-	}
-	// If the shell exits while a background child still holds stdio,
-	// don't wait forever; give it 100ms then force-close copied pipes.
-	cmd.WaitDelay = 100 * time.Millisecond
+	ConfigureCommandProcess(cmd)
 }
 
 func (t *BashTool) windowsShellCandidates() []string {

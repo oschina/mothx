@@ -4,8 +4,11 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
 // TestRouterCommandWithoutArgumentOpensPanel locks the UI contract: `/router`
@@ -126,5 +129,35 @@ func TestRouterPanelRoleToggleKeepsACeiling(t *testing.T) {
 	}
 	if !strings.Contains(app.routerPanel.Message, "role") && app.routerPanel.Message == "" {
 		t.Fatal("no feedback was shown when the last role toggle was refused")
+	}
+}
+
+func TestRouterPanelEditsTerminalBridgeOptIn(t *testing.T) {
+	app := newRouterCommandApp(t)
+	app.openRouterPanel()
+	app.beginRouterPanelCreate()
+	app.beginRouterPanelCreateFromScratch()
+
+	fields := app.routerPanelFormFields()
+	terminalIndex := -1
+	for i, field := range fields {
+		if field.Key == "terminal" {
+			terminalIndex = i
+			break
+		}
+	}
+	if terminalIndex < 0 {
+		t.Fatal("the profile form does not expose terminal access")
+	}
+	if app.routerPanel.Draft.TerminalAccess {
+		t.Fatal("terminal access must default to off")
+	}
+	app.routerPanel.FormCursor = terminalIndex
+	app.handleRouterPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if !app.routerPanel.Draft.TerminalAccess {
+		t.Fatal("the terminal field did not toggle opt-in")
+	}
+	if field := app.routerPanelFormFields()[terminalIndex]; field.Description != app.translator.Text(i18n.MsgRouterPanelValueOn) {
+		t.Fatalf("terminal field projection = %q, want enabled", field.Description)
 	}
 }

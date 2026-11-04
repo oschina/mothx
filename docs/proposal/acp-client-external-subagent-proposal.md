@@ -1,8 +1,8 @@
 # ACP Client External Sub-agent Proposal
 
-> Status: Implemented (Phases 0–3, 2026-11-03; Phase 4 follow-ups remain deliberate)
+> Status: Implemented Phases 0–4 (multi-session process reuse, multi-turn sessions with capability-gated `session/resume`/`session/load`, multi-profile target selection, read-only and isolated-write fan-out, capability-negotiated attachments, scoped filesystem and opt-in terminal bridges, durable child history, managed per-child worktrees with bounded change-set snapshots, a Runtime-owned exclusive change-set integration lane, and the ACP standard remote transport over WebSocket and streamable HTTP/SSE). Terminal/URL authentication is explicitly out of scope, and direct parallel base-workspace writers remain deliberately deferred behind per-child worktrees plus the exclusive integration lane.
 >
-> Date: 2026-11-02 · Completed: 2026-11-03
+> Date: 2026-11-02 · Completed: 2026-11-04
 >
 > Related: `docs/proposal/agent-core-runtime-unification-proposal.md`,
 > `docs/proposal/multi-agent-architecture-plan.md`,
@@ -42,26 +42,55 @@ server.
 
 ## Implementation Status (2026-11-03)
 
-Phases 0–3 are implemented. Router now launches exactly one blocking external
-ACP worker through the shared Runtime, with canonical child events, decisions,
-bounded output, process-tree containment, diagnostics, and bilingual docs. The
-Phase 4 follow-ups remain deliberately out of scope and are listed at the end
-of this document.
+Phases 0–3 are implemented, followed by asynchronous spawn and the first Phase
+4 transport slices. Router now reuses one initialized ACP process for multiple
+isolated remote sessions, admits concurrent read-only workers up to the profile
+ceiling, and negotiates image/audio/embedded-resource delivery from the Agent's
+advertised capabilities. It also advertises bounded bridges for
+`fs/read_text_file` and scoped `fs/write_text_file` constrained to the shared
+Runtime workspace roots, the task write scope, and the profile's declared write
+roots. Profiles that explicitly opt in also receive the terminal bridge.
+Remote sessions stay alive across turns, `subagent_send` drives follow-ups, and
+an explicit reconnect prefers capability-gated `session/resume` and falls back
+to `session/load`; child transcripts and remote session identity are persisted.
+Both local and ACP children now use the same durable child-history record.
+Read-only workers and isolated `implement` workers may share the profile
+ceiling because the latter write only a managed per-child worktree. The lead
+applies selected immutable snapshots through `subagent_integrate`, which uses
+one Runtime-owned exclusive base-workspace lane instead of starting another
+external Agent. An idle session also wakes into a new canonical lead Run when
+worker completions arrive in its mailbox, coalescing a burst into one Run and
+projecting it through the same Runtime event path. The ACP standard remote
+transport is implemented over WebSocket and streamable HTTP/SSE; parallel
+base-workspace writers remain the only deliberate follow-up.
 
 | Area | Status | Implemented boundary |
 | --- | --- | --- |
 | First-class Router mode | Implemented | `ModeRouter`, shared policy validation, Router-only frozen local tool surface and system prompt, CLI/TUI/ACP mode catalogs. |
 | ACP profile configuration | Implemented | `settings.json` `acpAgents` schema; argv validation, duplicate ID, environment-name, enabled-state, and permission-policy validation. |
-| Router session binding | Implemented | Replayable `router_binding` session entry for selected profile and non-blocking strategy, supported by legacy store, EventStore, display projection, fork, and Runtime resolution. |
-| ACP stdio client | Implemented | Transport-only `internal/acp/client`: NDJSON JSON-RPC correlation, notifications, reverse requests, v1 initialize/session helpers, frame bounds, and real subprocess tests. |
-| ACP Worker Bridge | Implemented | Runtime-owned one-turn `initialize -> session/new -> session/prompt -> close` bridge with typed update decoding, bounded output, partial-output preservation, cancellation notification, and a caller-supplied process launcher. |
-| Router `delegate_subagent` | Implemented | `AgentManager` reserves/binds an external child through a Runtime-installed backend; `delegate_subagent` requires the activated profile in Router and rejects local fallback, while non-Router `agent` calls are rejected. |
+| Router session binding | Implemented | Replayable `router_binding` session entry for an ordered profile allowlist and one non-blocking strategy per profile, supported by legacy store, EventStore, display projection, fork, and Runtime resolution. |
+| Multi-profile Router target | Implemented | The replayable binding stores an ordered allowlist plus one recorded strategy per profile. The first profile is the default; tools accept any bound ID and reject configured-but-unbound IDs. `ResolveRouterACPProfileByID` resolves the selected worker from the same Runtime-owned binding. |
+| ACP stdio client | Implemented | Transport-only `internal/acp/client`: NDJSON JSON-RPC correlation, notifications, reverse requests, v1 initialize/session helpers (including `session/resume`), frame bounds, and real subprocess tests. |
+| ACP standard remote transport | Implemented | The same transport-only client supports WebSocket and streamable HTTP/SSE from the ACP remote transport RFD: cookie affinity, HTTP/2 for `https://`, `initialize` 200 plus subsequent 202 POSTs, one connection-scoped SSE stream, one session-scoped SSE stream per isolated session, required `Acp-Connection-Id`/`Acp-Session-Id` routing, reverse-request responses on the session stream, JSON-RPC batch rejection, bounded frames, and DELETE/close lifecycle. Runtime selects it from `transport`/`url` profile policy and keys the connection pool by transport plus endpoint. |
+| ACP Worker Bridge | Implemented | Runtime-owned bridge with `initialize -> session/new|resume|load -> session/prompt` turns, typed update decoding, bounded output, partial-output preservation, cancellation notification, and a caller-supplied process launcher. One prompt runs at a time per remote session. |
+| Router `delegate_subagent` | Implemented | `AgentManager` reserves/binds an external child through a Runtime-installed backend; `delegate_subagent` requires a bound profile in Router and rejects local fallback, while non-Router `agent` calls are rejected. |
 | Profile role ceiling and task contract | Implemented | `roles`, `writeRoots`, and `maxConcurrentChildren` on `acpAgents`; Runtime `SubagentTaskContract` validation narrows a model request to the profile's role/write ceiling with bounded objectives, scopes, deliverables, verification, and stop conditions. |
-| TUI/CLI Router activation | Implemented | `/router <profile>` and `--router --acp-agent <profile>` call the same Runtime `ActivateRouter`: validates the profile and source policy, requires an idle session, then persists the Router binding before the mode entry. Router selection without a binding is rejected, and every attach path replays the persisted mode. |
-| External delegation and child projection | Implemented | One blocking worker per session; a Runtime-owned `agent.Agent` proxy projects ACP text/thought/tool/plan/usage updates into canonical child events, owns the single `EventRunFinished`, and returns a bounded `worker-reported` envelope. Cancellation answers pending decisions as cancelled and reaps the process tree. |
+| TUI/CLI Router activation | Implemented | `/router <profile>[,<profile>...]` and `--router --acp-agent <profile>[,<profile>...]` call the same Runtime `ActivateRouter`: validates every profile and the source policy, requires an idle session, then persists the ordered Router allowlist before the mode entry. The first profile is the default target. Router selection without a binding is rejected, and every attach path replays the persisted mode. |
+| External delegation and child projection | Implemented | External workers are blocking or asynchronous; a Runtime-owned `agent.Agent` proxy projects ACP text/thought/tool/plan/usage updates into canonical child events, owns the single `EventRunFinished`, and returns a bounded `worker-reported` envelope. Cancellation answers pending decisions as cancelled and reaps the process tree. |
 | Diagnostics and docs | Implemented | `mothx doctor` checks profile shape/executable availability without launching; bilingual configuration and tool-contract docs added; `mothx/manage/acp/profiles/list` projects the safe Runtime catalog. Executable/profile writes intentionally stay on the local settings path. |
 | Decision and process containment | Implemented | Remote `session/request_permission` records a canonical decision and answers immediately with an offered one-time option; the Runtime process launcher contains the tree with a Unix process group / Windows Job Object and `internal/acp/client` owns no process. |
-| Router target projection | Implemented | The Runtime publishes the activated worker ID into the `delegate_subagent` tool: the tool description names it, the `agent` schema is always a `const` for that ID, and a wrong `agent` value fails with the accepted name instead of a generic rule. Other configured profiles appear only as correction context, never as accepted schema values. |
+| Router target projection | Implemented | The Runtime publishes the session's bound worker allowlist into both `delegate_subagent` and `subagent_spawn`: a single bound worker is a `const`, multiple bound workers are an ordered `enum`, and the first ID is the default. Unbound configured profiles appear only as correction context. A wrong `agent` value fails with the accepted names instead of a generic rule. |
+| Router async spawn | Implemented | `subagent_spawn` accepts the same bound `agent` allowlist and bounded task contract and returns a manager handle immediately. `subagent_status`, `subagent_wait(handle: ...)`, `subagent_send`, and `subagent_destroy` project/observe the existing child lifecycle. External completions also enter the session mailbox keyed by the child handle. Read-only roles fan out to the profile ceiling; a workspace writer remains exclusive. `subagent_answer` and local-only parameters are not exposed. |
+| ACP multi-session transport | Implemented | One Runtime-owned connection pool starts and initializes at most one process per profile/workdir, advertises the union of client capabilities any session on that profile may enforce, then creates isolated remote sessions with session-scoped notification/reverse-request routing. Read-only and write-role sessions share that connection; each session's request handler still enforces its own role, write scope, and profile roots. Process lifetime is Runtime-owned and closed by `SessionRuntime.Close`; a dead transport is never silently replayed. |
+| Multi-turn external child | Implemented | A spawned child keeps its remote session alive between turns. `subagent_send` sends one follow-up prompt on the same session; the local sub-agent wall-clock budget does not apply. `subagent_destroy` closes it. |
+| Remote resume/reconnect | Implemented | The remote session ID is retained after a transport loss. A later turn prefers capability-gated `session/resume` (no history replay) and falls back to `session/load` when only that capability is advertised; a missing capability fails the turn rather than silently creating a fresh session. In-flight prompts are never replayed after output or side effects. |
+| Durable child history | Implemented | Migration 55 creates `session_child_runs`; migration 56 adds worktree/change-set fields and migration 57 adds integration evidence. DAO/session owners persist contract, transcript, backend, profile, remote session ID, workdir, worktree identity, base revision, change-set snapshot/error, integration result, status, and timestamps. The Runtime installs one recorder for local children; the ACP proxy persists its remote identity through the same record. |
+| Read-only fan-out | Implemented | Read-only roles share the configured `maxConcurrentChildren` ceiling. An `implement` role in a Runtime-managed per-child worktree may also share the ceiling because it cannot write the base workspace. A base-workspace writer (including integration) remains exclusive in both directions. The permit is Runtime-owned and counts live workers and base writers. |
+| Managed child worktree | Implemented | When `AgentManager` resolves a per-child worktree (explicit request or `worktree.perChildSubagents`), the ACP backend now uses that directory instead of silently falling back to the session workspace. Path resolution, `fs/*`, and `terminal/*` use an isolated Runtime registry/sandbox view rooted at the worktree; the session's global roots are not widened. |
+| Change-set snapshot | Implemented | On every external-child terminal path the Runtime captures a bounded, immutable snapshot from the registered worktree: base/head revision, changed-path statuses, unified/binary patch, and bounded untracked-file content with digests. Migration 56 persists `worktree_id`, `base_revision`, `change_set_json`, and `change_set_error` in `session_child_runs`; a truncated or failed snapshot is explicit and never silently integrated. |
+| Change-set integration | Implemented | Router exposes `subagent_integrate(changes: [{handle, digest}])`. The Runtime loads only durable child evidence, re-verifies the digest, successful terminal status, truncation state, and managed-worktree identity, then acquires one exclusive base-workspace lane. It applies the tracked patch with `git apply --check` followed by apply and installs untracked bytes through a component-wise symlink fence and atomic rename. It never copies or mutates the child worktree and never starts another Agent. A multi-selection is transactional within the Runtime: if a later snapshot conflicts, snapshots applied by that same call are reversed and their evidence is updated. Migration 57 records `integration_id`, `integration_digest`, `integration_status`, `integration_error`, and `integrated_at`; repeated identical selections are idempotent, and a git conflict is returned as structured evidence. |
+| Capability-negotiated attachments | Implemented | The tool passes only Runtime input resource IDs; the Runtime verifies ownership/size/hash and the bridge advertises/delivers ACP `image`, `audio`, or embedded `resource` content only when the Agent's `promptCapabilities` supports it. Embedded resources use an opaque Runtime URN rather than a `file://` URI, because a managed per-child worktree does not contain the session-workspace attachment path. Unsupported content is disclosed with its Runtime resource ID and session-relative path instead of being silently dropped. |
+| Filesystem and terminal bridges | Implemented | The bridge advertises `fs.readTextFile` only when the Runtime has a Registry, `fs.writeTextFile` only for a write-role contract whose profile declares `writeRoots`, and `terminal` only when the profile opts in. Reads resolve through the shared workspace roots and symlink fence with line/limit slicing; writes must resolve inside both the task `writeScope` and profile `writeRoots`, then use the shared file lock and atomic write path. Terminal commands run through the shared sandbox and process-group containment with a bounded, UTF-8-safe, non-interactive output buffer and the worker's restricted environment; terminal/URL authentication is not implemented. `session/new`/`session/load`/`session/resume` send `additionalDirectories` only when the Agent advertises that session capability. |
 | Known-agent preset picker | Implemented | `agentruntime.ACPAgentPresets()` holds verified launch recipes; the TUI `/router` panel opens on that picker instead of a blank form, because the most common configuration mistake is assuming `codex acp` / `claude acp` start an ACP server. |
 
 The focused package suite covering these foundations passes; the detailed
@@ -83,12 +112,13 @@ The fix is a Runtime-owned projection, not an adapter hint.
 persisted `RouterBinding` and pushes it into the tool
 (`agent.DelegateSubAgentTool.SetRouterTarget`). The tool then:
 
-- names the activated worker in its description, which is what the model reads
-  first;
-- pins the `agent` schema to that ID with `const` even when several profiles
-  are configured, so a wrong name is a schema violation rather than a runtime
-  surprise; other profiles appear only in the correction text; and
-- fails a wrong `agent` value with the accepted name (and the list of
+- names the session's bound worker allowlist in its description, which is what
+  the model reads first;
+- pins a single bound worker with `const`; with multiple bound workers it uses
+  an `enum` limited to that allowlist (with the first ID as the default), so a
+  wrong name is a schema violation rather than a runtime surprise; configured
+  but unbound profiles appear only in the correction text; and
+- fails a wrong `agent` value with the accepted names (and the list of
   configured profiles) instead of restating the rule.
 
 Because the target is republished on every tool-group synchronization,
@@ -127,10 +157,10 @@ Tests:
   entry point, a chosen preset fills a usable profile and persists, argv
   arguments survive, and Esc leaves no half-open form.
 - `internal/agent/delegate_router_target_test.go`: the generated schema is
-  always valid JSON (including an ID that needs JSON escaping), the `agent`
-  field is always `const` for the activated worker, the published target is
-  defensively copied and reversible, and a wrong or missing `agent` value names
-  the accepted worker.
+  always valid JSON (including an ID that needs JSON escaping), a single bound
+  worker is a `const`, multiple bound workers are a bound-only `enum`, the
+  published target is defensively copied and reversible, and a wrong or missing
+  `agent` value names the accepted workers.
 
 ### 2026-11-03 post-MVP hardening
 
@@ -139,14 +169,33 @@ Review closed four implementation gaps without widening the MVP:
 - the ACP client leaves its notification channel open and drains it through
   `Done`, removing a close/send panic on worker exit; inbound frames are read
   in bounded fragments so the limit is enforced before allocation;
-- the Router `agent` schema is always `const`, even with multiple configured
-  profiles, so only the activated worker is a valid schema value;
+- the Router `agent` schema exposes only the session's bound allowlist: a
+  single worker is a `const`, and multiple bound workers are an `enum`;
 - Router rejects local-child parameters (`mode`, `work_dir`, `worktree`,
   `tools`, `max_iterations`) instead of silently ignoring them; and
 - ACP permission cancellation uses `DecisionService`, failed resolution
   commits discard the in-memory pending entry after recording a terminal row,
   output truncation preserves UTF-8, and Windows workers start suspended until
   they join the Job Object.
+
+### 2026-11-04 review hardening
+
+A code-to-proposal audit closed four more gaps without widening the MVP:
+
+- the isolated-writer admission check now compares physical paths (resolving
+  symlinks) and fails closed for an empty base directory, so a worktree that
+  resolves into the session workspace can never share the fan-out lane;
+- streamable HTTP releases a request-id -> session mapping only when the client
+  authoritatively correlates the outbound response. A colliding reverse-request
+  ID no longer leaks the mapping or releases a live outbound call; cancellation
+  still selects the correct `Acp-Session-Id`;
+- embedded attachments use an opaque Runtime URN instead of a `file://` path
+  that a managed worktree does not contain, and unsupported attachments name
+  the Runtime resource ID plus the session-relative path; and
+- the shared `AgentManager` refreshes backend-owned metadata on status
+  transitions, so a terminal `changeSetDigest`, truncation flag, or capture
+  error is visible through `subagent_status` and `subagent_wait` rather than
+  only in the blocking delegate envelope.
 
 ## 1.1 MothX Architecture Gate
 
@@ -163,7 +212,7 @@ path. The following invariants are hard requirements, not aspirations:
 | One execution/lifecycle path | The parent remains a canonical `ExecutionRuntime` Run. Runtime-owned child execution joins the existing `AgentManager` child graph and its cancellation/status contracts. The ACP client cannot create a parallel run state machine, durable Run row, terminal result, or recovery policy. If child Runs later become durable, every child backend migrates together through `ExecutionRuntime`; ACP must not get a private store. |
 | One decision model | An external Agent's `session/request_permission` is a projection into `DecisionService`/`DecisionRecord`; no request-local approval map, UI-local state, or direct callback owns the decision. |
 | One event semantic model | ACP wire updates are decoded once by the Runtime adapter and projected as canonical `agent.Event` values with the parent/child identity. Adapters only render those events; they do not create a second external-child stream or terminal status. |
-| One input/content and artifact lifecycle | Child task/context uses the Runtime input contract. Phase 1 passes bounded text only. No adapter or ACP client directly manufactures provider content, reads attachment storage, uploads a mutable worktree file, or infers artifacts from remote text. |
+| One input/content and artifact lifecycle | Child task/context uses the Runtime input contract: bounded task text plus capability-negotiated image/audio/embedded-resource attachments. No adapter or ACP client directly manufactures provider content, reads attachment storage, uploads a mutable worktree file, or infers artifacts from remote text. |
 | One database direction | The ACP client is transport-only and performs no SQL. Any profile, Run, decision, event, or future child-history persistence follows `config`/`session`/`dao` and Runtime services only. |
 
 The design below is intentionally more restrictive than a generic ACP library:
@@ -203,12 +252,12 @@ Research was performed against the official ACP v1 documentation on
 | ACP v1 fact | Design consequence |
 | --- | --- |
 | ACP uses bidirectional JSON-RPC 2.0. Requests need a result/error; notifications do not. | The client needs one reader, serialized writer, request-ID correlation, and a reverse-request dispatcher. It cannot be a one-way `exec.Command` wrapper. |
-| The only standard transport today is newline-delimited UTF-8 JSON-RPC over stdio. The client launches the Agent; stdout must contain ACP frames only. | Phase 1 supports configured local stdio processes only. No HTTP, WebSocket, SSH, or shell-string transport is added. |
+| ACP v1 core defines newline-delimited UTF-8 JSON-RPC over stdio. The published remote-transport RFD defines WebSocket and streamable HTTP/SSE on one `/acp` endpoint. | The client supports a contained local stdio process and the RFD's WebSocket/streamable-HTTP profiles. SSH and shell-string transports remain unsupported, and no endpoint is ever supplied by model output. |
 | The normal sequence is `initialize`, then `session/new` or capability-gated `session/load`, then `session/prompt`; updates stream before the prompt response returns a stop reason. | Every external child owns one ephemeral remote ACP session and follows this handshake. MothX does not infer completion from stdout closing. |
 | Client and Agent negotiate a major `protocolVersion`; omitted capabilities are unsupported. | MothX sends v1 and rejects a response version it cannot implement. It advertises only the reverse capabilities it actually implements. |
 | `session/update` has standard message, thought, tool-call, plan, usage, command/config/mode, notice, and compaction variants. | Known variants map to canonical child events. Unknown/future variants remain bounded, untrusted child diagnostics rather than fabricated MothX semantics. |
 | `session/request_permission` is the baseline Agent-to-Client request. On cancellation the client must answer outstanding requests with `{ outcome: { outcome: "cancelled" } }`. | The shared Runtime `DecisionService` owns the pending approval; cancellation answers every pending remote request before process teardown. |
-| Filesystem, terminal, elicitation, authentication-terminal, notices, and compaction are capability-gated. | Phase 1 advertises no filesystem, terminal, terminal-authentication, or elicitation capability. It does not claim a bridge it has not implemented. |
+| Filesystem, terminal, elicitation, authentication-terminal, notices, and compaction are capability-gated. | MothX advertises only the bridges it actually enforces: bounded reads, write-role scoped writes, and an explicitly opted-in terminal. It does not advertise terminal authentication, elicitation, notices, or compaction. |
 | ACP describes Agent content, paths, IDs, tool labels, and permission labels as untrusted; permission is advisory for operations the remote Agent performs itself. | A profile is a trusted local executable chosen by the user. MothX must still render/record content defensively and cannot pretend its sandbox or allow list controls an Agent that acts without requesting permission. |
 
 Primary references:
@@ -254,8 +303,8 @@ it must not make a third-party SDK a new public or Runtime boundary.
   private attachments to another Agent by default.
 - Adding nested delegation. ACP-backed children receive no MothX sub-agent or
   delegate tools from this feature.
-- Implementing ACP filesystem, terminal, authentication, elicitation, custom
-  extension methods, session resume, or cross-process child pooling in Phase 1.
+- Implementing terminal or URL authentication, elicitation, custom extension
+  methods, or automatic replay of an in-flight prompt.
 - Creating a Desktop-only or ACP-server-only configuration store.
 
 ## 6. Product Contract
@@ -302,12 +351,12 @@ Rules:
 - `enabled`, profile limits, and the permission policy are authoritative
   Runtime policy. A disabled or unknown profile is absent from the tool schema
   and fails closed if a stale model call names it. `maxConcurrentChildren` is
-  part of that policy: the Runtime worker permit enforces the profile's
-  *enforced* ceiling, while the configured value stays schema-validated and
-  forward-compatible. A configured value above the enforced ceiling is accepted
-  (an existing `settings.json` must keep loading) and reported as not yet
-  effective by `mothx doctor` and the `/router` panel, never silently presented
-  as active.
+  part of that policy: the Runtime worker permit admits concurrent read-only
+  workers and isolated `implement` workers up to the profile's configured
+  ceiling, while a base-workspace writer remains exclusive. The configured
+  value stays schema-validated and forward-compatible, so an existing
+  `settings.json` keeps loading; `mothx doctor` and the `/router` panel report
+  both the configured and enforced ceilings.
 - `permissionPolicy` selects the Runtime strategy for a cooperating ACP
   Agent's permission requests. It is not an assertion that the external Agent
   cannot perform an operation without asking; profile process isolation remains
@@ -327,8 +376,8 @@ above its parent/session policy.
 
 ### 6.2 Tool-call surface
 
-Extend the existing tools; do not add parallel orchestration tools. The MVP
-implements only the blocking `delegate_subagent` path:
+Extend the existing tools; do not add parallel orchestration tools. The first
+blocking slice used `delegate_subagent`:
 
 ```json
 {
@@ -345,7 +394,7 @@ implements only the blocking `delegate_subagent` path:
 | Combination | Behavior |
 | --- | --- |
 | no `agent` | Exact existing local child behavior. |
-| `agent: <enabled-profile>` on `subagent_spawn` | Deferred to Phase 4; the MVP does not expose an asynchronous external child. |
+| `agent: <enabled-profile>` on `subagent_spawn` | Router-only asynchronous external child. Returns a handle immediately; read-only children may run concurrently up to the profile ceiling, while writers remain exclusive. |
 | `agent: <enabled-profile>` on `delegate_subagent` | Run a blocking ACP-backed child and return the usual compact result after its terminal state. |
 | `member` plus `agent` | Reject. An Expert Team member is a Runtime-resolved local member definition in Phase 1; it cannot silently become an arbitrary remote implementation. |
 | profile unavailable, disabled, saturated, or forbidden by policy | Reject before process launch. |
@@ -359,6 +408,23 @@ directory. `system_prompt_extra` is folded into the bounded task contract.
 None of these values are a security boundary over the external Agent. The tool
 schema and description state this explicitly.
 
+The asynchronous slice exposes only `subagent_spawn`, `subagent_status`,
+`subagent_wait`, `subagent_send`, and `subagent_destroy`. `subagent_spawn` accepts the same
+`agent` and bounded role/scope/deliverable/verification contract as the blocking
+tool; `subagent_wait(handle: ...)` waits for the existing manager status to
+reach a terminal state because Router has no team mailbox. `subagent_send`
+continues the same remote session with one follow-up turn; `subagent_answer`
+remains unavailable because ACP decisions use the parent `DecisionService`.
+The Runtime acquires the role-aware worker permit during child
+construction, not inside the asynchronous run goroutine, so a saturated read
+fan-out or any write conflict fails synchronously instead of returning a handle
+whose status later reports an error. Read-only workers may share the configured
+profile ceiling; a writer requires exclusive workspace access.
+Router and an Expert Team are mutually exclusive: activation rejects a bound
+team, team binding rejects Router, and Agent construction fails closed if both
+persisted states survive. A single-persona expert remains compatible with
+Router.
+
 The Runtime injects the list of available profile IDs and human display names
 into the lead's tool/prompt guidance after policy resolution. It must not
 expose argv, environment names, credentials, profile-internal notes, or
@@ -367,8 +433,8 @@ adapter must neither compute this catalog nor add a local fallback.
 
 ### 6.3 Context sent to the child
 
-The first phase passes the sub-agent tool's canonical Runtime input through a
-single ACP content conversion, then sends one bounded text prompt built from:
+The sub-agent tool's canonical Runtime input passes through a single ACP content
+conversion, which sends one bounded text prompt built from:
 
 - the concrete delegated task;
 - the selected working directory as task context;
@@ -378,11 +444,12 @@ single ACP content conversion, then sends one bounded text prompt built from:
   further, and state uncertainty.
 
 It does **not** forward the parent system prompt, hidden Runtime policy,
-complete session history, decisions, credentials, or attachment bytes. A
-future capability-negotiated attachment/content bridge needs a separate
-Runtime attachment proposal. Text, resource links, image/audio, and embedded
-context are sent only after a dedicated cross-entry input contract and an
-explicit user/data-disclosure policy exist. In particular, `internal/acp/client`
+complete session history, decisions, credentials, or attachment bytes unless
+the Runtime input contract authorized those exact resources. The implemented
+attachment bridge accepts only Runtime resource IDs, verifies ownership, size,
+and hash, then sends image/audio/embedded-resource content only when the Agent
+advertised the matching prompt capability. Unsupported content is disclosed as
+a workspace-relative reference rather than silently dropped. `internal/acp/client`
 may serialize Runtime-approved ACP content but must never become a second
 string-only input path that bypasses attachment normalization or policy.
 
@@ -430,7 +497,7 @@ initial lead surface:
 | --- | --- | --- |
 | Local inspection | `read`, `ls`, `grep`, `find` | Lets the lead investigate, inspect child changes in the shared worktree, and verify stated file-level facts. |
 | Planning/context | `plan`, `skill_ref` | `plan` changes canonical task-plan state, not the worktree. |
-| Orchestration | MVP: `delegate_subagent`; later: selected `subagent_*` tools | The MVP delegate is bound to one eligible ACP profile. Async spawn/status/send/wait are deferred; Router never silently falls back to a local in-process child. Local-child parameters (`mode`, `work_dir`, `worktree`, `tools`, `max_iterations`) are rejected, not ignored. |
+| Orchestration | `delegate_subagent`, `subagent_spawn`, `subagent_status`, `subagent_wait`, `subagent_send`, `subagent_destroy` | Every external path is bound to the activated ACP profile. `subagent_send` continues the same remote session; Router never silently falls back to a local in-process child. Local-child parameters (`mode`, `work_dir`, `worktree`, `tools`, `max_iterations`) are rejected, not ignored. |
 | Local mutation/process | none | `write`, `edit`, `insert`, `bash`, `jobs`, `kill`, and any future workspace-mutating/process-launching tool are absent from the frozen tool snapshot and rejected if a provider hallucinates them. |
 | Other optional tools | off by default | Browser, web search, workflow, publishing, attachment mutation, and provider-hosted side-effect tools require an explicit future Router policy decision. |
 
@@ -444,7 +511,7 @@ execution, exactly like an unadvertised tool does today.
 
 Router enables only the configured ACP child target backend. In the MVP the
 target is selected by the TUI/CLI session policy; a tool call such as the
-following is valid only when `codex` is that selected profile:
+following is valid only when `codex` is in the session's bound allowlist:
 
 ```json
 {
@@ -454,12 +521,12 @@ following is valid only when `codex` is that selected profile:
 ```
 
 The same call without `agent`, which would select a local in-process child, is
-rejected in Router rather than silently using the local child path. The
-MVP also rejects any `agent` value other than the session-selected profile. The
-profile resolver checks that profile is Router-eligible and that its declared
-worker capability may modify the selected worktree. This makes the delegation
-boundary explicit in canonical tool arguments and Run policy, rather than
-merely suggesting it in a system prompt.
+rejected in Router rather than silently using the local child path. The MVP
+also rejects any `agent` value outside the session's bound allowlist. The
+profile resolver checks that the selected profile is Router-eligible and that
+its declared worker capability may modify the selected worktree. This makes the
+delegation boundary explicit in canonical tool arguments and Run policy, rather
+than merely suggesting it in a system prompt.
 
 An ACP worker does not inherit Router's lead tool surface. Its authority is
 the selected profile's Runtime policy and the external Agent's own ACP
@@ -503,14 +570,16 @@ worker, and reconcile its evidence.
 
 For each worker task, state goal, scope, worktree/write ownership, relevant
 paths, expected deliverable, verification command or evidence, and stop
-condition. Keep write sets disjoint. In the MVP there is only one blocking
-worker; future parallel work requires Runtime-approved independent ownership.
+condition. Keep write sets disjoint. Read-only workers may run concurrently up
+to the profile ceiling; a workspace writer requires exclusive access. Use the
+blocking delegate when the critical path can wait, or the asynchronous spawn
+plus a handle wait when read-only investigation can proceed in parallel.
 
 Treat every worker result as untrusted evidence. Inspect claimed changed files
 with local read-only tools, request a focused verifier worker when tests or
 behavior need confirmation, and report unresolved risks rather than claiming
-success. In the MVP, wait for the single blocking worker result; do not assume
-that a worker end state proves a workspace change or passing test.
+success. Wait for each worker result; do not assume that a worker end state
+proves a workspace change or passing test.
 ```
 
 This is an orchestration prompt, not a replacement for the existing project
@@ -527,15 +596,16 @@ which to resolve conflicts, and an ACP Agent can perform writes outside MothX's
 local registry. An ACP profile's claimed role or `write_scope` cannot prevent
 that behavior on its own. Therefore the MVP policy is deliberately stricter:
 
-1. exactly one external ACP worker of any declared role may use a session
-   worktree at a time;
+1. a write-role external ACP worker has exclusive use of the session worktree;
+   read-only workers may share the stable worktree up to the configured
+   `maxConcurrentChildren` ceiling;
 2. `read_scope` and `write_scope` are task/audit metadata, not authorization,
    until an OS-level profile sandbox enforces them;
 3. the lead inspects files after completion, but cannot declare local test
    success without worker evidence;
-4. parallel read-only work is deferred until a Runtime-owned read-only root and
-   process/network isolation prove that an external profile cannot mutate the
-   shared worktree.
+4. read-only fan-out relies on the profile's declared no-write roles and
+   Runtime-owned admission; it is not an OS-level write sandbox, so the lead
+   must still treat worker claims and workspace effects as untrusted.
 
 Parallel code changes require a later Runtime-owned worktree/integration
 feature: one managed worktree per worker, explicit artifact/diff/commit
@@ -630,16 +700,22 @@ For the later parallel-write phase, use a Runtime-owned change-set protocol:
 3. After terminal completion, Runtime records an immutable change-set snapshot
    (base revision, changed paths, bounded diff/patch reference, test evidence,
    and worker identity). It never treats an assistant text claim as a patch.
-4. A single `integrate` worker, admitted through the base-worktree write lane,
-   receives selected change-set references and resolves/validates their merge.
+4. A single Runtime-owned integration operation, admitted through the
+   base-workspace write lane, receives selected change-set references and
+   resolves/validates their merge. It is a tool projection
+   (`subagent_integrate`) over the shared Runtime, not a second Agent and not a
+   fourth external worker.
 5. Runtime records integration evidence and preserves rejected/conflicting
    change sets for review; it never silently copies a mutable child worktree
-   into the base directory.
+   into the base directory. A multi-selection is all-or-nothing within one
+   call: a later conflict reverses the selections this call applied.
 
-The snapshot/artifact design must reuse the Runtime attachment/artifact and
-worktree ownership contracts. It requires a separate implementation proposal
-before enabling parallel write workers, because a worktree path is not itself a
-deliverable artifact.
+The snapshot/artifact design reuses the Runtime worktree ownership contract and
+the durable child-history record. It does not require a separate Agent
+implementation: `internal/worktree.ApplyChangeSet` and
+`agentruntime.RuntimeChangeSetIntegrator` own verification and application.
+Parallel base-workspace writers still require separate conflict-resolution
+policy because a worktree path is not itself a deliverable artifact.
 
 #### C. Require evidence and independent verification for completion
 
@@ -695,7 +771,7 @@ read-only. At launch, the Runtime observes standard ACP facts from
 
 | Compatibility level | Requirement | Router behavior |
 | --- | --- | --- |
-| `v1-basic` | ACP v1 negotiation, `session/new`, `session/prompt`, and prompt response work | Eligible only for the one serial MVP worker; it receives no read-only security claim. |
+| `v1-basic` | ACP v1 negotiation, `session/new`, `session/prompt`, and prompt response work | Eligible for read-only fan-out; it receives no enforced read-only security claim. |
 | `v1-streaming` | Also sends valid ordered `session/update` events | Eligible for normal Router progress/transcript projection. |
 | `v1-permission` | Also issues/handles valid `session/request_permission` when it needs approval | Eligible where the profile policy requires interactive approval. |
 | `router-worker` | Operator explicitly enables roles/write policy and the observed ACP baseline succeeds | Eligible for `implement`, `test`, `review`, or later `integrate` according to its declared ceiling. |
@@ -741,36 +817,40 @@ The deliberately narrow MVP is:
 | --- | --- | --- |
 | Configuration | User manually configures one or more global ACP profiles. TUI chooses one eligible profile; CLI supplies one profile ID with Router activation. | Desktop/WebUI/ACP management screens and profile editing UI. |
 | Session policy | Runtime persists `mode: router` plus one selected/allowed ACP profile ID and non-blocking approval strategy for the session. | Multi-profile routing, cost-class routing, dynamic worker selection. |
-| Lead tools | Read-only inspection/planning plus `delegate_subagent`; the delegate is ACP-only and targets the selected profile. | `subagent_spawn`, `subagent_send`, `subagent_wait`, `subagent_status`, fan-out, and local-child fallback. |
-| Child lifecycle | One blocking ACP child at a time, tied to the parent Run context; stream its progress through existing tool events and return one bounded completion envelope. | Async child residency, mailbox wakeups, child-panel persistence, child pool/reuse. |
-| Workspace | One child uses the parent resolved working directory; no concurrent writer exists. | Per-child worktree, change-set snapshots, parallel implementations, integration worker. |
+| Lead tools | Read-only inspection/planning plus blocking `delegate_subagent`, `subagent_spawn`/`subagent_status`/`subagent_wait`/`subagent_send`/`subagent_destroy`, and Router-only `subagent_integrate`; every external call targets one of the session's bound profiles. | `subagent_answer` and local-child fallback. |
+| Child lifecycle | Read-only external children and isolated `implement` workers may run concurrently up to the profile ceiling and share one initialized ACP process; a base-workspace writer is exclusive. A spawned session survives across `subagent_send` turns and may reconnect through `session/resume` or `session/load`. The caller may block on `delegate_subagent` or poll a `subagent_spawn` handle; an idle session is also woken by pending mailbox completions. | Parallel base-workspace writers. |
+| Workspace | An external child honors a Runtime-resolved managed worktree, receives an isolated filesystem/sandbox view, and records a bounded change-set snapshot with its durable history. The lead selects a snapshot by digest through `subagent_integrate`, which applies it under the Runtime's exclusive base-workspace lane and records canonical integration evidence. A write-role child without a worktree still owns the session workspace exclusively. | Parallel base-workspace writers; a second external integration Agent. |
 | Decisions | Resolve every remote permission through `DecisionService` using the selected non-blocking strategy; non-interactive CLI never hangs. | Interactive Router approval UI or profile-local approval persistence. |
-| ACP support | ACP v1 stdio, `initialize`, `session/new`, one text `session/prompt`, text/thought/tool progress, standard permission request, cancellation, and close. | Attachments, filesystem/terminal bridge, auth, elicitation, resume, extensions, remote transport. |
+| ACP support | ACP v1 stdio plus standard WebSocket/streamable-HTTP remote transport, `initialize`, `session/new`, connection reuse with isolated remote sessions, multi-turn `session/prompt`, `session/resume`/`session/load` reconnect, capability-gated additional roots, negotiated image/audio/embedded resources, `fs/read_text_file`, scoped `fs/write_text_file`, opt-in terminal, text/thought/tool progress, standard permission request, cancellation, close, and durable ACP child history. | Terminal/URL auth, elicitation, extensions, local-child history adoption. |
 
 Recommended controls are:
 
 ```text
 # CLI shape; exact Cobra flag names are subject to existing flag conventions.
 mothx --router --acp-agent codex "implement the requested change"
+# Bind an ordered allowlist; the first profile remains the default target.
+mothx --router --acp-agent codex,claude-code "implement the requested change"
 
 # TUI shape; choose only from Runtime-resolved configured profiles.
 /router codex
+/router codex,claude-code
 ```
 
 Internally these controls set the same persisted Runtime policy; they must not
-set a TUI/CLI-local boolean. The selected profile is the capability ceiling for
-the session. In this MVP, a `delegate_subagent` call with a missing or different
-`agent` value is rejected rather than allowing the model to choose from many
-profiles. This sharply limits heterogeneity and makes audit/cost attribution
-deterministic while retaining the normal tool-call workflow.
+set a TUI/CLI-local boolean. The selected allowlist is the capability ceiling for
+the session, and each worker keeps its own profile policy. A
+`delegate_subagent` call may choose only a bound `agent` value; an unbound
+configured profile is rejected. This keeps heterogeneity and audit/cost
+attribution deterministic while retaining the normal tool-call workflow.
 
-One blocking worker deliberately gives up parallel speed in exchange for a
-small correctness surface: no worker-write conflict, no async child state
-machine, no mailbox wake policy, and no child integration protocol. The Router
-lead can perform read-only investigation, send one precise implementation or
-review task, inspect returned evidence/files, and then produce the parent
-answer. The next milestone adds sequential multiple delegation only after the
-single-worker cancellation, decision, and event contracts are proven.
+Concurrent delegation is deliberately split by workspace safety: multiple
+read-only workers and isolated `implement` workers are allowed, while a
+base-workspace writer remains exclusive. The lead applies selected immutable
+snapshots through `subagent_integrate`, which owns the one base-workspace lane
+and records integration evidence; no external integration worker is started.
+The caller may block on one delegate or poll multiple spawn handles, inspect
+returned evidence/files, then integrate the desired snapshots and produce the
+parent answer.
 
 ## 7. Architecture
 
@@ -824,18 +904,18 @@ This is intentionally a bridge, not another Agent:
   or whether worker evidence is sufficient for user-facing success;
 - no adapter import or direct TUI/CLI/stdout rendering.
 
-For the TUI/CLI MVP it has one synchronous method conceptually equivalent to:
+The bridge separates one-time connection/session setup from one prompt turn:
 
 ```go
-Run(ctx, resolvedInvocation, hooks) (completion, error)
+Open(ctx, resolvedInvocation) (*acpRemoteWorker, error)
+Prompt(ctx, content, hooks) (result, error)
 ```
 
-It starts one process, performs one `initialize -> session/new ->
-session/prompt` turn, forwards events while the call is active, resolves remote
-permission through Runtime callbacks, and closes. It deliberately does not
-have a queue, pool, reconnect, resume, multi-session map, background health
-worker, or async child residency. Those can be introduced only when their
-owner and cross-entry lifecycle contracts are justified.
+The Runtime-owned connection pool may reuse one initialized process for several
+isolated remote sessions. The bridge still owns no Agent loop, mailbox, run
+state machine, or background health worker; it resolves remote permission
+through Runtime callbacks and exposes only protocol results and canonical
+events. Session identity and process lifetime stay under `SessionRuntime`.
 
 The parent-child registration sequence is explicit. `AgentManager` first
 validates parent policy and reserves a child ID/parent relation/cancel slot
@@ -915,8 +995,11 @@ second event stream in `internal/acp`, Desktop, Serve, or Channel.
 
 ### 7.3 ACP child state machine
 
-Each spawned child has one `ACPChild` and one process/connection. It is not
-pooled and it is not resumed in Phase 1.
+Each spawned child owns exactly one isolated remote ACP session. The Runtime
+may share one initialized process/connection across sessions with the same
+profile, work directory, and enforced capability set. Sessions are closed
+independently, and an explicit reconnect uses `session/resume` or
+`session/load`; the connection is never silently replayed.
 
 ```text
 new
@@ -943,10 +1026,14 @@ Required behavior:
 5. Reject an authentication-required startup deterministically in Phase 1. The
    Agent must be pre-authenticated by its own supported local setup; MothX does
    not advertise terminal authentication or relay secrets.
-6. Send `session/new` with an absolute Runtime-resolved `cwd`. Do not use
-   `session/load`, remote session reuse, or arbitrary `additionalDirectories`.
-7. Send exactly one `session/prompt` request. Process notifications and reverse
-   requests until its corresponding JSON-RPC response arrives.
+6. Send `session/new` with an absolute Runtime-resolved `cwd`. Send
+   `additionalDirectories` only when the Agent advertised
+   `sessionCapabilities.additionalDirectories`, and only with roots the Runtime
+   has already normalized and authorized. The same rule applies to
+   `session/load` and `session/resume`.
+7. Send one `session/prompt` request per turn. Process notifications and reverse
+   requests until its corresponding JSON-RPC response arrives; a follow-up turn
+   continues the same remote session.
 8. Translate its `stopReason` plus local cancellation/error facts to one
    canonical `EventRunFinished`, then legacy terminal compatibility events only
    where the existing child contract requires them.
@@ -957,8 +1044,8 @@ Required behavior:
 An EOF, malformed frame, non-ACP stdout, request-ID protocol violation, or
 process exit before the `session/prompt` response is a child error, not an
 implicit successful stop. MothX must not replay `session/prompt` after any
-output or tool event: repeating it may repeat remote side effects. Phase 1 has
-no automatic task retry.
+output or tool event: repeating it may repeat remote side effects. A later
+explicit turn may reconnect, but the failed prompt itself is never retried.
 
 ## 8. ACP v1 Capability and Reverse-request Policy
 
@@ -975,7 +1062,7 @@ MothX sends a minimal truthful capability set:
     "version": "<mothx-version>"
   },
   "clientCapabilities": {
-    "fs": {"readTextFile": false, "writeTextFile": false},
+    "fs": {"readTextFile": true, "writeTextFile": false},
     "terminal": false,
     "auth": {"terminal": false}
   }
@@ -985,17 +1072,25 @@ MothX sends a minimal truthful capability set:
 Do not include `elicitation`, `session.notices`, `session.compaction`, or
 `session.configOptions` until their respective client-side handling and
 projection contracts are implemented. Omission means unsupported in ACP v1.
-No `mothx.dev` extension is required or assumed between MothX and a third-party
+The values above are the base shape: `fs.readTextFile` is `true` only with an
+attached Registry, and `fs.writeTextFile` is `true` only for a write-role task
+whose profile declares `writeRoots` and allows that role. `terminal` is `true`
+only when the profile sets `"terminal": true`. A pooled process
+advertises the union actually enforced by its per-session handlers. No
+`mothx.dev` extension is required or assumed between MothX and a third-party
 Agent.
 
 ### 8.2 Incoming Agent requests and notifications
 
-| Incoming message | Phase 1 handling |
+| Incoming message | Current handling |
 | --- | --- |
 | `session/update` notification | Validate that it belongs to the active remote session; map supported variants to canonical child events in receive order. |
 | `session/request_permission` request | Persist/replay through the parent Runtime `DecisionService`, project a canonical approval event with child identity, then return the selected ACP option ID or `cancelled`. |
-| `$/cancel_request` notification | Cancel only the matching outstanding reverse request; stale IDs are harmless. |
-| `fs/*`, `terminal/*`, `elicitation/create`, terminal authentication, unknown standard request | Respond with `-32601` (or `-32602` for invalid parameters) because MothX did not advertise the capability. Never silently emulate it. |
+| `$/cancel_request` notification | Cancel only the matching outstanding reverse request; stale IDs are harmless. The original request receives a valid result or JSON-RPC `-32800` (Request cancelled). |
+| `fs/read_text_file` request | Resolve the absolute path through the shared Runtime workspace roots and symlink fence — the same `cwd` plus `additionalDirectories` sent in `session/new` — enforce the text-size/UTF-8 bound, apply ACP `line`/`limit`, and return only the requested content. |
+| `fs/write_text_file` request | Advertise only for a write-role task whose profile declares `writeRoots`. Resolve the symlink target through the shared workspace fence, require it inside both the task `writeScope` and the profile `writeRoots`, then write through the shared file lock and atomic-write path. |
+| `terminal/*` request | Available only when the profile opts in with `"terminal": true`. Run the argv through the shared workspace/sandbox command path with process-group containment, a bounded output buffer, and no interactive stdin. Terminal authentication and URL authentication are not implemented. |
+| `elicitation/create`, terminal authentication, unknown standard request | Respond with `-32601` (or `-32602` for invalid parameters) because MothX did not advertise the capability. Never silently emulate it. |
 | Unknown notification | Ignore after bounded diagnostic logging, as ACP permits. Do not error the child merely because a newer Agent sent a notification MothX does not understand. |
 
 For an ACP permission request, MothX stores the remote `sessionId`, remote
@@ -1098,8 +1193,11 @@ Controls in this proposal:
 - The Runtime decides profile availability, working directory, worktree, child
   concurrency, task-size limits, and whether the MothX tool itself is usable
   in the parent mode/source.
-- MothX advertises no ACP filesystem/terminal capability, so it never grants a
-  remote Agent a new MothX-mediated read/write/terminal primitive in Phase 1.
+- MothX advertises `fs/read_text_file` constrained to the same workspace roots
+  and symlink fence as local read tools, plus `fs/write_text_file` only for a
+  write-role task inside its declared write scope and the profile's write
+  roots. `terminal` is opt-in per profile; it runs argv through the shared
+  sandbox path and never implements terminal or URL authentication.
 - All remote content (including title, command text, paths, diffs, URLs,
   plans, and permission labels) is untrusted. Renderers escape terminal
   controls, sanitize markup, do not auto-open links/fetch URIs, and use existing
@@ -1175,6 +1273,10 @@ be a shared Runtime execution policy, not a Desktop or ACP-client exception.
 5. [x] Build a fake ACP Agent integration harness that speaks actual NDJSON on
    stdin/stdout. Do not test this with in-memory direct server method calls
    alone.
+6. [x] Add the ACP remote transport RFD's WebSocket and streamable HTTP/SSE
+   profiles behind the same transport-only client: cookie affinity, connection
+   and session SSE streams, HTTP/2 validation for `https://`, reverse-response
+   session headers, batch rejection, frame bounds, and close lifecycle.
 
 ### Phase 2: Runtime child adapter (implemented 2026-11-03)
 
@@ -1191,10 +1293,11 @@ be a shared Runtime execution policy, not a Desktop or ACP-client exception.
    terminal listeners while avoiding its local-factory-only `Create` path.
    (2026-11-03: `agent.ChildBackend` + `ACPChildBackend`; `Create` keeps every
    existing validation and registration step.)
-3. [x] For the TUI/CLI MVP, extend only `delegate_subagent` with the Runtime-bound
-   ACP target. Router exposes no asynchronous spawn/status/send/wait tool and
-   rejects a missing/mismatched `agent` target. Keep local delegation behavior
-   unchanged outside Router.
+3. [x] Start the TUI/CLI MVP with `delegate_subagent` and the Runtime-bound ACP
+   target, rejecting a missing/mismatched `agent` and keeping local delegation
+   unchanged outside Router. (2026-11-03 follow-up: added the role-aware
+   async `subagent_spawn`/`status`/`wait`/`destroy` surface; send/answer remain
+   absent, and read-only fan-out is admitted up to the profile ceiling.)
 4. [x] Register the feature exclusively through
    `agentruntime.SynchronizeToolGroups`/the shared agent-manager construction
    path so every entry point receives the same availability and prompt
@@ -1207,9 +1310,9 @@ be a shared Runtime execution policy, not a Desktop or ACP-client exception.
    Router-eligible ACP profile and reject local/mismatched child targets before
    launching the one blocking worker.
 7. [x] Persist/project the bounded task contract and evidence classification as
-   canonical child metadata. Keep full remote transcript as a child projection;
-   inject only a bounded, explicitly untrusted completion envelope into the
-   lead context.
+   canonical child metadata. Keep the live streamed worker text as a child
+   event projection; inject only a bounded, explicitly untrusted completion
+   envelope into the lead context.
 8. [x] Add the Runtime-owned process-tree launcher/reaper before enabling ACP
    profiles. Cancellation must terminate descendants through the platform
    containment handle after the ACP cancellation grace.
@@ -1233,23 +1336,72 @@ be a shared Runtime execution policy, not a Desktop or ACP-client exception.
 4. [x] Provide `mothx doctor` checks for executable availability and invalid
    profile shape without launching an Agent or exposing secret values.
 
-### Phase 4: Deliberate follow-ups (not implemented)
+### Phase 3.5: Single-worker async spawn (implemented 2026-11-03)
 
-The MVP is stable; evaluate these separately:
+1. [x] Publish the activated Router target into `subagent_spawn` as well as
+   `delegate_subagent`, using the same atomic projection and `const` schema.
+2. [x] Accept the bounded task contract on `subagent_spawn` and reject
+   `member`, `mode`, `work_dir`, `worktree`, `tools`, and `max_iterations`.
+3. [x] Install only `subagent_spawn`, `subagent_status`, `subagent_wait`,
+   `subagent_send`, and `subagent_destroy` in Router; do not expose
+   `subagent_answer`, because ACP decisions use the parent `DecisionService`.
+4. [x] Add handle-aware `subagent_wait` over the existing manager status so
+   Router can wait without a team mailbox.
+5. [x] Reserve the role-aware external-worker permit during child construction
+   so a conflicting spawn fails synchronously; release it on terminal cleanup
+   or destroy. (2026-11-03 follow-up: read-only roles and isolated `implement`
+   workers fan out to the profile ceiling; a base-workspace writer remains
+   exclusive.)
+
+### Phase 4: Follow-ups
+
+Implemented in the first Phase 4 slices:
 
 - capability-negotiated images/resources/attachments with explicit disclosure;
-- client-owned filesystem/terminal bridges backed by shared Runtime sandbox
-  policy;
-- terminal or URL authentication flows;
-- remote session reuse/resume and reconnect semantics;
-- ACP's future standard remote transport; and
-- asynchronous `subagent_spawn(agent: ...)`, multi-profile target selection,
-  mailbox wakeups, and parallel read-only fan-out after the blocking
-  TUI/CLI path is stable; and
-- managed worktree change-set snapshots and one exclusive integration-worker
-  path before enabling parallel ACP implementation workers; and
-- durable historical child transcript/run persistence for **all** child
-  backends together, not an ACP-only database.
+- one initialized ACP process reused across isolated remote sessions,
+  including read-only and write-role sessions from the same profile/workdir
+  (the connection advertises the capability union; per-session handlers
+  enforce the actual task scope);
+- read-only concurrent workers and isolated `implement` workers up to the
+  configured profile ceiling;
+- bounded `fs/read_text_file`, scoped `fs/write_text_file`, and opt-in terminal
+  bridges using the shared Runtime workspace roots, symlink fence, file lock,
+  atomic-write path, and sandbox command path;
+- multi-turn remote sessions with `subagent_send` and capability-gated
+  `session/resume`/`session/load` reconnect;
+- multi-profile Router activation and target selection from one persisted
+  ordered allowlist, with the first profile as the default;
+- external-worker completion notifications delivered through the session
+  mailbox with the canonical child handle as their identity;
+- durable child history (`session_child_runs`) with contract, transcript,
+  backend, remote session identity, status, profile, workdir, worktree identity,
+  base revision, and bounded change-set snapshot for ACP children (local
+  children use the same record shape); and
+- managed per-child worktrees with isolated path/sandbox projections and
+  deterministic change-set capture; and
+- Runtime-owned exclusive change-set integration through `subagent_integrate`,
+  with digest/truncation/status/worktree verification and persisted evidence.
+- Runtime-owned automatic mailbox wakeups. Completions observed while a
+  session is idle are coalesced (25ms debounce, 500ms cap) into one new lead
+  Run through `SubmissionCoordinator` and `ExecutionRuntime.BeginDurable`; the
+  seed is a system-injected continuation rather than a fake user entry. TUI and
+  ACP attach their existing renderers through Runtime callbacks, skip a second
+  event observation/terminal write, and share the same cancellation and
+  decision paths. No adapter-local queue, Run state machine, or timer exists.
+- ACP standard remote transport. Profiles may select `transport: "websocket"`
+  or `"http"` with one administrator-configured `url`; stdio remains the
+  default and keeps its contained-process launcher. The transport-only client
+  owns cookie affinity, HTTP/2 validation for `https://`, connection/session
+  SSE routing, reverse-response session headers, bounded frames, and close
+  semantics. The Runtime connection pool keys by transport and endpoint and
+  still owns profile policy, decisions, events, child lifecycle, and canonical
+  terminalization. URL/terminal authentication remains explicitly out of scope.
+
+Still deliberate:
+
+- terminal or URL authentication flows are explicitly not planned;
+- parallel base-workspace writers. Change-set capture and the exclusive
+  Runtime-owned integration lane are implemented.
 
 ## 12. Test Matrix and Acceptance Criteria
 
@@ -1284,30 +1436,43 @@ The MVP is stable; evaluate these separately:
   `bash`, `write`, `edit`, `insert`, `jobs`, or `kill` call is rejected before
   approval/execution on every entry point; no ordinary YOLO prompt/tool set may
   appear in the frozen Agent configuration.
-- The TUI/CLI Router MVP exposes only one blocking `delegate_subagent` bound to
-  the selected eligible ACP profile; it exposes no local child fallback or
-  async spawn/status/send/wait surface. Source-forced yolo sources cannot
-  select Router; non-forced adapters honor a persisted Router binding. Its
-  prompt is frozen from Runtime policy and contains the routing discipline, not
-  an adapter-injected prompt fragment.
+- Router exposes blocking `delegate_subagent` or asynchronous
+  `subagent_spawn`/`status`/`wait`/`destroy`, always bound to the session's
+  eligible ACP profile allowlist (the first ID is the default). Read-only
+  workers may fan out to the configured ceiling; writers are exclusive. It
+  exposes no local child fallback or
+  `subagent_answer`; `subagent_send` continues the same remote session.
+  Source-forced yolo
+  sources cannot select Router; non-forced adapters honor a persisted Router
+  binding. Its prompt is frozen from Runtime policy and contains the routing
+  discipline, not an adapter-injected prompt fragment.
 - Router resolves `session/request_permission` immediately through its selected
   `auto_allow_once` or `auto_reject` strategy and records the resolution via
   `DecisionService`; it never emits a pending Router approval dialog, selects
   an `*_always` option, or leaves a non-interactive CLI blocked.
-- The MVP admits only one ACP worker at a time for the session worktree.
-  Cancellation, process failure, and terminalization release that permit
-  exactly once. A role/write-scope declaration alone never unlocks parallel
-  read-only fan-out; that requires a tested Runtime-owned sandbox/root-set
-  enforcement contract.
+- The Runtime admits read-only ACP workers up to the profile ceiling and keeps
+  write-role execution exclusive. Cancellation, process failure, and
+  terminalization release each permit exactly once.
 - Runtime validates every Router `SubagentTaskContract`, clamps it to the
   selected profile role/write ceiling, bounds parent-visible completion output,
   and labels worker conclusions as untrusted evidence rather than user input.
 - ACP profile preflight accepts only observed standard v1 capabilities; a
   changed external Agent identity/version cannot silently enable an extension,
   broader worker role, or automatic permission policy.
-- The MVP's blocking ACP delegate returns the existing delegate result envelope
-  shape and has one manager-reserved child identity. Async mailbox/status/list
-  projection is deferred with `subagent_spawn(agent: ...)`.
+- The read-only filesystem bridge resolves absolute paths through the shared
+  workspace roots and symlink fence, honors ACP `line`/`limit`, rejects
+  oversized or non-UTF-8 files. Write and terminal capabilities are advertised
+  only under their separate role/profile gates and are enforced per session.
+- The blocking ACP delegate returns the existing delegate result envelope shape.
+  The asynchronous spawn returns the existing manager handle and uses the same
+  status/list projection. Its completion enters the existing session mailbox
+  with the canonical child handle and may wake an idle session through the one
+  Runtime-owned continuation path.
+- A burst of mailbox completions coalesces into one canonical lead Run, whose
+  seed is system-injected rather than a user transcript entry. Both TUI and ACP
+  project the same Run, observe each event exactly once, and do not write a
+  second terminal transition; cancellation still reaches the same
+  `ExecutionRuntime` and `DecisionService`.
 - Decision persistence/replay and cancellation use the same `DecisionService`
   record path as local approvals; no ACP-client-local decision map exists.
 - TUI, CLI, WebUI/API, ACP server, Channel, and Desktop receive the same
@@ -1340,8 +1505,8 @@ non-blocking `DecisionService` strategy without leaving a pending UI decision,
 and leave no process tree, pending decision, or profile permit behind. A
 non-interactive CLI must apply the same strategy instead of hanging. Other
 adapters must honor an attached session's
-persisted Router fence, but Desktop/ACP projection, async spawn, and child
-panels are separate follow-up acceptance scopes. The MVP must also pass the
+persisted Router fence. Async spawn and the shared child-history record are
+implemented; adapter child panels remain projection work. The MVP must also pass the
 architecture gate in section 1.1: a review must be able to point to exactly one
 Runtime owner for profile policy, input conversion, decisions, event semantics,
 process cleanup, and any persistence.
@@ -1357,20 +1522,40 @@ process cleanup, and any persistence.
 | Parse stderr or process exit as completion | ACP completion is the `session/prompt` response; process output/exit is not a safe terminal semantic. |
 | Automatically reconnect/replay a failed prompt | The remote Agent may have already executed side effects. |
 | Implement a second external-child status/event/decision store | Breaks the one Runtime and one event/decision model; existing AgentManager and DecisionService already own those facts. |
-| Advertise filesystem/terminal support now | MothX would be promising a security-sensitive capability before shared Runtime policy and operation bridges exist. |
+| Advertise write-filesystem/terminal support without shared bounds | MothX would promise a security-sensitive mutation or command-execution capability without the Runtime workspace fence, role/write-root checks, process containment, and profile opt-in now used by the bridge. |
 
-## 14. Open Decisions Before Coding
+## 14. Resolved and Remaining Decisions
 
-1. Confirm the settings compatibility field name and management UX for
-   `acpAgents`; the semantics in section 6 are fixed, but field naming should
-   follow the existing configuration style.
-2. Select the first real interoperability target and pin its ACP version/launch
-   contract in an integration fixture. The generic protocol tests must not
-   accidentally encode one vendor's extensions as ACP v1.
-3. Decide whether ACP-backed profiles need an explicit per-session capability
-   toggle at first release or whether globally configured-and-enabled profiles
-   are sufficient. Either choice must be resolved in `SessionRuntime`, never
-   as an adapter default.
-4. Confirm the existing sub-agent transcript retention contract before adding
-   external child records. This proposal intentionally reuses it in Phase 1;
-   durable expansion must apply uniformly to local and ACP children.
+Resolved:
+
+1. The settings field is `acpAgents`; the TUI panel and CLI activation use the
+   shared `config` validator/owner.
+2. ACP-backed profiles are globally configured and Runtime-resolved; no
+   adapter-owned per-session capability toggle is needed.
+3. Durable child history uses one `session_child_runs` record for local and ACP
+   children, owned by the Runtime/session/DAO path.
+4. The first real interoperability target is OpenCode's native
+   `opencode acp` stdio server. The opt-in
+   `TestRealOpenCodeACPInterop` fixture pins that launch contract and runs the
+   production `ACPWorkerBridge` against it; the hermetic suite keeps using the
+   fake ACP Agent.
+5. A Router session may bind an ordered allowlist of eligible workers. The
+   first profile is the default target, every bound profile records its own
+   non-blocking strategy, and the model may choose only IDs in that allowlist.
+
+Remaining:
+
+1. Parallel base-workspace writers beyond the current exclusive Runtime
+   integration lane (per-child worktrees, immutable snapshots, and
+   `subagent_integrate` are implemented).
+   This is intentionally gated rather than a missing mechanism: an external
+   Agent's own tools are not confined to the Runtime filesystem bridge, so
+   disjoint `write_scope` values cannot prove that two base-workspace writers
+   will not touch the same file. Multi-selection integration is now
+   transactional (a later conflict reverses the snapshots applied by that
+   call), but a future slice still must preflight every selected snapshot,
+   record a canonical conflict policy for overlapping paths, and prove that
+   non-bridge worker writes cannot race the base workspace. Until then,
+   parallel implementation uses managed per-child worktrees plus the single
+   exclusive integration lane; direct base-workspace writers remain serialized
+   in both directions.

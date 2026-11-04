@@ -14,23 +14,45 @@ import (
 )
 
 // acquireACPWorkerPermit enforces the profile's live-external-worker ceiling for
-// this session. The permit is released by the child proxy on every terminal
-// path.
+// this session. ACPChildBackend acquires the permit while constructing the
+// child, and the proxy releases it on the terminal path or when a child is
+// destroyed before it runs.
 //
-// limit is the Runtime-resolved ceiling for the profile, so the configured value
-// is consumed here rather than being descriptive only. It is one in this release
-// (see config.ACPAgentProfile.Validate); the counter exists so raising the
-// effective ceiling is a policy change in one place instead of a rewrite of the
-// admission rule.
+// limit is the Runtime-resolved read-only ceiling for the profile, so the
+// configured value is consumed here rather than being descriptive only. Write
+// roles are additionally serialized by the role-aware admission check.
 func (r *SessionRuntime) acquireACPWorkerPermit(limit int) (func(), error) {
+	return r.acquireACPWorkerPermitForRole(limit, SubagentRoleInvestigate)
+}
+
+// acquireACPWorkerPermitForRole treats a writer as a base-workspace writer. Use
+// acquireACPWorkerPermitForWorkspace for an implementation worker in a managed
+// worktree so it can run alongside readers while integration stays exclusive.
+func (r *SessionRuntime) acquireACPWorkerPermitForRole(limit int, role SubagentRole) (func(), error) {
+	return r.acquireACPWorkerPermitForWorkspace(limit, role, false)
+}
+
+// acquireACPWorkerPermitForWorkspace applies the profile fan-out ceiling and the
+// base-workspace write lane separately. Read-only workers and isolated
+// implementation workers may share the ceiling; any base-workspace writer is
+// exclusive in both directions.
+func (r *SessionRuntime) acquireACPWorkerPermitForWorkspace(limit int, role SubagentRole, isolated bool) (func(), error) {
 	if r == nil {
 		return nil, fmt.Errorf("agent runtime is nil")
 	}
 	if limit <= 0 {
 		limit = 1
 	}
+	writes := subagentRoleWrites(role)
+	baseWriter := writes && !isolated
 	r.acpWorkerMu.Lock()
 	defer r.acpWorkerMu.Unlock()
+	if baseWriter && r.acpWorkersLive > 0 {
+		return nil, fmt.Errorf("an external base-workspace writer requires exclusive access; wait for the current external worker to finish")
+	}
+	if r.acpBaseWritersLive > 0 {
+		return nil, fmt.Errorf("an external base-workspace writer is active; wait for it to finish before starting another worker")
+	}
 	if r.acpWorkersLive >= limit {
 		if limit == 1 {
 			return nil, fmt.Errorf("an external ACP worker is already running for this session")
@@ -38,6 +60,9 @@ func (r *SessionRuntime) acquireACPWorkerPermit(limit int) (func(), error) {
 		return nil, fmt.Errorf("this session already has %d live external ACP workers (limit %d)", r.acpWorkersLive, limit)
 	}
 	r.acpWorkersLive++
+	if baseWriter {
+		r.acpBaseWritersLive++
+	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -45,16 +70,39 @@ func (r *SessionRuntime) acquireACPWorkerPermit(limit int) (func(), error) {
 			if r.acpWorkersLive > 0 {
 				r.acpWorkersLive--
 			}
+			if baseWriter && r.acpBaseWritersLive > 0 {
+				r.acpBaseWritersLive--
+			}
 			r.acpWorkerMu.Unlock()
 		})
 	}, nil
 }
 
+// acpWorkerRequestScope is the already-resolved authorization context for one
+// remote session's reverse requests. It is deliberately per-child: a pooled
+// process may host read-only and write sessions at the same time, and the
+// connection routes each request to the matching session handler.
+type acpWorkerRequestScope struct {
+	ParentRunID string
+	ChildID     string
+	Profile     config.ACPAgentProfile
+	Contract    SubagentTaskContract
+	WorkDir     string
+	Strategy    config.ACPPermissionPolicy
+	Workspace   *acpWorkerWorkspace
+}
+
 // newACPRequestHandler projects an external Agent's reverse requests into the
 // canonical decision path. Router only supports non-blocking strategies, so the
 // handler answers immediately after recording the decision.
-func (r *SessionRuntime) newACPRequestHandler(parentRunID, childID, profileID string, strategy config.ACPPermissionPolicy, emit func(agentpkg.Event)) acpclient.RequestHandler {
+func (r *SessionRuntime) newACPRequestHandler(scope acpWorkerRequestScope, emit func(agentpkg.Event)) acpclient.RequestHandler {
 	return func(ctx context.Context, message acpclient.Message) (any, *acpclient.RPCError) {
+		if message.Method == "fs/read_text_file" {
+			return r.handleACPReadTextFile(ctx, message, scope.Workspace)
+		}
+		if message.Method == "fs/write_text_file" {
+			return r.handleACPWriteTextFile(ctx, message, scope)
+		}
 		if message.Method != "session/request_permission" {
 			return nil, &acpclient.RPCError{Code: -32601, Message: "method not found"}
 		}
@@ -62,17 +110,17 @@ func (r *SessionRuntime) newACPRequestHandler(parentRunID, childID, profileID st
 		if !ok {
 			return nil, &acpclient.RPCError{Code: -32602, Message: "invalid permission request"}
 		}
-		option, allowed := selectACPPermissionOption(request.Options, strategy)
-		decisionID := acpPermissionDecisionID(childID, request, message.ID)
+		option, allowed := selectACPPermissionOption(request.Options, scope.Strategy)
+		decisionID := acpPermissionDecisionID(scope.ChildID, request, message.ID)
 		toolArgs := decodeACPToolInput(request.ToolCall.RawInput)
 		steps := DecisionRequest{
-			ID: decisionID, RunID: parentRunID, SessionID: r.sessionIDForDecisions(), Kind: DecisionApproval,
+			ID: decisionID, RunID: scope.ParentRunID, SessionID: r.sessionIDForDecisions(), Kind: DecisionApproval,
 		}
 		payload := map[string]any{
-			"profileId": profileID, "remoteSessionId": request.SessionID,
+			"profileId": scope.Profile.ID, "remoteSessionId": request.SessionID,
 			"toolCallId": request.ToolCall.ToolCallID, "toolCallTitle": request.ToolCall.Title,
 			"toolCallKind": request.ToolCall.Kind, "rawInput": json.RawMessage(request.ToolCall.RawInput),
-			"offeredOptions": request.Options, "strategy": string(strategy),
+			"offeredOptions": request.Options, "strategy": string(scope.Strategy),
 		}
 		cancelled := ctx != nil && ctx.Err() != nil
 		if !allowed {
@@ -89,7 +137,7 @@ func (r *SessionRuntime) newACPRequestHandler(parentRunID, childID, profileID st
 		} else {
 			payload["selectedOptionId"] = value
 		}
-		if parentRunID != "" {
+		if scope.ParentRunID != "" {
 			r.recordACPDecision(steps, DecisionStatusPending, "", payload)
 			decisions := r.decisionService()
 			if decisions != nil {
@@ -120,7 +168,7 @@ func (r *SessionRuntime) newACPRequestHandler(parentRunID, childID, profileID st
 				ApprovalID:     decisionID,
 				ApprovalTool:   request.ToolCall.Title,
 				ApprovalArgs:   toolArgs,
-				ApprovalResult: strategy == config.ACPPermissionAutoAllowOnce,
+				ApprovalResult: scope.Strategy == config.ACPPermissionAutoAllowOnce,
 			})
 		}
 		return acpclient.PermissionSelected(value), nil

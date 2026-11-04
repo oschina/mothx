@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	agentpkg "github.com/oschina/mothx/agent"
 	"github.com/oschina/mothx/internal/tools"
 )
 
@@ -16,6 +18,7 @@ const (
 	subAgentWaitMinTimeoutMS     = 2500
 	subAgentWaitMaxTimeoutMS     = 120000
 	subAgentWaitDefaultTimeoutMS = 30000
+	subAgentWaitPollInterval     = 100 * time.Millisecond
 )
 
 // SubAgentWaitTool blocks the calling (lead) agent until the session member
@@ -43,6 +46,7 @@ func (t *SubAgentWaitTool) PromptSnippet() string {
 func (t *SubAgentWaitTool) PromptGuidelines() []string {
 	return []string{
 		"Use subagent_wait only when the critical path is blocked on a member's result; do non-overlapping local work while members run",
+		"For an external Router worker, pass the handle returned by subagent_spawn; the session mailbox still receives its completion",
 		"Completion content is delivered automatically after the wait returns; never call subagent_wait again immediately after a wait (no reflexive waiting)",
 	}
 }
@@ -51,6 +55,7 @@ func (t *SubAgentWaitTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
+			"handle": {"type": "string", "description": "Optional sub-agent handle. Use this for an external Router worker; waits for that child's terminal state instead of the team mailbox."},
 			"timeout_ms": {"type": "integer", "description": "Maximum wait time in milliseconds (clamped to 2500-120000, default 30000)"}
 		}
 	}`)
@@ -58,6 +63,9 @@ func (t *SubAgentWaitTool) Parameters() json.RawMessage {
 
 func (t *SubAgentWaitTool) Execute(ctx context.Context, params map[string]any) (tools.ToolResult, error) {
 	timeoutMS := resolveSubAgentWaitTimeoutMS(params)
+	if handle, _ := params["handle"].(string); strings.TrimSpace(handle) != "" {
+		return t.waitForHandle(ctx, strings.TrimSpace(handle), timeoutMS)
+	}
 
 	if t.manager == nil || t.manager.Mailbox == nil {
 		return newSubAgentWaitResult("no member mailbox is bound to this session", false, nil), nil
@@ -77,6 +85,52 @@ func (t *SubAgentWaitTool) Execute(ctx context.Context, params map[string]any) (
 		message = "Wait timed out."
 	}
 	return newSubAgentWaitResult(message, timedOut, mailbox.PendingSummary()), nil
+}
+
+// waitForHandle waits for one managed child through the existing manager status,
+// which is the canonical terminal signal for each external worker. It is
+// independent of the team mailbox so a handle wait works even when a completion
+// was already drained as steering; this adds no second child state machine.
+func (t *SubAgentWaitTool) waitForHandle(ctx context.Context, handle string, timeoutMS int) (tools.ToolResult, error) {
+	if t.manager == nil {
+		return tools.ToolResult{}, fmt.Errorf("sub-agent manager is not available")
+	}
+	id := agentpkg.AgentID(handle)
+	status, ok := t.manager.Status(id)
+	if !ok {
+		if _, exists := t.manager.Get(id); !exists {
+			return tools.ToolResult{}, fmt.Errorf("sub-agent %q not found", handle)
+		}
+		status = ManagedAgentStatus{ID: id, State: "unknown"}
+	}
+	if isTerminalManagedState(status.State) {
+		return newSubAgentHandleWaitResult("Sub-agent finished.", false, status), nil
+	}
+
+	timer := time.NewTimer(time.Duration(timeoutMS) * time.Millisecond)
+	defer timer.Stop()
+	ticker := time.NewTicker(subAgentWaitPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return tools.ToolResult{}, fmt.Errorf("subagent_wait: %w", ctx.Err())
+		case <-ticker.C:
+			next, exists := t.manager.Status(id)
+			if !exists {
+				if _, agentExists := t.manager.Get(id); !agentExists {
+					return tools.ToolResult{}, fmt.Errorf("sub-agent %q was destroyed while waiting", handle)
+				}
+				continue
+			}
+			status = next
+			if isTerminalManagedState(status.State) {
+				return newSubAgentHandleWaitResult("Sub-agent finished.", false, status), nil
+			}
+		case <-timer.C:
+			return newSubAgentHandleWaitResult("Wait timed out.", true, status), nil
+		}
+	}
 }
 
 // resolveSubAgentWaitTimeoutMS applies the bounded wait window: default 30000,
@@ -127,6 +181,35 @@ func newSubAgentWaitResult(message string, timedOut bool, pending []MemberComple
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return tools.NewTextToolResult(fmt.Sprintf(`{"message":%q,"timed_out":%t}`, message, timedOut))
+	}
+	return tools.NewTextToolResult(string(data))
+}
+
+func newSubAgentHandleWaitResult(message string, timedOut bool, status ManagedAgentStatus) tools.ToolResult {
+	state := status.State
+	if state == "" {
+		state = "unknown"
+	}
+	payload := struct {
+		Message  string         `json:"message"`
+		TimedOut bool           `json:"timed_out"`
+		Handle   string         `json:"handle"`
+		Status   string         `json:"status"`
+		Result   string         `json:"result,omitempty"`
+		Error    string         `json:"error,omitempty"`
+		Worker   map[string]any `json:"worker,omitempty"`
+	}{
+		Message:  message,
+		TimedOut: timedOut,
+		Handle:   string(status.ID),
+		Status:   state,
+		Result:   status.Result,
+		Error:    status.Error,
+		Worker:   status.Metadata,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return tools.NewTextToolResult(fmt.Sprintf(`{"message":%q,"timed_out":%t,"handle":%q,"status":%q}`, message, timedOut, payload.Handle, state))
 	}
 	return tools.NewTextToolResult(string(data))
 }

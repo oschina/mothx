@@ -56,6 +56,10 @@ type AgentBuildOptions struct {
 	RuntimeOwnsTurnEnd   bool
 	RuntimeOwnsUserEntry bool
 	UserEntryID          string
+	// SyntheticContinuation starts a Runtime-owned continuation without a user
+	// submission. Its seed message is system-injected context, not a fake user
+	// entry, so the build must not reserve a run user-entry ID.
+	SyntheticContinuation bool
 	// AuxiliaryRole marks a build that is not the session's conversational lead
 	// even though it runs on the session's own manager (the legacy knowledge
 	// librarian query bridge). Such a build never receives the team member
@@ -136,7 +140,7 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 	if opts.Provider == nil || opts.Model == nil {
 		return nil, fmt.Errorf("agent provider and model are required")
 	}
-	if opts.ConversationTurn && opts.RuntimeOwnsTurnEnd && opts.RunID != "" {
+	if opts.ConversationTurn && opts.RuntimeOwnsTurnEnd && opts.RunID != "" && !opts.SyntheticContinuation {
 		opts.RuntimeOwnsUserEntry = true
 		if opts.UserEntryID == "" {
 			opts.UserEntryID = session.RunUserEntryID(opts.RunID)
@@ -230,6 +234,9 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 	if mode == ModeRouter {
 		if _, ok := r.RouterBinding(); !ok {
 			return nil, fmt.Errorf("Router mode requires an activated ACP worker profile; activate one with /router or --router --acp-agent <profile>")
+		}
+		if r.TeamExpertActive() {
+			return nil, fmt.Errorf("Router mode cannot be combined with an expert team; unbind the expert or choose another mode")
 		}
 	}
 	beforeToolCall := beforeToolCallForPolicy(policy, opts.BeforeToolCall)

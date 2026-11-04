@@ -37,6 +37,10 @@ const (
 	CodeRemoveFailed         = "remove_failed"
 	CodeResetFailed          = "reset_failed"
 	CodeDefaultBranchFailed  = "default_branch_failed"
+	CodeRevisionFailed       = "revision_failed"
+	CodeChangeSetFailed      = "change_set_failed"
+	CodeApplyFailed          = "apply_failed"
+	CodeApplyConflict        = "apply_conflict"
 )
 
 // Info describes one git worktree derived from a repository. An empty Branch

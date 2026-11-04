@@ -1375,6 +1375,23 @@ func (m *Manager) AppendModeChange(mode string) (string, error) {
 // AppendRouterBinding records the selected external ACP profile and automatic
 // approval strategy for a Router-mode session.
 func (m *Manager) AppendRouterBinding(acpProfileID, approvalStrategy, policyRevision string) (string, error) {
+	return m.AppendRouterBindingSelection(RouterBindingSelection{
+		PrimaryProfileID: acpProfileID,
+		Profiles: []RouterProfileBinding{{
+			ProfileID: acpProfileID, ApprovalStrategy: approvalStrategy,
+		}},
+		PolicyRevision: policyRevision,
+	})
+}
+
+// AppendRouterBindingSelection records the ordered external ACP worker
+// selection for a Router-mode session. The legacy singular fields are filled
+// from the primary entry so older readers keep working.
+func (m *Manager) AppendRouterBindingSelection(selection RouterBindingSelection) (string, error) {
+	selection = normalizeRouterBindingSelection(selection)
+	if selection.PrimaryProfileID == "" {
+		return "", fmt.Errorf("Router binding requires a primary ACP profile")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1382,11 +1399,44 @@ func (m *Manager) AppendRouterBinding(acpProfileID, approvalStrategy, policyRevi
 		return "", err
 	}
 	return m.appendEntryLocked(context.Background(), func(parent *string) (interface{}, error) {
+		primaryStrategy := ""
+		for _, profile := range selection.Profiles {
+			if profile.ProfileID == selection.PrimaryProfileID {
+				primaryStrategy = profile.ApprovalStrategy
+				break
+			}
+		}
 		return RouterBindingEntry{
 			EntryBase:    EntryBase{Type: EntryRouterBinding, ID: GenerateID(), ParentID: parent, Timestamp: time.Now()},
-			ACPProfileID: acpProfileID, ApprovalStrategy: approvalStrategy, PolicyRevision: policyRevision,
+			ACPProfileID: selection.PrimaryProfileID, ApprovalStrategy: primaryStrategy,
+			Profiles:       append([]RouterProfileBinding(nil), selection.Profiles...),
+			PolicyRevision: selection.PolicyRevision,
 		}, nil
 	})
+}
+
+func normalizeRouterBindingSelection(selection RouterBindingSelection) RouterBindingSelection {
+	out := RouterBindingSelection{PolicyRevision: selection.PolicyRevision}
+	seen := make(map[string]bool, len(selection.Profiles)+1)
+	for _, profile := range selection.Profiles {
+		id := strings.TrimSpace(profile.ProfileID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out.Profiles = append(out.Profiles, RouterProfileBinding{
+			ProfileID: id, ApprovalStrategy: strings.TrimSpace(profile.ApprovalStrategy),
+		})
+	}
+	primary := strings.TrimSpace(selection.PrimaryProfileID)
+	if primary == "" && len(out.Profiles) > 0 {
+		primary = out.Profiles[0].ProfileID
+	}
+	if primary != "" && !seen[primary] {
+		out.Profiles = append([]RouterProfileBinding{{ProfileID: primary}}, out.Profiles...)
+	}
+	out.PrimaryProfileID = primary
+	return out
 }
 
 // AppendThinkingLevelChange records a thinking level change.

@@ -52,6 +52,10 @@ type MemberCompletion struct {
 	Payload     string // final result, error explanation, or question text
 	QuestionID  string
 	Options     []string
+	// External marks a completion from an external ACP worker instead of an
+	// expert-team member. MemberID then carries the canonical child handle and
+	// the next-step hint points at the external-worker tools.
+	External bool
 }
 
 // MemberMailbox is the session-level in-memory queue of member completions.
@@ -65,6 +69,11 @@ type MemberMailbox struct {
 	mu       sync.Mutex
 	queue    []MemberCompletion
 	activity chan struct{} // capacity 1, non-blocking wakeup hint
+	// activityListeners receive the same non-blocking hint as activity. They
+	// are an additive projection for a Runtime-owned continuation scheduler;
+	// the mailbox still owns the queue and never starts a run itself.
+	activityListeners    map[uint64]func()
+	nextActivityListener uint64
 	// runningChildren reports whether any managed child is still running. It is
 	// installed by AgentManager when the member context is bound and lets the
 	// lead's would-stop hook wait for members without knowing the manager.
@@ -85,6 +94,33 @@ func (m *MemberMailbox) SetRunningPredicate(running func() bool) {
 	m.mu.Lock()
 	m.runningChildren = running
 	m.mu.Unlock()
+}
+
+// AddActivityListener registers a callback invoked after a completion is
+// queued. The callback is advisory, must not block, and never changes queue
+// ownership. The returned function removes the listener and is safe to call
+// more than once.
+func (m *MemberMailbox) AddActivityListener(listener func()) func() {
+	if m == nil || listener == nil {
+		return func() {}
+	}
+	m.mu.Lock()
+	if m.activityListeners == nil {
+		m.activityListeners = make(map[uint64]func())
+	}
+	m.nextActivityListener++
+	id := m.nextActivityListener
+	m.activityListeners[id] = listener
+	m.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			delete(m.activityListeners, id)
+			m.mu.Unlock()
+		})
+	}
 }
 
 // RunningChildren reports whether members are still running. It always reports
@@ -108,10 +144,20 @@ func (m *MemberMailbox) Enqueue(c MemberCompletion) {
 	}
 	m.mu.Lock()
 	m.queue = append(m.queue, c)
+	listeners := make([]func(), 0, len(m.activityListeners))
+	for _, listener := range m.activityListeners {
+		listeners = append(listeners, listener)
+	}
 	m.mu.Unlock()
 	select {
 	case m.activity <- struct{}{}:
 	default:
+	}
+	for _, listener := range listeners {
+		func() {
+			defer func() { _ = recover() }()
+			listener()
+		}()
 	}
 }
 
@@ -234,7 +280,11 @@ func formatMemberCompletion(c MemberCompletion) string {
 	if c.Status == MemberStatusError {
 		b.WriteString(truncateMemberPayload(c.Payload, memberErrorPayloadRunes))
 		b.WriteString("\n")
-		fmt.Fprintf(&b, "下一步：如仍需该成员，用 subagent_spawn(member:%q, task:…) 重新派发任务。", c.MemberID)
+		if c.External {
+			fmt.Fprintf(&b, "下一步：如仍需该外部 worker，用 subagent_status(handle:%q) 检查状态，或用 subagent_send(handle:%q, …) 继续；需要新任务时重新 subagent_spawn。", c.MemberID, c.MemberID)
+		} else {
+			fmt.Fprintf(&b, "下一步：如仍需该成员，用 subagent_spawn(member:%q, task:…) 重新派发任务。", c.MemberID)
+		}
 	} else {
 		b.WriteString(truncateMemberPayload(c.Payload, memberPayloadRunes))
 	}

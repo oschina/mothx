@@ -306,6 +306,28 @@ func TestWorktreeProviderAdapterResolve(t *testing.T) {
 	}
 }
 
+func TestWorktreeProviderAdapterReturnsIdentityAndBaseRevision(t *testing.T) {
+	repo := initWorktreeTestRepo(t)
+	sessionDir := t.TempDir()
+	mgr, _ := newTestWorktreeManager(t, sessionDir)
+	provider := NewWorktreeProviderAdapter(mgr)
+
+	resolved, err := provider.ResolveWorktreeMetadata(repo, agent.WorktreeSpec{Name: "metadata"})
+	if err != nil {
+		t.Fatalf("ResolveWorktreeMetadata: %v", err)
+	}
+	if resolved.ID == "" || resolved.Directory == "" || resolved.RepositoryRoot == "" {
+		t.Fatalf("resolved metadata = %#v", resolved)
+	}
+	wantRevision, err := mgr.Revision(context.Background(), resolved.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.BaseRevision != wantRevision {
+		t.Fatalf("base revision = %q, want %q", resolved.BaseRevision, wantRevision)
+	}
+}
+
 func TestWorktreeProviderAdapterReuseSharesDirectory(t *testing.T) {
 	repo := initWorktreeTestRepo(t)
 	sessionDir := t.TempDir()

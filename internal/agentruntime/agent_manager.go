@@ -123,10 +123,16 @@ func NewAgentManager(opts AgentManagerOptions) (*agent.AgentManager, error) {
 		},
 	)
 	manager := agent.NewAgentManager(factory)
+	manager.SetChangeSetIntegrator(&RuntimeChangeSetIntegrator{Runtime: opts.Runtime, Worktrees: opts.Worktree})
 	// The Runtime installs the external-child backend for the whole manager.
 	// Agent Core never imports ACP; the backend resolves the activated profile,
 	// validates the task contract, and returns an event/input proxy.
-	manager.SetChildBackend(ACPChildBackend{Runtime: opts.Runtime, Settings: effectiveSettings})
+	manager.SetChildBackend(ACPChildBackend{Runtime: opts.Runtime, Settings: effectiveSettings, Worktrees: opts.Worktree})
+	if runtimeManager != nil {
+		if header := runtimeManager.GetHeader(); header != nil && header.ID != "" {
+			manager.SetChildRunRecorder(localChildRunRecorder{runtime: opts.Runtime}, header.ID)
+		}
+	}
 	// The session mailbox is installed for every session, not only for teams: a
 	// member's question or completion must reach an active lead wherever members
 	// can run (multi-agent, delegate, or workflow modes), and subagent_wait must

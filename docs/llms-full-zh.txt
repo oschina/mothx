@@ -1610,9 +1610,18 @@ Source: https://mothx.net/zh/changelog.md
 
 ### ✨ 新功能
 
+- **Router 模式现在支持多个异步外部 ACP worker。** 除阻塞式 `delegate_subagent` 外，Router 还暴露 `subagent_spawn`、`subagent_status`、`subagent_wait`、`subagent_send` 与 `subagent_destroy`。spawn 接受同样的已绑定 `agent` 允许列表与有界 role/scope/deliverable/verification 契约，立即返回 manager handle。Runtime 在创建子级时预留按角色计数的许可：与存活 writer 冲突的 spawn、或 writer 与任意存活 reader 冲突时同步失败；只读 worker 则可并发到 profile 上限。`subagent_wait(handle: ...)` 直接等待既有 manager 状态，不依赖团队 mailbox；`subagent_send` 在同一远程 session 上继续一次后续 turn。外部完成通知也会以 child handle 为身份进入会话 mailbox。Router 会拒绝本地参数（`member`、`mode`、`work_dir`、`worktree`、`tools`、`max_iterations`）；`subagent_answer` 仍不可用，因为 ACP 决策统一走父级 `DecisionService`。Router 与 Expert Team 互斥；单人格 expert 仍兼容。
+- **空闲会话现在会在外部 worker 完成时自动唤醒。** Runtime 会把一波 mailbox 完成通知合并成一个规范 lead Run（25ms 防抖，500ms 上限），通过共享 submission coordinator 与 `ExecutionRuntime` 准入，并使用 system-injected 上下文作为种子，而不是伪造用户消息。TUI 与 ACP 投影同一个 Run 的事件；唤醒 Run 的终态由 Runtime 唯一写入，取消、审批与提问继续走既有 execution/decision 路径。不会创建适配器私有队列、定时器或第二套事件流。
+- **Router 会话可以绑定一个有序的外部 ACP worker 允许列表。** `/router id1,id2` 与 `mothx --router --acp-agent id1,id2` 会为每个所选 profile 持久化各自的非阻塞审批策略；第一个 profile 是默认目标。`delegate_subagent` 与 `subagent_spawn` 接受任一已绑定 ID（单个 worker 仍是 schema `const`，多个 worker 变为 schema `enum`），已配置但未绑定的 profile 会被拒绝并给出纠正上下文。`ACPChildBackend` 按请求 profile 解析，而不是假定主 profile；任务契约记录实际选中的目标。
+
 - **TUI 与 CLI 现在可以为已配置的外部 ACP worker 激活 Router 模式。** `/router` 打开 ACP worker 面板（列出/新增/编辑/删除/激活 profile）；`/router <profile>` 与 `mothx --router --acp-agent <profile>` 直接激活，三者都走同一条 Runtime 激活路径：profile 必须存在于 `acpAgents`、已启用且使用非交互权限策略；会话必须空闲且来源未被强制为 yolo；Router binding 先于 mode 落盘，因此激活失败会留在非 Router 状态。面板只通过唯一的 `config.SaveACPAgentProfiles` 校验与写入入口持久化，因此空的 `command[0]`、重复 ID、写角色缺少 `writeRoots` 都会在写入前被拒绝。激活只负责指定 worker，非交互审批策略由 Runtime 按 profile 记录，并拒绝不一致的显式值。手工编辑或旧版本遗留的 `defaultMode: router` 会在加载与解析时被归一化为只读的 `plan` 模式，而不是让每个新会话的 Agent 构建失败；该回退绝不会放大为完全访问。 没有 binding 时，通用模式切换不能选择 `router`：`router` 已从 Tab 模式循环与 `defaultMode` 循环中移除，且 Agent 构建在无可用 binding 时对 Router 失败关闭，因此持久化默认值或过期的适配器取值都不会造出「委派必然失败」的 Router 工具面。TUI 的所有模式写入（`/mode`、Tab 循环、`/systeminit`、修改 `defaultMode` 设置）现在都经过共享 Runtime，适配器不再只改本地状态、导致重开时回放旧模式。会话在其他适配器重新打开、或无模式参数恢复时，会回放持久化模式（包括 Router）。直接编辑 `settings.json` 依然受支持且同样需要谨慎；外部委派已通过 Router 可用。
 
-- **Router 模式可以把任务委派给已配置的外部 ACP 编码 Agent。** Router 绑定的 `delegate_subagent` 通过共享 Runtime 启动一个阻塞式外部 worker：Agent Core 只拿到事件/输入代理，profile 策略、有界任务契约、唯一终态事件与进程 containment 都由 Runtime 负责。Router lead 会看到带 `agent` 身份的文本、思考、工具、计划与用量投影；阻塞返回值附带标记为 `worker-reported` 的有界 `worker` 元数据，完整远端 transcript 仍作为子级投影。远端 `session/request_permission` 会写入共享决策账本，并按 profile 的 `auto_allow_once`/`auto_reject` 立即作答，只选择对方实际提供的一次性选项。取消会发送 `session/cancel`、把所有待处理请求回答为 cancelled，并回收整个进程树（Unix 进程组、Windows Job Object）。外部子级传输不依赖持久化、provider 或适配器；`mothx doctor` 现在可在不启动 worker 的情况下校验 profile 形状与可执行文件可用性。 ACP profile 的 `maxConcurrentChildren` 现在真正被执行：Runtime 的 worker 许可每个会话只放行一个存活的外部 worker，因为两个 worker 会同时写入同一个会话工作目录，而只读的 Router lead 没有本地写入工具来化解该冲突。配置值大于 1 仍可正常加载（既有的 `settings.json` 必须保持有效），并由 `mothx doctor` 与 `/router` 面板报告为「尚未生效」，而不是被静默当作已生效；并行能力本身仍取决于 Runtime 拥有的「每 worker 独立 worktree」。
+- **Router 模式可以把任务委派给已配置的外部 ACP 编码 Agent。** Router 绑定的 `delegate_subagent` 通过共享 Runtime 启动一个阻塞式外部 worker：Agent Core 只拿到事件/输入代理，profile 策略、有界任务契约、唯一终态事件与进程 containment 都由 Runtime 负责。Router lead 会看到带 `agent` 身份的文本、思考、工具、计划与用量投影；阻塞返回值附带标记为 `worker-reported` 的有界 `worker` 元数据，子级事件投影保留完整的流式文本，而 lead 只收到有界信封。远端 `session/request_permission` 会写入共享决策账本，并按 profile 的 `auto_allow_once`/`auto_reject` 立即作答，只选择对方实际提供的一次性选项。取消会发送 `session/cancel`、把所有待处理请求回答为 cancelled，并回收整个进程树（Unix 进程组、Windows Job Object）。外部子级传输不依赖持久化、provider 或适配器；`mothx doctor` 现在可在不启动 worker 的情况下校验 profile 形状与可执行文件可用性。ACP profile 的 `maxConcurrentChildren` 现在按会话真实执行：只读角色可以并发到配置上限；在 Runtime 受管独立 worktree 中执行的 `implement` worker 可与 reader 并存，而主工作区 writer 仍双向独占。`mothx doctor` 与 `/router` 面板会分别报告配置值和实际执行值。
+- **Router 现在复用同一个 ACP 进程承载多个隔离的远端 session，协商附件投递，并提供有界文件系统/终端桥。** Runtime 连接池对每个 profile/workdir 最多初始化一个进程，在其中创建彼此隔离的远端 session，并按 `sessionId` 分流 `session/update` 与反向权限请求；关闭 Runtime 时连接池只关闭一次。Router 工具接受 Runtime 输入资源 ID 作为 `attachments`；Runtime 会校验归属、大小与 SHA-256，只有 Agent 声明了对应 `promptCapabilities` 时才发送 ACP image、audio 或 embedded resource，嵌入资源使用不透明的 Runtime URN，不会指向一个并不包含会话附件的 worktree `file://` 路径。未支持的内容会连同 Runtime 资源 ID 与会话相对路径明确披露，而不是静默丢弃。绑定 Runtime Registry 时，客户端会声明 `fs.readTextFile`，并通过与本地 read 工具相同的工作区根与符号链接围栏提供有界 UTF-8 读取；声明 `writeRoots` 的写角色 session 获得受任务范围约束的 `fs/write_text_file`，`"terminal": true` 的 profile 获得受进程组回收保护的终端桥。只有 Agent 声明 `sessionCapabilities.additionalDirectories` 时才会发送 `additionalDirectories`。
+- **ACP 传输正确性与子级历史已统一。** 反向 `$/cancel_request` 只取消匹配中的请求并返回 ACP `-32800`；`session/close` 把已关闭/未知 session 视为成功。重连时优先使用 `session/resume`，仅当 Agent 只声明历史回放能力时回退 `session/load`。本地子 Agent 现在与 ACP 子级写入同一条 `session_child_runs`，包含 transcript、父 Run、工作目录、状态与时间戳。
+- **外部 ACP worker 可以使用标准远程传输。** `acpAgents` profile 可将 `transport` 设为 `websocket` 或 `http` 并提供管理员配置的 `url`；省略时保持现有的受控 stdio 启动。纯传输 ACP client 支持远程 RFD 的 cookie 亲和、`https://` 的 HTTP/2 要求、同步 `initialize` 加异步 POST 响应、connection/session 两级 SSE 流、`Acp-Connection-Id`/`Acp-Session-Id` 路由（包括反向请求响应）、有界帧、JSON-RPC batch 拒绝与 DELETE 关闭。远程 profile 会拒绝 `command`、`environment`、内嵌凭据与 scheme 不匹配。Runtime 连接池按传输和端点建 key，因此远程 session 复用一个已初始化连接而不会与 stdio worker 混用；策略、决策、子级身份、规范事件与终态仍由 Runtime 独占。
+- **一个 ACP 连接现在同时服务只读与写角色 session。** 连接池不再按单次任务的 write 标记拆分。只要 profile 可能写入，连接就会在客户端能力并集中广播 `fs.writeTextFile`；但每个 session 的 handler 仍独立校验自身角色、写入范围、profile `writeRoots`、工作区围栏与符号链接解析后的真实路径。read/terminal 能力同理：连接广播 Runtime 能执行的能力，不允许该能力的 session 会收到 `-32601`。这样保持 ACP 固有的“单进程/单连接、多隔离 session”模型，而不是为每种角色再启动一个 worker。
+- **外部 ACP worker 现在会正确使用受管子级 worktree，并保留有界 change-set。** `AgentManager` 解析出的 worktree 会作为可信构建元数据传给 ACP backend，而不再被会话目录覆盖。worker 的 `fs/read_text_file`、受范围约束的 `fs/write_text_file` 与 `terminal/*` 桥使用以该 worktree 为根的隔离 Registry/sandbox，因此不能读写主会话工作区；共享文件锁与原子写入路径保持不变。每次终态路径上，Runtime 都会采集有界快照：base/head revision、变更路径状态、unified/binary patch，以及带 SHA-256 摘要的有界未跟踪文件内容。Migration 56 在 `session_child_runs` 中持久化 `worktree_id`、`base_revision`、`change_set_json` 与 `change_set_error`；截断或失败会显式记录，绝不会被静默集成。Router 的 `subagent_integrate` 通过唯一的独占 Runtime 通道应用选定快照：先重新校验 digest、成功终态、截断状态与受管 worktree 身份，再应用 tracked patch 与 untracked 字节；git 冲突会作为结构化证据返回，并通过 migration 57 记录 `integration_id`、`integration_digest`、`integration_status`、`integration_error` 与 `integrated_at`。多选集成是事务性的：若后续快照冲突，同一请求中已应用的快照会回滚并更新证据。无法采集的未跟踪项（符号链接、特殊文件、不可读路径）会标记快照截断，而不是静默省略。重复选择同一 `{handle, digest}` 是幂等的。
 
 
 - **Serve Web UI 新增动态多会话工作台。** `/chat` 现支持会话标签、最多 4 个窗格分屏（菜单/拖拽）、每个 pane 独立的 composer 与模型/草稿状态、布局持久化和移动端单窗格投影。应用级唯一的 `session-stream` 调度器是 `/ws/runs` 的唯一消费者并接管 SSE 回退，因此关闭一个 pane 不会中断其他后台会话的流。各 pane 直接渲染 canonical `sessionRunStates`，溢出的标签可通过“全部标签”菜单访问；审批与提问在所属 pane 的浮层中完成，后台待处理只显示标签与全局 attention 徽标，不会抢占焦点；超过 4 个窗格或标签上限的布局操作会被拒绝并提示原因。旧的单会话回退及其 `?workbench=0`/设置开关已移除，`/chat` 始终是工作台；只读 Plan dock 从焦点会话的最新 plan 消息派生，不新增存储、工具或后端端点。composer 文本在切换标签时保留；带 providerRef 的附件可跨刷新恢复，仅带 dataUrl 的附件在刷新后会提示重新选择。标签条内拖拽现在始终按同窗格重排处理，不再被误判为边缘分屏；第二个浏览器标签页会恢复共享的最近布局，并按 last-write-wins 保持可恢复。每个会话的滚动位置在切换标签后保留；关闭仍在运行的会话标签时会给出一次后台继续提示，而不是静默丢弃。 工作台标签条与 icon-only 工具条已收紧并适配明暗主题；composer 对齐 Desktop：折叠的模型+模式入口可展开 plan/agent/yolo/os 模式、Work/Code 显示模式与 provider/model/主角团选择，会话目录移到聊天头部。
@@ -1625,7 +1634,10 @@ Source: https://mothx.net/zh/changelog.md
 
 ### 🐛 问题修复
 
-- **Router 的外部 ACP worker 路径已完成加固。** ACP 客户端不再在传输读取方可能发送时关闭通知通道，因此 worker 退出或取消不会因并发发送而 panic；当最终响应与传输终态同时就绪时，也会优先返回响应。入站帧改为分片限长读取，超长行在分配完整 payload 之前即被拒绝。Router 的 `agent` schema 始终使用 `const` 钉死已激活 worker；本地子 Agent 参数（`mode`、`work_dir`、`worktree`、`tools`、`max_iterations`）会明确拒绝而不是静默忽略。ACP 权限取消现在也经过 `DecisionService`，解析提交失败时在写入终态行后清除内存中的 pending；输出截断保留 UTF-8 字符边界；Windows worker 以 suspended 状态启动，加入 Job Object 后才恢复线程。
+- **Router 的外部 ACP worker 路径已完成加固。** ACP 客户端不再在传输读取方可能发送时关闭通知通道，因此 worker 退出或取消不会因并发发送而 panic；当最终响应与传输终态同时就绪时，也会优先返回响应。入站帧改为分片限长读取，超长行在分配完整 payload 之前即被拒绝。单个 Router worker 仍是 schema `const`，多 worker 绑定变为仅限已绑定 ID 的 `enum`。本地子 Agent 参数（`mode`、`work_dir`、`worktree`、`tools`、`max_iterations`）会明确拒绝而不是静默忽略。ACP 权限取消现在也经过 `DecisionService`，解析提交失败时在写入终态行后清除内存中的 pending；输出截断保留 UTF-8 字符边界；Windows worker 以 suspended 状态启动，加入 Job Object 后才恢复线程。
+- **外部 worker 完成通知现在在会话 mailbox 中携带规范 child handle。** 之前 spawn 的 ACP worker 会以空 member ID 入队，导致 mailbox 项无法据此行动，错误提示也会指向不存在的本地成员。现在完成通知使用 child handle，标记为 external，并把后续指引指向 `subagent_status`/`subagent_send`；它仍通过既有 manager monitor 与 mailbox drain 传递，不引入第二套 child 状态机。
+- **外部 worker 的终态元数据不再陈旧。** `subagent_status` 与 `subagent_wait` 之前只投影子级创建时的元数据，因此已完成的 worker 从不会显示 `changeSetDigest`、截断标记或 change-set 采集错误。共享 manager 现在会在状态迁移时刷新 backend 元数据，使 `subagent_integrate` 可以直接使用准确证据，而不必只依赖阻塞式 delegate 返回值。
+- **TUI 取消与退出路径不再重复写入自动续跑的终态。** mailbox-wake Run 的终态事务由 Runtime 独占，因此即使 `abortPendingRequest`/`finalizeForQuit` 经 `resetAgent` 到达适配器的 `finish`，该投影现在也是 no-op。取消仍会停止同一个 `ExecutionRuntime` Run，只移除了第二次终态写入。
 
 - **ESM 目标编辑不会被并发协调器写入覆盖，孤立 Run 也不再阻塞控制。** ESM 目标的所有读改写路径现在都在 `BEGIN IMMEDIATE` 事务内执行，worker 进度写入不会再把它在用户编辑提交前读到的旧 objective 写回。pause/resume/clear 同时允许一个没有有效 lease、等待恢复的 canonical Run，因此中断的本地准入不会让目标永久不可控制。终端控制还会把不支持平台报告为 `501 terminal_unsupported` 而不是 `terminal_disabled`，Unix PTY 的 build tag 也与受支持平台集合对齐，使 `aix` 等目标编译到显式的 `ErrUnsupported` 实现。
 
@@ -6660,7 +6672,7 @@ MothX 使用两个配置文件:
 | `providers` | object | *(见下文)* | 提供商配置 (以名称为 key) |
 | `defaultProvider` | string | `"deepseek-openai"` | 默认使用的提供商 |
 | `defaultModel` | string | `"deepseek-v4-flash"` | 默认使用的模型 ID |
-| `defaultMode` | string | `"yolo"` | 默认运行模式: `plan`、`agent`、`yolo` 或 `os`。`router` 不是合法默认值：Router 为每个会话绑定一个外部 ACP worker，因此只能通过激活（`/router`）进入，不能设为全局默认 |
+| `defaultMode` | string | `"yolo"` | 默认运行模式: `plan`、`agent`、`yolo` 或 `os`。`router` 不是合法默认值：Router 为单个会话绑定一个或多个外部 ACP worker profile，因此只能通过激活（`/router`）进入，不能设为全局默认 |
 | `defaultThinkingLevel` | string | `"medium"` | 默认思考级别 |
 | `toolExecution` | object | *(见下文)* | 本地 function/custom tool 执行模式与每批并发上限 |
 | `statusLine` | object | *(见下文)* | 仅 TUI 生效的外部状态行命令设置 |
@@ -7183,7 +7195,7 @@ WebUI 在“设置 > Tools”中提供这两个字段，TUI 在 `/settings` > Be
 | `yolo` | 完全访问模式 — 所有工具自动执行 |
 | `os` | 仅 Shell 模式 — 只提供 Bash，使用 YOLO 级审批行为且不启用沙箱；高风险保护仍然生效 |
 
-`router` 是合法的会话运行模式，但不是合法的 `defaultMode`：它为每个会话绑定一个已激活的外部 ACP worker，因此需要通过 `/router`（TUI）或 `mothx --router --acp-agent <id>` 进入。若仍把 `defaultMode` 设为 `router`，它会被当作 `plan` 处理而不会报错：默认值在绑定 worker 之前就已解析，而 `plan` 是该意图的只读投影，因此这一回退绝不会把工具权限放大到完全访问。
+`router` 是合法的会话运行模式，但不是合法的 `defaultMode`：它为每个会话绑定一个或多个外部 ACP worker，因此需要通过 `/router <id>[,<id>...]`（TUI）或 `mothx --router --acp-agent <id>[,<id>...]` 进入。若仍把 `defaultMode` 设为 `router`，它会被当作 `plan` 处理而不会报错：默认值在绑定 worker 之前就已解析，而 `plan` 是该意图的只读投影，因此这一回退绝不会把工具权限放大到完全访问。
 
 ```json
 { "defaultMode": "yolo" }
@@ -7662,6 +7674,14 @@ Agent 模式下：
 | `perChildSubagents` | bool | `false` | 每个子 Agent 使用独立 worktree |
 | `esm` | bool | `false` | ESM worker/critic/audit 角色为每个目标共享一个 worktree |
 
+外部 ACP worker 会使用 `AgentManager` 解析出的 worktree（显式子级 worktree 或
+`perChildSubagents`），而不是退回会话目录。其 `fs/*` 与 `terminal/*` 桥以该
+worktree 为根；终态时会把有界 change-set 快照（base/head revision、变更路径、
+patch、未跟踪内容与摘要）写入持久化子级历史。Router lead 通过
+`subagent_integrate` 应用选定快照：它使用 Runtime 唯一的独占主工作区通道，
+绝不会复制可变的子级 worktree。git apply 冲突会作为证据返回，已经应用过的
+快照 digest 是幂等的。
+
 ```json
 {
   "worktree": {
@@ -7676,7 +7696,7 @@ Agent 模式下：
 
 ### acpAgents
 
-`acpAgents` 是 MothX 可用作 Router worker 的外部 ACP 编码 Agent 全局白名单。MothX 不会自动发现 Agent，也不会接受模型工具调用传入的命令；profile 的 `command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名，启动从不经过 shell 字符串。
+`acpAgents` 是 MothX 可用作 Router worker 的外部 ACP 编码 Agent 全局白名单。MothX 不会自动发现 Agent，也不会接受模型工具调用传入的命令或端点。本地 profile 的 `command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名，启动从不经过 shell 字符串；远程 profile 只使用管理员配置的 `url`。
 
 ```json
 {
@@ -7684,11 +7704,13 @@ Agent 模式下：
     {
       "id": "codex",
       "title": "Codex ACP",
+      "transport": "stdio",
       "command": ["codex-acp"],
       "enabled": true,
       "environment": ["OPENAI_API_KEY"],
       "roles": ["investigate", "implement", "test", "review"],
       "writeRoots": ["src"],
+      "terminal": false,
       "maxConcurrentChildren": 1,
       "permissionPolicy": "auto_allow_once"
     }
@@ -7697,14 +7719,16 @@ Agent 模式下：
 ```
 
 - `id` 是唯一暴露给模型的值。`command` 是 argv 数组；`command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名（启动从不经过 shell）。
+- `transport` 默认为 `stdio`，表示启动本地 ACP 进程；也可设为 `websocket` 或 `http`，使用 ACP 远程传输。远程 profile 必须提供 `url`，且不能同时设置 `command` 或 `environment`；URL 必须分别使用 `ws://`/`wss://` 或 `http://`/`https://`，且不能内嵌凭据。MothX 支持基于 cookie 的会话亲和、HTTP/2（`https://` 端点强制要求）以及 ACP RFD 定义的 connection/session 两级 SSE 流。不实现端点认证流程；`http://` 仅用于可信的本地开发。
 - `environment` 只列变量**名称**；启动时从 `env.json` 或进程环境读取值，不会展示给模型，也不会写入事件。
 - `roles` 是能力上限。未声明 `roles` 的 profile 只读（`investigate`）。写角色（`implement`、`integrate`）必须至少声明一个相对 `writeRoots`，任务的 write scope 必须位于其中。
-- `maxConcurrentChildren` 默认为 `1`，上限为 `8`。大于 `1` 的值会被接受以保持兼容（旧构建写入的 `settings.json` 仍能加载），但本版本每个会话只执行一个存活的外部 worker：Router worker 运行在共享的会话工作目录中，只读 lead 没有本地写入工具来化解两个外部写入者之间的冲突。Runtime 的许可会执行该上限，而 `mothx doctor` 与 `/router` 面板会把「配置值高于实际上限」报告为**尚未生效**而不是报错；当 Runtime 拥有「每 worker 独立 worktree」后，该值才可真正大于 1。
+- `terminal`（默认 `false`）允许该 profile 使用客户端维护的 ACP 终端桥。启用后远端 Agent 可以请求 MothX 执行 argv 命令；MothX 会通过共享工作区沙箱、进程组回收和有界输出缓冲执行。不实现终端认证或 URL 认证。仅对你已经信任其自主选择命令的 Agent 可执行文件启用。
+- `maxConcurrentChildren` 默认为 `1`，上限为 `8`。只读 Router worker 可以按该上限并发；Runtime 会对同一 profile/workdir 复用一个已初始化的 ACP 连接，承载多个相互隔离的远程 session。该连接会广播该 profile 上任一 session 可能执行的客户端能力并集（例如 profile 声明写角色与 `writeRoots` 时广播 `fs.writeTextFile`），但每个 session 的 handler 仍会拒绝超出自身任务角色/范围（role/scope）的写入。在 Runtime 受管独立 worktree 中执行的 `implement` worker 不会写主工作区，因此可以与 reader 并存。主工作区 writer（包括 `subagent_integrate`）双向独占，所以任一外部 worker 存活时 Runtime 会拒绝它，writer 存活时也会拒绝新的 reader。每个只读 fan-out 结果通过 `subagent_wait(handle: ...)` 分别等待。
 - Router 的 `permissionPolicy` 只能是 `auto_allow_once` 或 `auto_reject`；`interactive` profile 不能作为 Router worker 激活。MothX 只会选择远端 Agent 实际提供的一次性选项，绝不会自动选择 `allow_always`/`reject_always`。
 
-可以在 `settings.json` 中编辑 `acpAgents`，也可以使用 TUI 的 `/router` 面板：面板会列出 profile 及其由 Runtime 解析出的可用性，并支持新增、编辑、删除和激活。面板只通过共享配置层写入，因此无效候选（空的 `command[0]`、重复 ID、写角色缺少 `writeRoots`、内联明文密钥）会在写入前被拒绝。在面板中按 `t`、在 TUI 中使用 `/router <id>`，或在 CLI 中使用 `mothx --router --acp-agent <id>` 激活。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化 profile 与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
+可以在 `settings.json` 中编辑 `acpAgents`，也可以使用 TUI 的 `/router` 面板：面板会列出 profile 及其由 Runtime 解析出的可用性，并支持新增、编辑、删除和激活。面板只通过共享配置层写入，因此无效候选（stdio 的空 `command[0]`、缺失或不匹配的远程 `url`、重复 ID、写角色缺少 `writeRoots`、内联明文密钥）会在写入前被拒绝。在面板中按 `t`、在 TUI 中使用 `/router <id>[,<id>...]`，或在 CLI 中使用 `mothx --router --acp-agent <id>[,<id>...]` 激活。第一个 profile 是默认目标，有序列表是会话绑定的允许列表；Runtime 会逐个校验 profile 并记录对应的非阻塞策略。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化选择与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
 
-**信任边界：** 选择 profile 意味着信任该可执行文件可以访问会话工作目录、你允许的环境变量以及它自行选择的网络。Router 的只读工具列表约束的是 MothX lead，而不是外部 Agent。运行 `mothx doctor` 可以在不启动任何进程的情况下检查 profile 形状与可执行文件可用性。
+**信任边界：** 选择本地 profile 意味着信任该可执行文件可以访问会话工作目录、你允许的环境变量以及它自行选择的网络。选择远程 profile 意味着信任该端点接收任务、声明的工作区根目录，以及 MothX 通过协商的 filesystem/terminal 桥发送的内容。Router 的只读工具列表约束的是 MothX lead，而不是外部 Agent。运行 `mothx doctor` 可以在不启动进程、不连接端点的情况下检查 profile 形状与本地可执行文件可用性。
 
 ### maintenance（后台维护）
 
@@ -13939,6 +13963,7 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | [`subagent_status`](#subagent_---子-agent-委托) | 多 Agent | 查询子 Agent 执行状态与结果 | 只读 | 仅多 Agent 模式 |
 | [`subagent_send`](#subagent_---子-agent-委托) | 多 Agent | 向子 Agent 发送后续追问或指令 | 发送消息 | 仅多 Agent 模式 |
 | [`subagent_wait`](#subagent_---子-agent-委托) | 多 Agent | 关键路径被阻塞时等待成员活动 | 有界等待（2.5s-120s） | 仅多 Agent 模式 |
+| [`subagent_integrate`](#subagent_integrate---应用外部-worker-变更集) | Router | 应用选定的不可变 worker 变更集 | Runtime 集成通道 | 仅 Router 模式 |
 | [`subagent_answer`](#subagent_---子-agent-委托) | 多 Agent | 回答成员的阻塞提问，让其继续执行 | 提问作用域 | 仅多 Agent 模式 |
 | [`subagent_destroy`](#subagent_---子-agent-委托) | 多 Agent | 销毁子 Agent 释放其上下文资源 | 销毁释放 | 仅多 Agent 模式 |
 | [`delegate_subagent`](#delegate_subagent---阻塞式单子-agent-委托) | 委托模式 | 同步执行一个子 Agent 任务 | 子 Agent 级权限限制 | 仅 Delegate 模式 |
@@ -14512,21 +14537,51 @@ Delegate 模式适用于大范围代码搜索、多步调查、聚焦实现或�
 
 #### Router 外部 worker
 
-在 Router 模式（`/router` 面板、`/router <id>` 或 `--router --acp-agent <id>`）下，`delegate_subagent` 始终指向已激活的外部 ACP worker。`agent` 必填且必须与已激活 profile 一致，不存在本地子 Agent 回退。lead 还需要提供有界任务契约：
+在 Router 模式（`/router` 面板、`/router <id>[,<id>...]` 或 `--router --acp-agent <id>[,<id>...]`）下，`delegate_subagent` 指向会话绑定的外部 ACP worker 之一。`agent` 必填且必须是已绑定 profile，不存在本地子 Agent 回退；第一个绑定 profile 是默认目标。lead 还需要提供有界任务契约：
 
 | 参数 | 说明 |
 |------|------|
-| `agent` | Router 必填：已激活的 ACP profile ID。 |
+| `agent` | Router 必填：已绑定的 ACP profile ID 之一（第一个为默认值）。 |
 | `role` | `investigate`（默认）、`implement`、`test`、`review` 或 `integrate`。 |
 | `read_scope` | worker 应读取的路径或搜索目标（有界）。 |
 | `write_scope` | worker 可修改的路径；写角色必填，且必须位于 profile 的 `writeRoots` 内。 |
 | `expected_deliverables` | `findings`、`changed-files`、`test-evidence` 或 `review`；默认值按角色决定。 |
 | `verification` | worker 必须报告的检查或证据；`implement`/`integrate`/`test` 必填。 |
 | `stop_conditions` | 明确的完成条件与非目标。 |
+| `attachments` | Runtime 输入资源 ID；根据 Agent 的 ACP prompt 能力协商传输方式。 |
 
 `mode`、`work_dir`、`worktree`、`tools`、`max_iterations` 是本地子 Agent 参数，Router 下会明确拒绝而不是静默忽略：外部 worker 的模式、工具权限、生命周期和工作目录来自其 ACP profile 与 Runtime 解析出的会话目录。
 
 返回值新增有界 `worker` 对象（`profileId`、`role`、`deliverables`、`evidence: "worker-reported"`、`outputTruncated`、`stopReason`）。请把该结论视为不可信证据：用只读工具核对声称的路径，不要在没有证据时把 `worker-reported` 升级为已验证。
+
+Router 下还提供 `subagent_spawn`，用于启动异步外部 worker。它接受同样的 `agent` 允许列表与有界任务契约字段（另加 `system_prompt_extra`），并立即返回 handle。`subagent_status` 读取既有 manager 状态；`subagent_wait(handle: ...)` 通过规范 manager 状态等待指定 handle 进入终态；`subagent_send` 可在空闲 worker 的同一远程 session 上发送一次后续 turn；`subagent_destroy` 关闭 session 并释放资源。会话 mailbox 也会以 child handle 作为成员 ID 接收每次外部完成通知，因此即使 lead 没有调用 `subagent_wait`，后续迭代仍能看到结果。只读 worker 可以按 profile 的 `maxConcurrentChildren` 并发运行。在 Runtime 受管独立 worktree 中执行的 `implement` worker 不会写主工作区，因此可以与 reader 并存；主工作区 writer（包括 `subagent_integrate`）仍然双向独占。对于同一 profile/workdir，Runtime 会复用一个已初始化的 ACP 进程承载多个远程 session；每个 child 仍拥有独立的远程 session ID 与规范事件流。传输断开后，后续 turn 会优先通过能力协商的 `session/resume` 重连，并回退到 `session/load`；已经发出且产生副作用的 prompt 不会被重放。Router 下会拒绝 `member`、`mode`、`work_dir`、`worktree`、`tools` 与 `max_iterations`，且仍不暴露 `subagent_answer`，因为 ACP 决策统一走父级 `DecisionService`。
+
+#### `subagent_integrate` - 应用外部 worker 变更集
+
+把已完成的外部 Router worker 的选定不可变变更集应用到会话工作区。它不会复制可变的子级 worktree，不会重跑 worker，也不会启动第二个 Runner：Runtime 读取持久化快照，校验 digest、状态、截断标记与受管 worktree 身份，然后通过唯一的独占集成通道执行。一次选择多个快照时，该调用内是 all-or-nothing 的：如果后续快照冲突，本次调用已经应用的快照会被回滚，并更新对应证据。
+
+```json
+{
+  "changes": [
+    {"handle": "worker-1", "digest": "sha256:..."},
+    {"handle": "worker-2", "digest": "sha256:..."}
+  ]
+}
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `changes` | array | ✓ | 1 到 8 个 `{handle, digest}` 选择。 |
+| `changes[].handle` | string | ✓ | `subagent_spawn` 返回的规范 child handle。 |
+| `changes[].digest` | string | ✓ | 来自 `subagent_status` 或 `subagent_wait` 的精确 `changeSetDigest`。 |
+
+结果包含 `integrationId`、`status`、已应用文件与每个 child 的证据。缺失、截断、失败或 digest 不匹配的快照会在写入前被拒绝。git apply 冲突会作为结构化 `conflict` 证据返回，且工具错误为 nil，便于 lead 用只读工具检查主工作区并决定如何恢复；返回前会先回滚同一次调用中更早应用的快照。已经应用过的 `{handle, digest}` 是幂等的。集成证据通过 migration 57 持久化在 `session_child_runs` 的 `integration_id`、`integration_digest`、`integration_status`、`integration_error` 与 `integrated_at` 字段。
+
+当 Runtime 绑定了工作区 Registry 时，外部 worker 还可以请求 `fs/read_text_file`。Runtime 会通过会话工作区根与符号链接围栏解析绝对路径，只返回不超过 1 MiB 的合法 UTF-8 文本，并支持 ACP 可选的 1-based `line`/`limit`。只有当 Agent 声明 `sessionCapabilities.additionalDirectories` 时，`session/new` 才会以 `cwd` 加 `additionalDirectories` 的形式发送同一组 Runtime 授权根；`session/load` 与 `session/resume` 遵循同一规则。声明了 `writeRoots` 的 profile 在写角色任务中还会获得 `fs/write_text_file`；每次写入都必须解析到任务 `writeScope` 与 profile `writeRoots` 内，并复用共享文件锁和原子写入路径。设置 `"terminal": true` 的 profile 还会获得 `terminal/create`、`terminal/output`、`terminal/wait_for_exit`、`terminal/kill`、`terminal/release`；命令通过共享沙箱与进程组回收执行，并使用有界、非交互的输出缓冲。不实现终端认证或 URL 认证。
+
+`attachments` 接受请求 manifest 中的 Runtime 输入资源 ID。Runtime 会校验归属、大小和哈希，再按 Agent 在 ACP `promptCapabilities` 中声明的能力协商发送：`image` 内容、`audio` 内容，或使用 `embeddedContext` 的嵌入 `resource`。不支持的类型不会被静默丢弃；worker prompt 会明确说明未内联的原因、Runtime 资源 ID 与会话相对路径。由于隔离 worker 运行在全新的 worktree 中，该路径仅用于说明来源，并不保证文件存在于 worker 的工作区。
+
+Router 不能与 Expert Team 组合使用：激活 Router 前需先解绑团队，也不能把团队绑定到已有的 Router 会话。单人格 expert 仍然兼容，因为它只提供身份与技能，不会启用团队的本地多 Agent 工具面。
 
 
 ---

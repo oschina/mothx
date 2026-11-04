@@ -47,6 +47,22 @@ type SubagentTaskContract struct {
 	StopConditions       []string              `json:"stopConditions,omitempty"`
 	TargetProfile        string                `json:"targetProfile"`
 	SystemPromptExtra    string                `json:"systemPromptExtra,omitempty"`
+	Attachments          []SubagentAttachment  `json:"attachments,omitempty"`
+}
+
+// SubagentAttachment is one Runtime-owned input resource authorized for the
+// external worker prompt. Data is already integrity-checked and bounded by the
+// input policy; it is never sourced from model text or an adapter path.
+type SubagentAttachment struct {
+	ID           string         `json:"id"`
+	Filename     string         `json:"filename"`
+	MediaType    string         `json:"mediaType"`
+	Kind         AttachmentKind `json:"kind"`
+	RelativePath string         `json:"relativePath"`
+	Bytes        int64          `json:"bytes"`
+	// Data is the verified attachment payload used only to build the ACP prompt.
+	// It must never enter a persisted event, task contract projection, or log.
+	Data []byte `json:"-"`
 }
 
 const (
@@ -58,6 +74,8 @@ const (
 	maxSubagentSystemExtraBytes  = 2 * 1024
 	maxSubagentStopConditions    = 8
 	maxSubagentContractBytes     = 16 * 1024
+	maxSubagentAttachments       = 8
+	maxSubagentAttachmentBytes   = 32 << 20
 )
 
 // Validate clamps a model-supplied contract to the selected profile's declared
@@ -178,6 +196,30 @@ func (c SubagentTaskContract) Validate(profile config.ACPAgentProfile) error {
 	if total > maxSubagentContractBytes {
 		return fmt.Errorf("task contract exceeds %d bytes", maxSubagentContractBytes)
 	}
+	if len(c.Attachments) > maxSubagentAttachments {
+		return fmt.Errorf("task contract exceeds %d attachments", maxSubagentAttachments)
+	}
+	seenAttachments := map[string]bool{}
+	var attachmentBytes int64
+	for _, attachment := range c.Attachments {
+		if strings.TrimSpace(attachment.ID) == "" || strings.TrimSpace(attachment.Filename) == "" {
+			return fmt.Errorf("task contract attachment identity and filename are required")
+		}
+		if seenAttachments[attachment.ID] {
+			return fmt.Errorf("attachment %q is declared twice", attachment.ID)
+		}
+		seenAttachments[attachment.ID] = true
+		if attachment.Bytes <= 0 || attachment.Bytes != int64(len(attachment.Data)) {
+			return fmt.Errorf("attachment %q has inconsistent size", attachment.Filename)
+		}
+		if strings.TrimSpace(attachment.MediaType) == "" || strings.TrimSpace(attachment.RelativePath) == "" {
+			return fmt.Errorf("attachment %q requires mediaType and relativePath", attachment.Filename)
+		}
+		attachmentBytes += attachment.Bytes
+		if attachmentBytes > maxSubagentAttachmentBytes {
+			return fmt.Errorf("task contract attachments exceed %d bytes", maxSubagentAttachmentBytes)
+		}
+	}
 	return nil
 }
 
@@ -239,7 +281,9 @@ func normalizeSubagentScope(field string, entries []string) ([]string, error) {
 // RenderPrompt builds one bounded text task for the external worker. The
 // contract is already validated; this function only shapes the message and
 // adds MothX-owned child instructions. It never forwards parent prompts,
-// hidden policy, conversation history, credentials, or attachments.
+// hidden policy, conversation history, or credentials. Attachment identifiers
+// and workspace-relative paths are named, but their bytes are delivered only
+// through the capability-negotiated ACP content blocks.
 func (c SubagentTaskContract) RenderPrompt(workDir string) string {
 	var b strings.Builder
 	b.WriteString("You are one external worker delegated by a MothX Router lead.\n")
@@ -289,6 +333,13 @@ func (c SubagentTaskContract) RenderPrompt(workDir string) string {
 		b.WriteString("\n## Additional task context\n")
 		b.WriteString(strings.TrimSpace(c.SystemPromptExtra))
 		b.WriteString("\n")
+	}
+	if len(c.Attachments) > 0 {
+		b.WriteString("\n## Runtime attachments\n")
+		for _, attachment := range c.Attachments {
+			fmt.Fprintf(&b, "- %s (%s, %d bytes, workspace path: %s)\n",
+				attachment.Filename, attachment.MediaType, attachment.Bytes, attachment.RelativePath)
+		}
 	}
 	b.WriteString("\n## MothX worker rules\n")
 	b.WriteString("- Stay inside the stated scope and stop conditions.\n")

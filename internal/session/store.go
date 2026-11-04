@@ -29,6 +29,8 @@ type Store interface {
 
 	// AppendRouterBinding records Router-specific session policy.
 	AppendRouterBinding(acpProfileID, approvalStrategy, policyRevision string) (string, error)
+	// AppendRouterBindingSelection records an ordered multi-worker selection.
+	AppendRouterBindingSelection(selection RouterBindingSelection) (string, error)
 
 	// AppendThinkingLevelChange records a thinking level change.
 	AppendThinkingLevelChange(level string) (string, error)

@@ -63,6 +63,7 @@ func (a *App) SetRuntime(runtime *agentruntime.SessionRuntime) {
 	if runtime.RuleContent != "" {
 		a.ruleContent = runtime.RuleContent
 	}
+	a.enableMailboxWake()
 }
 
 func (a *App) bindRuntimeSession(manager *session.Manager) error {

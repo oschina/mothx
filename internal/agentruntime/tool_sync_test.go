@@ -54,7 +54,14 @@ func TestSynchronizeToolGroupsRouterAlwaysExposesDelegate(t *testing.T) {
 
 	SynchronizeToolGroups(rt, registry, ToolGroupPolicy{}, manager)
 	assertToolsPresent(t, registry, []string{"delegate_subagent"}, true)
-	assertToolsPresent(t, registry, agent.SubAgentToolNames(), false)
+	assertToolsPresent(t, registry, agent.RouterSubAgentToolNames(), true)
+	assertToolsPresent(t, registry, []string{"subagent_answer"}, false)
+
+	// Enabling the ordinary multi-agent capability must not widen Router into
+	// send/answer: an external ACP child is one bounded turn with no mailbox.
+	SynchronizeToolGroups(rt, registry, ToolGroupPolicy{MultiAgent: true}, manager)
+	assertToolsPresent(t, registry, agent.RouterSubAgentToolNames(), true)
+	assertToolsPresent(t, registry, []string{"subagent_answer"}, false)
 
 	// Leaving Router removes it again unless the adapter policy asks for it.
 	rt.Mode = ModeYolo

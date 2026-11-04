@@ -226,9 +226,49 @@ func TestACPAgentProfileRoleCeilings(t *testing.T) {
 		if got := writer.EffectiveMaxConcurrentChildren(); got != want {
 			t.Fatalf("configured %d reported as %d, want %d", configured, got, want)
 		}
-		// The enforced ceiling stays one regardless of what was configured.
-		if got := writer.EffectiveEnforcedChildren(); got != 1 {
-			t.Fatalf("configured %d enforced %d workers, want 1", configured, got)
+		if got := writer.EffectiveEnforcedChildren(); got != want {
+			t.Fatalf("configured %d enforced %d workers, want %d", configured, got, want)
+		}
+	}
+}
+
+func TestACPAgentProfileRemoteTransportValidation(t *testing.T) {
+	websocket := ACPAgentProfile{
+		ID: "remote-ws", Enabled: true,
+		Transport: "websocket", URL: "wss://agent.example/acp",
+	}
+	if err := websocket.Validate(); err != nil {
+		t.Fatalf("valid WebSocket profile rejected: %v", err)
+	}
+	if !websocket.IsRemote() || websocket.EffectiveTransport() != ACPAgentTransportWebSocket {
+		t.Fatalf("transport = %q remote=%v", websocket.EffectiveTransport(), websocket.IsRemote())
+	}
+	httpProfile := ACPAgentProfile{
+		ID: "remote-http", Enabled: true,
+		Transport: "http", URL: "https://agent.example/acp",
+	}
+	if err := httpProfile.Validate(); err != nil {
+		t.Fatalf("valid HTTP profile rejected: %v", err)
+	}
+	legacy := ACPAgentProfile{ID: "legacy", Enabled: true, Command: []string{"worker"}}
+	if legacy.EffectiveTransport() != ACPAgentTransportStdio || legacy.IsRemote() {
+		t.Fatalf("empty transport = %q, want stdio", legacy.EffectiveTransport())
+	}
+
+	invalid := []ACPAgentProfile{
+		{ID: "missing-url", Enabled: true, Transport: "http"},
+		{ID: "bad-ws-scheme", Enabled: true, Transport: "websocket", URL: "https://agent.example/acp"},
+		{ID: "bad-http-scheme", Enabled: true, Transport: "http", URL: "wss://agent.example/acp"},
+		{ID: "remote-command", Enabled: true, Transport: "websocket", URL: "ws://agent.example/acp", Command: []string{"worker"}},
+		{ID: "remote-env", Enabled: true, Transport: "http", URL: "http://agent.example/acp", Environment: []string{"TOKEN"}},
+		{ID: "stdio-url", Enabled: true, Command: []string{"worker"}, URL: "http://agent.example/acp"},
+		{ID: "userinfo", Enabled: true, Transport: "http", URL: "https://user:pass@agent.example/acp"},
+		{ID: "fragment", Enabled: true, Transport: "http", URL: "https://agent.example/acp#secret"},
+		{ID: "unknown", Enabled: true, Transport: "ssh", URL: "ssh://agent.example"},
+	}
+	for _, profile := range invalid {
+		if err := profile.Validate(); err == nil {
+			t.Fatalf("invalid profile %#v was accepted", profile)
 		}
 	}
 }

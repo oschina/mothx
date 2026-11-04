@@ -63,6 +63,7 @@ Calls report their start in the order the model emitted them, so a later call's 
 | [`subagent_status`](#subagent_---delegated-work) | Multi-Agent | Query sub-agent status | Read-only | Multi-Agent Mode |
 | [`subagent_send`](#subagent_---delegated-work) | Multi-Agent | Send commands to sub-agents | Send message | Multi-Agent Mode |
 | [`subagent_wait`](#subagent_---delegated-work) | Multi-Agent | Wait for member activity when the critical path is blocked | Bounded wait (2.5s-120s) | Multi-Agent Mode |
+| [`subagent_integrate`](#subagent_integrate---apply-external-worker-change-sets) | Router | Apply selected immutable worker change sets | Runtime integration lane | Router Mode |
 | [`subagent_answer`](#subagent_---delegated-work) | Multi-Agent | Answer a member's blocking question so it can continue | Question scoped | Multi-Agent Mode |
 | [`subagent_destroy`](#subagent_---delegated-work) | Multi-Agent | Remove sub-agents & clean up | Destroy | Multi-Agent Mode |
 | [`delegate_subagent`](#delegate_subagent---blocking-single-sub-agent-delegation) | Delegate | Run one synchronous sub-agent task | Sub-agent scoped limits | Delegate Mode |
@@ -636,21 +637,51 @@ Use delegate mode for broad searches, multi-step investigations, focused impleme
 
 #### Router external worker
 
-In Router mode (`/router` panel, `/router <id>`, or `--router --acp-agent <id>`), `delegate_subagent` always targets the activated external ACP worker. `agent` is required, must match the activated profile, and there is no local-child fallback. The lead also supplies a bounded task contract:
+In Router mode (`/router` panel, `/router <id>[,<id>...]`, or `--router --acp-agent <id>[,<id>...]`), `delegate_subagent` targets one of the external ACP workers bound to the session. `agent` is required, must name a bound profile, and there is no local-child fallback; the first bound profile is the default. The lead also supplies a bounded task contract:
 
 | Parameter | Description |
 |-----------|-------------|
-| `agent` | Required in Router: the activated ACP profile ID. |
+| `agent` | Required in Router: one of the bound ACP profile IDs (the first is the default). |
 | `role` | `investigate` (default), `implement`, `test`, `review`, or `integrate`. |
 | `read_scope` | Bounded paths or search targets the worker should read. |
 | `write_scope` | Paths the worker may modify; required for write roles and must stay inside the profile's `writeRoots`. |
 | `expected_deliverables` | `findings`, `changed-files`, `test-evidence`, or `review`; defaults are role-specific. |
 | `verification` | Check or evidence the worker must report; required for `implement`/`integrate`/`test`. |
 | `stop_conditions` | Explicit completion and non-goals. |
+| `attachments` | Runtime input resource IDs; delivery is negotiated from the Agent's ACP prompt capabilities. |
 
 `mode`, `work_dir`, `worktree`, `tools`, and `max_iterations` are local-child parameters and are rejected in Router rather than silently ignored: the external worker's mode, tool authority, lifetime, and working directory come from its ACP profile and the Runtime-resolved session directory.
 
 The result adds a bounded `worker` object (`profileId`, `role`, `deliverables`, `evidence: "worker-reported"`, `outputTruncated`, `stopReason`). Treat that conclusion as untrusted evidence: inspect claimed paths with read-only tools and do not upgrade "worker-reported" to verified without evidence.
+
+`subagent_spawn` is also available in Router for asynchronous external workers. It takes the same `agent` allowlist and bounded contract fields (plus `system_prompt_extra`) and returns a handle immediately. `subagent_status` reads the existing manager status, `subagent_wait(handle: ...)` waits for a handle through the canonical manager status, `subagent_send` sends one follow-up turn to an idle worker on the same remote session, and `subagent_destroy` closes the session and releases it. The session mailbox also receives each external completion using the child handle as its member ID, so a later iteration can see the result even when the lead did not call `subagent_wait`. Read-only workers can run concurrently up to the profile's `maxConcurrentChildren`. An `implement` worker in a Runtime-managed per-child worktree may coexist with readers because it cannot write the base workspace; a base-workspace writer (including `subagent_integrate`) remains exclusive in both directions. The Runtime reuses one initialized ACP process for multiple remote sessions in the same profile/workdir, while each child keeps an isolated remote session ID and canonical event stream. If a transport dies, the next turn prefers capability-gated `session/resume` and falls back to `session/load`; a dead in-flight prompt is never replayed. `member`, `mode`, `work_dir`, `worktree`, `tools`, and `max_iterations` are rejected in Router, and `subagent_answer` remains unavailable because ACP decisions use the parent `DecisionService`.
+
+#### `subagent_integrate` - Apply external worker change sets
+
+Applies selected immutable change sets from finished external Router workers to the session workspace. It never copies a mutable child worktree, never reruns the worker, and never starts a second Runner: the Runtime loads the durable snapshot, verifies the digest, status, truncation state, and managed-worktree identity, then uses one exclusive integration lane. A multi-selection is all-or-nothing within that call: if a later snapshot conflicts, snapshots this call already applied are reversed and their evidence is updated.
+
+```json
+{
+  "changes": [
+    {"handle": "worker-1", "digest": "sha256:..."},
+    {"handle": "worker-2", "digest": "sha256:..."}
+  ]
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `changes` | array | ✓ | One to eight `{handle, digest}` selections. |
+| `changes[].handle` | string | ✓ | Canonical child handle returned by `subagent_spawn`. |
+| `changes[].digest` | string | ✓ | Exact `changeSetDigest` from `subagent_status` or `subagent_wait`. |
+
+The result reports `integrationId`, `status`, applied files, and per-child evidence. A missing, truncated, failed, or digest-mismatched snapshot is rejected before anything is written. A git apply conflict is returned as structured `conflict` evidence with a nil tool error so the lead can inspect the base workspace and decide how to recover; earlier selections from the same call are rolled back first. An already-applied `{handle, digest}` is idempotent. Integration evidence is persisted on `session_child_runs` (migration 57) as `integration_id`, `integration_digest`, `integration_status`, `integration_error`, and `integrated_at`.
+
+When the Runtime has a workspace Registry, an external worker may also request `fs/read_text_file`. The Runtime resolves the absolute path through the session's workspace roots and symlink fence, limits text reads to 1 MiB of valid UTF-8, and honors ACP's optional 1-based `line`/`limit`. `session/new` sends the same Runtime-authorized roots as `cwd` plus `additionalDirectories` only when the Agent advertises `sessionCapabilities.additionalDirectories`; the same rule applies to `session/load` and `session/resume`. A write-role task whose profile declares `writeRoots` additionally gets `fs/write_text_file`; each write must resolve inside both the task `writeScope` and profile `writeRoots` and uses the shared file lock and atomic-write path. A profile with `"terminal": true` also gets `terminal/create`, `terminal/output`, `terminal/wait_for_exit`, `terminal/kill`, and `terminal/release`; commands run through the shared sandbox and process-group containment with a bounded non-interactive output buffer. Terminal and URL authentication are not implemented.
+
+`attachments` accepts Runtime input resource IDs from the request manifest. The Runtime verifies ownership, size, and hash, then negotiates delivery through the Agent's advertised ACP `promptCapabilities`: `image` content, `audio` content, or an embedded `resource` for `embeddedContext`. An unsupported attachment is not silently dropped; the worker prompt names the omission, the Runtime resource ID, and the session-relative path. Because an isolated worker runs in a fresh worktree, that path is provenance rather than a promise that the file exists in the worker's workspace.
+
+Router cannot be combined with an Expert Team: unbind the team before activating Router or binding a team to an existing Router session. A single-persona expert remains compatible because it contributes identity/skills without enabling the team's local multi-agent surface.
 
 
 ---

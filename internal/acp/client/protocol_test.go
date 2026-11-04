@@ -1,8 +1,10 @@
 package client
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"testing"
 )
 
@@ -56,6 +58,32 @@ func TestPermissionResultShapes(t *testing.T) {
 	if string(cancelled) != `{"outcome":{"outcome":"cancelled"}}` {
 		t.Fatalf("cancelled result = %s", cancelled)
 	}
+}
+
+func TestCloseSessionTreatsUnknownSessionAsSuccessful(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverRead, clientWrite := io.Pipe()
+	clientRead, serverWrite := io.Pipe()
+	client := newClient(ctx, cancel, clientWrite, clientRead, nil, Config{})
+	go client.readLoop()
+
+	go func() {
+		line, err := bufio.NewReader(serverRead).ReadBytes('\n')
+		if err != nil {
+			return
+		}
+		var request Message
+		if err := json.Unmarshal(line, &request); err != nil {
+			return
+		}
+		_, _ = io.WriteString(serverWrite, `{"jsonrpc":"2.0","id":`+string(request.ID)+`,"error":{"code":-32002,"message":"Resource not found"}}`+"\n")
+	}()
+	if err := client.CloseSession(context.Background(), "already-closed"); err != nil {
+		t.Fatalf("CloseSession unknown session: %v", err)
+	}
+	_ = serverWrite.Close()
+	_ = client.Close()
 }
 
 func TestStartRequiresLauncher(t *testing.T) {

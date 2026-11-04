@@ -32,6 +32,66 @@ func TestSessionRuntimeRouterBindingPersistsAndRejectsInteractive(t *testing.T) 
 	}
 }
 
+func TestSessionRuntimeRouterBindingPersistsMultipleProfiles(t *testing.T) {
+	sessionDir := t.TempDir()
+	manager := session.New(t.TempDir(), sessionDir)
+	if err := manager.InitWithID("router-multi"); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &SessionRuntime{Manager: manager, ID: "router-multi", Source: SourceTUI}
+	settings := config.DefaultSettings()
+	settings.ACPAgents = []config.ACPAgentProfile{
+		{
+			ID: "codex", Command: []string{"/opt/codex", "acp"}, Enabled: true,
+			PermissionPolicy: config.ACPPermissionAutoAllowOnce,
+		},
+		{
+			ID: "reviewer", Command: []string{"/opt/reviewer", "acp"}, Enabled: true,
+			PermissionPolicy: config.ACPPermissionAutoReject,
+		},
+	}
+	binding := RouterBinding{
+		ACPProfileID: "codex",
+		Profiles: []RouterProfileBinding{
+			{ProfileID: "codex"},
+			{ProfileID: "reviewer"},
+		},
+		PolicyRevision: "v2",
+	}
+	if err := runtime.ActivateRouter(t.Context(), sessionDir, settings, binding); err != nil {
+		t.Fatalf("ActivateRouter: %v", err)
+	}
+	recovered, ok := runtime.RouterBinding()
+	if !ok {
+		t.Fatal("multi-profile binding was not recovered")
+	}
+	if got := recovered.ProfileIDs(); len(got) != 2 || got[0] != "codex" || got[1] != "reviewer" {
+		t.Fatalf("bound profiles = %v", got)
+	}
+	if strategy, ok := recovered.strategyFor("reviewer"); !ok || strategy != config.ACPPermissionAutoReject {
+		t.Fatalf("reviewer strategy = %q, ok=%v", strategy, ok)
+	}
+	profile, resolved, err := runtime.ResolveRouterACPProfileByID(settings, "reviewer")
+	if err != nil {
+		t.Fatalf("resolve reviewer: %v", err)
+	}
+	if profile.ID != "reviewer" || resolved.ACPProfileID != "codex" {
+		t.Fatalf("profile=%#v binding=%#v", profile, resolved)
+	}
+	if _, _, err := runtime.ResolveRouterACPProfileByID(settings, "unbound"); err == nil {
+		t.Fatal("an unbound profile was accepted")
+	}
+	reopened, err := session.OpenByIDExact(sessionDir, "router-multi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := reopened.GetLatestRouterBinding()
+	if !ok || len(entry.Profiles) != 2 || entry.Profiles[1].ProfileID != "reviewer" ||
+		entry.Profiles[1].ApprovalStrategy != string(config.ACPPermissionAutoReject) {
+		t.Fatalf("replayed binding = %#v, ok=%v", entry, ok)
+	}
+}
+
 func TestACPWorkerEnvironmentUsesOnlyProfileAllowlist(t *testing.T) {
 	t.Setenv("ROUTER_ACP_TEST_ONE", "one")
 	t.Setenv("ROUTER_ACP_TEST_TWO", "two")
@@ -195,6 +255,32 @@ func TestActivateRouterRejectsForcedSourceAndStaleStrategy(t *testing.T) {
 	}
 	if _, ok := runtime.RouterBinding(); ok {
 		t.Fatal("rejected activation persisted a Router binding")
+	}
+}
+
+func TestActivateRouterRejectsTeamExpert(t *testing.T) {
+	sessionDir := t.TempDir()
+	manager := session.New(t.TempDir(), sessionDir)
+	if err := manager.InitWithID("activate-router-team"); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &SessionRuntime{
+		Manager: manager,
+		ID:      "activate-router-team",
+		Source:  SourceTUI,
+		Expert:  &ExpertBinding{Team: true},
+	}
+	settings := config.DefaultSettings()
+	settings.ACPAgents = []config.ACPAgentProfile{{
+		ID: "codex", Command: []string{"/opt/codex/bin/codex", "acp"}, Enabled: true,
+		PermissionPolicy: config.ACPPermissionAutoAllowOnce,
+	}}
+	err := runtime.ActivateRouter(t.Context(), sessionDir, settings, RouterBinding{ACPProfileID: "codex"})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined with an expert team") {
+		t.Fatalf("team Router activation error = %v", err)
+	}
+	if _, ok := runtime.RouterBinding(); ok {
+		t.Fatal("rejected team activation persisted a Router binding")
 	}
 }
 

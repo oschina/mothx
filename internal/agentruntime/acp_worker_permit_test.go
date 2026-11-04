@@ -71,3 +71,70 @@ func TestACPWorkerPermitReleaseIsIdempotent(t *testing.T) {
 		t.Fatalf("live worker count = %d, want 1", live)
 	}
 }
+
+// Read-only sessions may share the worktree up to the profile ceiling, while a
+// base-workspace write role requires exclusive access in both directions.
+func TestACPWorkerPermitReadOnlyFanOutAndExclusiveWriter(t *testing.T) {
+	runtime := &SessionRuntime{}
+	first, err := runtime.acquireACPWorkerPermitForRole(2, SubagentRoleInvestigate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtime.acquireACPWorkerPermitForRole(2, SubagentRoleReview)
+	if err != nil {
+		t.Fatalf("second read-only worker: %v", err)
+	}
+	if _, err := runtime.acquireACPWorkerPermitForRole(2, SubagentRoleImplement); err == nil ||
+		!strings.Contains(err.Error(), "exclusive") {
+		t.Fatalf("writer next to readers = %v", err)
+	}
+	first()
+	second()
+
+	writer, err := runtime.acquireACPWorkerPermitForRole(2, SubagentRoleImplement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.acquireACPWorkerPermitForRole(2, SubagentRoleInvestigate); err == nil ||
+		!strings.Contains(err.Error(), "writer is active") {
+		t.Fatalf("reader next to writer = %v", err)
+	}
+	if _, err := runtime.acquireACPWorkerPermitForRole(2, SubagentRoleIntegrate); err == nil {
+		t.Fatal("a second workspace writer was admitted")
+	}
+	writer()
+
+	reader, err := runtime.acquireACPWorkerPermitForRole(2, SubagentRoleTest)
+	if err != nil {
+		t.Fatalf("reader after writer release: %v", err)
+	}
+	reader()
+}
+
+func TestACPWorkerPermitAllowsIsolatedWriterBesideReaders(t *testing.T) {
+	runtime := &SessionRuntime{}
+	reader, err := runtime.acquireACPWorkerPermitForRole(3, SubagentRoleInvestigate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, true)
+	if err != nil {
+		t.Fatalf("isolated writer beside reader: %v", err)
+	}
+	if _, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleIntegrate, false); err == nil ||
+		!strings.Contains(err.Error(), "exclusive") {
+		t.Fatalf("base writer beside live workers = %v", err)
+	}
+	writer()
+	reader()
+
+	base, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleIntegrate, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.acquireACPWorkerPermitForWorkspace(3, SubagentRoleImplement, true); err == nil ||
+		!strings.Contains(err.Error(), "base-workspace writer is active") {
+		t.Fatalf("isolated writer beside base writer = %v", err)
+	}
+	base()
+}

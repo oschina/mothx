@@ -508,36 +508,70 @@ func (m *WorktreeManager) WaitForReady(ctx context.Context, id string) (session.
 // named key for baseCwd's repository, or creates one. It lets a workstream (for
 // example an ESM objective's worker/critic/audit roles) share a single worktree.
 func (m *WorktreeManager) ResolveOrCreate(ctx context.Context, baseCwd, key string) (string, error) {
-	repoRoot, err := m.git.RepoRoot(ctx, baseCwd)
+	wt, err := m.ResolveOrCreateWorktree(ctx, baseCwd, key)
 	if err != nil {
 		return "", err
+	}
+	return wt.Directory, nil
+}
+
+// ResolveOrCreateWorktree is ResolveOrCreate with the Runtime-owned identity of
+// the resolved worktree retained for child-history and change-set recording.
+func (m *WorktreeManager) ResolveOrCreateWorktree(ctx context.Context, baseCwd, key string) (session.Worktree, error) {
+	repoRoot, err := m.git.RepoRoot(ctx, baseCwd)
+	if err != nil {
+		return session.Worktree{}, err
 	}
 	if strings.TrimSpace(key) != "" {
 		existing, err := session.ListWorktrees(m.sessionDir, repoRoot, "")
 		if err != nil {
-			return "", err
+			return session.Worktree{}, err
 		}
 		for _, wt := range existing {
 			if wt.Name != key || wt.Status == session.WorktreeStatusRemoved {
 				continue
 			}
 			if wt.Status == session.WorktreeStatusReady {
-				return wt.Directory, nil
+				return wt, nil
 			}
 			if ready, werr := m.WaitForReady(ctx, wt.ID); werr == nil {
-				return ready.Directory, nil
+				return ready, nil
 			}
 		}
 	}
 	created, err := m.Create(ctx, CreateWorktreeRequest{BaseCwd: repoRoot, Name: key})
 	if err != nil {
-		return "", err
+		return session.Worktree{}, err
 	}
 	ready, err := m.WaitForReady(ctx, created.ID)
 	if err != nil {
-		return "", err
+		return session.Worktree{}, err
 	}
-	return ready.Directory, nil
+	return ready, nil
+}
+
+// Revision resolves the commit currently checked out by a managed worktree.
+func (m *WorktreeManager) Revision(ctx context.Context, directory string) (string, error) {
+	return m.git.Revision(ctx, directory)
+}
+
+// CaptureChangeSet captures a bounded snapshot for a registered worktree. The
+// registry is the ownership authority, so an arbitrary path not created by the
+// Runtime is rejected even if it happens to be a git worktree.
+func (m *WorktreeManager) CaptureChangeSet(ctx context.Context, id, baseRevision string, patchLimit int) (worktree.ChangeSet, error) {
+	wt, err := m.resolve(ctx, id, "")
+	if err != nil {
+		return worktree.ChangeSet{}, err
+	}
+	if wt.ID == "" {
+		return worktree.ChangeSet{}, &worktree.Error{Code: worktree.CodeChangeSetFailed, Message: "change-set capture requires a registered worktree id"}
+	}
+	release, err := m.lockDir(wt.Directory)
+	if err != nil {
+		return worktree.ChangeSet{}, err
+	}
+	defer release()
+	return m.git.CaptureChangeSet(ctx, wt.Directory, baseRevision, patchLimit)
 }
 
 // WorktreeProviderAdapter adapts the WorktreeManager to the internal/agent
@@ -553,23 +587,45 @@ func NewWorktreeProviderAdapter(mgr *WorktreeManager) *WorktreeProviderAdapter {
 
 // ResolveWorktree implements agent.WorktreeProvider.
 func (p *WorktreeProviderAdapter) ResolveWorktree(baseCwd string, spec agent.WorktreeSpec) (string, error) {
+	resolved, err := p.ResolveWorktreeMetadata(baseCwd, spec)
+	if err != nil {
+		return "", err
+	}
+	return resolved.Directory, nil
+}
+
+// ResolveWorktreeMetadata implements agent.WorktreeMetadataProvider.
+func (p *WorktreeProviderAdapter) ResolveWorktreeMetadata(baseCwd string, spec agent.WorktreeSpec) (agent.WorktreeResolution, error) {
 	if p == nil || p.mgr == nil {
-		return "", fmt.Errorf("worktree manager is unavailable")
+		return agent.WorktreeResolution{}, fmt.Errorf("worktree manager is unavailable")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), worktreeResolveTimeout)
 	defer cancel()
+	var wt session.Worktree
 	if spec.Reuse {
-		return p.mgr.ResolveOrCreate(ctx, baseCwd, spec.Name)
+		resolved, err := p.mgr.ResolveOrCreateWorktree(ctx, baseCwd, spec.Name)
+		if err != nil {
+			return agent.WorktreeResolution{}, err
+		}
+		wt = resolved
+	} else {
+		created, err := p.mgr.Create(ctx, CreateWorktreeRequest{BaseCwd: baseCwd, Name: spec.Name})
+		if err != nil {
+			return agent.WorktreeResolution{}, err
+		}
+		ready, err := p.mgr.WaitForReady(ctx, created.ID)
+		if err != nil {
+			return agent.WorktreeResolution{}, err
+		}
+		wt = ready
 	}
-	created, err := p.mgr.Create(ctx, CreateWorktreeRequest{BaseCwd: baseCwd, Name: spec.Name})
+	revision, err := p.mgr.Revision(ctx, wt.Directory)
 	if err != nil {
-		return "", err
+		return agent.WorktreeResolution{}, err
 	}
-	ready, err := p.mgr.WaitForReady(ctx, created.ID)
-	if err != nil {
-		return "", err
-	}
-	return ready.Directory, nil
+	return agent.WorktreeResolution{
+		ID: wt.ID, Directory: wt.Directory, RepositoryRoot: wt.RepositoryRoot, BaseRevision: revision,
+	}, nil
 }
 
 func (m *WorktreeManager) resolve(ctx context.Context, id, directory string) (session.Worktree, error) {

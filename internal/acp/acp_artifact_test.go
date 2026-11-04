@@ -409,7 +409,7 @@ func TestACPStdioProcessImagePromptReachesProviderAsImageContent(t *testing.T) {
 	workDir := t.TempDir()
 	var providerCalls atomic.Int32
 	var firstBody, secondBody atomic.Value
-	manifestPath := regexp.MustCompile(`- path: ([^\\"]+)`)
+	manifestPath := regexp.MustCompile(`\\n\s*path: ([^\\"]+)`)
 	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := providerCalls.Add(1)
 		body, _ := io.ReadAll(r.Body)

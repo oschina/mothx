@@ -76,14 +76,33 @@ type ModeChangeEntry struct {
 	Mode string `json:"mode"`
 }
 
-// RouterBindingEntry records the selected external ACP worker and its
-// non-blocking permission strategy for a Router-mode session. The mode itself
+// RouterProfileBinding is one external ACP worker selected for a Router-mode
+// session, together with the non-blocking strategy recorded at activation.
+type RouterProfileBinding struct {
+	ProfileID        string `json:"profileId"`
+	ApprovalStrategy string `json:"approvalStrategy"`
+}
+
+// RouterBindingSelection is the ordered Router worker selection persisted in a
+// RouterBindingEntry. PrimaryProfileID is the default target when a tool call
+// does not choose an explicit profile.
+type RouterBindingSelection struct {
+	PrimaryProfileID string
+	Profiles         []RouterProfileBinding
+	PolicyRevision   string
+}
+
+// RouterBindingEntry records the selected external ACP workers and their
+// non-blocking permission strategies for a Router-mode session. The mode itself
 // remains a regular ModeChangeEntry so every projection keeps one mode source.
+// The singular ACPProfileID/ApprovalStrategy fields are the legacy single-worker
+// shape and stay populated with the primary selection.
 type RouterBindingEntry struct {
 	EntryBase
-	ACPProfileID     string `json:"acpProfileId"`
-	ApprovalStrategy string `json:"approvalStrategy"`
-	PolicyRevision   string `json:"policyRevision,omitempty"`
+	ACPProfileID     string                 `json:"acpProfileId"`
+	ApprovalStrategy string                 `json:"approvalStrategy"`
+	Profiles         []RouterProfileBinding `json:"acpProfiles,omitempty"`
+	PolicyRevision   string                 `json:"policyRevision,omitempty"`
 }
 
 // ThinkingLevelChangeEntry records a thinking level change.

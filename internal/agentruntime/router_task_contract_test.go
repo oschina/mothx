@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -36,6 +37,25 @@ func validContract() SubagentTaskContract {
 func TestSubagentTaskContractAcceptsBoundedImplementTask(t *testing.T) {
 	if err := validContract().Validate(contractProfile()); err != nil {
 		t.Fatalf("valid contract rejected: %v", err)
+	}
+}
+
+func TestSubagentTaskContractJSONNeverContainsAttachmentBytes(t *testing.T) {
+	contract := validContract()
+	contract.Attachments = []SubagentAttachment{{
+		ID: "resource-1", Filename: "secret.txt", MediaType: "text/plain",
+		Kind: AttachmentFile, RelativePath: ".mothx/tmp/inputs/resource-1/secret.txt",
+		Bytes: 12, Data: []byte("do-not-leak"),
+	}}
+	encoded, err := json.Marshal(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "do-not-leak") {
+		t.Fatalf("serialized contract leaked attachment bytes: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"relativePath":".mothx/tmp/inputs/resource-1/secret.txt"`) {
+		t.Fatalf("serialized contract lost attachment metadata: %s", encoded)
 	}
 }
 

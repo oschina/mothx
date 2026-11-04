@@ -36,6 +36,8 @@ func TestRouterActivationProfileValidation(t *testing.T) {
 		{name: "router mode requires agent", opts: runOptions{mode: "router"}, wantErr: true},
 		{name: "mode conflict", opts: runOptions{router: true, acpAgent: "codex", mode: "yolo"}, wantErr: true},
 		{name: "explicit router mode", opts: runOptions{acpAgent: "codex", mode: "router"}, want: "codex"},
+		{name: "multiple workers", opts: runOptions{router: true, acpAgent: "codex, reviewer,codex"}, want: "codex, reviewer,codex"},
+		{name: "empty allowlist", opts: runOptions{router: true, acpAgent: " , "}, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,5 +55,12 @@ func TestRouterActivationProfileValidation(t *testing.T) {
 				t.Fatalf("profile = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseRouterProfileIDsPreservesDefaultAndDeduplicates(t *testing.T) {
+	got := parseRouterProfileIDs(" codex, reviewer ,codex, ")
+	if len(got) != 2 || got[0] != "codex" || got[1] != "reviewer" {
+		t.Fatalf("profiles = %v", got)
 	}
 }

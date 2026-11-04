@@ -2,10 +2,11 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -20,20 +21,39 @@ import (
 // completion envelope.
 const maxSubagentResultBytes = 16 * 1024
 
+// maxACPWorkerMessageBytes leaves room for Runtime-bounded attachments encoded
+// as base64 in one ACP prompt frame.
+const maxACPWorkerMessageBytes = 64 << 20
+
 // ACPWorkerInvocation is the already-authorized Runtime input to one external
 // ACP worker turn. It contains no adapter state or provider content; Router
 // task construction owns that conversion before this boundary.
 type ACPWorkerInvocation struct {
-	Profile        config.ACPAgentProfile
-	Contract       SubagentTaskContract
-	WorkDir        string
-	Launcher       acpclient.Launcher
-	ClientInfo     acpclient.Implementation
+	Profile               config.ACPAgentProfile
+	Contract              SubagentTaskContract
+	WorkDir               string
+	AdditionalDirectories []string
+	// ResumeSessionID requests an explicit reconnect through session/resume or
+	// session/load (Runtime chooses from advertised capabilities). It is used
+	// only for an already-created remote session; the caller must not send a
+	// prompt through the old connection after this value is set.
+	ResumeSessionID string
+	Launcher        acpclient.Launcher
+	ClientInfo      acpclient.Implementation
+	// ReadTextFile advertises the Runtime-owned read-only filesystem bridge.
+	// WriteTextFile advertises the Runtime-owned scoped write bridge, and
+	// TerminalAccess opts into the profile-gated terminal bridge.
+	ReadTextFile   bool
+	WriteTextFile  bool
+	TerminalAccess bool
 	HandleRequest  acpclient.RequestHandler
 	OnNotification func(acpclient.Message)
 	// OnEvent receives canonical, non-terminal child events. The proxy owns the
 	// single EventRunFinished terminal event.
 	OnEvent func(agentpkg.Event)
+	// pool is the Runtime-owned reusable process pool. Nil keeps the bridge
+	// standalone for focused protocol tests and diagnostics.
+	pool *acpConnectionPool
 }
 
 // ACPWorkerResult is the protocol result of one remote worker turn. The proxy
@@ -52,225 +72,97 @@ type ACPWorkerResult struct {
 // typed protocol result.
 type ACPWorkerBridge struct{}
 
-// Run starts one configured stdio ACP Agent, performs the MVP handshake and
-// one text prompt turn, then closes the remote session when supported.
+// Run obtains one initialized ACP connection, creates one remote session, and
+// runs one bounded prompt turn. A Runtime-owned pool may reuse the process for
+// other sessions; standalone callers own the process for this invocation.
 func (ACPWorkerBridge) Run(ctx context.Context, invocation ACPWorkerInvocation) (ACPWorkerResult, error) {
-	if err := invocation.Profile.Validate(); err != nil {
-		return ACPWorkerResult{}, err
-	}
-	if !invocation.Profile.Enabled {
-		return ACPWorkerResult{}, fmt.Errorf("ACP worker profile %q is disabled", invocation.Profile.ID)
-	}
-	if strings.TrimSpace(invocation.WorkDir) == "" || !filepath.IsAbs(invocation.WorkDir) {
-		return ACPWorkerResult{}, fmt.Errorf("ACP worker requires an absolute work directory")
-	}
-	if err := invocation.Contract.Validate(invocation.Profile); err != nil {
-		return ACPWorkerResult{}, err
-	}
-	if invocation.Launcher == nil {
-		return ACPWorkerResult{}, fmt.Errorf("ACP worker requires a Runtime process launcher")
-	}
-
-	env, err := acpWorkerEnvironment(invocation.Profile)
+	worker, err := (ACPWorkerBridge{}).Open(ctx, invocation)
 	if err != nil {
 		return ACPWorkerResult{}, err
 	}
-	stderr := &boundedACPStderr{limit: 2048}
-	client, err := acpclient.Start(ctx, acpclient.Config{
-		Command:       invocation.Profile.Command,
-		Dir:           invocation.WorkDir,
-		Env:           env,
-		Launcher:      invocation.Launcher,
-		Stderr:        stderr,
-		HandleRequest: invocation.HandleRequest,
-	})
-	if err != nil {
-		return ACPWorkerResult{}, err
-	}
-	defer client.Close()
+	defer func() { _ = worker.Close(ctx) }()
+	return worker.Prompt(ctx, acpPromptContent(worker.Capabilities(), invocation.Contract, invocation.WorkDir), invocation.OnEvent)
+}
 
-	var output strings.Builder
-	truncated := false
-	toolCalls := 0
-	emit := func(event agentpkg.Event) {
-		if invocation.OnEvent != nil {
-			invocation.OnEvent(event)
-		}
+// acpPromptContent is the capability-negotiated projection of one validated
+// Runtime task contract. Unsupported content is never silently dropped: the
+// text prompt names the omitted attachment and its workspace-relative path.
+func acpPromptContent(capabilities map[string]any, contract SubagentTaskContract, workDir string) []acpclient.ContentBlock {
+	text := contract.RenderPrompt(workDir)
+	if len(contract.Attachments) == 0 {
+		return []acpclient.ContentBlock{{Type: "text", Text: text}}
 	}
-	handleUpdate := func(message acpclient.Message) {
-		update, ok := acpclient.DecodeSessionUpdate(message)
-		if !ok {
-			return
-		}
-		switch update.SessionUpdate {
-		case "agent_message_chunk":
-			if update.Content == nil || update.Content.Text == "" {
-				return
-			}
-			text := update.Content.Text
-			if output.Len()+len(text) > maxSubagentResultBytes {
-				remaining := maxSubagentResultBytes - output.Len()
-				if remaining > 0 {
-					piece, _ := truncateACPText(text, remaining)
-					output.WriteString(piece)
-				}
-				truncated = true
-				return
-			}
-			output.WriteString(text)
-			emit(agentpkg.Event{Type: agentpkg.EventTextDelta, TextDelta: text})
-		case "agent_thought_chunk":
-			if update.Content != nil && update.Content.Text != "" {
-				text, _ := boundACPText(update.Content.Text)
-				emit(agentpkg.Event{Type: agentpkg.EventThinkDelta, ThinkDelta: text})
-			}
-		case "tool_call":
-			toolCalls++
-			title, _ := boundACPText(update.Title)
-			emit(agentpkg.Event{
-				Type:       agentpkg.EventToolCall,
-				ToolCallID: acpRemoteToolCallID(update.ToolCallID),
-				ToolName:   title,
-				ToolArgs:   decodeACPToolInput(update.RawInput),
-				ToolCall: &agentpkg.ToolCallBlock{
-					ID: acpRemoteToolCallID(update.ToolCallID), Name: title,
-					Kind: update.Kind, Input: string(update.RawInput),
-				},
+	image := acpPromptCapability(capabilities, "image")
+	audio := acpPromptCapability(capabilities, "audio")
+	embedded := acpPromptCapability(capabilities, "embeddedContext")
+	blocks := make([]acpclient.ContentBlock, 0, 1+len(contract.Attachments))
+	var delivery strings.Builder
+	delivery.WriteString("\n## Attachment delivery\n")
+	for _, attachment := range contract.Attachments {
+		switch {
+		case attachment.Kind == AttachmentImage && image:
+			blocks = append(blocks, acpclient.ContentBlock{
+				Type: "image", Data: base64.StdEncoding.EncodeToString(attachment.Data), MIMEType: attachment.MediaType,
 			})
-		case "tool_call_update":
-			eventType := agentpkg.EventToolExecutionUpdate
-			if update.Status == "completed" || update.Status == "failed" {
-				eventType = agentpkg.EventToolExecutionEnd
-			}
-			title, _ := boundACPText(update.Title)
-			result, _ := boundACPText(string(update.RawOutput))
-			event := agentpkg.Event{
-				Type:       eventType,
-				ToolCallID: acpRemoteToolCallID(update.ToolCallID),
-				ToolName:   title,
-				ToolResult: result,
-			}
-			if update.Status == "failed" {
-				event.ToolError = fmt.Errorf("remote tool call failed")
-			}
-			emit(event)
-		case "plan":
-			steps := make([]agentpkg.PlanStep, 0, len(update.Entries))
-			for _, entry := range update.Entries {
-				content, _ := boundACPText(entry.Content)
-				steps = append(steps, agentpkg.PlanStep{Title: content, Status: entry.Status})
-			}
-			emit(agentpkg.Event{Type: agentpkg.EventPlanUpdate, Plan: &agentpkg.TaskPlan{Steps: steps}})
-		case "usage_update":
-			emit(agentpkg.Event{
-				Type:         agentpkg.EventUsage,
-				ContextUsage: &agentpkg.ContextUsage{TotalTokens: update.Used, ContextWindow: update.Size},
+			fmt.Fprintf(&delivery, "- %s: delivered as ACP image content.\n", attachment.Filename)
+		case attachment.Kind == AttachmentAudio && audio:
+			blocks = append(blocks, acpclient.ContentBlock{
+				Type: "audio", Data: base64.StdEncoding.EncodeToString(attachment.Data), MIMEType: attachment.MediaType,
 			})
-		}
-	}
-
-	// Drain updates independently while session/prompt waits for its terminal
-	// response; the bounded client notification buffer must never be allowed to
-	// back up a long-running worker.
-	notificationsDone := make(chan struct{})
-	go func() {
-		defer close(notificationsDone)
-		notifications := client.Notifications()
-		handle := func(notification acpclient.Message) {
-			if invocation.OnNotification != nil {
-				invocation.OnNotification(notification)
+			fmt.Fprintf(&delivery, "- %s: delivered as ACP audio content.\n", attachment.Filename)
+		case embedded:
+			resource := &acpclient.Resource{
+				URI: acpAttachmentURI(attachment), MIMEType: attachment.MediaType,
 			}
-			handleUpdate(notification)
-		}
-		for {
-			select {
-			case notification := <-notifications:
-				handle(notification)
-			case <-client.Done():
-				// Notifications are not closed by the transport (closing would
-				// race a concurrent send). Drain what is already buffered, then
-				// stop; anything arriving after termination has no consumer.
-				for {
-					select {
-					case notification := <-notifications:
-						handle(notification)
-					default:
-						return
-					}
-				}
+			if attachment.Kind == AttachmentFile && (strings.HasPrefix(attachment.MediaType, "text/") ||
+				strings.Contains(attachment.MediaType, "json") || strings.Contains(attachment.MediaType, "xml")) {
+				resource.Text = string(attachment.Data)
+			} else {
+				resource.Blob = base64.StdEncoding.EncodeToString(attachment.Data)
 			}
+			blocks = append(blocks, acpclient.ContentBlock{Type: "resource", Resource: resource})
+			fmt.Fprintf(&delivery, "- %s: delivered as an embedded ACP resource.\n", attachment.Filename)
+		default:
+			fmt.Fprintf(&delivery, "- %s: not inlined because the ACP Agent did not advertise a compatible prompt capability; Runtime resource %q (%s, %d bytes, session-relative path %s) remains available to the parent.\n",
+				attachment.Filename, attachment.ID, attachment.MediaType, attachment.Bytes, attachment.RelativePath)
 		}
-	}()
-	// One teardown path for every success and error return: close the transport,
-	// then join the drain goroutine before the proxy may close its event channel.
-	defer func() {
-		_ = client.Close()
-		<-notificationsDone
-	}()
+	}
+	text += delivery.String()
+	return append([]acpclient.ContentBlock{{Type: "text", Text: text}}, blocks...)
+}
 
-	clientInfo := invocation.ClientInfo
-	if clientInfo.Name == "" {
-		clientInfo = acpclient.Implementation{Name: "mothx", Title: "MothX Router", Version: "dev"}
+func acpPromptCapability(capabilities map[string]any, name string) bool {
+	prompt, ok := capabilities["promptCapabilities"].(map[string]any)
+	if !ok {
+		return false
 	}
-	initialized, err := client.Initialize(ctx, acpclient.InitializeParams{
-		ClientInfo: clientInfo,
-		ClientCapabilities: map[string]any{
-			"fs":       map[string]bool{"readTextFile": false, "writeTextFile": false},
-			"terminal": false,
-			"auth":     map[string]bool{"terminal": false},
-		},
-	})
-	if err != nil {
-		return ACPWorkerResult{}, fmt.Errorf("initialize ACP worker: %w", err)
-	}
-	session, err := client.NewSession(ctx, acpclient.NewSessionParams{Cwd: invocation.WorkDir})
-	if err != nil {
-		if len(initialized.AuthMethods) > 0 {
-			return ACPWorkerResult{}, fmt.Errorf("ACP worker profile %q requires local authentication handled by its own client; MothX does not relay credentials: %w", invocation.Profile.ID, err)
-		}
-		return ACPWorkerResult{}, fmt.Errorf("create ACP worker session: %w", err)
-	}
+	value, ok := prompt[name].(bool)
+	return ok && value
+}
 
-	// ACP session/cancel is the semantic cancellation signal for an active
-	// remote turn. The client context cancellation alone must not be mistaken
-	// for a successful remote completion.
-	cancelDone := make(chan struct{})
-	defer close(cancelDone)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = client.Cancel(session.SessionID)
-		case <-cancelDone:
-		}
-	}()
-	prompt, promptErr := client.Prompt(ctx, acpclient.PromptParams{
-		SessionID: session.SessionID,
-		Prompt:    []acpclient.ContentBlock{{Type: "text", Text: invocation.Contract.RenderPrompt(invocation.WorkDir)}},
-	})
-	// Finish the notification drain before snapshotting the bounded output; the
-	// defer above is the single teardown path for early errors.
-	drain := func() {
-		_ = client.Close()
-		<-notificationsDone
+// acpAttachmentURI is an opaque identity for a Runtime-owned input resource.
+// It must not be a file URI: an isolated worker's worktree is a fresh git
+// worktree, so the session-workspace attachment path may not exist there.
+func acpAttachmentURI(attachment SubagentAttachment) string {
+	return "urn:mothx:attachment:" + url.PathEscape(attachment.ID)
+}
+
+func acquireACPWorkerConnection(ctx context.Context, invocation ACPWorkerInvocation, env []string) (*acpWorkerConnection, bool, error) {
+	if invocation.pool != nil {
+		conn, err := invocation.pool.acquire(ctx, invocation, env)
+		return conn, false, err
 	}
-	partial := func(stopReason string) ACPWorkerResult {
-		return ACPWorkerResult{
-			AgentInfo: initialized.AgentInfo, SessionID: session.SessionID, StopReason: stopReason,
-			Output: output.String(), Truncated: truncated, ToolCalls: toolCalls,
-		}
+	conn := &acpWorkerConnection{
+		profile:  invocation.Profile,
+		ready:    make(chan struct{}),
+		sessions: make(map[string]*acpWorkerSession),
 	}
-	if promptErr != nil {
-		drain()
-		return partial("error"), fmt.Errorf("run ACP worker prompt: %w", promptErr)
+	conn.start(ctx, invocation, env)
+	<-conn.ready
+	if conn.initErr != nil {
+		return nil, true, conn.initErr
 	}
-	if supportsSessionClose(initialized.AgentCapabilities) {
-		if err := client.CloseSession(ctx, session.SessionID); err != nil {
-			drain()
-			return partial(prompt.StopReason), fmt.Errorf("close ACP worker session: %w", err)
-		}
-	}
-	drain()
-	return partial(prompt.StopReason), nil
+	return conn, true, nil
 }
 
 // boundedACPStderr keeps only a bounded amount of worker stderr for local

@@ -149,7 +149,7 @@ MothX 使用两个配置文件:
 | `providers` | object | *(见下文)* | 提供商配置 (以名称为 key) |
 | `defaultProvider` | string | `"deepseek-openai"` | 默认使用的提供商 |
 | `defaultModel` | string | `"deepseek-v4-flash"` | 默认使用的模型 ID |
-| `defaultMode` | string | `"yolo"` | 默认运行模式: `plan`、`agent`、`yolo` 或 `os`。`router` 不是合法默认值：Router 为每个会话绑定一个外部 ACP worker，因此只能通过激活（`/router`）进入，不能设为全局默认 |
+| `defaultMode` | string | `"yolo"` | 默认运行模式: `plan`、`agent`、`yolo` 或 `os`。`router` 不是合法默认值：Router 为单个会话绑定一个或多个外部 ACP worker profile，因此只能通过激活（`/router`）进入，不能设为全局默认 |
 | `defaultThinkingLevel` | string | `"medium"` | 默认思考级别 |
 | `toolExecution` | object | *(见下文)* | 本地 function/custom tool 执行模式与每批并发上限 |
 | `statusLine` | object | *(见下文)* | 仅 TUI 生效的外部状态行命令设置 |
@@ -672,7 +672,7 @@ WebUI 在“设置 > Tools”中提供这两个字段，TUI 在 `/settings` > Be
 | `yolo` | 完全访问模式 — 所有工具自动执行 |
 | `os` | 仅 Shell 模式 — 只提供 Bash，使用 YOLO 级审批行为且不启用沙箱；高风险保护仍然生效 |
 
-`router` 是合法的会话运行模式，但不是合法的 `defaultMode`：它为每个会话绑定一个已激活的外部 ACP worker，因此需要通过 `/router`（TUI）或 `mothx --router --acp-agent <id>` 进入。若仍把 `defaultMode` 设为 `router`，它会被当作 `plan` 处理而不会报错：默认值在绑定 worker 之前就已解析，而 `plan` 是该意图的只读投影，因此这一回退绝不会把工具权限放大到完全访问。
+`router` 是合法的会话运行模式，但不是合法的 `defaultMode`：它为每个会话绑定一个或多个外部 ACP worker，因此需要通过 `/router <id>[,<id>...]`（TUI）或 `mothx --router --acp-agent <id>[,<id>...]` 进入。若仍把 `defaultMode` 设为 `router`，它会被当作 `plan` 处理而不会报错：默认值在绑定 worker 之前就已解析，而 `plan` 是该意图的只读投影，因此这一回退绝不会把工具权限放大到完全访问。
 
 ```json
 { "defaultMode": "yolo" }
@@ -1151,6 +1151,14 @@ Agent 模式下：
 | `perChildSubagents` | bool | `false` | 每个子 Agent 使用独立 worktree |
 | `esm` | bool | `false` | ESM worker/critic/audit 角色为每个目标共享一个 worktree |
 
+外部 ACP worker 会使用 `AgentManager` 解析出的 worktree（显式子级 worktree 或
+`perChildSubagents`），而不是退回会话目录。其 `fs/*` 与 `terminal/*` 桥以该
+worktree 为根；终态时会把有界 change-set 快照（base/head revision、变更路径、
+patch、未跟踪内容与摘要）写入持久化子级历史。Router lead 通过
+`subagent_integrate` 应用选定快照：它使用 Runtime 唯一的独占主工作区通道，
+绝不会复制可变的子级 worktree。git apply 冲突会作为证据返回，已经应用过的
+快照 digest 是幂等的。
+
 ```json
 {
   "worktree": {
@@ -1165,7 +1173,7 @@ Agent 模式下：
 
 ### acpAgents
 
-`acpAgents` 是 MothX 可用作 Router worker 的外部 ACP 编码 Agent 全局白名单。MothX 不会自动发现 Agent，也不会接受模型工具调用传入的命令；profile 的 `command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名，启动从不经过 shell 字符串。
+`acpAgents` 是 MothX 可用作 Router worker 的外部 ACP 编码 Agent 全局白名单。MothX 不会自动发现 Agent，也不会接受模型工具调用传入的命令或端点。本地 profile 的 `command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名，启动从不经过 shell 字符串；远程 profile 只使用管理员配置的 `url`。
 
 ```json
 {
@@ -1173,11 +1181,13 @@ Agent 模式下：
     {
       "id": "codex",
       "title": "Codex ACP",
+      "transport": "stdio",
       "command": ["codex-acp"],
       "enabled": true,
       "environment": ["OPENAI_API_KEY"],
       "roles": ["investigate", "implement", "test", "review"],
       "writeRoots": ["src"],
+      "terminal": false,
       "maxConcurrentChildren": 1,
       "permissionPolicy": "auto_allow_once"
     }
@@ -1186,14 +1196,16 @@ Agent 模式下：
 ```
 
 - `id` 是唯一暴露给模型的值。`command` 是 argv 数组；`command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名（启动从不经过 shell）。
+- `transport` 默认为 `stdio`，表示启动本地 ACP 进程；也可设为 `websocket` 或 `http`，使用 ACP 远程传输。远程 profile 必须提供 `url`，且不能同时设置 `command` 或 `environment`；URL 必须分别使用 `ws://`/`wss://` 或 `http://`/`https://`，且不能内嵌凭据。MothX 支持基于 cookie 的会话亲和、HTTP/2（`https://` 端点强制要求）以及 ACP RFD 定义的 connection/session 两级 SSE 流。不实现端点认证流程；`http://` 仅用于可信的本地开发。
 - `environment` 只列变量**名称**；启动时从 `env.json` 或进程环境读取值，不会展示给模型，也不会写入事件。
 - `roles` 是能力上限。未声明 `roles` 的 profile 只读（`investigate`）。写角色（`implement`、`integrate`）必须至少声明一个相对 `writeRoots`，任务的 write scope 必须位于其中。
-- `maxConcurrentChildren` 默认为 `1`，上限为 `8`。大于 `1` 的值会被接受以保持兼容（旧构建写入的 `settings.json` 仍能加载），但本版本每个会话只执行一个存活的外部 worker：Router worker 运行在共享的会话工作目录中，只读 lead 没有本地写入工具来化解两个外部写入者之间的冲突。Runtime 的许可会执行该上限，而 `mothx doctor` 与 `/router` 面板会把「配置值高于实际上限」报告为**尚未生效**而不是报错；当 Runtime 拥有「每 worker 独立 worktree」后，该值才可真正大于 1。
+- `terminal`（默认 `false`）允许该 profile 使用客户端维护的 ACP 终端桥。启用后远端 Agent 可以请求 MothX 执行 argv 命令；MothX 会通过共享工作区沙箱、进程组回收和有界输出缓冲执行。不实现终端认证或 URL 认证。仅对你已经信任其自主选择命令的 Agent 可执行文件启用。
+- `maxConcurrentChildren` 默认为 `1`，上限为 `8`。只读 Router worker 可以按该上限并发；Runtime 会对同一 profile/workdir 复用一个已初始化的 ACP 连接，承载多个相互隔离的远程 session。该连接会广播该 profile 上任一 session 可能执行的客户端能力并集（例如 profile 声明写角色与 `writeRoots` 时广播 `fs.writeTextFile`），但每个 session 的 handler 仍会拒绝超出自身任务角色/范围（role/scope）的写入。在 Runtime 受管独立 worktree 中执行的 `implement` worker 不会写主工作区，因此可以与 reader 并存。主工作区 writer（包括 `subagent_integrate`）双向独占，所以任一外部 worker 存活时 Runtime 会拒绝它，writer 存活时也会拒绝新的 reader。每个只读 fan-out 结果通过 `subagent_wait(handle: ...)` 分别等待。
 - Router 的 `permissionPolicy` 只能是 `auto_allow_once` 或 `auto_reject`；`interactive` profile 不能作为 Router worker 激活。MothX 只会选择远端 Agent 实际提供的一次性选项，绝不会自动选择 `allow_always`/`reject_always`。
 
-可以在 `settings.json` 中编辑 `acpAgents`，也可以使用 TUI 的 `/router` 面板：面板会列出 profile 及其由 Runtime 解析出的可用性，并支持新增、编辑、删除和激活。面板只通过共享配置层写入，因此无效候选（空的 `command[0]`、重复 ID、写角色缺少 `writeRoots`、内联明文密钥）会在写入前被拒绝。在面板中按 `t`、在 TUI 中使用 `/router <id>`，或在 CLI 中使用 `mothx --router --acp-agent <id>` 激活。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化 profile 与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
+可以在 `settings.json` 中编辑 `acpAgents`，也可以使用 TUI 的 `/router` 面板：面板会列出 profile 及其由 Runtime 解析出的可用性，并支持新增、编辑、删除和激活。面板只通过共享配置层写入，因此无效候选（stdio 的空 `command[0]`、缺失或不匹配的远程 `url`、重复 ID、写角色缺少 `writeRoots`、内联明文密钥）会在写入前被拒绝。在面板中按 `t`、在 TUI 中使用 `/router <id>[,<id>...]`，或在 CLI 中使用 `mothx --router --acp-agent <id>[,<id>...]` 激活。第一个 profile 是默认目标，有序列表是会话绑定的允许列表；Runtime 会逐个校验 profile 并记录对应的非阻塞策略。激活要求会话空闲且来源未被强制为 yolo，并通过正常的会话回放条目持久化选择与 Router 模式。TUI/CLI 不会自行读取 profile argv 或启动 worker。
 
-**信任边界：** 选择 profile 意味着信任该可执行文件可以访问会话工作目录、你允许的环境变量以及它自行选择的网络。Router 的只读工具列表约束的是 MothX lead，而不是外部 Agent。运行 `mothx doctor` 可以在不启动任何进程的情况下检查 profile 形状与可执行文件可用性。
+**信任边界：** 选择本地 profile 意味着信任该可执行文件可以访问会话工作目录、你允许的环境变量以及它自行选择的网络。选择远程 profile 意味着信任该端点接收任务、声明的工作区根目录，以及 MothX 通过协商的 filesystem/terminal 桥发送的内容。Router 的只读工具列表约束的是 MothX lead，而不是外部 Agent。运行 `mothx doctor` 可以在不启动进程、不连接端点的情况下检查 profile 形状与本地可执行文件可用性。
 
 ### maintenance（后台维护）
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -67,7 +68,10 @@ type AgentManager struct {
 	// childBackend is an optional Runtime-installed child constructor. Agent
 	// Core never imports the external protocol; it only knows whether the
 	// backend handled this validated request.
-	childBackend ChildBackend
+	childBackend        ChildBackend
+	childRunRecorder    ChildRunRecorder
+	changeSetIntegrator ChangeSetIntegrator
+	sessionID           string
 }
 
 // ChildBackend constructs a child after AgentManager has validated the parent,
@@ -78,6 +82,75 @@ type AgentManager struct {
 // the manager's status, cancellation, event-forwarding, or terminal contracts.
 type ChildBackend interface {
 	CreateChild(opts AgentOptions) (agentpkg.Agent, bool, error)
+}
+
+// ChildWorktreePlanner lets a Runtime-installed backend request an isolated
+// worktree before construction. Agent Core resolves it through the Runtime-owned
+// WorktreeProvider; the backend never runs git itself.
+type ChildWorktreePlanner interface {
+	ChildWorktree(opts AgentOptions) *WorktreeSpec
+}
+
+// ChildRunObservation is the lifecycle fact a child backend reports for
+// durable history. The Runtime owns where it is stored; Agent Core only
+// supplies canonical identity, status, and the child transcript.
+type ChildRunObservation struct {
+	ChildID         string
+	SessionID       string
+	ParentRunID     string
+	Backend         string
+	ProfileID       string
+	RemoteSessionID string
+	WorkDir         string
+	WorktreeID      string
+	BaseRevision    string
+	ChangeSetJSON   string
+	ChangeSetError  string
+	Status          string
+	ContractJSON    string
+	TranscriptJSON  string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// ChildRunRecorder persists child history through the Runtime-owned session
+// boundary. It is optional so standalone Agent Core tests do not require a DB.
+type ChildRunRecorder interface {
+	RecordChildRun(observation ChildRunObservation) error
+}
+
+// ChangeSetSelection identifies one immutable child change-set snapshot the
+// Router lead wants the Runtime integration owner to apply.
+type ChangeSetSelection struct {
+	Handle string `json:"handle"`
+	Digest string `json:"digest"`
+}
+
+// ChangeSetIntegrationChild is the per-child integration outcome.
+type ChangeSetIntegrationChild struct {
+	Handle        string   `json:"handle"`
+	Digest        string   `json:"digest"`
+	Status        string   `json:"status"`
+	Error         string   `json:"error,omitempty"`
+	EvidenceError string   `json:"evidenceError,omitempty"`
+	AppliedFiles  []string `json:"appliedFiles,omitempty"`
+}
+
+// ChangeSetIntegrationResult is the Runtime-owned integration evidence projected
+// to the lead. It never treats a worker's prose as proof of a workspace change.
+type ChangeSetIntegrationResult struct {
+	IntegrationID string                      `json:"integrationId,omitempty"`
+	Status        string                      `json:"status"`
+	Children      []ChangeSetIntegrationChild `json:"children,omitempty"`
+	AppliedFiles  []string                    `json:"appliedFiles,omitempty"`
+	Error         string                      `json:"error,omitempty"`
+	EvidenceError string                      `json:"evidenceError,omitempty"`
+}
+
+// ChangeSetIntegrator applies selected immutable snapshots through the one
+// Runtime-owned integration lane. Agent Core only validates the tool shape.
+type ChangeSetIntegrator interface {
+	IntegrateChangeSets(ctx context.Context, selections []ChangeSetSelection) (ChangeSetIntegrationResult, error)
 }
 
 // ChildMetadataProvider is an optional interface on an external child. Its
@@ -97,6 +170,13 @@ type ChildCompletionProvider interface {
 // requests.
 type WorktreeProvider interface {
 	ResolveWorktree(baseCwd string, spec WorktreeSpec) (string, error)
+}
+
+// WorktreeMetadataProvider is the richer optional contract. AgentManager uses
+// it when available so external child backends receive the worktree identity
+// and base revision, not just a directory.
+type WorktreeMetadataProvider interface {
+	ResolveWorktreeMetadata(baseCwd string, spec WorktreeSpec) (WorktreeResolution, error)
 }
 
 // NewAgentManager creates a new agent manager.
@@ -148,6 +228,83 @@ func (m *AgentManager) SetChildBackend(backend ChildBackend) {
 	m.mu.Lock()
 	m.childBackend = backend
 	m.mu.Unlock()
+}
+
+// SetChildRunRecorder installs durable child-history persistence and the
+// canonical session identity. It must be called during Runtime assembly,
+// before child agents start.
+func (m *AgentManager) SetChildRunRecorder(recorder ChildRunRecorder, sessionID string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.childRunRecorder = recorder
+	m.sessionID = sessionID
+	m.mu.Unlock()
+}
+
+// SetChangeSetIntegrator installs the Runtime-owned change-set application
+// service. It must be set during assembly, before Router tools are exposed.
+func (m *AgentManager) SetChangeSetIntegrator(integrator ChangeSetIntegrator) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.changeSetIntegrator = integrator
+	m.mu.Unlock()
+}
+
+// IntegrateChangeSets delegates to the Runtime-owned integration service.
+func (m *AgentManager) IntegrateChangeSets(ctx context.Context, selections []ChangeSetSelection) (ChangeSetIntegrationResult, error) {
+	if m == nil {
+		return ChangeSetIntegrationResult{}, fmt.Errorf("agent manager is not initialized")
+	}
+	m.mu.RLock()
+	integrator := m.changeSetIntegrator
+	m.mu.RUnlock()
+	if integrator == nil {
+		return ChangeSetIntegrationResult{}, fmt.Errorf("change-set integration is not available for this session")
+	}
+	return integrator.IntegrateChangeSets(ctx, selections)
+}
+
+type childWorkDirProvider interface {
+	WorkDir() string
+}
+
+// RecordLocalChildRun persists one completed local child through the
+// Runtime-installed recorder. External backends persist their own remote
+// session identity and must not be double-recorded here.
+func (m *AgentManager) RecordLocalChildRun(a agentpkg.Agent, parentRunID, status string) error {
+	if m == nil || a == nil {
+		return nil
+	}
+	m.mu.RLock()
+	recorder := m.childRunRecorder
+	sessionID := m.sessionID
+	m.mu.RUnlock()
+	if recorder == nil || sessionID == "" {
+		return nil
+	}
+	transcript, err := json.Marshal(a.GetMessages())
+	if err != nil {
+		return fmt.Errorf("encode child transcript: %w", err)
+	}
+	workDir := ""
+	if provider, ok := a.(childWorkDirProvider); ok {
+		workDir = provider.WorkDir()
+	}
+	startedAt := time.Now()
+	if current, ok := m.Status(a.ID()); ok && !current.StartedAt.IsZero() {
+		startedAt = current.StartedAt
+	}
+	now := time.Now()
+	return recorder.RecordChildRun(ChildRunObservation{
+		ChildID: string(a.ID()), SessionID: sessionID, ParentRunID: parentRunID,
+		Backend: "local", WorkDir: workDir, Status: status,
+		ContractJSON: "{}", TranscriptJSON: string(transcript),
+		CreatedAt: startedAt, UpdatedAt: now,
+	})
 }
 
 // SetWorktreeProvider installs the Runtime-owned worktree resolver. It must be
@@ -306,6 +463,14 @@ func (m *AgentManager) Register(a agentpkg.Agent) {
 // Create creates a new agent and registers it.
 // If opts.ParentID is set, validates the parent exists and is a top-level agent.
 func (m *AgentManager) Create(opts AgentOptions) (agentpkg.Agent, error) {
+	if opts.ParentID != "" && opts.Worktree == nil && opts.ExternalAgent != "" {
+		m.mu.RLock()
+		backend := m.childBackend
+		m.mu.RUnlock()
+		if planner, ok := backend.(ChildWorktreePlanner); ok {
+			opts.Worktree = planner.ChildWorktree(opts)
+		}
+	}
 	// Resolve an on-demand worktree before taking the manager lock: it may
 	// block on git and must not stall other manager operations.
 	if opts.Worktree != nil || opts.ParentID != "" {
@@ -324,14 +489,21 @@ func (m *AgentManager) Create(opts AgentOptions) (agentpkg.Agent, error) {
 			if opts.Worktree != nil {
 				spec = *opts.Worktree
 			}
-			dir, err := provider.ResolveWorktree(opts.WorkDir, spec)
+			resolved := WorktreeResolution{}
+			var err error
+			if metadataProvider, ok := provider.(WorktreeMetadataProvider); ok {
+				resolved, err = metadataProvider.ResolveWorktreeMetadata(opts.WorkDir, spec)
+			} else {
+				resolved.Directory, err = provider.ResolveWorktree(opts.WorkDir, spec)
+			}
 			if err != nil {
 				if !spec.Optional {
 					return nil, fmt.Errorf("resolve sub-agent worktree: %w", err)
 				}
 				// Optional: keep the inherited workspace and continue.
 			} else {
-				opts.WorkDir = dir
+				opts.WorkDir = resolved.Directory
+				opts.WorktreeResolved = &resolved
 			}
 		}
 	}
@@ -625,6 +797,31 @@ func (m *AgentManager) MarkRunning(id agentpkg.AgentID) {
 	m.updateStatus(id, "running", "", "")
 }
 
+// BeginFollowUp starts a new turn for an already-managed child. Terminal state
+// is sticky within one turn so a late compatibility EventDone/EventError cannot
+// overwrite the canonical EventRunFinished outcome. A follow-up is a new turn,
+// so it must explicitly clear that terminal state before its events arrive.
+func (m *AgentManager) BeginFollowUp(id agentpkg.AgentID) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	st, ok := m.statuses[id]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	if st.StartedAt.IsZero() {
+		st.StartedAt = time.Now()
+	}
+	st.State = "running"
+	st.Result = ""
+	st.Error = ""
+	st.UpdatedAt = time.Now()
+	m.statuses[id] = st
+	m.mu.Unlock()
+}
+
 // MarkDone records successful completion and the last reported result.
 func (m *AgentManager) MarkDone(id agentpkg.AgentID, result string) {
 	m.updateStatus(id, "done", result, "")
@@ -682,6 +879,12 @@ func (m *AgentManager) updateStatus(id agentpkg.AgentID, state, result, errMsg s
 	}
 	if errMsg != "" {
 		st.Error = errMsg
+	}
+	// Backend-owned metadata can change after construction (for example an
+	// external child's terminal change-set digest). Refresh it on every status
+	// transition so subagent_status/subagent_wait never project stale facts.
+	if provider, ok := m.agents[id].(ChildMetadataProvider); ok {
+		st.Metadata = provider.ChildMetadata()
 	}
 	st.UpdatedAt = time.Now()
 	m.statuses[id] = st

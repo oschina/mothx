@@ -168,6 +168,40 @@ func TestSetExpertPreflightFailureDoesNotPersistBrokenBinding(t *testing.T) {
 	}
 }
 
+func TestSetExpertRejectsTeamInRouterMode(t *testing.T) {
+	workDir := t.TempDir()
+	writeExpertFixtures(t, workDir)
+	mgr, err := CreateSession(CreateSessionOptions{WorkDir: workDir, SessionDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	runtime, err := testBuilder().Build(context.Background(), BuildOptions{WorkDir: workDir, Manager: mgr})
+	if err != nil {
+		t.Fatalf("build runtime: %v", err)
+	}
+	defer runtime.Close()
+	runtime.mu.Lock()
+	runtime.Mode = ModeRouter
+	runtime.mu.Unlock()
+
+	if err := runtime.SetExpert("studio"); err == nil ||
+		!strings.Contains(err.Error(), "cannot be bound in Router mode") {
+		t.Fatalf("team bind in Router = %v", err)
+	}
+	if got := mgr.GetExpertID(); got != "" {
+		t.Fatalf("rejected team bind persisted expert id %q", got)
+	}
+	if binding, _ := runtime.ExpertState(); binding != nil {
+		t.Fatalf("rejected team bind changed runtime binding: %+v", binding)
+	}
+
+	// A non-team expert remains a prompt/skill identity and does not conflict
+	// with Router's role-aware external worker policy.
+	if err := runtime.SetExpert("solo"); err != nil {
+		t.Fatalf("solo expert bind in Router: %v", err)
+	}
+}
+
 func TestSetExpertRehydratesPackageSkills(t *testing.T) {
 	workDir := t.TempDir()
 	mgr, err := CreateSession(CreateSessionOptions{WorkDir: workDir, SessionDir: t.TempDir()})
