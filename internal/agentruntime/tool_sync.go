@@ -92,6 +92,38 @@ func SynchronizeToolGroups(rt *SessionRuntime, registry *tools.Registry, policy 
 
 const delegateSubAgentToolName = "delegate_subagent"
 
+// RouterActive reports whether this session currently resolves to Router mode.
+// It is the Runtime-owned mode predicate adapters must use instead of
+// re-deriving Router from their own mode field: Router is a Runtime fact
+// resolved from the persisted mode entry plus the activated worker binding.
+func (r *SessionRuntime) RouterActive() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	mode := r.Mode
+	r.mu.RUnlock()
+	return strings.TrimSpace(mode) == ModeRouter
+}
+
+// ManagerBackedToolsEnabled reports whether this session exposes the
+// manager-backed tool groups (sub-agent, delegate, workflow) and therefore
+// needs an AgentManager plus a registered lead agent.
+//
+// The lead agent must be registered into the manager before it can spawn a
+// child: AgentManager.Create validates the parent ID against the registered
+// agents and fails with "parent agent <id> not found" otherwise. Router mode
+// installs the same delegation surface as a multi-agent session, so it must
+// count here even when the adapter's multi-agent/delegate/workflow flags are
+// all false. Every entry point must use this predicate so a session can never
+// expose a delegation tool whose parent is unknown to the manager.
+func ManagerBackedToolsEnabled(rt *SessionRuntime, multiAgent, delegate, workflows bool) bool {
+	if SubAgentToolsEnabled(rt, multiAgent) || delegate || workflows {
+		return true
+	}
+	return rt.RouterActive()
+}
+
 func removeSubAgentTools(registry *tools.Registry) {
 	for _, name := range agent.SubAgentToolNames() {
 		registry.Remove(name)

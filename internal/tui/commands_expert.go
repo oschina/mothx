@@ -264,7 +264,7 @@ func (a *App) expertControlIdle() bool {
 // agentManagementEnabled includes the Runtime-owned forced team capability;
 // an adapter flag alone must not hide a bound team's manager or its status.
 func (a *App) agentManagementEnabled() bool {
-	return a != nil && (a.multiAgent || a.delegateMode || a.workflows || (a.runtime != nil && a.runtime.TeamExpertActive()))
+	return a != nil && agentruntime.ManagerBackedToolsEnabled(a.runtime, a.multiAgent, a.delegateMode, a.workflows)
 }
 
 // refreshExpertAwareAgentManager rebuilds the manager from the authoritative
@@ -298,11 +298,21 @@ func (a *App) refreshExpertAwareAgentManager() error {
 // handle only; install, removal, and manager-swap re-installation semantics
 // stay shared across entry points.
 func (a *App) syncToolGroups() {
+	// The Runtime owns mode resolution. The adapter's own mode field can lag
+	// behind it (a resumed Router session adopts its persisted mode only after
+	// the Runtime replayed it), and a stale mode would install the wrong tool
+	// group: the Router delegation surface would be missing, or an ordinary
+	// multi-agent surface would be installed for a Router session.
+	mode := ""
+	if a != nil && a.runtime != nil {
+		_, _, _, resolved, _ := a.runtime.ConfigSnapshot()
+		mode = resolved
+	}
 	agentruntime.SynchronizeToolGroups(a.runtime, a.registry, agentruntime.ToolGroupPolicy{
 		MultiAgent: a.multiAgent,
 		Delegate:   a.delegateMode,
 		Workflows:  a.workflows,
-		Mode:       a.mode,
+		Mode:       mode,
 	}, a.agentMgr)
 }
 

@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
 
 	"github.com/oschina/mothx/internal/agentruntime"
@@ -66,6 +67,23 @@ func (s *server) handleManageRouterActivate(req rpcRequest) {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "router_activation_failed",
 			err.Error(), nil))
 		return
+	}
+
+	// Router installs the delegation surface for this session, so the session
+	// needs its own manager (the activated worker binding is per session) and
+	// the manager-backed tool groups must point at it. Without this the lead
+	// agent is registered into a manager that does not own the session, and
+	// every spawn fails with "parent agent <id> not found".
+	if rt.registry != nil {
+		manager, err := s.registerTeamExpertTools(rt.runtime, rt.registry)
+		if err != nil {
+			// The binding and mode are already persisted, so this is a
+			// projection failure, not a failed activation. Report it without
+			// rolling back the durable Router selection.
+			log.Printf("[acp] router activation could not build the session manager for %s: %v", sessionID, err)
+		} else {
+			rt.agentMgr = manager
+		}
 	}
 
 	// The Runtime persisted Router mode; project the resolved state so the

@@ -983,7 +983,11 @@ func (s *Server) executeBackgroundRun(sess *APISession, durableCtx context.Conte
 		a.Abort()
 		return
 	}
-	if (sess.MultiAgent || sess.DelegateMode || sess.Workflows) && sess.AgentMgr != nil {
+	// Register the lead whenever the session exposes a manager-backed
+	// delegation tool. Router mode installs that surface without any of the
+	// session's capability flags, and an unregistered lead makes every
+	// sub-agent spawn fail with "parent agent <id> not found".
+	if agentruntime.ManagerBackedToolsEnabled(sess.Runtime, sess.MultiAgent, sess.DelegateMode, sess.Workflows) && sess.AgentMgr != nil {
 		sess.AgentMgr.Register(agent.NewAgentAdapter(a))
 		defer func() {
 			sess.AgentMgr.Finish(a.ID(), ctx.Err())

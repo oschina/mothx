@@ -1765,6 +1765,10 @@ func (s *server) newToolRegistry(cwd string, mgr *session.Manager) *tools.Regist
 // A process-wide ACP manager cannot own team state: member definitions and
 // completion mailboxes are session resources and must never be shared between
 // ACP sessions.
+//
+// A Router session also needs a session-scoped manager: its delegation tools
+// resolve the activated worker per session, and the manager must own the
+// session's binding rather than the process-wide one.
 func (s *server) registerTeamExpertTools(runtime *agentruntime.SessionRuntime, registry *tools.Registry) (*agent.AgentManager, error) {
 	if runtime == nil || registry == nil {
 		return nil, fmt.Errorf("session runtime is unavailable")
@@ -1774,10 +1778,10 @@ func (s *server) registerTeamExpertTools(runtime *agentruntime.SessionRuntime, r
 	// lose the session roster and mailbox.
 	manager := s.agentMgr
 	var teamManager *agent.AgentManager
-	if runtime.TeamExpertActive() {
+	if runtime.TeamExpertActive() || runtime.RouterActive() {
 		p, providerName, model, _, _ := runtime.ConfigSnapshot()
 		if p == nil || model == nil {
-			return nil, fmt.Errorf("team expert session provider and model are required")
+			return nil, fmt.Errorf("session provider and model are required")
 		}
 		created, err := agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
 			Runtime: runtime, Provider: p, ProviderName: providerName, Model: model,
@@ -1798,10 +1802,18 @@ func (s *server) registerTeamExpertTools(runtime *agentruntime.SessionRuntime, r
 // Runtime-owned installer. ACP supplies policy and the resolved manager only;
 // install, removal, and manager-swap re-installation semantics stay shared.
 func (s *server) syncSessionToolGroups(runtime *agentruntime.SessionRuntime, registry *tools.Registry, manager *agent.AgentManager) {
+	// The Runtime owns mode resolution. The adapter's own mode field can lag
+	// behind it, and a stale mode would install the wrong tool group.
+	mode := ""
+	if runtime != nil {
+		_, _, _, resolved, _ := runtime.ConfigSnapshot()
+		mode = resolved
+	}
 	agentruntime.SynchronizeToolGroups(runtime, registry, agentruntime.ToolGroupPolicy{
 		MultiAgent: s.multiAgent,
 		Delegate:   s.delegate,
 		Workflows:  s.workflows,
+		Mode:       mode,
 	}, manager)
 }
 
@@ -3509,7 +3521,11 @@ func (s *server) handlePromptContext(admissionCtx context.Context, req rpcReques
 	if agentMgr == nil {
 		agentMgr = s.agentMgr
 	}
-	if agentMgr != nil {
+	// The lead must be registered whenever the session exposes a manager-backed
+	// delegation tool. Router mode installs that surface without any of the
+	// adapter's multi-agent/delegate/workflow flags, and an unregistered lead
+	// makes every sub-agent spawn fail with "parent agent <id> not found".
+	if agentruntime.ManagerBackedToolsEnabled(rt.runtime, s.multiAgent, s.delegate, s.workflows) && agentMgr != nil {
 		agentMgr.Register(agent.NewAgentAdapter(a))
 	}
 	rt.agent = agent.NewAgentAdapter(a)

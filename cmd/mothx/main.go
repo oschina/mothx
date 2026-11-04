@@ -496,6 +496,7 @@ func run(args []string, opts runOptions) error {
 		// the Runtime-owned tool groups so Router exposes its delegate immediately.
 		agentruntime.SynchronizeToolGroups(sharedRuntime, registry, agentruntime.ToolGroupPolicy{
 			MultiAgent: opts.multiAgent, Delegate: opts.delegate, Workflows: opts.workflows,
+			Mode: agentruntime.ModeRouter,
 		}, runtime.agentManager)
 	}
 

@@ -36,6 +36,8 @@
 
 ### 🐛 问题修复
 
+- **Router 会话现在可以正常 spawn 外部 ACP worker。** 此前只有当适配器开启了 multi-agent、delegate 或 workflow 能力时，lead agent 才会被注册进 `AgentManager`，但 Router 模式并不依赖这些开关就会装上同样的委派工具面。结果是每次 spawn 都会以 `create sub-agent: parent agent agent-master not found` 失败，已正确配置并激活的 worker 根本不会被执行到。现在该判定由 Runtime 通过 `ManagerBackedToolsEnabled` 独占，Router 与常规能力一并计入，所有入口（TUI、CLI、WebUI/API、ACP/Desktop）都据此注册 lead。此外，TUI、WebUI 与 ACP 的工具组同步现在从 Runtime 而非适配器自有字段解析模式，因此恢复或刚刚激活的 Router 会话装上的是 Router 委派工具面而不是错误的那一套；ACP/Desktop 下的 Router 会话也会获得其按会话绑定 worker 所需的会话级 manager。
+
 - **TUI 的 `/browser` 命令现在能真正启用浏览器自动化。** 该命令此前只修改 TUI 本地的工具注册表，因此浏览器工具会在首次提问创建并绑定会话时再次被悄悄移除：共享 Runtime 会依据过期的能力状态重新加载资源，在构建 Agent 之前注销该工具。现在该命令改为经 Runtime 自身的能力路径执行，工具、对应 Skill 提示词与持久化的会话能力保持为同一个事实。Runtime 也会在构建、附着、能力更新与资源刷新之间保持浏览器能力一致；在首次提问之前打开的浏览器开关会被持久化到该提问所创建的会话上，因此重新打开该会话时浏览器支持依然处于开启状态。
 
 - **注册 MCP 服务器不再需要重启客户端，绑定旧协议版本的远端服务器也能正常连接。** 此前新增或修改 MCP 服务器只写入 `mcp.json`，必须完整重启客户端后 Agent 才能感知；现在 TUI `/mcpmgr` 面板、Serve Web UI 的 `/api/mcp` 端点与 ACP 的 `mothx/manage/mcp/set` 方法都会经共享 Runtime 就地重连受影响的服务器。MCP 工具按服务器归属，重连只替换该服务器自己的工具集合，并会移除已删除或已关闭服务器遗留的工具，不影响其他服务器与内置工具。已在执行的运行仍使用构建时冻结的工具集合，变更在下一次运行时生效。重连失败会保留此前可用的配置，不会把它一并拆除。协议协商也不再强制要求最新版本：服务端以 `2025-06-18`、`2025-03-26` 或 `2024-11-05` 回应 `initialize` 时均被接受，且只有定义了 `MCP-Protocol-Version` 的版本才会发送该请求头。未知版本仍会被拒绝，不会谎称兼容。

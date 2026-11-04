@@ -333,7 +333,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "session run is being cancelled", "session_run_cancelling")
 		return
 	}
-	if (sess.MultiAgent || sess.DelegateMode || sess.Workflows) && sess.AgentMgr != nil {
+	// Register the lead whenever the session exposes a manager-backed
+	// delegation tool. Router mode installs that surface without any of the
+	// session's capability flags, and an unregistered lead makes every
+	// sub-agent spawn fail with "parent agent <id> not found".
+	if agentruntime.ManagerBackedToolsEnabled(sess.Runtime, sess.MultiAgent, sess.DelegateMode, sess.Workflows) && sess.AgentMgr != nil {
 		sess.AgentMgr.Register(agent.NewAgentAdapter(a))
 		defer func() {
 			sess.AgentMgr.Finish(a.ID(), ctx.Err())
@@ -1681,7 +1685,10 @@ func (s *Server) syncSessionTools(sess *APISession, refreshContext bool) error {
 		sess.Registry.Remove("a2a_dispatch")
 	}
 
-	if agentruntime.SubAgentToolsEnabled(sess.Runtime, sess.MultiAgent) || sess.DelegateMode || sess.Workflows {
+	// A Router session exposes the same delegation surface as a multi-agent
+	// session, so it needs a manager even when the session's own capability
+	// flags are all false. The Runtime owns that decision.
+	if agentruntime.ManagerBackedToolsEnabled(sess.Runtime, sess.MultiAgent, sess.DelegateMode, sess.Workflows) {
 		if sess.AgentMgr == nil {
 			sess.AgentMgr = s.newAgentManagerForSession(sess)
 		}
@@ -1698,10 +1705,20 @@ func (s *Server) syncSessionTools(sess *APISession, refreshContext bool) error {
 // manager handle only; install, removal, and manager-swap re-installation are
 // Runtime-owned so every entry point shares one behavior.
 func synchronizeSessionToolGroups(sess *APISession) {
+	// The Runtime owns mode resolution. The adapter's own mode field can lag
+	// behind it, and a stale mode would install the wrong tool group: the
+	// Router delegation surface would be missing, or an ordinary multi-agent
+	// surface would be installed for a Router session.
+	mode := ""
+	if sess != nil && sess.Runtime != nil {
+		_, _, _, resolved, _ := sess.Runtime.ConfigSnapshot()
+		mode = resolved
+	}
 	agentruntime.SynchronizeToolGroups(sess.Runtime, sess.Registry, agentruntime.ToolGroupPolicy{
 		MultiAgent: sess.MultiAgent,
 		Delegate:   sess.DelegateMode,
 		Workflows:  sess.Workflows,
+		Mode:       mode,
 	}, sess.AgentMgr)
 }
 

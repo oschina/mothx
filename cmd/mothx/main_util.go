@@ -240,7 +240,12 @@ func runPrint(args []string, p provider.Provider, providerName string, model *pr
 			a.LoadHistoryState(replayState.Messages, replayState.EntryIDs)
 		}
 	}
-	if (multiAgent || delegateMode || workflows) && agentMgr != nil {
+	// The lead must be registered whenever the session exposes a
+	// manager-backed delegation tool: AgentManager.Create resolves the parent
+	// ID against the registered agents. Router mode installs that surface
+	// without any of the adapter's multi-agent/delegate/workflow flags, so the
+	// Runtime owns the decision.
+	if agentruntime.ManagerBackedToolsEnabled(runtime, multiAgent, delegateMode, workflows) && agentMgr != nil {
 		agentMgr.Register(agent.NewAgentAdapter(a))
 	}
 

@@ -129,6 +129,13 @@ func (s *Server) ActivateSessionRouter(sessionID string, profileIDs []string) (*
 	if _, _, _, mode, _ := sess.Runtime.ConfigSnapshot(); strings.TrimSpace(mode) != "" {
 		sess.Mode = mode
 	}
+	// Router installs the delegation surface for this session, so the session
+	// needs its own manager even when the session's capability flags are all
+	// false. Without a manager the delegation tools would have no parent to
+	// resolve, and every spawn would fail with "parent agent <id> not found".
+	if sess.AgentMgr == nil {
+		sess.AgentMgr = s.newAgentManagerForSession(sess)
+	}
 	// The Router surface is a different tool group, so the session registry must
 	// be reconciled through the shared installer.
 	agentruntime.SynchronizeToolGroups(sess.Runtime, sess.Registry, agentruntime.ToolGroupPolicy{
