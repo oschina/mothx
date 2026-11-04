@@ -254,6 +254,17 @@ func (i *RuntimeChangeSetIntegrator) IntegrateChangeSets(ctx context.Context, se
 			result.Error = applyErr.Error()
 			recordIntegrationEvidence(&result, childResult, sessionDir, sessionID, item.childID, item.selection.Digest, now)
 			for rest := index + 1; rest < len(loaded); rest++ {
+				// A child whose snapshot already landed before this request keeps
+				// its durable "applied" evidence. The idempotency check reads
+				// that record, so downgrading it to "not_attempted" would make
+				// the next request re-apply (and conflict on) a snapshot that
+				// is already in the workspace.
+				if loaded[rest].applied {
+					result.Children[rest].Status = ChangeSetIntegrationApplied
+					result.Children[rest].Error = ""
+					result.Children[rest].AppliedFiles = append([]string(nil), changeSetPaths(loaded[rest].changeSet)...)
+					continue
+				}
 				result.Children[rest].Status = ChangeSetIntegrationNotAttempted
 				result.Children[rest].Error = "not attempted after an earlier integration failure"
 				recordIntegrationEvidence(&result, &result.Children[rest], sessionDir, sessionID, loaded[rest].childID, loaded[rest].selection.Digest, now)

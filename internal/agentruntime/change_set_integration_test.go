@@ -292,3 +292,61 @@ func (f *integrationFixture) worktreeIDDirectory(t *testing.T) string {
 	}
 	return record.Directory
 }
+
+func TestRuntimeChangeSetIntegrationKeepsAppliedEvidenceAfterLaterConflict(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	directory := fixture.worktreeIDDirectory(t)
+
+	if err := os.WriteFile(filepath.Join(directory, "README.md"), []byte("hello\nchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	applied := fixture.capture(t, worktreepkg.DefaultChangeSetPatchBytes)
+	fixture.saveChild(t, "worker-applied", applied)
+
+	integrator := &RuntimeChangeSetIntegrator{Runtime: fixture.runtime, Worktrees: fixture.worktrees}
+	first, err := integrator.IntegrateChangeSets(context.Background(), []agent.ChangeSetSelection{{
+		Handle: "worker-applied", Digest: applied.Digest,
+	}})
+	if err != nil {
+		t.Fatalf("first IntegrateChangeSets: %v", err)
+	}
+	if first.Status != ChangeSetIntegrationApplied {
+		t.Fatalf("first integration status = %q, want applied", first.Status)
+	}
+
+	// A second child now describes a conflicting edit of the same base, so it
+	// fails to apply after the first child already landed.
+	if err := os.WriteFile(filepath.Join(directory, "README.md"), []byte("hello\nother\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := fixture.capture(t, worktreepkg.DefaultChangeSetPatchBytes)
+	fixture.saveChild(t, "worker-conflict", conflicting)
+
+	// The already-applied child is selected again behind the conflicting one.
+	// It was applied by an earlier request, so the failure of its sibling must
+	// not downgrade its durable evidence: that record is what proves the
+	// snapshot already landed and makes a repeated selection idempotent.
+	second, err := integrator.IntegrateChangeSets(context.Background(), []agent.ChangeSetSelection{
+		{Handle: "worker-conflict", Digest: conflicting.Digest},
+		{Handle: "worker-applied", Digest: applied.Digest},
+	})
+	if err != nil {
+		t.Fatalf("second IntegrateChangeSets: %v", err)
+	}
+	if second.Status != ChangeSetIntegrationFailed {
+		t.Fatalf("second integration status = %q, want failed", second.Status)
+	}
+	if second.Children[1].Status != ChangeSetIntegrationApplied {
+		t.Fatalf("already-applied child status = %q, want applied", second.Children[1].Status)
+	}
+	record, found, err := session.LoadChildRun(fixture.sessionDir, "integration-session", "worker-applied")
+	if err != nil || !found {
+		t.Fatalf("worker-applied history: found=%t err=%v", found, err)
+	}
+	if record.IntegrationStatus != ChangeSetIntegrationApplied {
+		t.Fatalf("applied child evidence = %q, want applied", record.IntegrationStatus)
+	}
+	if record.IntegrationDigest != applied.Digest {
+		t.Fatalf("applied child digest = %q, want %q", record.IntegrationDigest, applied.Digest)
+	}
+}
