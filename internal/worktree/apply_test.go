@@ -117,6 +117,56 @@ func TestApplyChangeSetRejectsTruncatedSnapshot(t *testing.T) {
 	}
 }
 
+// TestApplyChangeSetReportsAppliedPatchWhenUntrackedWriteFails locks in the
+// ordering contract the Runtime's rollback path depends on: the tracked patch
+// is applied before the untracked files are written, so a failure while
+// writing an untracked file must still report PatchApplied. Otherwise the
+// caller would skip the rollback and leave a half-applied snapshot behind.
+func TestApplyChangeSetReportsAppliedPatchWhenUntrackedWriteFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		// A read-only directory does not stop root, so the write would
+		// succeed and the test would prove nothing.
+		t.Skip("test requires a non-root user")
+	}
+	repo := initChangeSetRepo(t)
+	manager, info := materializeChangeSetWorktree(t, repo)
+	base, err := manager.Revision(context.Background(), info.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(info.Directory, "README.md"), []byte("hello\nchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(info.Directory, "new.txt"), []byte("new file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changeSet, err := manager.CaptureChangeSet(context.Background(), info.Directory, base, DefaultChangeSetPatchBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the untracked write fail after the tracked patch has already been
+	// applied: the parent directory exists but is not writable, so creating
+	// the staged temporary file inside it fails.
+	if err := os.Mkdir(filepath.Join(repo, "blocked"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	blocked := changeSetWithUntracked("blocked/child.txt", "worker content\n")
+	blocked.Patch = changeSet.Patch
+	blocked.BaseRevision = changeSet.BaseRevision
+	blocked.HeadRevision = changeSet.HeadRevision
+	blocked.Files = changeSet.Files
+	blocked.Digest = changeSetDigest(blocked)
+
+	applied, err := ApplyChangeSet(context.Background(), repo, blocked)
+	if err == nil {
+		t.Fatal("ApplyChangeSet succeeded, want an untracked write failure")
+	}
+	if !applied.PatchApplied {
+		t.Fatalf("apply metadata = %#v, want PatchApplied so the caller can roll back", applied)
+	}
+}
+
 func TestRollbackChangeSetRestoresTrackedAndRemovesCreatedUntracked(t *testing.T) {
 	repo := initChangeSetRepo(t)
 	manager, info := materializeChangeSetWorktree(t, repo)
