@@ -49,6 +49,32 @@ type mcpConnectReadyMsg struct {
 	Err      error
 }
 
+// mcpReloadCmd reconnects the configured MCP servers so a configuration change
+// takes effect without restarting the client. It runs on a Bubble Tea command
+// goroutine, never the Update loop, so a slow or unhealthy server cannot
+// freeze the UI.
+func (a *App) mcpReloadCmd() tea.Cmd {
+	if a == nil || a.runtime == nil {
+		return nil
+	}
+	runtime := a.runtime
+	return func() tea.Msg {
+		var failures []string
+		err := runtime.ReloadConfiguredMCP(context.Background(), agentruntime.MCPPolicy{
+			Optional: true,
+			OnError: func(cause error) {
+				if cause != nil {
+					failures = append(failures, cause.Error())
+				}
+			},
+		})
+		if err != nil {
+			return mcpConnectReadyMsg{Err: err}
+		}
+		return mcpConnectReadyMsg{Failures: failures}
+	}
+}
+
 // handleMCPConnectReady folds an MCP connect outcome into the UI. MCP tools are
 // registered directly on the shared registry, so the cached Agent must be
 // rebuilt to freeze them into its next system prompt. An active run is never

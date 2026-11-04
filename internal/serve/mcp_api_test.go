@@ -14,14 +14,14 @@ func TestMCPConfigHandlerRoundTrip(t *testing.T) {
 
 	put := httptest.NewRequest(http.MethodPut, "/api/mcp", bytes.NewBufferString(`{"mcpServers":[{"name":" local ","command":"server"}]}`))
 	putResult := httptest.NewRecorder()
-	rt.handleMCPConfigAtPath(putResult, put, path)
+	rt.handleMCPConfigAtPath(putResult, put, path, nil)
 	if putResult.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, body = %s", putResult.Code, putResult.Body.String())
 	}
 
 	get := httptest.NewRequest(http.MethodGet, "/api/mcp", nil)
 	getResult := httptest.NewRecorder()
-	rt.handleMCPConfigAtPath(getResult, get, path)
+	rt.handleMCPConfigAtPath(getResult, get, path, nil)
 	if getResult.Code != http.StatusOK {
 		t.Fatalf("GET status = %d, body = %s", getResult.Code, getResult.Body.String())
 	}

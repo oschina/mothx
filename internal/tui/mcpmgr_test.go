@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/config"
 )
 
@@ -57,5 +58,51 @@ func TestMCPMgrCRUDAndEnablement(t *testing.T) {
 	_, _ = app.handleMCPMgrKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	if len(app.mcpMgr.Servers) != 0 {
 		t.Fatalf("delete left servers=%#v", app.mcpMgr.Servers)
+	}
+}
+
+// TestMCPMgrSaveSchedulesHotReload guards that saving the MCP configuration
+// reconnects the servers in place instead of requiring a client restart. The
+// reconnect command must be scheduled so the caller can run it off the
+// update loop.
+func TestMCPMgrSaveSchedulesHotReload(t *testing.T) {
+	workDir := t.TempDir()
+	app := &App{cwd: workDir, width: 100, runtime: &agentruntime.SessionRuntime{}}
+	app.openMCPMgr("project")
+
+	app.beginMCPMgrCreate()
+	app.chooseMCPMgrType()
+	app.beginMCPMgrFieldInput("name")
+	app.mcpMgr.Input = app.mcpMgr.Input.SetValue("fixture")
+	app.submitMCPMgrFieldInput()
+	app.beginMCPMgrFieldInput("command")
+	app.mcpMgr.Input = app.mcpMgr.Input.SetValue("fixture-mcp")
+	app.submitMCPMgrFieldInput()
+
+	cmd := app.saveMCPMgrDraft()
+	if cmd == nil {
+		t.Fatal("saving the MCP configuration must schedule a hot reload")
+	}
+}
+
+// TestMCPMgrSaveWithoutRuntimeHasNoReloadCommand guards that a manager without
+// a shared Runtime cannot schedule a reload: there is no Runtime-owned
+// connection to replace.
+func TestMCPMgrSaveWithoutRuntimeHasNoReloadCommand(t *testing.T) {
+	workDir := t.TempDir()
+	app := &App{cwd: workDir, width: 100}
+	app.openMCPMgr("project")
+
+	app.beginMCPMgrCreate()
+	app.chooseMCPMgrType()
+	app.beginMCPMgrFieldInput("name")
+	app.mcpMgr.Input = app.mcpMgr.Input.SetValue("fixture")
+	app.submitMCPMgrFieldInput()
+	app.beginMCPMgrFieldInput("command")
+	app.mcpMgr.Input = app.mcpMgr.Input.SetValue("fixture-mcp")
+	app.submitMCPMgrFieldInput()
+
+	if cmd := app.saveMCPMgrDraft(); cmd != nil {
+		t.Fatal("a manager without a Runtime must not schedule a reload")
 	}
 }

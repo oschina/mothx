@@ -1672,16 +1672,60 @@ func (s *server) handleManageMCPSet(req rpcRequest) {
 			fmt.Sprintf("save MCP config: %v", err), nil))
 		return
 	}
+	// Reconnect the affected sessions in place so the new configuration takes
+	// effect without restarting the ACP runtime or the Desktop client. The
+	// reload is Runtime-owned; this method only decides when to trigger it.
+	reloaded := s.reloadManagedMCP(target)
 	saved, err := s.manageMCPConfigAtPath(target.Path)
 	if err != nil {
 		saved = cfg
 	}
-	s.writeResponse(req.ID, map[string]any{
+	response := map[string]any{
 		"scope":     target.Scope,
 		"sessionId": target.SessionID,
 		"path":      target.Path,
 		"servers":   manageMCPViews(saved),
-	}, nil)
+	}
+	if len(reloaded) > 0 {
+		response["reloadedSessions"] = reloaded
+	}
+	s.writeResponse(req.ID, response, nil)
+}
+
+// reloadManagedMCP reconnects the sessions affected by an MCP configuration
+// write. A global change affects every live session; a project change affects
+// only the sessions whose working directory owns that project configuration.
+// The reload never fails the management call: a server that cannot be
+// reconnected is reported through the session's canonical warning surface.
+func (s *server) reloadManagedMCP(target manageMCPTarget) []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	runtimes := make([]*sessionRuntime, 0, len(s.sessions))
+	for _, rt := range s.sessions {
+		runtimes = append(runtimes, rt)
+	}
+	s.mu.Unlock()
+	var reloaded []string
+	for _, rt := range runtimes {
+		if rt == nil || rt.runtime == nil {
+			continue
+		}
+		if target.Scope == "project" && rt.runtime.WorkDir != filepath.Dir(target.Path) {
+			continue
+		}
+		if err := rt.runtime.ReloadConfiguredMCP(context.Background(), agentruntime.MCPPolicy{
+			Callbacks: s.buildMCPCallbacks(rt.id),
+			Optional:  true,
+			OnError:   func(error) {},
+		}); err != nil {
+			log.Printf("[acp] reload MCP for session %s failed: %v", rt.id, err)
+			continue
+		}
+		reloaded = append(reloaded, rt.id)
+	}
+	return reloaded
 }
 
 // --- §6.1 cron ------------------------------------------------------------------

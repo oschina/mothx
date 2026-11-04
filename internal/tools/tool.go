@@ -202,9 +202,14 @@ func ToolDefinition(t Tool) provider.ToolDefinition {
 
 // Registry manages available tools.
 type Registry struct {
-	mu             sync.RWMutex
-	tools          map[string]Tool
-	order          []string
+	mu    sync.RWMutex
+	tools map[string]Tool
+	order []string
+	// ownedTools maps a tool owner key to the tool names it registered. It lets
+	// a resource owner (for example an MCP server) replace its whole tool set
+	// atomically when the underlying configuration changes, without the
+	// registry guessing which tools belong to whom.
+	ownedTools     map[string][]string
 	sandbox        sandbox.Sandbox
 	workDir        string
 	jobManager     *JobManager
@@ -219,6 +224,7 @@ type Registry struct {
 func NewRegistry(workDir string, sb sandbox.Sandbox) *Registry {
 	return &Registry{
 		tools:      make(map[string]Tool),
+		ownedTools: make(map[string][]string),
 		workDir:    workDir,
 		sandbox:    sb,
 		jobManager: NewJobManager(),
@@ -247,6 +253,7 @@ func NewRegistryWithConfig(cfg RegistryConfig) *Registry {
 	}
 	r := &Registry{
 		tools:      make(map[string]Tool),
+		ownedTools: make(map[string][]string),
 		workDir:    cfg.WorkDir,
 		sandbox:    cfg.Sandbox,
 		jobManager: NewJobManager(),
@@ -357,6 +364,113 @@ func (r *Registry) Remove(name string) {
 			}
 		}
 	}
+}
+
+// RegisterOwned registers a tool on behalf of an owner key and records the
+// ownership so ReplaceOwned can swap the owner's whole tool set later.
+// Registering the same owner twice replaces the previously owned tools
+// instead of accumulating them, so a resource owner can reconnect without
+// leaving stale tools behind.
+func (r *Registry) RegisterOwned(owner string, t Tool) {
+	if t == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	name := t.Name()
+	if _, exists := r.tools[name]; !exists {
+		r.order = append(r.order, name)
+	}
+	r.tools[name] = t
+	r.ownedTools[owner] = append(r.ownedTools[owner], name)
+}
+
+// ReplaceOwned atomically swaps every tool registered by owner for the given
+// tool set. Tools previously owned by owner that are absent from the new set
+// are removed, so a disabled or deleted server cannot leave a stale tool
+// behind. The new tools keep the position of the replaced ones in the
+// registration order when the names match, and are appended otherwise.
+func (r *Registry) ReplaceOwned(owner string, tools []Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	previous := r.ownedTools[owner]
+	previousSet := make(map[string]struct{}, len(previous))
+	for _, name := range previous {
+		previousSet[name] = struct{}{}
+	}
+	nextNames := make(map[string]struct{}, len(tools))
+	newOrder := make([]string, 0, len(r.order))
+	for _, t := range tools {
+		if t == nil {
+			continue
+		}
+		nextNames[t.Name()] = struct{}{}
+	}
+	// Drop tools the owner no longer exposes.
+	for _, name := range previous {
+		if _, keep := nextNames[name]; keep {
+			continue
+		}
+		// Only remove the tool when no other owner still claims it.
+		if r.toolOwnedByOther(owner, name) {
+			continue
+		}
+		delete(r.tools, name)
+	}
+	// Rebuild the order so replaced tools keep their original position and
+	// newly introduced tools are appended.
+	for _, name := range r.order {
+		if _, owned := previousSet[name]; owned {
+			if _, keep := nextNames[name]; keep {
+				newOrder = append(newOrder, name)
+			}
+			continue
+		}
+		newOrder = append(newOrder, name)
+	}
+	registered := make(map[string]struct{}, len(tools))
+	for _, t := range tools {
+		if t == nil {
+			continue
+		}
+		name := t.Name()
+		if _, exists := r.tools[name]; !exists {
+			newOrder = append(newOrder, name)
+		}
+		r.tools[name] = t
+		registered[name] = struct{}{}
+	}
+	r.order = newOrder
+	names := make([]string, 0, len(registered))
+	for name := range registered {
+		names = append(names, name)
+	}
+	r.ownedTools[owner] = names
+}
+
+// toolOwnedByOther reports whether any owner other than the given one still
+// claims the tool name. The caller must hold the registry lock.
+func (r *Registry) toolOwnedByOther(owner, name string) bool {
+	for key, names := range r.ownedTools {
+		if key == owner {
+			continue
+		}
+		for _, owned := range names {
+			if owned == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// OwnedToolNames returns the tool names registered for an owner. It is a
+// read-only projection used to report what a resource owner currently
+// contributes to the registry.
+func (r *Registry) OwnedToolNames(owner string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]string(nil), r.ownedTools[owner]...)
 }
 
 // All returns all registered tools in order.

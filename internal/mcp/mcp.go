@@ -28,6 +28,43 @@ import (
 
 const mcpProtocolVersion = "2025-11-25"
 
+// mcpSupportedProtocolVersions lists the MCP revisions this client can speak.
+// The list is ordered newest-first. A server that answers with an older
+// revision is still usable: the wire differences this client depends on
+// (Streamable HTTP headers, the JSON-RPC envelope) are stable across every
+// revision listed here, so refusing an older server would reject remote
+// endpoints that are perfectly compatible.
+var mcpSupportedProtocolVersions = []string{
+	mcpProtocolVersion,
+	"2025-06-18",
+	"2025-03-26",
+	"2024-11-05",
+}
+
+// mcpProtocolVersionSupported reports whether the negotiated revision is one
+// this client can speak.
+func mcpProtocolVersionSupported(version string) bool {
+	version = strings.TrimSpace(version)
+	for _, supported := range mcpSupportedProtocolVersions {
+		if version == supported {
+			return true
+		}
+	}
+	return false
+}
+
+// mcpProtocolVersionDefinesHeader reports whether the revision defines the
+// MCP-Protocol-Version HTTP header. Streamable HTTP introduced it in
+// 2025-03-26; earlier revisions must not receive the header.
+func mcpProtocolVersionDefinesHeader(version string) bool {
+	switch strings.TrimSpace(version) {
+	case "2025-11-25", "2025-06-18", "2025-03-26":
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	mcpInitializeTimeout = 15 * time.Second
 	mcpListToolsTimeout  = 15 * time.Second
@@ -110,6 +147,15 @@ func (c *Client) currentProtocolVersion() string {
 	c.smu.RLock()
 	defer c.smu.RUnlock()
 	return c.protocolVersion
+}
+
+// Name returns the configured server name. It identifies the connection in
+// Runtime-owned bookkeeping such as registry tool ownership.
+func (c *Client) Name() string {
+	if c == nil {
+		return ""
+	}
+	return c.name
 }
 
 func (c *Client) setProtocolVersion(version string) {
@@ -425,13 +471,14 @@ func ConnectServersWithOptions(ctx context.Context, configs []ServerConfig, regi
 		if client == nil || registry == nil {
 			continue
 		}
+		var serverTools []tools.Tool
 		for _, info := range results[i].tools {
 			if strings.TrimSpace(info.Name) == "" {
 				continue
 			}
 			tool := newMCPTool(client, info, registeredToolNames)
 			registeredToolNames[tool.Name()] = struct{}{}
-			registry.Register(tool)
+			serverTools = append(serverTools, tool)
 		}
 		for _, info := range results[i].resources {
 			if strings.TrimSpace(info.URI) == "" {
@@ -439,7 +486,7 @@ func ConnectServersWithOptions(ctx context.Context, configs []ServerConfig, regi
 			}
 			tool := newMCPResourceTool(client, info, registeredToolNames)
 			registeredToolNames[tool.Name()] = struct{}{}
-			registry.Register(tool)
+			serverTools = append(serverTools, tool)
 		}
 		for _, info := range results[i].prompts {
 			if strings.TrimSpace(info.Name) == "" {
@@ -447,8 +494,11 @@ func ConnectServersWithOptions(ctx context.Context, configs []ServerConfig, regi
 			}
 			tool := newMCPPromptTool(client, info, registeredToolNames)
 			registeredToolNames[tool.Name()] = struct{}{}
-			registry.Register(tool)
+			serverTools = append(serverTools, tool)
 		}
+		// The tools are owned by their server, so a later reconnect replaces
+		// exactly this server's surface instead of leaving stale tools behind.
+		registry.ReplaceOwned(ToolOwner(client.name), serverTools)
 	}
 	return clients, failures, nil
 }
@@ -778,11 +828,18 @@ func (c *Client) acceptInitializeResult(raw json.RawMessage) error {
 	if strings.TrimSpace(result.ProtocolVersion) == "" {
 		return errors.New("initialize result omitted protocolVersion")
 	}
-	// This client implements the current revision only. Silently accepting an
-	// older revision would falsely claim compatibility while using current wire
-	// semantics (notably Streamable HTTP headers).
-	if result.ProtocolVersion != mcpProtocolVersion {
+	// The server selects the revision. An older supported revision stays
+	// usable because the wire semantics this client relies on are stable
+	// across it, so rejecting it would fail a compatible remote endpoint.
+	if !mcpProtocolVersionSupported(result.ProtocolVersion) {
 		return fmt.Errorf("unsupported negotiated protocol version %q", result.ProtocolVersion)
+	}
+	// Only send the MCP-Protocol-Version header for revisions that define it.
+	// Streamable HTTP introduced it in 2025-03-26; an older revision must not
+	// receive a header it does not understand.
+	if !mcpProtocolVersionDefinesHeader(result.ProtocolVersion) {
+		c.setProtocolVersion("")
+		return nil
 	}
 	c.setProtocolVersion(result.ProtocolVersion)
 	return nil
@@ -1573,6 +1630,13 @@ func SanitizeToolName(name string) string {
 		return "tool"
 	}
 	return out
+}
+
+// ToolOwner returns the registry ownership key for an MCP server's tools.
+// Every tool a server exposes is owned by that server, so reconnecting the
+// server replaces exactly its own tools and leaves other servers untouched.
+func ToolOwner(serverName string) string {
+	return "mcp:" + strings.TrimSpace(serverName)
 }
 
 func mcpContentToText(blocks []mcpContentBlock) string {

@@ -1008,6 +1008,7 @@ func (rt *channelRuntime) routes(configPath string) func(*openaiapi.Server, *htt
 		mux.HandleFunc("/api/session-id", rt.handleSessionID(sessions))
 		mux.HandleFunc("/api/sessions", rt.handleSessions(sessions))
 		mux.HandleFunc("/api/sessions/", rt.handleSessionByID(sessions))
+		mux.HandleFunc("/api/acp/profiles", rt.handleACPWorkerProfiles(acpProfileCatalogOf(sessions)))
 		mux.HandleFunc("/api/experts", rt.handleExperts(sessions))
 		mux.HandleFunc("/api/experts/", rt.handleExperts(sessions))
 		mux.HandleFunc("/api/knowledge-bases", rt.handleKnowledgeBases)
@@ -1016,7 +1017,7 @@ func (rt *channelRuntime) routes(configPath string) func(*openaiapi.Server, *htt
 		mux.HandleFunc("/api/projects/", rt.handleProjectByID)
 		mux.HandleFunc("/api/stats/", rt.handleStats(srv.SessionDir()))
 		mux.HandleFunc("/api/settings", rt.handleSettings(srv))
-		mux.HandleFunc("/api/mcp", rt.handleMCPConfig)
+		mux.HandleFunc("/api/mcp", rt.handleMCPConfig(sessions))
 		mux.HandleFunc("/api/env", rt.handleEnv)
 		mux.HandleFunc("/api/memory", rt.handleMemory)
 		mux.HandleFunc("/api/cron", rt.handleCron)
@@ -1538,6 +1539,106 @@ func writeExpertHTTPError(w http.ResponseWriter, err error) {
 	writeJSON(w, status, map[string]string{"error": code, "code": code})
 }
 
+// acpWorkerProfileCatalog is the narrow Router projection the HTTP adapter
+// needs. The WebUI adapter stays a projection: it never reads acpAgents
+// itself, because eligibility, role ceilings, and the validation verdict stay
+// behind the shared Runtime catalog.
+type acpWorkerProfileCatalog interface {
+	ListACPWorkerProfiles() []openaiapi.ACPWorkerProfileSummary
+}
+
+// acpRouterSessionService is the session-scoped Router projection. Activation
+// delegates to the shared Runtime path, so the WebUI cannot reach a Router state
+// the TUI or CLI could not.
+type acpRouterSessionService interface {
+	GetSessionRouter(sessionID string) (*openaiapi.RouterBindingSummary, error)
+	ActivateSessionRouter(sessionID string, profileIDs []string) (*openaiapi.RouterBindingSummary, error)
+	DeactivateSessionRouter(sessionID string) (*openaiapi.RouterBindingSummary, error)
+}
+
+// acpProfileCatalogOf resolves the narrow Router catalog projection from the
+// active session manager. A manager that is not the openaiapi server has no
+// Router catalog to project.
+func acpProfileCatalogOf(sessions activeSessionManager) acpWorkerProfileCatalog {
+	catalog, ok := sessions.(acpWorkerProfileCatalog)
+	if !ok {
+		return nil
+	}
+	return catalog
+}
+
+// handleACPWorkerProfiles projects the Runtime-owned external ACP worker
+// catalog for the WebUI.
+func (rt *channelRuntime) handleACPWorkerProfiles(catalog acpWorkerProfileCatalog) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if catalog == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "server not ready"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"profiles": catalog.ListACPWorkerProfiles()})
+	}
+}
+
+// handleSessionRouter is the session-scoped Router selection projection.
+// Activation delegates to the shared Runtime path, so the WebUI cannot reach a
+// Router state the TUI or CLI could not.
+func (rt *channelRuntime) handleSessionRouter(srv acpRouterSessionService, id string, parts []string, w http.ResponseWriter, r *http.Request) {
+	if srv == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "server not ready"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		state, err := srv.GetSessionRouter(id)
+		if err != nil {
+			writeRouterHTTPError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, state)
+	case http.MethodPost:
+		var body struct {
+			ProfileIDs []string `json:"profileIds"`
+			Deactivate bool     `json:"deactivate"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		var (
+			state *openaiapi.RouterBindingSummary
+			err   error
+		)
+		if body.Deactivate {
+			state, err = srv.DeactivateSessionRouter(id)
+		} else {
+			state, err = srv.ActivateSessionRouter(id, body.ProfileIDs)
+		}
+		if err != nil {
+			writeRouterHTTPError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, state)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func writeRouterHTTPError(w http.ResponseWriter, err error) {
+	status := http.StatusBadRequest
+	code := "router_invalid"
+	switch {
+	case errors.Is(err, openaiapi.ErrSessionNotFound):
+		status, code = http.StatusNotFound, "session_not_found"
+	case openaiapi.IsSessionRouterMutationBusy(err):
+		status, code = http.StatusConflict, "session_active"
+	}
+	writeJSON(w, status, map[string]string{"error": code, "code": code, "detail": err.Error()})
+}
+
 // handleSessionExpert is the session-scoped identity projection. Mutations
 // delegate to Server.SetSessionExpert; clients must use the normal fork route
 // with expertId for an identity replacement.
@@ -1815,6 +1916,15 @@ func (rt *channelRuntime) handleSessionByID(sessions activeSessionManager) http.
 		}
 		if id == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session ID required"})
+			return
+		}
+		if len(parts) >= 2 && parts[1] == "router" {
+			srv, ok := sessions.(acpRouterSessionService)
+			if !ok {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "server not ready"})
+				return
+			}
+			rt.handleSessionRouter(srv, id, parts, w, r)
 			return
 		}
 		if len(parts) >= 2 && parts[1] == "expert" {

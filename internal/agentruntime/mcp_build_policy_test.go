@@ -34,6 +34,35 @@ func testBuildSettings(t *testing.T) *config.Settings {
 	return settings
 }
 
+// writeMCPFixtureServer writes a stdio MCP server that answers the handshake
+// and exposes one tool. It is the same minimal protocol surface the MCP
+// client needs, expressed as a shell script so the test has no external
+// dependency.
+func writeMCPFixtureServer(t *testing.T, workDir, name string) {
+	t.Helper()
+	path := filepath.Join(workDir, name)
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  method=$(printf '%s\n' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25"}}\n' "$id"
+      ;;
+    tools/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","description":"d","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    resources/list|prompts/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestBuilderBuildDefersConfiguredMCP pins the interactive deferral: a build
 // with Deferred MCP must return immediately even when a configured server would
 // hang, mark the runtime as deferred, and connect (tolerantly) only when the
@@ -112,5 +141,87 @@ func TestBuilderBuildStrictMCPFails(t *testing.T) {
 		Source: SourceTUI, WorkDir: workDir,
 	}); err == nil {
 		t.Fatal("strict build must fail when a configured server is unreachable")
+	}
+}
+
+// TestReloadConfiguredMCPReplacesToolsWithoutRestart pins the hot-reload
+// contract: a configuration change replaces the MCP tool surface on the
+// shared registry in place, so the entry point does not need a process
+// restart. The stale tool of a removed server must disappear.
+func TestReloadConfiguredMCPReplacesToolsWithoutRestart(t *testing.T) {
+	workDir := t.TempDir()
+	settings := testBuildSettings(t)
+
+	runtime, err := (Builder{Settings: settings, SandboxLevel: sandbox.LevelNone}).Build(context.Background(), BuildOptions{
+		Source: SourceTUI, WorkDir: workDir, MCP: MCPConnectPolicy{Optional: true},
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(runtime.Close)
+
+	// A stdio server that speaks the MCP handshake over stdin/stdout.
+	writeMCPFixtureServer(t, workDir, "alpha-server")
+	writeProjectMCP(t, workDir, `[{"name":"alpha","command":"`+filepath.Join(workDir, "alpha-server")+`"}]`)
+	if err := runtime.ReloadConfiguredMCP(context.Background(), MCPPolicy{Optional: true}); err != nil {
+		t.Fatalf("reload configured MCP: %v", err)
+	}
+	if len(runtime.MCPClients) != 1 {
+		t.Fatalf("MCP clients = %d, want one connected server", len(runtime.MCPClients))
+	}
+	names := runtime.Registry.OwnedToolNames("mcp:alpha")
+	if len(names) == 0 {
+		t.Fatal("the reloaded server must contribute its tools to the registry")
+	}
+
+	// Removing the server from the configuration must remove its tools.
+	writeProjectMCP(t, workDir, `[]`)
+	if err := runtime.ReloadConfiguredMCP(context.Background(), MCPPolicy{Optional: true}); err != nil {
+		t.Fatalf("reload after removal: %v", err)
+	}
+	if got := runtime.Registry.OwnedToolNames("mcp:alpha"); len(got) != 0 {
+		t.Fatalf("removed server still owns tools %v", got)
+	}
+	if len(runtime.MCPClients) != 0 {
+		t.Fatalf("MCP clients = %d, want none after removal", len(runtime.MCPClients))
+	}
+}
+
+// TestReloadConfiguredMCPKeepsWorkingConfigOnFailure pins that a failed
+// reload does not tear down the working configuration: the previous clients
+// stay connected so the session keeps its tools.
+func TestReloadConfiguredMCPKeepsWorkingConfigOnFailure(t *testing.T) {
+	workDir := t.TempDir()
+	settings := testBuildSettings(t)
+
+	runtime, err := (Builder{Settings: settings, SandboxLevel: sandbox.LevelNone}).Build(context.Background(), BuildOptions{
+		Source: SourceTUI, WorkDir: workDir, MCP: MCPConnectPolicy{Optional: true},
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(runtime.Close)
+
+	writeMCPFixtureServer(t, workDir, "alpha-server")
+	writeProjectMCP(t, workDir, `[{"name":"alpha","command":"`+filepath.Join(workDir, "alpha-server")+`"}]`)
+	if err := runtime.ReloadConfiguredMCP(context.Background(), MCPPolicy{Optional: true}); err != nil {
+		t.Fatalf("reload configured MCP: %v", err)
+	}
+	clients := runtime.MCPClients
+	if len(clients) != 1 {
+		t.Fatalf("MCP clients = %d, want one connected server", len(clients))
+	}
+
+	// A strict reload against an unreachable server must fail without
+	// releasing the previously connected clients.
+	writeProjectMCP(t, workDir, `[{"name":"bad","command":"/definitely/missing/mcp-server"}]`)
+	if err := runtime.ReloadConfiguredMCP(context.Background(), MCPPolicy{}); err == nil {
+		t.Fatal("a strict reload against an unreachable server must fail")
+	}
+	if len(runtime.MCPClients) != 1 {
+		t.Fatalf("a failed reload released the working clients: %d remain", len(runtime.MCPClients))
+	}
+	if runtime.MCPClients[0] != clients[0] {
+		t.Fatal("a failed reload replaced the working client")
 	}
 }

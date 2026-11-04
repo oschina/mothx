@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -92,6 +93,108 @@ func TestRegisterAndGet(t *testing.T) {
 	_, ok = r.Get("nonexistent")
 	if ok {
 		t.Error("expected not to get 'nonexistent' tool")
+	}
+}
+
+// stubTool is a minimal Tool used to exercise registry ownership without
+// depending on a real tool implementation.
+type stubTool struct {
+	name string
+}
+
+func (s *stubTool) Name() string                { return s.name }
+func (s *stubTool) Description() string         { return "stub" }
+func (s *stubTool) PromptSnippet() string       { return "stub" }
+func (s *stubTool) PromptGuidelines() []string  { return nil }
+func (s *stubTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+
+func (s *stubTool) Execute(context.Context, map[string]any) (ToolResult, error) {
+	return NewTextToolResult("ok"), nil
+}
+
+// TestReplaceOwnedRemovesStaleTools guards the hot-reload contract: replacing
+// an owner's tool set must remove the tools it no longer exposes, so a deleted
+// or disabled server cannot leave a stale tool behind.
+func TestReplaceOwnedRemovesStaleTools(t *testing.T) {
+	r := NewRegistry("/tmp", sandbox.NewNoneSandbox())
+	r.RegisterDefaults()
+
+	r.ReplaceOwned("mcp:alpha", []Tool{&stubTool{name: "mcp_alpha_one"}})
+	if _, ok := r.Get("mcp_alpha_one"); !ok {
+		t.Fatal("the owned tool must be registered")
+	}
+
+	r.ReplaceOwned("mcp:alpha", nil)
+	if _, ok := r.Get("mcp_alpha_one"); ok {
+		t.Fatal("a replaced-away tool must be removed")
+	}
+	// The built-in surface must survive an MCP replacement.
+	if _, ok := r.Get("read"); !ok {
+		t.Fatal("replacing an owned tool set must not remove built-in tools")
+	}
+}
+
+// TestReplaceOwnedKeepsOtherOwnersTools guards that one owner's replacement
+// does not disturb another owner's tools.
+func TestReplaceOwnedKeepsOtherOwnersTools(t *testing.T) {
+	r := NewRegistry("/tmp", sandbox.NewNoneSandbox())
+	r.ReplaceOwned("mcp:alpha", []Tool{&stubTool{name: "mcp_alpha_one"}})
+	r.ReplaceOwned("mcp:beta", []Tool{&stubTool{name: "mcp_beta_one"}})
+
+	r.ReplaceOwned("mcp:alpha", []Tool{&stubTool{name: "mcp_alpha_two"}})
+
+	if _, ok := r.Get("mcp_alpha_two"); !ok {
+		t.Fatal("the new owned tool must be registered")
+	}
+	if _, ok := r.Get("mcp_alpha_one"); ok {
+		t.Fatal("the replaced-away tool must be removed")
+	}
+	if _, ok := r.Get("mcp_beta_one"); !ok {
+		t.Fatal("another owner's tool must not be removed")
+	}
+}
+
+// TestReplaceOwnedPreservesRegistrationOrder guards that a reconnecting owner
+// keeps its position in the registration order, so the resulting tool surface
+// stays identical to a fresh connection.
+func TestReplaceOwnedPreservesRegistrationOrder(t *testing.T) {
+	r := NewRegistry("/tmp", sandbox.NewNoneSandbox())
+	r.ReplaceOwned("mcp:alpha", []Tool{&stubTool{name: "mcp_alpha_one"}})
+	r.ReplaceOwned("mcp:beta", []Tool{&stubTool{name: "mcp_beta_two"}})
+
+	r.ReplaceOwned("mcp:alpha", []Tool{&stubTool{name: "mcp_alpha_one"}})
+
+	var names []string
+	for _, tool := range r.All() {
+		names = append(names, tool.Name())
+	}
+	alpha := -1
+	beta := -1
+	for index, name := range names {
+		if name == "mcp_alpha_one" {
+			alpha = index
+		}
+		if name == "mcp_beta_two" {
+			beta = index
+		}
+	}
+	if alpha < 0 || beta < 0 || alpha > beta {
+		t.Fatalf("unexpected tool order %v", names)
+	}
+}
+
+// TestOwnedToolNamesProjectsOwnerSurface guards the read-only projection used
+// to report what an owner currently contributes.
+func TestOwnedToolNamesProjectsOwnerSurface(t *testing.T) {
+	r := NewRegistry("/tmp", sandbox.NewNoneSandbox())
+	r.ReplaceOwned("mcp:alpha", []Tool{&stubTool{name: "mcp_alpha_one"}, &stubTool{name: "mcp_alpha_two"}})
+
+	names := r.OwnedToolNames("mcp:alpha")
+	if len(names) != 2 {
+		t.Fatalf("owned tool names = %v, want two entries", names)
+	}
+	if len(r.OwnedToolNames("mcp:missing")) != 0 {
+		t.Fatal("an unknown owner must project no tools")
 	}
 }
 

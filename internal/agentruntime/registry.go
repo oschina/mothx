@@ -175,6 +175,111 @@ func (r *SessionRuntime) ConnectConfiguredMCP(ctx context.Context, policy MCPPol
 	return r.ConnectMCP(ctx, policy)
 }
 
+// ReloadConfiguredMCP reconnects the configured MCP servers and replaces their
+// tools on the shared registry without restarting the process. It is the
+// Runtime-owned hot-reload path: an entry point only decides when to reload
+// and how to project the outcome.
+//
+// The reload is safe against a live run. A running Agent keeps the tool
+// surface it froze at build time, so replacing the registry entries cannot
+// change an in-flight turn. The next build observes the new tool set.
+func (r *SessionRuntime) ReloadConfiguredMCP(ctx context.Context, policy MCPPolicy) error {
+	if r == nil {
+		return fmt.Errorf("runtime is required")
+	}
+	if err := r.ensureOpen(); err != nil {
+		return err
+	}
+	servers, err := mcp.LoadConfiguredServers(r.WorkDir)
+	if err != nil {
+		return fmt.Errorf("load MCP configuration: %w", err)
+	}
+	policy.Servers = append(servers, policy.Servers...)
+	return r.reloadMCP(ctx, policy)
+}
+
+// reloadMCP connects the given servers and swaps the Runtime-owned MCP tools
+// on the shared registry. The previous clients are closed only after the new
+// connections are established, so a failed reload keeps the working
+// configuration in place instead of leaving the session without MCP tools.
+func (r *SessionRuntime) reloadMCP(ctx context.Context, policy MCPPolicy) error {
+	if r == nil || r.Registry == nil {
+		return fmt.Errorf("runtime registry is required")
+	}
+	enabled := make([]mcp.ServerConfig, 0, len(policy.Servers))
+	for _, server := range policy.Servers {
+		if config.MCPServerEnabled(server) {
+			enabled = append(enabled, server)
+		}
+	}
+	if len(enabled) == 0 {
+		// Nothing is configured anymore: drop the existing MCP tools and
+		// release the clients so the session reflects the new configuration.
+		r.releaseMCPTools()
+		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			return fmt.Errorf("agent runtime is closed")
+		}
+		r.MCPClients = nil
+		r.mcpFailures = nil
+		r.mu.Unlock()
+		return nil
+	}
+	clients, failures, err := mcp.ConnectServersWithOptions(ctx, enabled, r.Registry, policy.Callbacks, mcp.ConnectOptions{
+		Optional:       policy.Optional,
+		OverallTimeout: policy.OverallTimeout,
+	})
+	if err != nil {
+		if policy.Optional {
+			if policy.OnError != nil {
+				policy.OnError(err)
+			}
+			return nil
+		}
+		return err
+	}
+	descriptions := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		descriptions = append(descriptions, failure.Error())
+	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		mcp.CloseClients(clients)
+		return fmt.Errorf("agent runtime is closed")
+	}
+	previous := r.MCPClients
+	r.MCPClients = clients
+	r.mcpFailures = descriptions
+	r.mu.Unlock()
+	// The new connections are live, so the previous ones are released now.
+	mcp.CloseClients(previous)
+	if len(failures) > 0 && policy.OnError != nil {
+		for _, failure := range failures {
+			policy.OnError(failure.Err)
+		}
+	}
+	return nil
+}
+
+// releaseMCPTools removes the MCP-owned tools from the shared registry and
+// closes the Runtime-owned clients. It is used when the configuration no
+// longer contains any enabled server.
+func (r *SessionRuntime) releaseMCPTools() {
+	if r == nil || r.Registry == nil {
+		return
+	}
+	r.mu.Lock()
+	clients := r.MCPClients
+	r.MCPClients = nil
+	r.mu.Unlock()
+	for _, client := range clients {
+		r.Registry.ReplaceOwned(mcp.ToolOwner(client.Name()), nil)
+	}
+	mcp.CloseClients(clients)
+}
+
 // CloseMCPClients releases clients held by legacy adapter aliases during migration.
 func CloseMCPClients(clients []*mcp.Client) {
 	mcp.CloseClients(clients)

@@ -1280,6 +1280,40 @@ func (s *Server) GetSessionWorkDir(id string) (string, error) {
 	return item.WorkDir, nil
 }
 
+// ReloadSessionMCP reconnects the configured MCP servers for one session and
+// replaces its MCP tools on the shared registry. It is the serve-side
+// projection of the Runtime-owned hot reload: an MCP configuration write
+// takes effect without restarting the server or the client.
+func (s *Server) ReloadSessionMCP(id string) error {
+	if s == nil || s.pool == nil {
+		return fmt.Errorf("session pool is required")
+	}
+	sess := s.pool.Get(id)
+	if sess == nil || sess.Runtime == nil {
+		return fmt.Errorf("session %q is not active", id)
+	}
+	return sess.Runtime.ReloadConfiguredMCP(context.Background(), agentruntime.MCPPolicy{Optional: true})
+}
+
+// ReloadAllSessionMCP reconnects the configured MCP servers for every active
+// session. It is used after a global MCP configuration write.
+func (s *Server) ReloadAllSessionMCP() []string {
+	if s == nil || s.pool == nil {
+		return nil
+	}
+	var reloaded []string
+	for _, sess := range s.pool.Snapshot() {
+		if sess == nil || sess.Runtime == nil {
+			continue
+		}
+		if err := sess.Runtime.ReloadConfiguredMCP(context.Background(), agentruntime.MCPPolicy{Optional: true}); err != nil {
+			continue
+		}
+		reloaded = append(reloaded, sess.ID)
+	}
+	return reloaded
+}
+
 func sortActiveSessionInfos(items []ActiveSessionInfo) {
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].LastUsed.Equal(items[j].LastUsed) {

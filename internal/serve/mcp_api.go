@@ -14,11 +14,13 @@ import (
 
 // handleMCPConfig manages the global MCP configuration shared by all runtimes.
 // It intentionally uses the same mcp.json schema and path as the TUI.
-func (rt *channelRuntime) handleMCPConfig(w http.ResponseWriter, r *http.Request) {
-	rt.handleMCPConfigAtPath(w, r, config.GlobalMCPPath())
+func (rt *channelRuntime) handleMCPConfig(sessions activeSessionManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rt.handleMCPConfigAtPath(w, r, config.GlobalMCPPath(), sessions)
+	}
 }
 
-func (rt *channelRuntime) handleMCPConfigAtPath(w http.ResponseWriter, r *http.Request, path string) {
+func (rt *channelRuntime) handleMCPConfigAtPath(w http.ResponseWriter, r *http.Request, path string, sessions activeSessionManager) {
 	switch r.Method {
 	case http.MethodGet:
 		cfg, err := loadMCPConfig(path)
@@ -36,6 +38,16 @@ func (rt *channelRuntime) handleMCPConfigAtPath(w http.ResponseWriter, r *http.R
 		config.NormalizeMCPConfig(&cfg)
 		if err := config.SaveMCPConfig(path, &cfg); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		// Reconnect the affected sessions in place so the new configuration
+		// takes effect without restarting the server or the client.
+		reloaded := reloadMCPForSessions(sessions, path)
+		if len(reloaded) > 0 {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"mcpServers":       cfg.MCPServers,
+				"reloadedSessions": reloaded,
+			})
 			return
 		}
 		writeJSON(w, http.StatusOK, cfg)
@@ -70,5 +82,38 @@ func (rt *channelRuntime) handleSessionMCPConfig(w http.ResponseWriter, r *http.
 		}
 		return
 	}
-	rt.handleMCPConfigAtPath(w, r, filepath.Join(workDir, config.ProjectMCPPath()))
+	rt.handleMCPConfigAtPath(w, r, filepath.Join(workDir, config.ProjectMCPPath()), sessions)
+}
+
+// reloadMCPForSessions reconnects the sessions affected by an MCP
+// configuration write. A global write affects every active session; a project
+// write affects only the sessions whose working directory owns that project
+// configuration. The reload is Runtime-owned and never fails the write: a
+// server that cannot be reconnected is reported through the session's
+// canonical warning surface.
+func reloadMCPForSessions(sessions activeSessionManager, path string) []string {
+	reloader, ok := sessions.(interface {
+		ReloadAllSessionMCP() []string
+		ReloadSessionMCP(string) error
+	})
+	if !ok || reloader == nil {
+		return nil
+	}
+	if path == config.GlobalMCPPath() {
+		return reloader.ReloadAllSessionMCP()
+	}
+	// A project configuration belongs to one working directory. Only the
+	// sessions whose work dir matches it are reloaded.
+	workDir := filepath.Dir(path)
+	var reloaded []string
+	for _, item := range sessions.ListActivePoolSessions() {
+		if item.WorkDir != workDir {
+			continue
+		}
+		if err := reloader.ReloadSessionMCP(item.ID); err != nil {
+			continue
+		}
+		reloaded = append(reloaded, item.ID)
+	}
+	return reloaded
 }

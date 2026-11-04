@@ -24,6 +24,55 @@ func TestUniqueToolName(t *testing.T) {
 	}
 }
 
+// TestAcceptInitializeResultAcceptsSupportedOlderRevision guards the
+// negotiation rule: a server that answers with an older revision this client
+// can still speak must connect instead of being rejected. A remote endpoint
+// pinned to 2025-06-18 is wire-compatible and must not fail the connection.
+func TestAcceptInitializeResultAcceptsSupportedOlderRevision(t *testing.T) {
+	client := &Client{}
+	if err := client.acceptInitializeResult(json.RawMessage(`{"protocolVersion":"2025-06-18"}`)); err != nil {
+		t.Fatalf("supported older revision was rejected: %v", err)
+	}
+	if got := client.currentProtocolVersion(); got != "2025-06-18" {
+		t.Fatalf("negotiated version = %q, want 2025-06-18", got)
+	}
+}
+
+// TestAcceptInitializeResultRejectsUnknownRevision guards that an unknown
+// revision is still refused: accepting it would falsely claim compatibility.
+func TestAcceptInitializeResultRejectsUnknownRevision(t *testing.T) {
+	client := &Client{}
+	err := client.acceptInitializeResult(json.RawMessage(`{"protocolVersion":"1999-01-01"}`))
+	if err == nil || !strings.Contains(err.Error(), "unsupported negotiated protocol version") {
+		t.Fatalf("unknown revision error = %v, want unsupported negotiated protocol version", err)
+	}
+	if got := client.currentProtocolVersion(); got != "" {
+		t.Fatalf("rejected negotiation must not record a version, got %q", got)
+	}
+}
+
+// TestAcceptInitializeResultOmitsHeaderForPreHeaderRevision guards that the
+// MCP-Protocol-Version header is only sent for revisions that define it. A
+// pre-2025-03-26 server must not receive a header it does not understand.
+func TestAcceptInitializeResultOmitsHeaderForPreHeaderRevision(t *testing.T) {
+	client := &Client{}
+	if err := client.acceptInitializeResult(json.RawMessage(`{"protocolVersion":"2024-11-05"}`)); err != nil {
+		t.Fatalf("supported pre-header revision was rejected: %v", err)
+	}
+	if got := client.currentProtocolVersion(); got != "" {
+		t.Fatalf("pre-header revision must not set a protocol version, got %q", got)
+	}
+}
+
+// TestAcceptInitializeResultRequiresProtocolVersion guards that a result
+// without a revision is still rejected: the client cannot assume one.
+func TestAcceptInitializeResultRequiresProtocolVersion(t *testing.T) {
+	client := &Client{}
+	if err := client.acceptInitializeResult(json.RawMessage(`{}`)); err == nil {
+		t.Fatal("a result without protocolVersion must be rejected")
+	}
+}
+
 func TestMCPContentToText(t *testing.T) {
 	out := mcpContentToText([]mcpContentBlock{
 		{Type: "text", Text: "hello"},

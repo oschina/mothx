@@ -212,6 +212,61 @@ func TestConnectMCPServersHTTPRegistersAndExecutes(t *testing.T) {
 	}
 }
 
+// TestConnectMCPServersHTTPAcceptsOlderProtocolRevision covers the reported
+// remote-server case end to end: a server that answers `initialize` with an
+// older revision this client can still speak must connect and contribute its
+// tools instead of failing the whole connection.
+func TestConnectMCPServersHTTPAcceptsOlderProtocolRevision(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var req RPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]any{"protocolVersion": "2025-06-18"},
+			})
+		case "tools/list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{"tools": []map[string]any{
+					{
+						"name":        "query",
+						"description": "query tool",
+						"inputSchema": map[string]any{"type": "object"},
+					},
+				}},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]any{},
+			})
+		}
+	}))
+	defer srv.Close()
+
+	registry := newMCPTestRegistry(t)
+	clients, err := ConnectServers(context.Background(), []ServerConfig{
+		{Name: "seodata", Type: "http", URL: srv.URL},
+	}, registry, Callbacks{})
+	if err != nil {
+		t.Fatalf("connect against a 2025-06-18 server failed: %v", err)
+	}
+	defer CloseClients(clients)
+	if !hasToolContaining(registry, "seodata") {
+		t.Fatal("the remote server's tools must be registered")
+	}
+}
+
 func TestMCPHTTPSessionIDHeaderRoundTrip(t *testing.T) {
 	const sid = "sid-123"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

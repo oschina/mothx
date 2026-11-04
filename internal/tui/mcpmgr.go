@@ -95,15 +95,18 @@ func (a *App) loadMCPMgrScope(scope string) {
 	a.mcpMgr.Message = ""
 }
 
-func (a *App) saveMCPMgr() error {
+// saveMCPMgr persists the edited MCP configuration and returns the command
+// that reconnects the configured servers. Reconnecting in place means the
+// change takes effect for this session without restarting the client.
+func (a *App) saveMCPMgr() (tea.Cmd, error) {
 	cfg := &config.MCPConfig{MCPServers: append([]config.MCPServer(nil), a.mcpMgr.Servers...)}
 	config.NormalizeMCPConfig(cfg)
 	if err := config.SaveMCPConfig(a.mcpMgr.Path, cfg); err != nil {
-		return err
+		return nil, err
 	}
 	a.mcpMgr.Servers = cfg.MCPServers
-	a.mcpMgr.Message = "Saved. Run /reload to apply MCP changes to this session."
-	return nil
+	a.mcpMgr.Message = "Saved. Reconnecting MCP servers..."
+	return a.mcpReloadCmd(), nil
 }
 
 func (a *App) beginMCPMgrCreate() {
@@ -309,11 +312,11 @@ func parseMCPMgrPairs(value string) ([]struct {
 	return pairs, nil
 }
 
-func (a *App) saveMCPMgrDraft() {
+func (a *App) saveMCPMgrDraft() tea.Cmd {
 	draft := a.mcpMgr.Draft
 	if err := validateMCPMgrServer(draft, a.mcpMgr.Servers, a.mcpMgr.EditingIndex); err != nil {
 		a.mcpMgr.Error = err.Error()
-		return
+		return nil
 	}
 	draft.Name = strings.TrimSpace(draft.Name)
 	draft.Type = strings.TrimSpace(draft.Type)
@@ -326,11 +329,14 @@ func (a *App) saveMCPMgrDraft() {
 	} else {
 		a.mcpMgr.Servers[a.mcpMgr.EditingIndex] = draft
 	}
-	if err := a.saveMCPMgr(); err != nil {
+	cmd, err := a.saveMCPMgr()
+	if err != nil {
 		a.mcpMgr.Error = "Save MCP config: " + err.Error()
-		return
+		return nil
 	}
 	a.closeMCPMgrForm()
+	a.scheduleRender()
+	return cmd
 }
 
 func validateMCPMgrServer(server config.MCPServer, existing []config.MCPServer, editingIndex int) error {
@@ -421,7 +427,7 @@ func (a *App) handleMCPMgrKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 			case "enabled":
 				a.mcpMgr.Draft.Enabled = mcpMgrBoolPtr(!config.MCPServerEnabled(a.mcpMgr.Draft))
 			case "save":
-				a.saveMCPMgrDraft()
+				return true, a.saveMCPMgrDraft()
 			case "cancel":
 				a.closeMCPMgrForm()
 			default:
@@ -432,6 +438,7 @@ func (a *App) handleMCPMgrKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 	if a.mcpMgr.ConfirmDelete {
+		var reloadCmd tea.Cmd
 		switch {
 		case msg.Type == tea.KeyEsc || (msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "n")):
 			a.mcpMgr.ConfirmDelete = false
@@ -441,14 +448,16 @@ func (a *App) handleMCPMgrKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 				if a.mcpMgr.Cursor >= len(a.mcpMgr.Servers) {
 					a.mcpMgr.Cursor = max(0, len(a.mcpMgr.Servers)-1)
 				}
-				if err := a.saveMCPMgr(); err != nil {
+				cmd, err := a.saveMCPMgr()
+				if err != nil {
 					a.mcpMgr.Error = "Save MCP config: " + err.Error()
 				}
+				reloadCmd = cmd
 			}
 			a.mcpMgr.ConfirmDelete = false
 		}
 		a.scheduleRender()
-		return true, nil
+		return true, reloadCmd
 	}
 	switch {
 	case msg.Type == tea.KeyCtrlC:
@@ -465,9 +474,12 @@ func (a *App) handleMCPMgrKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		if a.mcpMgr.Cursor < len(a.mcpMgr.Servers) {
 			server := &a.mcpMgr.Servers[a.mcpMgr.Cursor]
 			server.Enabled = mcpMgrBoolPtr(!config.MCPServerEnabled(*server))
-			if err := a.saveMCPMgr(); err != nil {
+			cmd, err := a.saveMCPMgr()
+			if err != nil {
 				a.mcpMgr.Error = "Save MCP config: " + err.Error()
 			}
+			a.scheduleRender()
+			return true, cmd
 		}
 	case msg.Type == tea.KeyEnter || (msg.Type == tea.KeyRunes && string(msg.Runes) == "e"):
 		a.beginMCPMgrEdit(a.mcpMgr.Cursor)
