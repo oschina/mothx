@@ -56,6 +56,23 @@ behind a build tag, so `make test` and CI neither compile nor run it. Run it
 locally after changing Router lifecycle, TUI projection, or ACP worker code;
 add `-race` when investigating concurrent worker behavior.
 
+### Browser and Desktop end-to-end checks
+
+The Router surfaces have browser-level coverage as well:
+
+```bash
+# WebUI: a real browser drives the composer, picks a worker, and activates it.
+cd ui && npm run e2e          # includes e2e/router.smoke.mjs
+
+# Desktop: the real runtime binary is driven over ACP stdio.
+cd desktop && npm run build:runtime && npm run e2e:router
+```
+
+The WebUI smoke test runs a headless Chromium against the built UI and a fake
+host, so it needs `npm run build` first. The Desktop round trip needs a runtime
+built from the current source, because it asserts the Router management
+projection that the host binary carries.
+
 ## Project Structure
 
 ```

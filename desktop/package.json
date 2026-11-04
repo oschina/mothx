@@ -20,6 +20,7 @@
     "dev": "tsx scripts/dev.ts",
     "typecheck": "tsc --noEmit",
     "e2e": "node scripts/e2e-smoke.mjs",
+    "e2e:router": "node scripts/acp-router-roundtrip.mjs",
     "verify:phase1": "node scripts/phase1-verify.mjs",
     "verify:phase3": "node scripts/phase3-verify.mjs",
     "test": "node --test scripts/resolve-version.test.cjs scripts/binary-arch.test.cjs scripts/e2e-smoke.test.mjs scripts/dev.test.mjs && tsx --test \"scripts/*.test.ts\" \"main/*.test.ts\" \"renderer/src/**/*.test.ts\"",

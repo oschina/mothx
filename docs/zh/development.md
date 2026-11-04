@@ -55,6 +55,22 @@ TUI → Runtime → Router → ACP 路径。它刻意放在 build tag 后，因�
 与 CI 既不会编译也不会运行它。修改 Router 生命周期、TUI 投影或 ACP worker
 代码后请在本地运行；排查并发 worker 行为时加上 `-race`。
 
+### 浏览器与 Desktop 端到端检查
+
+Router 的各界面还有浏览器级覆盖：
+
+```bash
+# WebUI：真实浏览器驱动 composer、选择 worker 并激活。
+cd ui && npm run e2e          # 包含 e2e/router.smoke.mjs
+
+# Desktop：用真实 runtime 二进制通过 ACP stdio 驱动。
+cd desktop && npm run build:runtime && npm run e2e:router
+```
+
+WebUI 冒烟测试用无头 Chromium 跑已构建的 UI 并配一个假 host，因此需要先执行
+`npm run build`。Desktop 往返测试需要从当前源码构建的 runtime，因为它断言的是
+宿主二进制携带的 Router 管理投影。
+
 ## 项目结构
 
 ```

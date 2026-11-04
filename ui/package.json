@@ -8,7 +8,7 @@
     "test": "node --test src/lib/*.test.js src/lib/workbench/*.test.js",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "e2e": "npm test && npm run build && node e2e/channel-settings.smoke.mjs && node e2e/trajectory.smoke.mjs && node e2e/workbench.smoke.mjs"
+    "e2e": "npm test && npm run build && node e2e/channel-settings.smoke.mjs && node e2e/router.smoke.mjs && node e2e/trajectory.smoke.mjs && node e2e/workbench.smoke.mjs"
   },
   "dependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",

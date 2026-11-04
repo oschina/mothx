@@ -640,7 +640,10 @@ try {
   await evaluate(cdp, `document.querySelector('.composer-config-toggle').click()`);
   await waitFor(cdp, `document.querySelector('.composer-config-panel') !== null`);
   await waitFor(cdp, `document.querySelector('.composer-config-panel .model-search-select') !== null`);
-  await waitFor(cdp, `document.querySelectorAll('.composer-mode-group button').length === 4 && document.querySelector('.composer-mode-group button.active')?.textContent === 'yolo'`);
+  // The mode group carries the four ordinary modes plus an optional Router
+  // button, so the count is the base modes with the Router entry allowed on
+  // top of them.
+  await waitFor(cdp, `document.querySelectorAll('.composer-mode-group button').length >= 4 && document.querySelector('.composer-mode-group button.active')?.textContent === 'yolo'`);
   assert.equal(await evaluate(cdp, `document.querySelectorAll('.composer-display-group button').length`), 2, 'display mode must live in the merged config panel');
   await evaluate(cdp, `document.querySelector('.composer-config-toggle').click()`);
   await waitFor(cdp, `document.querySelector('.composer-config-panel') === null`);
