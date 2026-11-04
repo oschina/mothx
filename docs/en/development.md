@@ -45,7 +45,16 @@ go test ./internal/tools/
 
 # Run specific test
 go test -run TestReadTool ./internal/tools/
+
+# Run the local-only TUI Router end-to-end suite (not part of CI)
+go test -tags tui_router_e2e ./internal/tui/ -run 'RouterE2E' -v
 ```
+
+The `tui_router_e2e` suite starts a fake ACP worker as a child process and
+drives the production TUI → Runtime → Router → ACP path. It is intentionally
+behind a build tag, so `make test` and CI neither compile nor run it. Run it
+locally after changing Router lifecycle, TUI projection, or ACP worker code;
+add `-race` when investigating concurrent worker behavior.
 
 ## Project Structure
 

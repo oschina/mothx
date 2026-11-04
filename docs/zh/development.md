@@ -45,7 +45,15 @@ go test ./internal/tools/
 
 # 运行特定测试
 go test -run TestReadTool ./internal/tools/
+
+# 运行仅本地的 TUI Router 端到端套件（不进入 CI）
+go test -tags tui_router_e2e ./internal/tui/ -run 'RouterE2E' -v
 ```
+
+`tui_router_e2e` 套件会把假 ACP worker 作为子进程启动，并驱动生产级的
+TUI → Runtime → Router → ACP 路径。它刻意放在 build tag 后，因此 `make test`
+与 CI 既不会编译也不会运行它。修改 Router 生命周期、TUI 投影或 ACP worker
+代码后请在本地运行；排查并发 worker 行为时加上 `-race`。
 
 ## 项目结构
 
