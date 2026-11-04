@@ -819,6 +819,14 @@ func (t *SubAgentSpawnTool) Execute(ctx context.Context, params map[string]any) 
 	cancel := func() {}
 	if externalAgent == "" {
 		runCtx, cancel = context.WithTimeout(parentRunCtx, policy.TimeoutPerAgent)
+	} else {
+		// An asynchronous external worker outlives the lead turn that spawned
+		// it. The lead's run context is cancelled when that run reaches its
+		// terminal state, so deriving the worker from it would cancel every
+		// spawned worker the moment the lead finished its own turn. The worker
+		// is still cancellable: the manager holds this cancel function, so
+		// subagent_destroy and the shared Runtime shutdown reach it.
+		runCtx, cancel = context.WithCancel(context.WithoutCancel(parentRunCtx))
 	}
 
 	options := AgentOptions{
