@@ -2078,6 +2078,10 @@ func (s *server) handleInitialize(req rpcRequest) {
 				"attachmentList",
 				"manageSettings",
 				"manageACPProfiles",
+				// manageRouter advertises the additive Router selection
+				// projection (mothx/manage/router/*). Desktop gates its Router
+				// composer control on this key.
+				"manageRouter",
 				"manageApplicationSettings",
 				"manageServeConfig",
 				"manageChannels",

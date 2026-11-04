@@ -38,7 +38,9 @@ import {
 } from '@/core/composer';
 import { t } from '@/core/i18n';
 import { changeSessionWorkingDirectory, chooseWorkingDirectory } from '@/core/sessions';
-import { currentConfigOptions, currentModelLabel, currentProviderLabel, isSessionRunning, sessionRunStatus, state, type SessionConfigOptionShape } from '@/core/state';
+import { currentConfigOptions, currentModelLabel, currentProviderLabel, hasFeature, isSessionRunning, sessionRunStatus, state, type SessionConfigOptionShape } from '@/core/state';
+import { activateRouter, deactivateRouter, listACPWorkerProfiles, type ACPWorkerProfileView } from '@/core/manage-api';
+import { refreshSessions } from '@/core/sessions';
 import { formatBytes } from '@/core/transcript';
 import { applyWorkspacePickerTarget } from '@/core/workspace-picker';
 import { composerFocusEvents, composerInjectEvents, composerReplaceEvents, consumePendingInjection, consumePendingReplacement } from '@/core/bus';
@@ -219,6 +221,13 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
   const [value, setValue] = useState('');
   const [configOpen, setConfigOpen] = useState(false);
   const [configTab, setConfigTab] = useState<'model' | 'provider'>('model');
+  // Router worker selection. The catalog and the activation live on the ACP
+  // host; the composer only projects them and forwards the user's choice.
+  const [routerWorkers, setRouterWorkers] = useState<ACPWorkerProfileView[]>([]);
+  const [routerSelection, setRouterSelection] = useState<string[]>([]);
+  const [routerBusy, setRouterBusy] = useState(false);
+  const [routerError, setRouterError] = useState('');
+  const routerAvailable = hasFeature('manageRouter');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const autoGrow = useCallback(() => {
@@ -229,6 +238,69 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
   }, []);
 
   useEffect(autoGrow, [value, autoGrow]);
+
+  // Load the worker catalog when the config popover opens so the user can
+  // name a worker. Entering Router is an explicit choice: the Runtime refuses
+  // a Router session without a bound worker.
+  useEffect(() => {
+    if (!configOpen || !routerAvailable || routerWorkers.length > 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const profiles = await listACPWorkerProfiles();
+        if (!cancelled) setRouterWorkers(profiles);
+      } catch {
+        // The catalog is advisory here; an unavailable worker list only means
+        // the Router option cannot offer a selection.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [configOpen, routerAvailable, routerWorkers.length]);
+
+  const selectableRouterWorkers = routerWorkers.filter((worker) => worker.enabled && worker.routerEligible);
+
+  const toggleRouterWorker = (id: string) => {
+    setRouterError('');
+    setRouterSelection((current) => (
+      current.includes(id) ? current.filter((value) => value !== id) : [...current, id]
+    ));
+  };
+
+  const commitRouterSelection = async () => {
+    const sessionId = appState.activeSessionId;
+    if (!sessionId) return;
+    if (routerSelection.length === 0) {
+      setRouterError(t('composer.routerSelectWorker'));
+      return;
+    }
+    setRouterBusy(true);
+    setRouterError('');
+    try {
+      await activateRouter(sessionId, routerSelection);
+      // The host persisted Router mode and notified the canonical session
+      // state; refresh the list so the composer renders the resolved mode.
+      await refreshSessions();
+    } catch (error) {
+      setRouterError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRouterBusy(false);
+    }
+  };
+
+  const leaveRouter = async () => {
+    const sessionId = appState.activeSessionId;
+    if (!sessionId) return;
+    setRouterBusy(true);
+    setRouterError('');
+    try {
+      await deactivateRouter(sessionId);
+      await refreshSessions();
+    } catch (error) {
+      setRouterError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRouterBusy(false);
+    }
+  };
 
   // 注入(技能/指令点击)与聚焦(新建任务)通过总线送达当前挂载的 composer;
   // 若请求发生在挂载前,pendingInjection 会在挂载后立刻被消费。
@@ -456,7 +528,74 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
                     </button>
                   );
                 })}
+                {routerAvailable && (
+                  <button
+                    type="button"
+                    aria-pressed={currentModeValue === 'router'}
+                    disabled={routerBusy}
+                    onClick={() => void applyConfigOption('mode', currentModeValue === 'router' ? 'plan' : 'router')}
+                    className={cn(
+                      'rounded-[6px] border px-2 py-1 text-[11.5px] leading-none transition-colors',
+                      currentModeValue === 'router'
+                        ? 'border-primary/45 bg-primary/8 font-semibold text-primary'
+                        : 'border-transparent text-muted-foreground hover:bg-hoverbg hover:text-strong',
+                    )}
+                  >
+                    router
+                  </button>
+                )}
               </div>
+              {routerAvailable && (
+                <div className="space-y-1.5 border-t border-border pt-2">
+                  <span className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[.3px] text-muted-foreground">
+                    {t('composer.routerWorker')}
+                  </span>
+                  {selectableRouterWorkers.length === 0 ? (
+                    <p className="text-[11px] text-faint">{t('composer.routerNone')}</p>
+                  ) : (
+                    <>
+                      {selectableRouterWorkers.map((worker) => (
+                        <label key={worker.id} className="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            checked={routerSelection.includes(worker.id)}
+                            disabled={routerBusy}
+                            onChange={() => toggleRouterWorker(worker.id)}
+                          />
+                          <span className="truncate">{worker.title || worker.id}</span>
+                          {worker.parallelBaseWorkspaceWrites && (
+                            <span className="rounded-[4px] border border-warning/40 px-1 text-[9.5px] text-warning">
+                              {t('composer.routerParallel')}
+                            </span>
+                          )}
+                        </label>
+                      ))}
+                      {routerError && <p className="text-[11px] text-destructive">{routerError}</p>}
+                      <div className="flex gap-1.5 pt-0.5">
+                        {currentModeValue === 'router' ? (
+                          <button
+                            type="button"
+                            disabled={routerBusy}
+                            onClick={() => void leaveRouter()}
+                            className="rounded-[6px] border border-border px-2 py-1 text-[11.5px] leading-none text-foreground hover:bg-hoverbg disabled:opacity-50"
+                          >
+                            {t('composer.routerLeave')}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={routerBusy}
+                            onClick={() => void commitRouterSelection()}
+                            className="rounded-[6px] border border-primary/45 bg-primary/8 px-2 py-1 text-[11.5px] leading-none font-semibold text-primary disabled:opacity-50"
+                          >
+                            {t('composer.routerActivate')}
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
               {thinkingOption?.options?.length ? (
                 <div className="flex flex-wrap items-center gap-1">
                   <span className="mr-1 inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[.3px] text-muted-foreground">

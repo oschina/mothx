@@ -378,6 +378,53 @@ export const cache: {
   experts?: ExpertListView;
 } = {};
 
+// ---- Router worker selection ----
+
+// ACPWorkerProfileView is the Runtime-owned catalog projection for one
+// configured external ACP worker. It never carries argv, environment names, or
+// credentials.
+export interface ACPWorkerProfileView {
+  id: string;
+  title?: string;
+  transport?: string;
+  enabled?: boolean;
+  routerEligible?: boolean;
+  roles?: string[];
+  permissionPolicy?: string;
+  maxConcurrentChildren?: number;
+  parallelBaseWorkspaceWrites?: boolean;
+  invalidReason?: string;
+}
+
+// RouterSessionView is the session's current Router selection.
+export interface RouterSessionView {
+  enabled?: boolean;
+  profileIds?: string[];
+  primaryProfile?: string;
+  mode?: string;
+}
+
+export async function listACPWorkerProfiles(): Promise<ACPWorkerProfileView[]> {
+  if (!hasFeature('manageRouter')) return [];
+  const body = await invoke<{ profiles?: ACPWorkerProfileView[] }>('mothx/manage/acp/profiles/list', {});
+  return body?.profiles || [];
+}
+
+export async function getRouterState(sessionId: string): Promise<RouterSessionView | undefined> {
+  if (!hasFeature('manageRouter') || !sessionId) return undefined;
+  return invoke<RouterSessionView>('mothx/manage/router/state', { sessionId });
+}
+
+export async function activateRouter(sessionId: string, profileIds: string[]): Promise<RouterSessionView | undefined> {
+  if (!hasFeature('manageRouter') || !sessionId) return undefined;
+  return invoke<RouterSessionView>('mothx/manage/router/activate', { sessionId, profileIds });
+}
+
+export async function deactivateRouter(sessionId: string): Promise<RouterSessionView | undefined> {
+  if (!hasFeature('manageRouter') || !sessionId) return undefined;
+  return invoke<RouterSessionView>('mothx/manage/router/deactivate', { sessionId });
+}
+
 export async function guard<T>(feature: string, fn: () => Promise<T>, fallback: T): Promise<T> {
   if (!hasFeature(feature)) return fallback;
   try {

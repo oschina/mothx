@@ -80,6 +80,12 @@ func (s *server) handleManageRequest(req rpcRequest) {
 		s.handleManageSettingsPatch(req)
 	case "mothx/manage/acp/profiles/list":
 		s.handleManageACPProfilesList(req)
+	case "mothx/manage/router/state":
+		s.handleManageRouterState(req)
+	case "mothx/manage/router/activate":
+		s.handleManageRouterActivate(req)
+	case "mothx/manage/router/deactivate":
+		s.handleManageRouterDeactivate(req)
 	case "mothx/manage/application/get":
 		s.handleManageApplicationGet(req)
 	case "mothx/manage/application/patch":
