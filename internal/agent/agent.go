@@ -742,6 +742,22 @@ func (a *Agent) MaxToolConcurrency() int {
 	return a.config.MaxToolConcurrency
 }
 
+// FrozenSurface returns the system prompt and the advertised tool names that
+// were frozen when this Agent was built.
+//
+// The projection is read-only and exists so a cross-entry contract test can
+// prove that every entry point builds the same Agent surface for one session.
+// It is also how an adapter can inspect the effective mode's prompt and tool
+// fence without reconstructing the prompt itself.
+func (a *Agent) FrozenSurface() (string, []string) {
+	if a == nil {
+		return "", nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.frozenSystemPrompt, append([]string(nil), a.frozenToolNames...)
+}
+
 func configureRegistryImageHint(cfg Config, registry *tools.Registry) {
 	if registry == nil {
 		return
