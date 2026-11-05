@@ -342,6 +342,11 @@ type App struct {
 	// on SessionRuntime.ActivateRouter. This panel only renders and collects
 	// input.
 	routerPanel routerPanelState
+	// Router activation runs as a Bubble Tea command because Runtime reloads
+	// the persisted session before writing the binding. These fields serialize
+	// adapter submissions and discard stale command results.
+	routerActivating    bool
+	routerActivationSeq uint64
 
 	// /btw side-question floating layer
 	btwOpen       bool
@@ -854,6 +859,12 @@ func currentWorkingDir(sess *session.Manager) string {
 }
 
 func (a *App) currentCwd() string {
+	// Runtime activation reloads the session while holding its Manager lock.
+	// Rendering must not wait on that lock: the adapter already caches the
+	// authoritative cwd for the bound session.
+	if a.routerActivating && a.cwd != "" {
+		return a.cwd
+	}
 	if a.session != nil && a.session.GetHeader() != nil && a.session.GetHeader().Cwd != "" {
 		return a.session.GetHeader().Cwd
 	}
@@ -1031,6 +1042,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.addMessage(statusStyle.Render(msg.Text))
 			a.scheduleRender()
 		}
+		return a, nil
+
+	case routerActivatedMsg:
+		a.finishRouterActivation(msg)
 		return a, nil
 
 	case mcpConnectReadyMsg:

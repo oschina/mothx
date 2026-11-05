@@ -308,7 +308,7 @@ func newRouterE2EFixtureWithOptions(t *testing.T, p provider.Provider, opts rout
 		t.Fatalf("assemble agent manager: %v", err)
 	}
 
-	app.handleCommand("/router " + strings.Join(workerIDs, ","))
+	runRouterActivation(t, app, app.handleCommand("/router "+strings.Join(workerIDs, ",")))
 	if app.mode != agentruntime.ModeRouter {
 		t.Fatalf("Router activation failed: mode=%q transcript=%q",
 			app.mode, stripANSI(strings.Join(app.messages, "\n")))

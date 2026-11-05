@@ -744,19 +744,6 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 			a.addCommandError(a.translator.Text(i18n.MsgCommandRunningCannotOpen, "/router"))
 			return nil
 		}
-		if err := a.ensureSession(); err != nil {
-			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterFailed, err))
-			return nil
-		}
-		runtime, err := a.expertRuntime()
-		if err != nil {
-			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterFailed, err))
-			return nil
-		}
-		sessionDir := ""
-		if a.session != nil {
-			sessionDir = a.session.GetSessionDir()
-		}
 		// Runtime names the worker; it fills the non-blocking approval strategy
 		// from the profile's validated policy and enforces the idle/idleness and
 		// source checks. The TUI never reads profile argv or credentials.
@@ -765,21 +752,7 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterUsage))
 			return nil
 		}
-		binding := agentruntime.RouterBinding{ACPProfileID: profileIDs[0]}
-		for _, profileID := range profileIDs {
-			binding.Profiles = append(binding.Profiles, agentruntime.RouterProfileBinding{ProfileID: profileID})
-		}
-		if err := runtime.ActivateRouter(context.Background(), sessionDir, a.settings, binding); err != nil {
-			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterFailed, err))
-			return nil
-		}
-		// Activation already persisted Router mode through the shared Runtime;
-		// mirror that resolved value instead of writing the adapter field.
-		a.adoptRuntimeMode()
-		a.syncToolGroups()
-		a.resetAgent(fmt.Errorf("router activated"))
-		a.addCommandStatus(a.translator.Text(i18n.MsgCommandRouterActivated, strings.Join(profileIDs, ", ")))
-		a.addCommandStatus(a.translator.Text(i18n.MsgCommandPermissionsRouter))
+		return a.startRouterActivation(profileIDs, false)
 	case "/model":
 		if len(parts) > 1 {
 			// Switch model directly

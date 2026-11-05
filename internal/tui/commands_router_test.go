@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/provider"
@@ -49,9 +51,26 @@ func newRouterCommandApp(t *testing.T) *App {
 	return app
 }
 
+// runRouterActivation executes the deferred Bubble Tea command and feeds its result
+// back through Update, matching the real Bubble Tea loop.
+func runRouterActivation(t *testing.T, app *App, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("Router activation returned no command")
+	}
+	msg := cmd()
+	if msg == nil {
+		t.Fatal("Router activation command returned no message")
+	}
+	if _, ok := msg.(routerActivatedMsg); !ok {
+		t.Fatalf("Router activation command returned %T, want routerActivatedMsg", msg)
+	}
+	app.Update(msg)
+}
+
 func TestRouterCommandActivatesRuntimeBinding(t *testing.T) {
 	app := newRouterCommandApp(t)
-	app.handleCommand("/router codex")
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
 
 	output := stripANSI(strings.Join(app.messages, "\n"))
 	if app.mode != agentruntime.ModeRouter {
@@ -68,7 +87,7 @@ func TestRouterCommandActivatesRuntimeBinding(t *testing.T) {
 
 func TestRouterCommandActivatesMultipleWorkers(t *testing.T) {
 	app := newRouterCommandApp(t)
-	app.handleCommand("/router codex,reviewer")
+	runRouterActivation(t, app, app.handleCommand("/router codex,reviewer"))
 
 	binding, ok := app.runtime.RouterBinding()
 	if !ok {
@@ -91,7 +110,7 @@ func TestRouterCommandRejectsUnknownProfileAndBusySession(t *testing.T) {
 		t.Fatal("/mode router bypassed Router activation")
 	}
 
-	app.handleCommand("/router missing")
+	runRouterActivation(t, app, app.handleCommand("/router missing"))
 	if app.mode == agentruntime.ModeRouter {
 		t.Fatal("unknown profile activated Router mode")
 	}
@@ -106,7 +125,7 @@ func TestRouterCommandRejectsUnknownProfileAndBusySession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lease.Release()
-	app.handleCommand("/router codex")
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
 	if app.mode == agentruntime.ModeRouter {
 		t.Fatal("Router activation with an active execution admission was accepted")
 	}

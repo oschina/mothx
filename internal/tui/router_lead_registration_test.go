@@ -24,7 +24,7 @@ func TestRouterSessionRegistersLeadAgentForSpawn(t *testing.T) {
 	}
 
 	// The Router surface is only installed once a worker is activated.
-	app.handleCommand("/router codex")
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
 	if app.mode != agentruntime.ModeRouter {
 		t.Fatalf("mode = %q, want router", app.mode)
 	}
@@ -70,7 +70,7 @@ func TestRouterSessionAgentManagementIsEnabled(t *testing.T) {
 		t.Fatal("a plain session already reported manager-backed tools as enabled")
 	}
 
-	app.handleCommand("/router codex")
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
 	if !app.agentManagementEnabled() {
 		t.Fatal("a Router session did not enable the manager-backed tool surface, so the lead is never registered")
 	}
@@ -83,7 +83,7 @@ func TestLeavingRouterRestoresOrdinarySurface(t *testing.T) {
 	if err := app.bindRuntimeSession(app.session); err != nil {
 		t.Fatalf("bind runtime session: %v", err)
 	}
-	app.handleCommand("/router codex")
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
 	if !app.agentManagementEnabled() {
 		t.Fatal("Router did not enable the manager-backed tool surface")
 	}
@@ -107,7 +107,7 @@ func TestRouterToolGroupFollowsRuntimeMode(t *testing.T) {
 	if err := app.bindRuntimeSession(app.session); err != nil {
 		t.Fatalf("bind runtime session: %v", err)
 	}
-	app.handleCommand("/router codex")
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
 
 	// Simulate a stale adapter mode field while the Runtime still resolves
 	// Router. The tool group must follow the Runtime.
@@ -125,7 +125,7 @@ func TestRouterActiveFollowsRuntimeMode(t *testing.T) {
 	if app.runtime.RouterActive() {
 		t.Fatal("a plain session reported Router as active")
 	}
-	app.handleCommand("/router codex")
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
 	if !app.runtime.RouterActive() {
 		t.Fatal("the Runtime did not resolve Router after activation")
 	}

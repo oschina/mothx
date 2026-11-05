@@ -101,7 +101,7 @@ func TestRouterPanelActivationGoesThroughRuntimeFence(t *testing.T) {
 	app.refreshSettingsAfterRouterPanelSave()
 	app.loadRouterPanelProfiles()
 	app.routerPanel.Cursor = 0
-	app.activateRouterFromPanel()
+	runRouterActivation(t, app, app.activateRouterFromPanel())
 
 	if app.mode == agentruntime.ModeRouter {
 		t.Fatal("the panel activated Router for a disabled profile")
@@ -111,6 +111,38 @@ func TestRouterPanelActivationGoesThroughRuntimeFence(t *testing.T) {
 	}
 	if _, ok := app.runtime.RouterBinding(); ok {
 		t.Fatal("a rejected activation persisted a Router binding")
+	}
+}
+
+// Runtime activation reloads the persisted session before writing the binding,
+// which can take seconds on a large database. The update loop must stay free
+// while that work runs, then apply the result through a message.
+func TestRouterPanelActivationRunsOffUpdateLoop(t *testing.T) {
+	app := newRouterCommandApp(t)
+	app.openRouterPanel()
+	app.routerPanel.Profiles = []config.ACPAgentProfile{{
+		ID: "codex", Command: []string{"/opt/codex/bin/codex", "acp"}, Enabled: true,
+		PermissionPolicy: config.ACPPermissionAutoAllowOnce,
+	}}
+	app.routerPanel.Cursor = 0
+
+	cmd := app.activateRouterFromPanel()
+	if cmd == nil {
+		t.Fatal("activation did not return a deferred command")
+	}
+	if app.mode == agentruntime.ModeRouter || app.runtime.RouterActive() {
+		t.Fatal("activation mutated Router state on the update loop")
+	}
+	if !app.routerPanel.Activating || !app.routerActivating {
+		t.Fatal("panel did not expose the in-flight activation state")
+	}
+
+	runRouterActivation(t, app, cmd)
+	if app.mode != agentruntime.ModeRouter || !app.runtime.RouterActive() {
+		t.Fatal("completed activation did not apply the Runtime-resolved mode")
+	}
+	if app.routerPanel.Open || app.routerActivating {
+		t.Fatal("completed activation did not close the panel and clear its busy state")
 	}
 }
 

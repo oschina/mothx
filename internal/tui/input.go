@@ -494,6 +494,13 @@ func (a *App) processInput(input string) tea.Cmd {
 		a.addCommandError("Cannot send input while context compaction is running.")
 		return nil
 	}
+	// Router activation is a Runtime write that changes the next Run's mode and
+	// tool surface. Do not admit input against the previous resolution while
+	// the command is still in flight.
+	if a.routerActivating {
+		a.addCommandError(a.translator.Text(i18n.MsgCommandRouterInProgress))
+		return nil
+	}
 	// Session creation for the very first submission runs off the Bubble Tea
 	// update loop. While it is in flight the Runtime has no session to admit
 	// against, so additional submissions stay in the TUI queue.

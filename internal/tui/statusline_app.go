@@ -46,6 +46,12 @@ func (a *App) tickStatusLine() tea.Cmd {
 }
 
 func (a *App) requestStatusLineRefresh(force bool) {
+	// Router activation reloads the session off the update loop but holds the
+	// Manager lock. Building the status-line payload reads session metadata, so
+	// defer it until the activation result lands and removes the render block.
+	if a.routerActivating {
+		return
+	}
 	if !a.statusLineEnabled() || a.width <= 0 || !a.ready {
 		return
 	}

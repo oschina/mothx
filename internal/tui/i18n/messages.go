@@ -352,7 +352,9 @@ const (
 	MsgCommandRouterDescription           MessageID = "commands.router.description"
 	MsgCommandRouterActivated             MessageID = "commands.router.activated"
 	MsgCommandRouterFailed                MessageID = "commands.router.failed"
+	MsgCommandRouterInProgress            MessageID = "commands.router.in_progress"
 	MsgRouterPanelTitle                   MessageID = "router_panel.title"
+	MsgRouterPanelActivating              MessageID = "router_panel.activating"
 	MsgRouterPanelKeys                    MessageID = "router_panel.keys"
 	MsgRouterPanelEmpty                   MessageID = "router_panel.empty"
 	MsgRouterPanelLoadFailed              MessageID = "router_panel.load_failed"
@@ -612,7 +614,9 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandRouterUsage:                 "Usage: /router <acp-profile-id>[,<acp-profile-id>...] (configure acpAgents in settings.json first)",
 		MsgCommandRouterActivated:             "✅ Router activated with ACP worker: %s",
 		MsgCommandRouterFailed:                "Router activation failed: %v",
+		MsgCommandRouterInProgress:            "Router activation is already in progress.",
 		MsgRouterPanelTitle:                   "Router ACP Workers",
+		MsgRouterPanelActivating:              "Activating Router worker %s...",
 		MsgRouterPanelKeys:                    "a:add  enter/e:edit  t:activate  d:delete  r:reload  esc:close",
 		MsgRouterPanelEmpty:                   "(no ACP worker profiles; press a to add one)",
 		MsgRouterPanelLoadFailed:              "Load settings: %v",
@@ -1097,7 +1101,9 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgCommandRouterUsage:                 "用法：/router <acp-profile-id>[,<acp-profile-id>...]（请先在 settings.json 配置 acpAgents）",
 		MsgCommandRouterActivated:             "✅ Router 已激活，ACP worker：%s",
 		MsgCommandRouterFailed:                "Router 激活失败：%v",
+		MsgCommandRouterInProgress:            "Router 激活正在进行中。",
 		MsgRouterPanelTitle:                   "Router ACP Worker",
+		MsgRouterPanelActivating:              "正在激活 Router worker %s…",
 		MsgRouterPanelKeys:                    "a:新增  enter/e:编辑  t:激活  d:删除  r:刷新  esc:关闭",
 		MsgRouterPanelEmpty:                   "（尚未配置 ACP worker profile；按 a 新增）",
 		MsgRouterPanelLoadFailed:              "读取设置失败：%v",

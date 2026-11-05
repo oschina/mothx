@@ -51,7 +51,7 @@ func TestCycleModeLeavesRouterWhenAlreadyInIt(t *testing.T) {
 func TestModeSwitchPersistsThroughRuntime(t *testing.T) {
 	app := newRouterCommandApp(t)
 
-	app.handleCommand("/router codex")
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
 	if persisted := app.runtime.PersistedMode(); persisted != agentruntime.ModeRouter {
 		t.Fatalf("persisted mode after activation = %q, want router", persisted)
 	}

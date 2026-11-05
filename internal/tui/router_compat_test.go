@@ -35,7 +35,7 @@ func TestTUIStillBuildsAgentWithRouterDefaultMode(t *testing.T) {
 // read-only Router surface the user just left.
 func TestLeavingRouterPersistsAndSurvivesReload(t *testing.T) {
 	app := newRouterCommandApp(t)
-	app.handleCommand("/router codex")
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
 	if app.mode != agentruntime.ModeRouter {
 		t.Fatalf("activation did not enter Router: %q", app.mode)
 	}

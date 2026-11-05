@@ -29,18 +29,22 @@ import (
 // eligibility itself, never reads a profile's argv for execution, and never
 // writes settings.json directly.
 type routerPanelState struct {
-	Open          bool
-	Profiles      []config.ACPAgentProfile
-	Cursor        int
-	ChoosingColon bool
-	ColonCursor   int
-	Editing       bool
-	EditingIndex  int
-	Draft         config.ACPAgentProfile
-	FormCursor    int
-	InputField    string
-	Input         editor.Model
-	ConfirmDelete bool
+	Open       bool
+	Profiles   []config.ACPAgentProfile
+	Cursor     int
+	Activating bool
+	// ActivationProfile is the worker label shown while Runtime activation is
+	// in flight. It is presentation-only; the binding remains Runtime-owned.
+	ActivationProfile string
+	ChoosingColon     bool
+	ColonCursor       int
+	Editing           bool
+	EditingIndex      int
+	Draft             config.ACPAgentProfile
+	FormCursor        int
+	InputField        string
+	Input             editor.Model
+	ConfirmDelete     bool
 	// Presets is the well-known-agent picker shown when creating a profile. It
 	// exists so a user does not have to know that `codex acp` is not a valid ACP
 	// launch and which adapter package is.
@@ -63,6 +67,10 @@ func (a *App) openRouterPanel() {
 	// never touches Runtime resources, and activation itself is fenced by the
 	// shared Runtime (idle check + source policy). Do not add an adapter-local
 	// "running" gate here.
+	if a.routerActivating {
+		a.addCommandError(a.translator.Text(i18n.MsgCommandRouterInProgress))
+		return
+	}
 	a.input = a.input.Blur()
 	a.routerPanel = routerPanelState{Open: true, EditingIndex: -1}
 	a.loadRouterPanelProfiles()
@@ -369,42 +377,131 @@ func (a *App) refreshSettingsAfterRouterPanelSave() {
 // activateRouterFromPanel runs the one shared activation path. The panel only
 // supplies the selected profile ID; Runtime validates eligibility, the idle
 // fence, the source policy, and the approval strategy.
-func (a *App) activateRouterFromPanel() {
+func (a *App) activateRouterFromPanel() tea.Cmd {
+	if a.routerPanel.Cursor < 0 || a.routerPanel.Cursor >= len(a.routerPanel.Profiles) {
+		a.routerPanel.Error = a.translator.Text(i18n.MsgRouterPanelInvalidProfile, fmt.Errorf("no selected profile"))
+		a.scheduleRender()
+		return nil
+	}
 	profile := a.routerPanel.Profiles[a.routerPanel.Cursor]
 	if strings.TrimSpace(profile.ID) == "" {
 		a.routerPanel.Error = a.translator.Text(i18n.MsgRouterPanelInvalidProfile, fmt.Errorf("empty profile id"))
-		return
+		a.scheduleRender()
+		return nil
+	}
+	return a.startRouterActivation([]string{profile.ID}, true)
+}
+
+// startRouterActivation validates the adapter-side selection, then performs the
+// shared Runtime activation in a Bubble Tea command. ActivateRouter reloads the
+// persisted session and may take seconds on a large database; running it on the
+// update loop freezes input, rendering, and cancellation for the whole TUI.
+func (a *App) startRouterActivation(profileIDs []string, fromPanel bool) tea.Cmd {
+	if len(profileIDs) == 0 {
+		a.setRouterActivationError(fmt.Errorf("Router ACP profile ID is required"), fromPanel)
+		return nil
+	}
+	if a.routerActivating {
+		if fromPanel && a.routerPanel.Open {
+			a.routerPanel.Error = a.translator.Text(i18n.MsgCommandRouterInProgress)
+			a.scheduleRender()
+		} else {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandRouterInProgress))
+		}
+		return nil
 	}
 	if err := a.ensureSession(); err != nil {
-		a.routerPanel.Error = a.translator.Text(i18n.MsgCommandRouterFailed, err)
-		return
+		a.setRouterActivationError(err, fromPanel)
+		return nil
 	}
 	runtime, err := a.expertRuntime()
 	if err != nil {
-		a.routerPanel.Error = a.translator.Text(i18n.MsgCommandRouterFailed, err)
-		return
+		a.setRouterActivationError(err, fromPanel)
+		return nil
 	}
 	sessionDir := ""
 	if a.session != nil {
 		sessionDir = a.session.GetSessionDir()
 	}
-	if err := runtime.ActivateRouter(context.Background(), sessionDir, a.settings, agentruntime.RouterBinding{ACPProfileID: profile.ID}); err != nil {
+	binding := agentruntime.RouterBinding{ACPProfileID: profileIDs[0]}
+	for _, profileID := range profileIDs {
+		binding.Profiles = append(binding.Profiles, agentruntime.RouterProfileBinding{ProfileID: profileID})
+	}
+	label := strings.Join(profileIDs, ", ")
+	a.routerActivationSeq++
+	seq := a.routerActivationSeq
+	a.routerActivating = true
+	if fromPanel && a.routerPanel.Open {
+		a.routerPanel.Activating = true
+		a.routerPanel.ActivationProfile = label
+		a.routerPanel.Error = ""
+	} else {
+		a.addCommandStatus(a.translator.Text(i18n.MsgRouterPanelActivating, label))
+	}
+	a.scheduleRender()
+	settings := a.settings
+	return func() tea.Msg {
+		err := runtime.ActivateRouter(context.Background(), sessionDir, settings, binding)
+		return routerActivatedMsg{seq: seq, profileLabel: label, fromPanel: fromPanel, err: err}
+	}
+}
+
+func (a *App) setRouterActivationError(err error, fromPanel bool) {
+	if fromPanel && a.routerPanel.Open {
 		a.routerPanel.Error = a.translator.Text(i18n.MsgCommandRouterFailed, err)
+		a.scheduleRender()
 		return
 	}
-	// Activation already persisted Router mode through the shared Runtime; mirror
-	// that resolved value instead of writing the adapter field.
+	a.addCommandError(a.translator.Text(i18n.MsgCommandRouterFailed, err))
+}
+
+// routerActivatedMsg reports the result of the Runtime activation command.
+type routerActivatedMsg struct {
+	seq          uint64
+	profileLabel string
+	fromPanel    bool
+	err          error
+}
+
+// finishRouterActivation applies a completed Runtime activation on the update
+// loop. Runtime has already persisted the binding and mode; the adapter only
+// mirrors the resolved state and reconciles its cached Agent/tool groups.
+func (a *App) finishRouterActivation(msg routerActivatedMsg) {
+	if msg.seq != a.routerActivationSeq {
+		return
+	}
+	a.routerActivating = false
+	a.routerPanel.Activating = false
+	if msg.err != nil {
+		a.setRouterActivationError(msg.err, msg.fromPanel)
+		return
+	}
 	a.adoptRuntimeMode()
 	a.syncToolGroups()
 	a.resetAgent(fmt.Errorf("router activated"))
-	a.closeRouterPanel()
-	a.addCommandStatus(a.translator.Text(i18n.MsgCommandRouterActivated, profile.ID))
+	if msg.fromPanel && a.routerPanel.Open {
+		a.closeRouterPanel()
+	}
+	a.addRouterActivatedStatus(msg.profileLabel)
+	a.scheduleRender()
+}
+
+func (a *App) addRouterActivatedStatus(profileID string) {
+	a.addCommandStatus(a.translator.Text(i18n.MsgCommandRouterActivated, profileID))
 	a.addCommandStatus(a.translator.Text(i18n.MsgCommandPermissionsRouter))
 }
 
 func (a *App) handleRouterPanelKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	if !a.routerPanel.Open {
 		return false, nil
+	}
+	if a.routerPanel.Activating {
+		if msg.Type == tea.KeyCtrlC {
+			a.finalizeForQuit()
+			a.stopPrintLoop()
+			return true, tea.Quit
+		}
+		return true, nil
 	}
 	if a.routerPanel.InputField != "" {
 		switch msg.Type {
@@ -514,6 +611,7 @@ func (a *App) handleRouterPanelKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, tea.Quit
 	case msg.Type == tea.KeyEsc || (msg.Type == tea.KeyRunes && string(msg.Runes) == "q"):
 		a.closeRouterPanel()
+		return true, nil
 	case msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && string(msg.Runes) == "k"):
 		a.routerPanel.Cursor = max(0, a.routerPanel.Cursor-1)
 	case msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && string(msg.Runes) == "j"):
@@ -523,7 +621,7 @@ func (a *App) handleRouterPanelKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	case msg.Type == tea.KeyRunes && string(msg.Runes) == "a":
 		a.beginRouterPanelCreate()
 	case msg.Type == tea.KeyRunes && string(msg.Runes) == "t":
-		a.activateRouterFromPanel()
+		return true, a.activateRouterFromPanel()
 	case msg.Type == tea.KeyRunes && string(msg.Runes) == "d":
 		if a.routerPanel.Cursor < len(a.routerPanel.Profiles) {
 			a.routerPanel.ConfirmDelete = true
@@ -560,9 +658,14 @@ func (a *App) renderRouterPanel() string {
 	width := max(42, a.width-4)
 	height := max(8, a.height-lipgloss.Height(a.renderFooter())-5)
 	descriptors := a.routerPanelDescriptors()
-	active := a.routerPanelActiveProfile()
+	active := ""
+	if !a.routerPanel.Activating {
+		active = a.routerPanelActiveProfile()
+	}
 	lines := []string{a.translator.Text(i18n.MsgRouterPanelTitle), strings.Repeat("-", width)}
 	switch {
+	case a.routerPanel.Activating:
+		lines = append(lines, a.translator.Text(i18n.MsgRouterPanelActivating, a.routerPanel.ActivationProfile))
 	case a.routerPanel.ChoosingPreset:
 		lines = append(lines, a.translator.Text(i18n.MsgRouterPanelChoosePreset)+":")
 		presets := agentruntime.ACPAgentPresets()

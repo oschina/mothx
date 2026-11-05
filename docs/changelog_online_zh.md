@@ -37,6 +37,7 @@
 
 ### 🐛 问题修复
 
+- **激活 Router ACP profile 不再卡死 TUI。** 此前激活直接在 Bubble Tea 更新循环中同步执行 `SessionRuntime.ActivateRouter`，Runtime 为激活而做的会话 reload 与 binding/mode 写入会使输入、渲染和取消在整个 reload 期间全部阻塞，大体积 `sessions.db` 下可持续数秒。现在激活改为 `tea.Cmd`：更新循环保持响应，面板显示进行中状态并拒绝其他面板按键与并发提交，结果通过消息回到更新循环后才应用 Runtime 解析出的模式与工具面。校验、idle fence、source policy、持久化与写入顺序仍由 Runtime 独占。
 - **Router 会话现在可以正常 spawn 外部 ACP worker。** 此前只有当适配器开启了 multi-agent、delegate 或 workflow 能力时，lead agent 才会被注册进 `AgentManager`，但 Router 模式并不依赖这些开关就会装上同样的委派工具面。结果是每次 spawn 都会以 `create sub-agent: parent agent agent-master not found` 失败，已正确配置并激活的 worker 根本不会被执行到。现在该判定由 Runtime 通过 `ManagerBackedToolsEnabled` 独占，Router 与常规能力一并计入，所有入口（TUI、CLI、WebUI/API、ACP/Desktop）都据此注册 lead。此外，TUI、WebUI 与 ACP 的工具组同步现在从 Runtime 而非适配器自有字段解析模式，因此恢复或刚刚激活的 Router 会话装上的是 Router 委派工具面而不是错误的那一套；ACP/Desktop 下的 Router 会话也会获得其按会话绑定 worker 所需的会话级 manager。
 
 - **TUI 的 `/browser` 命令现在能真正启用浏览器自动化。** 该命令此前只修改 TUI 本地的工具注册表，因此浏览器工具会在首次提问创建并绑定会话时再次被悄悄移除：共享 Runtime 会依据过期的能力状态重新加载资源，在构建 Agent 之前注销该工具。现在该命令改为经 Runtime 自身的能力路径执行，工具、对应 Skill 提示词与持久化的会话能力保持为同一个事实。Runtime 也会在构建、附着、能力更新与资源刷新之间保持浏览器能力一致；在首次提问之前打开的浏览器开关会被持久化到该提问所创建的会话上，因此重新打开该会话时浏览器支持依然处于开启状态。
