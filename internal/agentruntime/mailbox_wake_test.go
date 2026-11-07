@@ -197,3 +197,18 @@ func TestMailboxWakeDoesNotStartWithoutPendingCompletions(t *testing.T) {
 	default:
 	}
 }
+
+// A continuation that fails before the Agent runs must not consume the
+// mailbox. Otherwise a transient build/session error permanently loses the
+// completion notification the wake was meant to deliver.
+func TestMailboxWakeKeepsPendingNotificationsOnPreRunFailure(t *testing.T) {
+	runtime := &SessionRuntime{Mailbox: agent.NewMemberMailbox()}
+	runtime.Mailbox.Enqueue(agent.MemberCompletion{MemberID: "worker-1", Status: "done", Payload: "finished"})
+
+	if err := runtime.executeMailboxWake(context.Background(), "wake-test", MailboxWakeOptions{}); err == nil {
+		t.Fatal("a wake without a bound session must fail")
+	}
+	if !runtime.Mailbox.HasPending() {
+		t.Fatal("a failed wake consumed the pending completion")
+	}
+}

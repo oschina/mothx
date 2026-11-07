@@ -453,11 +453,6 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 	return nil
 }
 
-// replayPersistedMode resolves the newest persisted mode entry for an attached
-// session through the shared source/mode resolver. It returns "" when the
-// session never persisted a mode, so a new session keeps its adapter/default
-// mode. This is what makes a persisted Router session reopen as Router in
-// adapters that have no Router startup flag.
 // PersistedMode returns the session's persisted Router/Plan/Agent mode as
 // resolved through the shared source/mode policy, or "" when the session never
 // persisted one. It is the single projection adapters use to adopt a resumed
@@ -483,6 +478,11 @@ func (r *SessionRuntime) PersistedMode() string {
 	return mode
 }
 
+// replayPersistedMode resolves the newest persisted mode entry for an attached
+// session through the shared source/mode resolver. It returns "" when the
+// session never persisted a mode, so a new session keeps its adapter/default
+// mode. This is what makes a persisted Router session reopen as Router in
+// adapters that have no Router startup flag.
 func replayPersistedMode(manager *session.Manager, source SourceResolution, entrySource RuntimeSource) (string, error) {
 	if manager == nil {
 		return "", nil
@@ -494,6 +494,15 @@ func replayPersistedMode(manager *session.Manager, source SourceResolution, entr
 	_, mode, err := resolveManagerPolicy(manager, SourceResolutionInput{Current: source.Source, Requested: entrySource}, "", entry.Mode, ModeYolo)
 	if err != nil {
 		return "", err
+	}
+	if mode == ModeRouter {
+		// Router is only valid with a persisted worker binding. Activation
+		// writes the binding before the mode, so a mode-only entry means a
+		// partially written or damaged session. Fail closed to the read-only plan
+		// surface instead of exposing Router with no worker to delegate to.
+		if _, ok := manager.GetLatestRouterBinding(); !ok {
+			return ModePlan, nil
+		}
 	}
 	return mode, nil
 }

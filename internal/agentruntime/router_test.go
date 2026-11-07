@@ -353,3 +353,39 @@ func TestResolveRouterACPProfileRejectsInteractivePermissionPolicy(t *testing.T)
 		t.Fatal("interactive external permission policy was accepted for Router")
 	}
 }
+
+// A persisted Router mode without a binding is a partially written session.
+// Replay must fail closed to the read-only plan surface instead of exposing
+// Router with no worker to delegate to.
+func TestReplayPersistedRouterModeFailsClosedWithoutBinding(t *testing.T) {
+	manager := session.New(t.TempDir(), t.TempDir())
+	if err := manager.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AppendModeChange(ModeRouter); err != nil {
+		t.Fatal(err)
+	}
+	mode, err := replayPersistedMode(manager, SourceResolution{Source: SourceTUI}, SourceTUI)
+	if err != nil {
+		t.Fatalf("replay persisted mode: %v", err)
+	}
+	if mode != ModePlan {
+		t.Fatalf("mode without a binding = %q, want %q", mode, ModePlan)
+	}
+
+	if _, err := manager.AppendRouterBindingSelection(session.RouterBindingSelection{
+		PrimaryProfileID: "codex",
+		Profiles: []session.RouterProfileBinding{
+			{ProfileID: "codex", ApprovalStrategy: string(config.ACPPermissionAutoAllowOnce)},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mode, err = replayPersistedMode(manager, SourceResolution{Source: SourceTUI}, SourceTUI)
+	if err != nil {
+		t.Fatalf("replay persisted mode: %v", err)
+	}
+	if mode != ModeRouter {
+		t.Fatalf("mode with a binding = %q, want %q", mode, ModeRouter)
+	}
+}

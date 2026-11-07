@@ -16,6 +16,10 @@ import (
 const (
 	defaultMailboxWakeDebounce = 25 * time.Millisecond
 	maxMailboxWakeDebounce     = 500 * time.Millisecond
+	// mailboxWakeRetryDelay bounds how long a failed continuation waits before
+	// retrying. Notifications stay in the mailbox on a pre-run failure, so a
+	// transient database/build error must not strand them until new activity.
+	mailboxWakeRetryDelay = 2 * time.Second
 )
 
 // MailboxWakeRun is the immutable identity an adapter uses to attach its
@@ -155,17 +159,30 @@ func (r *SessionRuntime) runMailboxWake(ctx context.Context, options MailboxWake
 	defer close(done)
 	defer removeListener()
 
+	retry := false
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-wake:
+		if !retry {
+			select {
+			case <-ctx.Done():
+				return
+			case <-wake:
+			}
 		}
+		retry = false
 		if !waitMailboxWakeDebounce(ctx, options.Debounce) {
 			return
 		}
 		if err := r.tryMailboxWake(ctx, options); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrSubmissionClosed) {
 			log.Printf("[runtime] automatic mailbox continuation failed: %v", err)
+			// A failed attempt leaves the drained-nothing notifications pending.
+			// Retry with a bounded delay instead of waiting for fresh mailbox
+			// activity that may never arrive.
+			if r.Mailbox != nil && r.Mailbox.HasPending() {
+				if !waitMailboxWakeDebounce(ctx, mailboxWakeRetryDelay) {
+					return
+				}
+				retry = true
+			}
 		}
 	}
 }
@@ -236,19 +253,12 @@ func (r *SessionRuntime) tryMailboxWake(ctx context.Context, options MailboxWake
 
 func (r *SessionRuntime) executeMailboxWake(ctx context.Context, runID string, options MailboxWakeOptions) (runErr error) {
 	// Re-check after admission: an active predecessor may already have drained
-	// the mailbox, in which case this wake must not create an empty Run.
+	// the mailbox, in which case this wake must not create an empty Run. Do not
+	// drain yet: every step below can fail, and notifications must survive a
+	// failed continuation so the retry path can still deliver them.
 	if !r.Mailbox.HasPending() {
 		return nil
 	}
-	pending := r.Mailbox.DrainSteering()
-	if len(pending) == 0 {
-		return nil
-	}
-	seedText := strings.TrimSpace(joinMailboxWakeMessages(pending))
-	if seedText == "" {
-		return nil
-	}
-	seed := provider.NewSystemInjectedUserMessage(seedText)
 
 	_, sessionID := r.mailboxWakeSession()
 	if sessionID == "" {
@@ -338,6 +348,16 @@ func (r *SessionRuntime) executeMailboxWake(ctx context.Context, runID string, o
 		_ = finish(RunStateFailed, buildErr)
 		return buildErr
 	}
+	// Build succeeded, so the pending notifications can be consumed now. If a
+	// predecessor drained them between admission and this point, finish the
+	// empty Run without invoking the Agent.
+	pending := r.Mailbox.DrainSteering()
+	seedText := strings.TrimSpace(joinMailboxWakeMessages(pending))
+	if seedText == "" {
+		_ = finish(RunStateCompleted, nil)
+		return nil
+	}
+	seed := provider.NewSystemInjectedUserMessage(seedText)
 	execution.SetAgent(a)
 	callMailboxWakeAgent(options.OnAgent, runInfo, a)
 
