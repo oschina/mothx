@@ -121,7 +121,19 @@ func (s *server) handleManageRouterDeactivate(req rpcRequest) {
 	// Leaving Router is a mode write, so it follows the same lease-fenced path
 	// the other ACP session mutations use.
 	if err := s.withSessionMutationLease(sessionID, func() error {
-		return rt.runtime.SetMode(agentruntime.ModePlan)
+		if err := rt.runtime.SetMode(agentruntime.ModePlan); err != nil {
+			return err
+		}
+		// Leaving Router removes the Router-only delegation surface. Reconcile the
+		// tool groups through the same Runtime-owned installer activation uses;
+		// otherwise the next prompt keeps subagent_spawn/delegate_subagent with a
+		// manager whose lead is no longer registered.
+		if rt.registry != nil {
+			if err := s.refreshSessionExpertTools(rt); err != nil {
+				log.Printf("[acp] router deactivation could not reconcile tools for %s: %v", sessionID, err)
+			}
+		}
+		return nil
 	}); err != nil {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "router_deactivation_failed",
 			err.Error(), nil))

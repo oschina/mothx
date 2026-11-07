@@ -9,6 +9,7 @@ import (
 
 	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
 	"github.com/oschina/mothx/internal/session"
 )
 
@@ -50,7 +51,11 @@ func newRouterManageFixture(t *testing.T, output *syncedBuffer) (*server, string
 		t.Fatal(err)
 	}
 	t.Cleanup(runtime.Close)
-	srv.sessions["router-session"] = &sessionRuntime{runtime: runtime, id: "router-session", mgr: mgr}
+	p := provider.NewMockProvider("mock", []*provider.Model{{ID: "model", Name: "model", ContextWindow: 128000}}, nil)
+	if err := runtime.ConfigureSession(p, "mock", p.Models()[0], agentruntime.ModeYolo, ""); err != nil {
+		t.Fatal(err)
+	}
+	srv.sessions["router-session"] = &sessionRuntime{runtime: runtime, id: "router-session", mgr: mgr, registry: registry}
 	return srv, "router-session"
 }
 
@@ -184,3 +189,33 @@ func TestManageRouterStateOmitsSecrets(t *testing.T) {
 }
 
 var _ = context.Background
+
+// Leaving Router must remove the Router-only delegation surface, not just flip
+// the mode. Otherwise the next prompt still exposes subagent_spawn and its
+// manager no longer has a registered lead.
+func TestManageRouterDeactivateRemovesRouterTools(t *testing.T) {
+	output := &syncedBuffer{}
+	srv, sessionID := newRouterManageFixture(t, output)
+	rt := srv.sessionRuntime(sessionID)
+
+	manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/router/activate", map[string]any{
+		"sessionId":  sessionID,
+		"profileIds": []string{"codex"},
+	}))
+	if _, ok := rt.registry.Get("subagent_spawn"); !ok {
+		t.Fatal("activation did not install the Router delegation surface")
+	}
+	if _, ok := rt.registry.Get("delegate_subagent"); !ok {
+		t.Fatal("activation did not install the Router delegate tool")
+	}
+
+	manageFixtureResult(t, callManageFixture(t, srv, output, 2, "mothx/manage/router/deactivate", map[string]any{
+		"sessionId": sessionID,
+	}))
+	if _, ok := rt.registry.Get("subagent_spawn"); ok {
+		t.Fatal("deactivation left subagent_spawn installed")
+	}
+	if _, ok := rt.registry.Get("delegate_subagent"); ok {
+		t.Fatal("deactivation left delegate_subagent installed")
+	}
+}
