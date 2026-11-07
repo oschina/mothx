@@ -103,6 +103,19 @@ func TestActivateSessionRouterBindsWorkerThroughRuntime(t *testing.T) {
 	if state.Mode != "router" {
 		t.Fatalf("session mode = %q, want router", state.Mode)
 	}
+	// Activation installs the delegation surface, so the session must own a
+	// manager and expose the delegate tool even when its capability flags are
+	// all false.
+	sess := srv.pool.Get(sessionID)
+	if sess == nil {
+		t.Fatal("the activated session is not in the pool")
+	}
+	if sess.AgentMgr == nil {
+		t.Fatal("Router activation did not create the session manager")
+	}
+	if _, ok := sess.Registry.Get("delegate_subagent"); !ok {
+		t.Fatal("Router activation did not install delegate_subagent")
+	}
 
 	// The binding must survive a fresh read, because the next session attach
 	// replays it.

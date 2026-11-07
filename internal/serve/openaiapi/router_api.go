@@ -129,19 +129,11 @@ func (s *Server) ActivateSessionRouter(sessionID string, profileIDs []string) (*
 	}
 	// Router installs the delegation surface for this session, so the session
 	// needs its own manager even when the session's capability flags are all
-	// false. Without a manager the delegation tools would have no parent to
-	// resolve, and every spawn would fail with "parent agent <id> not found".
-	if sess.AgentMgr == nil {
-		sess.AgentMgr = s.newAgentManagerForSession(sess)
+	// false. The Runtime-owned reconciliation decides that from the resolved
+	// mode, builds or reuses the manager, and installs the matching tool group.
+	if err := s.reconcileSessionAgentManager(sess, false); err != nil {
+		return nil, err
 	}
-	// The Router surface is a different tool group, so the session registry must
-	// be reconciled through the shared installer.
-	agentruntime.SynchronizeToolGroups(sess.Runtime, sess.Registry, agentruntime.ToolGroupPolicy{
-		MultiAgent: sess.MultiAgent,
-		Delegate:   sess.DelegateMode,
-		Workflows:  sess.Workflows,
-		Mode:       agentruntime.ModeRouter,
-	}, sess.AgentMgr)
 
 	return s.routerSummary(sess), nil
 }
@@ -165,12 +157,9 @@ func (s *Server) DeactivateSessionRouter(sessionID string) (*RouterBindingSummar
 	if _, _, _, mode, _ := sess.Runtime.ConfigSnapshot(); strings.TrimSpace(mode) != "" {
 		sess.Mode = mode
 	}
-	agentruntime.SynchronizeToolGroups(sess.Runtime, sess.Registry, agentruntime.ToolGroupPolicy{
-		MultiAgent: sess.MultiAgent,
-		Delegate:   sess.DelegateMode,
-		Workflows:  sess.Workflows,
-		Mode:       sess.Mode,
-	}, sess.AgentMgr)
+	if err := s.reconcileSessionAgentManager(sess, false); err != nil {
+		return nil, err
+	}
 	return s.routerSummary(sess), nil
 }
 

@@ -566,8 +566,9 @@ func (s *Server) cmdRule(sess *APISession, parts []string) *CommandResult {
 	}
 	sess.RuleContent = content
 	if sess.AgentMgr != nil {
-		sess.AgentMgr = s.newAgentManagerForSession(sess)
-		synchronizeSessionToolGroups(sess)
+		if err := s.reconcileSessionAgentManager(sess, true); err != nil {
+			return &CommandResult{Message: fmt.Sprintf("Failed to rebuild agent manager: %v", err), Error: true}
+		}
 	}
 
 	if written {

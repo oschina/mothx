@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/oschina/mothx/internal/agent"
@@ -116,4 +117,147 @@ func TestSynchronizeToolGroupsTeamAuthority(t *testing.T) {
 	assertToolsPresent(t, registry, agent.SubAgentToolNames(), true)
 	assertToolsPresent(t, registry, []string{"workflow_run"}, true)
 	assertToolsPresent(t, registry, []string{"workflow_lint", "workflow_status", "workflow_cancel"}, false)
+}
+
+func TestReconcileManagerBackedToolsCreatesOnlyWhenRequired(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), nil)
+	rt := &SessionRuntime{Registry: registry}
+	created := &agent.AgentManager{}
+	builds := 0
+	build := func() (*agent.AgentManager, error) {
+		builds++
+		return created, nil
+	}
+
+	// No manager-backed capability: the factory must not run and the groups
+	// must be removed.
+	manager, err := rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{Policy: ToolGroupPolicy{}, Build: build})
+	if err != nil {
+		t.Fatalf("reconcile disabled groups: %v", err)
+	}
+	if manager != nil || builds != 0 {
+		t.Fatalf("disabled groups returned manager=%v builds=%d, want nil/0", manager, builds)
+	}
+	assertToolsPresent(t, registry, toolGroupNames(), false)
+
+	// Enabling a group creates the manager exactly once.
+	policy := ToolGroupPolicy{MultiAgent: true, Delegate: true, Workflows: true}
+	manager, err = rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{Policy: policy, Build: build})
+	if err != nil {
+		t.Fatalf("reconcile enabled groups: %v", err)
+	}
+	if manager != created || builds != 1 {
+		t.Fatalf("enabled groups returned manager=%v builds=%d, want the built manager and 1", manager, builds)
+	}
+	assertToolsPresent(t, registry, toolGroupNames(), true)
+
+	// A re-sync reuses the current handle instead of rebuilding it.
+	manager, err = rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{Policy: policy, Manager: manager, Build: build})
+	if err != nil {
+		t.Fatalf("reconcile reuse: %v", err)
+	}
+	if manager != created || builds != 1 {
+		t.Fatalf("reuse returned manager=%v builds=%d, want the same manager and 1", manager, builds)
+	}
+
+	// Rebuild discards the handle and builds a fresh session-scoped manager.
+	rebuilt := &agent.AgentManager{}
+	builds = 0
+	manager, err = rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{
+		Policy: policy, Manager: manager, Rebuild: true,
+		Build: func() (*agent.AgentManager, error) {
+			builds++
+			return rebuilt, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("reconcile rebuild: %v", err)
+	}
+	if manager != rebuilt || builds != 1 {
+		t.Fatalf("rebuild returned manager=%v builds=%d, want the rebuilt manager and 1", manager, builds)
+	}
+
+	// Turning every group off drops the manager and removes the tools.
+	manager, err = rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{Policy: ToolGroupPolicy{}, Manager: manager, Build: build})
+	if err != nil {
+		t.Fatalf("reconcile disable after enable: %v", err)
+	}
+	if manager != nil {
+		t.Fatalf("disabled reconcile kept manager %v", manager)
+	}
+	assertToolsPresent(t, registry, toolGroupNames(), false)
+}
+
+func TestReconcileManagerBackedToolsRouterRequiresManager(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), nil)
+	rt := &SessionRuntime{Registry: registry, Mode: ModeRouter}
+	created := &agent.AgentManager{}
+	builds := 0
+	manager, err := rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{
+		Policy: ToolGroupPolicy{},
+		Build:  func() (*agent.AgentManager, error) { builds++; return created, nil },
+	})
+	if err != nil {
+		t.Fatalf("reconcile router: %v", err)
+	}
+	if manager != created || builds != 1 {
+		t.Fatalf("router reconcile manager=%v builds=%d, want the built manager and 1", manager, builds)
+	}
+	assertToolsPresent(t, registry, []string{"delegate_subagent"}, true)
+	assertToolsPresent(t, registry, agent.RouterSubAgentToolNames(), true)
+}
+
+func TestReconcileManagerBackedToolsRequireManager(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), nil)
+	rt := &SessionRuntime{Registry: registry}
+	created := &agent.AgentManager{}
+	manager, err := rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{
+		Policy:         ToolGroupPolicy{},
+		RequireManager: true,
+		Build:          func() (*agent.AgentManager, error) { return created, nil },
+	})
+	if err != nil {
+		t.Fatalf("reconcile required manager: %v", err)
+	}
+	if manager != created {
+		t.Fatalf("required manager = %v, want the built manager", manager)
+	}
+	// Capabilities are still empty, so the manager-backed surface stays off even
+	// though the handle exists for adapter bookkeeping.
+	assertToolsPresent(t, registry, toolGroupNames(), false)
+}
+
+func TestReconcileManagerBackedToolsPreservesManagerOnBuildError(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), nil)
+	rt := &SessionRuntime{Registry: registry}
+	current := &agent.AgentManager{}
+	wantErr := errors.New("provider unavailable")
+	manager, err := rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{
+		Policy:  ToolGroupPolicy{MultiAgent: true},
+		Manager: current,
+		Rebuild: true,
+		Build:   func() (*agent.AgentManager, error) { return nil, wantErr },
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("build error = %v, want %v", err, wantErr)
+	}
+	if manager != current {
+		t.Fatalf("build error returned manager %v, want the current handle %v", manager, current)
+	}
+}
+
+func TestReconcileManagerBackedToolsUsesRuntimeRegistry(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), nil)
+	rt := &SessionRuntime{Registry: registry}
+	manager, err := rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{
+		Policy:  ToolGroupPolicy{Workflows: true},
+		Manager: &agent.AgentManager{},
+	})
+	if err != nil {
+		t.Fatalf("reconcile with runtime registry: %v", err)
+	}
+	if manager == nil {
+		t.Fatal("reconcile dropped the supplied manager")
+	}
+	assertToolsPresent(t, registry, workflow.ToolNames(), true)
 }

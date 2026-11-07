@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/expert"
 	"github.com/oschina/mothx/internal/session"
@@ -272,48 +273,70 @@ func (a *App) agentManagementEnabled() bool {
 // resolved roster/mailbox context; retaining an old manager would leak a
 // previous session's team into this session's tool surface.
 func (a *App) refreshExpertAwareAgentManager() error {
+	return a.reconcileAgentManager(true)
+}
+
+// reconcileAgentManager is the TUI projection of the Runtime-owned
+// "ensure manager, then synchronize manager-backed tools" entry point. The TUI
+// keeps a manager even when no manager-backed tool is exposed because ESM
+// supervision, root-agent tab state, and /agent commands use the handle.
+func (a *App) reconcileAgentManager(rebuild bool) error {
 	if a == nil || a.runtime == nil || a.provider == nil || a.model == nil || a.settings == nil {
 		return nil
 	}
-	manager, err := agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
-		Runtime: a.runtime, Provider: a.provider, ProviderName: a.activeProviderName(), Model: a.model,
-		Settings: a.settings, Allow: a.allow, MultiAgentEnabled: a.multiAgent,
-		DelegateEnabled: a.delegateMode, WorkflowsEnabled: a.workflows,
-		Worktree: defaultWorktreeManager(a.settings), WorktreePerChild: a.settings.WorktreePerChildSubagents(),
+	manager, err := a.runtime.ReconcileManagerBackedTools(agentruntime.ManagerBackedToolsOptions{
+		Registry:       a.registry,
+		Policy:         a.managerToolGroupPolicy(),
+		Manager:        a.agentMgr,
+		Rebuild:        rebuild,
+		RequireManager: true,
+		Build:          a.buildAgentManager,
 	})
 	if err != nil {
 		return err
 	}
 	a.agentMgr = manager
-	a.activeAgent = ""
-	if a.registry == nil {
-		return nil
+	if rebuild {
+		a.activeAgent = ""
 	}
-	a.syncToolGroups()
 	return nil
 }
 
-// syncToolGroups reconciles the manager-backed tool groups through the
-// Runtime-owned installer. The TUI supplies policy and the current manager
-// handle only; install, removal, and manager-swap re-installation semantics
-// stay shared across entry points.
-func (a *App) syncToolGroups() {
-	// The Runtime owns mode resolution. The adapter's own mode field can lag
-	// behind it (a resumed Router session adopts its persisted mode only after
-	// the Runtime replayed it), and a stale mode would install the wrong tool
-	// group: the Router delegation surface would be missing, or an ordinary
-	// multi-agent surface would be installed for a Router session.
-	mode := ""
-	if a != nil && a.runtime != nil {
-		_, _, _, resolved, _ := a.runtime.ConfigSnapshot()
-		mode = resolved
+// buildAgentManager constructs this session's manager through the shared
+// Runtime constructor. It is called by the Runtime reconciliation only.
+func (a *App) buildAgentManager() (*agent.AgentManager, error) {
+	if a == nil || a.runtime == nil || a.provider == nil || a.model == nil || a.settings == nil {
+		return nil, fmt.Errorf("tui agent manager requires provider, model, and settings")
 	}
-	agentruntime.SynchronizeToolGroups(a.runtime, a.registry, agentruntime.ToolGroupPolicy{
+	return agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
+		Runtime: a.runtime, Provider: a.provider, ProviderName: a.activeProviderName(), Model: a.model,
+		Settings: a.settings, Allow: a.allow, MultiAgentEnabled: a.multiAgent,
+		DelegateEnabled: a.delegateMode, WorkflowsEnabled: a.workflows,
+		Worktree: defaultWorktreeManager(a.settings), WorktreePerChild: a.settings.WorktreePerChildSubagents(),
+	})
+}
+
+// managerToolGroupPolicy projects the TUI's capability flags for the shared
+// Runtime reconciliation. The Runtime resolves the effective mode and any
+// forced team/Router capability itself.
+func (a *App) managerToolGroupPolicy() agentruntime.ToolGroupPolicy {
+	if a == nil {
+		return agentruntime.ToolGroupPolicy{}
+	}
+	return agentruntime.ToolGroupPolicy{
 		MultiAgent: a.multiAgent,
 		Delegate:   a.delegateMode,
 		Workflows:  a.workflows,
-		Mode:       mode,
-	}, a.agentMgr)
+	}
+}
+
+// syncToolGroups reconciles the manager-backed tool groups through the
+// Runtime-owned entry point. The TUI supplies policy and construction only;
+// install, removal, and manager-swap re-installation semantics stay shared.
+func (a *App) syncToolGroups() {
+	if err := a.reconcileAgentManager(false); err != nil {
+		a.addCommandError(err.Error())
+	}
 }
 
 func (a *App) localizedExpertText(text expert.LocalizedText) string {

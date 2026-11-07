@@ -180,6 +180,7 @@ Phase 12 之后新增的 Router 工作没有引入第二套运行语义，而是
 新增的 Runtime 侧投影：
 
 - `publishRouterTarget` 在每次工具组同步时把已激活的 worker ID 推送到 `delegate_subagent` 工具：工具描述点名该 worker，`agent` schema 始终用 `const` 钉死已激活值（即使配置了多个 profile），其他 profile 只出现在纠错文本中，传错名字时错误消息直接给出正确值。这是 Runtime 拥有的投影，不是适配层提示。
+- `SessionRuntime.ReconcileManagerBackedTools` 是激活/刷新后「按能力决定是否需要 manager、创建或复用、再同步工具组」的唯一入口。TUI、CLI、WebUI/API、ACP 与 channels 只提供能力策略、当前句柄和构造工厂；Runtime 负责 `ManagerBackedToolsEnabled` 判定、`Rebuild`/`RequireManager` 策略、构造失败时保留旧句柄，以及把工具组精确绑定到最终 manager。适配层不再各自实现这段组合逻辑。
 - `agentruntime.ACPAgentPresets()` 记录已验证的启动配方；TUI `/router` 面板以预设选择器作为新建入口，避免用户必须知道 `codex acp` / `claude acp` 并不启动 ACP server。
 
 Phase 4 剩余项（异步 `subagent_spawn`、多 profile fan-out、mailbox wakeup、client-owned fs/terminal bridge、URL 认证、远程 session 复用、managed worktree change-set）仍为刻意延后项，需要各自的前置方案。

@@ -1955,8 +1955,8 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 			}
 			// Manager-backed tool groups (sub-agent, delegate, workflow) are not
 			// installed here: this mutator runs before the session Runtime is
-			// attached. agentruntime.SynchronizeToolGroups reconciles them right
-			// after attachment against this session's manager and tool catalog.
+			// attached. The Runtime reconciliation installs them right after
+			// attachment against this session's manager and tool catalog.
 			if cronStore != nil && toolEnabled("cron", true) {
 				sessionID := ""
 				if header := mgr.GetHeader(); header != nil {
@@ -2014,7 +2014,7 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 	// when any member is enabled (explicitly or by default) the full tool
 	// groups install together, and only explicitly disabled names are trimmed.
 	// A team binding is a Runtime policy capability whose full sub-agent set is
-	// authoritative; SynchronizeToolGroups owns those semantics.
+	// authoritative; the Runtime reconciliation owns those semantics.
 	registerFamily := false
 	for _, name := range append(append(agent.SubAgentToolNames(), "delegate_subagent"), workflow.ToolNames()...) {
 		if toolEnabled(name, multiAgentEnabled) {
@@ -2045,7 +2045,16 @@ func (d *Dispatcher) resolveSession(platform, userID string) (*ChannelSession, e
 		Workflows:     registerFamily,
 		WorkflowTools: keepSelection(workflow.ToolNames()),
 	}
-	agentruntime.SynchronizeToolGroups(sessionRuntime, reg, groupPolicy, sessionAgentMgr)
+	manager, err := sessionRuntime.ReconcileManagerBackedTools(agentruntime.ManagerBackedToolsOptions{
+		Registry:       reg,
+		Policy:         groupPolicy,
+		Manager:        sessionAgentMgr,
+		RequireManager: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reconcile channel agent tools: %w", err)
+	}
+	sessionAgentMgr = manager
 	sess := &ChannelSession{
 		Execution:  &agentruntime.ExecutionRuntime{},
 		Decisions:  &agentruntime.DecisionService{},

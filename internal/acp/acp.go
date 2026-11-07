@@ -1773,48 +1773,56 @@ func (s *server) registerTeamExpertTools(runtime *agentruntime.SessionRuntime, r
 	if runtime == nil || registry == nil {
 		return nil, fmt.Errorf("session runtime is unavailable")
 	}
-	// Team experts receive a session-scoped manager. Keep the legacy shared
-	// manager for explicit ACP multi-agent mode only; using it for a team would
-	// lose the session roster and mailbox.
-	manager := s.agentMgr
-	var teamManager *agent.AgentManager
-	if runtime.TeamExpertActive() || runtime.RouterActive() {
-		p, providerName, model, _, _ := runtime.ConfigSnapshot()
-		if p == nil || model == nil {
-			return nil, fmt.Errorf("session provider and model are required")
-		}
-		created, err := agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
-			Runtime: runtime, Provider: p, ProviderName: providerName, Model: model,
-			Settings: s.currentSettings(), Allow: s.allow, MultiAgentEnabled: true,
-			Worktree: s.worktrees, WorktreePerChild: s.currentSettings().WorktreePerChildSubagents(),
-		})
-		if err != nil {
-			return nil, err
-		}
-		teamManager = created
-		manager = created
+	// Team experts and Router sessions receive a session-scoped manager. A
+	// non-team session keeps the process-wide ACP manager so the Runtime handle
+	// never owns a shared resource that another session can mutate.
+	rebuild := runtime.TeamExpertActive() || runtime.RouterActive()
+	var sessionManager *agent.AgentManager
+	opts := agentruntime.ManagerBackedToolsOptions{
+		Registry: registry,
+		Policy:   s.managerToolGroupPolicy(),
+		Manager:  s.agentMgr,
+		Rebuild:  rebuild,
 	}
-	s.syncSessionToolGroups(runtime, registry, manager)
-	return teamManager, nil
+	if rebuild {
+		opts.Build = func() (*agent.AgentManager, error) {
+			p, providerName, model, _, _ := runtime.ConfigSnapshot()
+			if p == nil || model == nil {
+				return nil, fmt.Errorf("session provider and model are required")
+			}
+			created, err := agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
+				Runtime: runtime, Provider: p, ProviderName: providerName, Model: model,
+				Settings: s.currentSettings(), Allow: s.allow, MultiAgentEnabled: true,
+				Worktree: s.worktrees, WorktreePerChild: s.currentSettings().WorktreePerChildSubagents(),
+			})
+			if err != nil {
+				return nil, err
+			}
+			sessionManager = created
+			return created, nil
+		}
+	}
+	if _, err := runtime.ReconcileManagerBackedTools(opts); err != nil {
+		return nil, err
+	}
+	if rebuild {
+		return sessionManager, nil
+	}
+	return nil, nil
 }
 
-// syncSessionToolGroups reconciles the manager-backed tool groups through the
-// Runtime-owned installer. ACP supplies policy and the resolved manager only;
-// install, removal, and manager-swap re-installation semantics stay shared.
-func (s *server) syncSessionToolGroups(runtime *agentruntime.SessionRuntime, registry *tools.Registry, manager *agent.AgentManager) {
-	// The Runtime owns mode resolution. The adapter's own mode field can lag
-	// behind it, and a stale mode would install the wrong tool group.
-	mode := ""
-	if runtime != nil {
-		_, _, _, resolved, _ := runtime.ConfigSnapshot()
-		mode = resolved
+// managerToolGroupPolicy projects the ACP server's capability flags for the
+// shared Runtime reconciliation. The Runtime resolves the effective mode and
+// any forced team/Router capability itself.
+func (s *server) managerToolGroupPolicy() agentruntime.ToolGroupPolicy {
+	if s == nil {
+		return agentruntime.ToolGroupPolicy{}
 	}
-	agentruntime.SynchronizeToolGroups(runtime, registry, agentruntime.ToolGroupPolicy{
+	return agentruntime.ToolGroupPolicy{
 		MultiAgent: s.multiAgent,
 		Delegate:   s.delegate,
 		Workflows:  s.workflows,
-		Mode:       mode,
-	}, manager)
+	}
 }
 
 // refreshSessionExpertTools updates only the adapter projection of the

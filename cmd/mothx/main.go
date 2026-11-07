@@ -32,7 +32,6 @@ import (
 	"github.com/oschina/mothx/internal/tui"
 	"github.com/oschina/mothx/internal/update"
 	appversion "github.com/oschina/mothx/internal/version"
-	"github.com/oschina/mothx/internal/workflow"
 )
 
 var version = appversion.Current()
@@ -493,11 +492,21 @@ func run(args []string, opts runOptions) error {
 		selection.mode = agentruntime.ModeRouter
 		opts.mode = agentruntime.ModeRouter
 		// Activation can happen after the initial registry hooks ran. Reconcile
-		// the Runtime-owned tool groups so Router exposes its delegate immediately.
-		agentruntime.SynchronizeToolGroups(sharedRuntime, registry, agentruntime.ToolGroupPolicy{
-			MultiAgent: opts.multiAgent, Delegate: opts.delegate, Workflows: opts.workflows,
-			Mode: agentruntime.ModeRouter,
-		}, runtime.agentManager)
+		// the Runtime-owned manager and tool groups through the shared entry
+		// point so Router exposes its delegate immediately.
+		manager, err := sharedRuntime.ReconcileManagerBackedTools(agentruntime.ManagerBackedToolsOptions{
+			Registry:       registry,
+			Policy:         agentruntime.ToolGroupPolicy{MultiAgent: opts.multiAgent, Delegate: opts.delegate, Workflows: opts.workflows},
+			Manager:        runtime.agentManager,
+			RequireManager: true,
+			Build: func() (*agent.AgentManager, error) {
+				return newCLIAgentManager(sharedRuntime, p, selection.name, model, settings, opts, runtime.allow)
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("reconcile Router tools: %w", err)
+		}
+		runtime.agentManager = manager
 	}
 
 	if opts.print {
@@ -806,12 +815,10 @@ func setupAgentRuntime(ctx context.Context, p provider.Provider, providerName st
 	}
 
 	allow := config.LoadAllow()
-	agentMgr, err := agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
-		Runtime: sharedRuntime, Provider: p, Model: model, Settings: settings,
-		ProviderName: providerName, Allow: allow, MultiAgentEnabled: true,
-		DelegateEnabled: opts.delegate, WorkflowsEnabled: opts.workflows,
-		Worktree: worktreeManager(settings, ""), WorktreePerChild: settings.WorktreePerChildSubagents(),
-	})
+	buildManager := func() (*agent.AgentManager, error) {
+		return newCLIAgentManager(sharedRuntime, p, providerName, model, settings, opts, allow)
+	}
+	agentMgr, err := buildManager()
 	if err != nil {
 		sharedRuntime.Close()
 		return runtimeSetup{}, err
@@ -832,26 +839,21 @@ func setupAgentRuntime(ctx context.Context, p provider.Provider, providerName st
 		},
 	}
 	registry := sharedRuntime.Registry
-	// Resolve the Runtime-owned capability once for this adapter setup. Registry
-	// hooks are deliberately re-entrant with Runtime reads, but the snapshot
-	// still keeps tool registration tied to the fully assembled session state.
-	subAgentToolsEnabled := agentruntime.SubAgentToolsEnabled(sharedRuntime, opts.multiAgent)
-	if err := sharedRuntime.ApplyRegistryHooks([]agentruntime.RegistryHook{func(runtime *agentruntime.SessionRuntime) error {
-		if subAgentToolsEnabled {
-			agent.RegisterSubAgentTools(runtime.Registry, agentMgr)
-		}
-		_, _, _, effectiveMode, _ := runtime.ConfigSnapshot()
-		if opts.delegate || effectiveMode == agentruntime.ModeRouter {
-			agent.RegisterDelegateSubAgentTool(runtime.Registry, agentMgr)
-		}
-		if opts.workflows {
-			workflow.RegisterTools(runtime.Registry, agentMgr, nil)
-		}
-		return nil
-	}}); err != nil {
+	// Manager-backed tool groups are installed through the same Runtime entry
+	// point every other adapter uses. The CLI keeps the manager handle even when
+	// no group is exposed because runPrint and the optional cron scheduler use it.
+	manager, err := sharedRuntime.ReconcileManagerBackedTools(agentruntime.ManagerBackedToolsOptions{
+		Registry:       registry,
+		Policy:         agentruntime.ToolGroupPolicy{MultiAgent: opts.multiAgent, Delegate: opts.delegate, Workflows: opts.workflows},
+		Manager:        agentMgr,
+		RequireManager: true,
+		Build:          buildManager,
+	})
+	if err != nil {
 		sharedRuntime.Close()
 		return runtimeSetup{}, err
 	}
+	runtime.agentManager = manager
 	if opts.cron {
 		globalStore := cron.NewSQLiteCronStore(settings.GetSessionDir())
 		runtime.cronStore = cron.NewSessionScopedStoreWithWorkDir(globalStore, sessionID, workDir)
@@ -867,6 +869,18 @@ func setupAgentRuntime(ctx context.Context, p provider.Provider, providerName st
 	}
 	logRuntimeModes(opts)
 	return runtime, nil
+}
+
+// newCLIAgentManager constructs the CLI session manager through the shared
+// Runtime constructor. It is used by setup and by the post-activation
+// reconciliation, so the CLI never assembles manager options twice.
+func newCLIAgentManager(sharedRuntime *agentruntime.SessionRuntime, p provider.Provider, providerName string, model *provider.Model, settings *config.Settings, opts runOptions, allow *config.AllowConfig) (*agent.AgentManager, error) {
+	return agentruntime.NewAgentManager(agentruntime.AgentManagerOptions{
+		Runtime: sharedRuntime, Provider: p, Model: model, Settings: settings,
+		ProviderName: providerName, Allow: allow, MultiAgentEnabled: true,
+		DelegateEnabled: opts.delegate, WorkflowsEnabled: opts.workflows,
+		Worktree: worktreeManager(settings, ""), WorktreePerChild: settings.WorktreePerChildSubagents(),
+	})
 }
 
 func logRuntimeModes(opts runOptions) {

@@ -1405,9 +1405,6 @@ func (s *Server) getOrCreateSession(sessionID, workDir string) (*APISession, err
 				if err := s.applyStoredSessionCapabilities(gwSess); err != nil {
 					return nil, err
 				}
-				if gwSess.MultiAgent || gwSess.DelegateMode || gwSess.Workflows {
-					gwSess.AgentMgr = s.newAgentManagerForSession(gwSess)
-				}
 				s.registerCronTool(gwSess)
 				if err := s.pool.Put(gwSess); err != nil {
 					return nil, err
@@ -1459,9 +1456,6 @@ func (s *Server) getOrCreateSession(sessionID, workDir string) (*APISession, err
 				}
 				if err := s.applyStoredSessionCapabilities(gwSess); err != nil {
 					return nil, err
-				}
-				if gwSess.MultiAgent || gwSess.DelegateMode || gwSess.Workflows {
-					gwSess.AgentMgr = s.newAgentManagerForSession(gwSess)
 				}
 				s.registerCronTool(gwSess)
 				if err := s.pool.Put(gwSess); err != nil {
@@ -1687,39 +1681,50 @@ func (s *Server) syncSessionTools(sess *APISession, refreshContext bool) error {
 
 	// A Router session exposes the same delegation surface as a multi-agent
 	// session, so it needs a manager even when the session's own capability
-	// flags are all false. The Runtime owns that decision.
-	if agentruntime.ManagerBackedToolsEnabled(sess.Runtime, sess.MultiAgent, sess.DelegateMode, sess.Workflows) {
-		if sess.AgentMgr == nil {
-			sess.AgentMgr = s.newAgentManagerForSession(sess)
-		}
-	} else {
-		sess.AgentMgr = nil
+	// flags are all false. The Runtime owns that decision, construction, and the
+	// matching tool-group reconciliation.
+	if err := s.reconcileSessionAgentManager(sess, false); err != nil {
+		return err
 	}
-	synchronizeSessionToolGroups(sess)
 
 	return nil
 }
 
-// synchronizeSessionToolGroups reconciles the manager-backed tool groups
-// through the Runtime-owned installer. Adapters supply policy and the current
-// manager handle only; install, removal, and manager-swap re-installation are
-// Runtime-owned so every entry point shares one behavior.
-func synchronizeSessionToolGroups(sess *APISession) {
-	// The Runtime owns mode resolution. The adapter's own mode field can lag
-	// behind it, and a stale mode would install the wrong tool group: the
-	// Router delegation surface would be missing, or an ordinary multi-agent
-	// surface would be installed for a Router session.
-	mode := ""
-	if sess != nil && sess.Runtime != nil {
-		_, _, _, resolved, _ := sess.Runtime.ConfigSnapshot()
-		mode = resolved
+// sessionToolGroupPolicy projects the adapter's capability flags once for the
+// shared Runtime reconciliation. The Runtime resolves the effective mode and
+// any forced team/Router capability itself.
+func sessionToolGroupPolicy(sess *APISession) agentruntime.ToolGroupPolicy {
+	if sess == nil {
+		return agentruntime.ToolGroupPolicy{}
 	}
-	agentruntime.SynchronizeToolGroups(sess.Runtime, sess.Registry, agentruntime.ToolGroupPolicy{
+	return agentruntime.ToolGroupPolicy{
 		MultiAgent: sess.MultiAgent,
 		Delegate:   sess.DelegateMode,
 		Workflows:  sess.Workflows,
-		Mode:       mode,
-	}, sess.AgentMgr)
+	}
+}
+
+// reconcileSessionAgentManager is the WebUI/API projection of the Runtime-owned
+// "ensure manager, then synchronize manager-backed tools" entry point. The
+// adapter supplies only its current handle, policy, and construction factory.
+func (s *Server) reconcileSessionAgentManager(sess *APISession, rebuild bool) error {
+	if sess == nil {
+		return nil
+	}
+	manager, err := sess.Runtime.ReconcileManagerBackedTools(agentruntime.ManagerBackedToolsOptions{
+		Registry: sess.Registry,
+		Policy:   sessionToolGroupPolicy(sess),
+		Manager:  sess.AgentMgr,
+		Rebuild:  rebuild,
+		Build: func() (*agent.AgentManager, error) {
+			return s.newAgentManagerForSession(sess), nil
+		},
+	})
+	if err != nil {
+		return err
+	}
+	sess.AgentMgr = manager
+	return nil
 }
 
 func (s *Server) registerCronTool(sess *APISession) {
@@ -1762,13 +1767,11 @@ func (s *Server) refreshSessionContext(sess *APISession) error {
 	sess.ExtraContext = sess.Runtime.ExtraContext
 	sess.RuleContent = sess.Runtime.RuleContent
 	if sess.AgentMgr != nil {
-		sess.AgentMgr = s.newAgentManagerForSession(sess)
-		// Re-point the manager-backed tool groups at the new manager so tool
-		// instances reference the current AgentMgr. Without this, tools created
-		// by syncSessionTools keep pointing at the old manager while the parent
-		// agent is registered into the new one, causing "parent agent not found"
-		// errors when sub-agents are spawned.
-		synchronizeSessionToolGroups(sess)
+		// The resource refresh changed context/skills/settings, so manager-owned
+		// factory state must be rebuilt and re-pointed at the tools.
+		if err := s.reconcileSessionAgentManager(sess, true); err != nil {
+			return err
+		}
 	}
 	return nil
 }

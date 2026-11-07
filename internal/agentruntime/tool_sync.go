@@ -106,6 +106,83 @@ func (r *SessionRuntime) RouterActive() bool {
 	return strings.TrimSpace(mode) == ModeRouter
 }
 
+// ManagerFactory constructs the session-scoped AgentManager used by the
+// manager-backed tool groups. A factory may return (nil, nil) when the session
+// deliberately has no usable manager (for example no configured provider); the
+// Runtime then reconciles the registry to an empty manager-backed surface.
+type ManagerFactory func() (*agent.AgentManager, error)
+
+// ManagerBackedToolsOptions is the adapter-supplied input to one Runtime-owned
+// manager/tool reconciliation.
+//
+// Adapters supply their resolved capability policy, the manager handle they
+// currently hold, and a factory for a session-scoped manager. The Runtime owns
+// whether a manager is required, when it must be rebuilt, and how the
+// manager-backed tool groups are installed or removed. This is the single
+// post-activation/refresh entry point for TUI, CLI, WebUI/API, ACP, and
+// channels; adapters must not open-code the predicate plus installer pair.
+type ManagerBackedToolsOptions struct {
+	// Registry overrides the Runtime registry. Nil uses the Runtime's Registry.
+	Registry *tools.Registry
+	// Policy is the adapter's resolved capability/tool-selection policy.
+	Policy ToolGroupPolicy
+	// Manager is the adapter's current manager handle.
+	Manager *agent.AgentManager
+	// Build creates a session-scoped manager. It is called only when the
+	// Runtime resolves that a manager-backed capability is active and either
+	// Manager is nil or Rebuild is true.
+	Build ManagerFactory
+	// Rebuild discards Manager before Build so manager-owned session state
+	// (expert roster/mailbox, Router worker binding, provider/model changes) is
+	// recreated instead of reusing a stale roster.
+	Rebuild bool
+	// RequireManager keeps a manager even when the capability predicate is
+	// false. The TUI and CLI use it because root-agent bookkeeping, ESM
+	// supervision, and the cron scheduler hold the manager handle independently
+	// of which manager-backed tools the model can see.
+	RequireManager bool
+}
+
+// ReconcileManagerBackedTools is the one Runtime entry point for the
+// "ensure the session manager, then synchronize the manager-backed tool
+// groups" sequence. It decides from resolved Runtime capability (including a
+// bound expert team and Router mode) whether a manager is required, builds or
+// reuses one, and installs/removes the tool groups against that exact manager.
+//
+// On a build error the current manager handle is preserved and returned with
+// the error so the caller can keep its previous projection instead of
+// silently discarding a manager that is still running children. Passing a nil
+// factory with no current manager is valid: the tool groups are removed.
+func (r *SessionRuntime) ReconcileManagerBackedTools(opts ManagerBackedToolsOptions) (*agent.AgentManager, error) {
+	registry := opts.Registry
+	if registry == nil && r != nil {
+		registry = r.Registry
+	}
+	required := ManagerBackedToolsEnabled(r, opts.Policy.MultiAgent, opts.Policy.Delegate, opts.Policy.Workflows) || opts.RequireManager
+	if !required {
+		SynchronizeToolGroups(r, registry, opts.Policy, nil)
+		return nil, nil
+	}
+	manager := opts.Manager
+	if manager == nil || opts.Rebuild {
+		if opts.Build != nil {
+			built, err := opts.Build()
+			if err != nil {
+				return manager, err
+			}
+			manager = built
+		} else if manager == nil {
+			// A manager is required but the caller supplied no construction
+			// path. Remove the manager-backed tools instead of leaving tools
+			// that could only fail at spawn time.
+			SynchronizeToolGroups(r, registry, opts.Policy, nil)
+			return nil, nil
+		}
+	}
+	SynchronizeToolGroups(r, registry, opts.Policy, manager)
+	return manager, nil
+}
+
 // ManagerBackedToolsEnabled reports whether this session exposes the
 // manager-backed tool groups (sub-agent, delegate, workflow) and therefore
 // needs an AgentManager plus a registered lead agent.

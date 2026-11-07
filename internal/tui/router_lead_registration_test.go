@@ -143,3 +143,28 @@ func TestManagerBackedToolsEnabledHandlesNilRuntime(t *testing.T) {
 		t.Fatal("an explicitly requested multi-agent session was not enabled")
 	}
 }
+
+// Activation itself must create the manager through the shared Runtime entry
+// point. A TUI session that reaches Router without a manager would otherwise
+// install delegation tools whose parent is unknown to the manager.
+func TestRouterActivationCreatesMissingManager(t *testing.T) {
+	app := newRouterCommandApp(t)
+	if err := app.bindRuntimeSession(app.session); err != nil {
+		t.Fatalf("bind runtime session: %v", err)
+	}
+	// Simulate a session that reached activation without a manager (for
+	// example after an expert transition cleared it).
+	app.agentMgr = nil
+	app.registry.Remove("delegate_subagent")
+
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
+	if app.agentMgr == nil {
+		t.Fatal("Router activation did not create the session manager")
+	}
+	if _, ok := app.registry.Get("delegate_subagent"); !ok {
+		t.Fatal("Router activation did not install delegate_subagent")
+	}
+	if _, ok := app.registry.Get("subagent_spawn"); !ok {
+		t.Fatal("Router activation did not install subagent_spawn")
+	}
+}

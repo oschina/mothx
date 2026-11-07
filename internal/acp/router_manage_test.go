@@ -86,6 +86,14 @@ func TestManageRouterActivateBindsWorkerThroughRuntime(t *testing.T) {
 	if !ok || binding.ACPProfileID != "codex" {
 		t.Fatalf("persisted binding = %#v (ok=%t)", binding, ok)
 	}
+	// Activation must leave the session with a manager that owns the Router
+	// binding and a registry that exposes the delegation surface.
+	if rt.agentMgr == nil {
+		t.Fatal("Router activation did not create the session manager")
+	}
+	if _, ok := rt.registry.Get("delegate_subagent"); !ok {
+		t.Fatal("Router activation did not install delegate_subagent")
+	}
 }
 
 // The worker catalog is the same shared Runtime projection the TUI renders.

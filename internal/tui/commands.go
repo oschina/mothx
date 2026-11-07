@@ -114,12 +114,12 @@ func (a *App) handleDelegateCommand(parts []string) {
 	}
 	switch parts[1] {
 	case "on":
-		if a.agentMgr == nil {
-			a.addCommandError(a.translator.Text(i18n.MsgCommandAgentManagerUnavailable))
+		a.delegateMode = true
+		if err := a.reconcileAgentManager(false); err != nil {
+			a.delegateMode = false
+			a.addCommandError(err.Error())
 			return
 		}
-		a.delegateMode = true
-		a.syncToolGroups()
 		a.resetAgent(fmt.Errorf("delegate mode changed"))
 		a.restartMailboxWake()
 		a.addCommandStatus(a.translator.Text(i18n.MsgCommandDelegateChanged, "ON"))
