@@ -66,6 +66,11 @@ func (a *App) pollBackgroundRuns() {
 	if a == nil || a.session == nil || a.settings == nil || len(a.backgroundRuns) == 0 {
 		return
 	}
+	// Router activation holds the session Manager lock while it reloads; reading
+	// session metadata here would freeze the update loop for the whole reload.
+	if a.routerActivating {
+		return
+	}
 	header := a.session.GetHeader()
 	if header == nil || header.ID == "" {
 		return

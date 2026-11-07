@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -431,6 +432,8 @@ func (a *App) startRouterActivation(profileIDs []string, fromPanel bool) tea.Cmd
 	a.routerActivationSeq++
 	seq := a.routerActivationSeq
 	a.routerActivating = true
+	a.routerActivationCtx, a.routerActivationCancel = context.WithCancel(context.Background())
+	ctx := a.routerActivationCtx
 	if fromPanel && a.routerPanel.Open {
 		a.routerPanel.Activating = true
 		a.routerPanel.ActivationProfile = label
@@ -440,9 +443,44 @@ func (a *App) startRouterActivation(profileIDs []string, fromPanel bool) tea.Cmd
 	}
 	a.scheduleRender()
 	settings := a.settings
+	a.routerActivationWG.Add(1)
 	return func() tea.Msg {
-		err := runtime.ActivateRouter(context.Background(), sessionDir, settings, binding)
+		defer a.routerActivationWG.Done()
+		err := runtime.ActivateRouter(ctx, sessionDir, settings, binding)
 		return routerActivatedMsg{seq: seq, profileLabel: label, fromPanel: fromPanel, err: err}
+	}
+}
+
+// cancelRouterActivation cancels the in-flight activation context, if any. It is
+// called when the command returns and when the TUI quits while activation is
+// still running.
+func (a *App) cancelRouterActivation() {
+	if a.routerActivationCancel != nil {
+		a.routerActivationCancel()
+		a.routerActivationCancel = nil
+	}
+	a.routerActivationCtx = nil
+}
+
+// waitForRouterActivation waits for an in-flight activation command to return.
+// The bound keeps a stuck database call from hanging process teardown forever;
+// ActivateRouter's reload itself is not context-aware.
+func (a *App) waitForRouterActivation(timeout time.Duration) {
+	if a == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		a.routerActivationWG.Wait()
+		close(done)
+	}()
+	if timeout <= 0 {
+		<-done
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(timeout):
 	}
 }
 
@@ -472,6 +510,10 @@ func (a *App) finishRouterActivation(msg routerActivatedMsg) {
 	}
 	a.routerActivating = false
 	a.routerPanel.Activating = false
+	a.cancelRouterActivation()
+	// Status-line refreshes were deferred while the Manager write lock was held;
+	// request one now that the activation result has landed.
+	defer a.requestStatusLineRefresh(true)
 	if msg.err != nil {
 		a.setRouterActivationError(msg.err, msg.fromPanel)
 		return

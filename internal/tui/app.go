@@ -347,6 +347,12 @@ type App struct {
 	// adapter submissions and discard stale command results.
 	routerActivating    bool
 	routerActivationSeq uint64
+	// routerActivationCtx bounds the in-flight activation so quit can stop it,
+	// and the WaitGroup makes process teardown wait for a Runtime write that
+	// would otherwise race Runtime.Close and database shutdown.
+	routerActivationCtx    context.Context
+	routerActivationCancel context.CancelFunc
+	routerActivationWG     sync.WaitGroup
 
 	// /btw side-question floating layer
 	btwOpen       bool
@@ -1052,6 +1058,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.handleMCPConnectReady(msg)
 
 	case statusLineRenderedMsg:
+		if a.routerActivating {
+			// Router activation holds the session Manager write lock. Comparing a
+			// status-line result against session metadata would block this update
+			// loop for the whole reload, so drop the stale result and clear the
+			// in-flight state. finishRouterActivation requests a fresh render.
+			a.statusLineInFlight = false
+			a.statusLineCancel = nil
+			a.statusLinePending = nil
+			return a, nil
+		}
 		return a, a.handleStatusLineRendered(msg)
 
 	case statusLineTickMsg:
@@ -1928,6 +1944,14 @@ func (a *App) finalizeForQuit() {
 	// Abort/reset paths finalize off the update loop; wait for them before the
 	// process exits so an in-flight cancellation still reaches the durable row.
 	a.waitForRunFinalization()
+	// A Router activation is a Runtime write (session reload + binding + mode).
+	// Cancel it and wait briefly so it cannot race Runtime.Close/database
+	// shutdown after the UI returns. The reload itself is not context-aware, so
+	// the wait is bounded rather than dependent on cancellation alone.
+	if a.routerActivating {
+		a.cancelRouterActivation()
+		a.waitForRouterActivation(5 * time.Second)
+	}
 	if a.run != nil {
 		a.finalizeAbortedRun()
 		run := a.run
