@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/oschina/mothx/internal/browser"
@@ -199,17 +200,20 @@ func (r *SessionRuntime) ReloadConfiguredMCP(ctx context.Context, policy MCPPoli
 }
 
 // reloadMCP connects the given servers and swaps the Runtime-owned MCP tools
-// on the shared registry. The previous clients are closed only after the new
-// connections are established, so a failed reload keeps the working
-// configuration in place instead of leaving the session without MCP tools.
+// on the shared registry. A server that fails to reconnect keeps its previous
+// client and tools, so a partial failure does not tear down the working
+// configuration; only the clients that were actually replaced (or whose server
+// was removed/disabled) are closed.
 func (r *SessionRuntime) reloadMCP(ctx context.Context, policy MCPPolicy) error {
 	if r == nil || r.Registry == nil {
 		return fmt.Errorf("runtime registry is required")
 	}
 	enabled := make([]mcp.ServerConfig, 0, len(policy.Servers))
+	enabledNames := make(map[string]struct{}, len(policy.Servers))
 	for _, server := range policy.Servers {
 		if config.MCPServerEnabled(server) {
 			enabled = append(enabled, server)
+			enabledNames[strings.TrimSpace(server.Name)] = struct{}{}
 		}
 	}
 	if len(enabled) == 0 {
@@ -250,17 +254,59 @@ func (r *SessionRuntime) reloadMCP(ctx context.Context, policy MCPPolicy) error 
 		return fmt.Errorf("agent runtime is closed")
 	}
 	previous := r.MCPClients
-	r.MCPClients = clients
+	next, released := reconcileMCPReload(r.Registry, previous, clients, failures, enabledNames)
+	r.MCPClients = next
 	r.mcpFailures = descriptions
 	r.mu.Unlock()
-	// The new connections are live, so the previous ones are released now.
-	mcp.CloseClients(previous)
+	// The new connections are live and failed servers kept their old client, so
+	// only the replaced/removed clients are released now.
+	mcp.CloseClients(released)
 	if len(failures) > 0 && policy.OnError != nil {
 		for _, failure := range failures {
 			policy.OnError(failure.Err)
 		}
 	}
 	return nil
+}
+
+// reconcileMCPReload computes the Runtime's next client list after a reload.
+// A failed server is represented by its previous client, which stays connected,
+// so its advertised tools remain usable. A server that disappeared from (or was
+// disabled in) the configuration loses its owned tools even though the connect
+// path only replaces configured owners.
+func reconcileMCPReload(registry *tools.Registry, previous, connected []*mcp.Client, failures []mcp.ServerConnectFailure, enabledNames map[string]struct{}) (next, released []*mcp.Client) {
+	previousByName := make(map[string]*mcp.Client, len(previous))
+	for _, client := range previous {
+		if client != nil {
+			previousByName[client.Name()] = client
+		}
+	}
+	next = append(next, connected...)
+	retained := make(map[*mcp.Client]struct{})
+	for _, failure := range failures {
+		client := previousByName[strings.TrimSpace(failure.Name)]
+		if client == nil {
+			continue
+		}
+		if _, kept := retained[client]; kept {
+			continue
+		}
+		retained[client] = struct{}{}
+		next = append(next, client)
+	}
+	for _, client := range previous {
+		if client == nil {
+			continue
+		}
+		if _, kept := retained[client]; kept {
+			continue
+		}
+		if _, stillEnabled := enabledNames[strings.TrimSpace(client.Name())]; !stillEnabled && registry != nil {
+			registry.ReplaceOwned(mcp.ToolOwner(client.Name()), nil)
+		}
+		released = append(released, client)
+	}
+	return next, released
 }
 
 // releaseMCPTools removes the MCP-owned tools from the shared registry and

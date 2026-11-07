@@ -225,3 +225,118 @@ func TestReloadConfiguredMCPKeepsWorkingConfigOnFailure(t *testing.T) {
 		t.Fatal("a failed reload replaced the working client")
 	}
 }
+
+// TestReloadConfiguredMCPKeepsStableToolNames pins that reconnecting the same
+// server exposes the same tool names. The reload path must not reserve the
+// replaced owner's names against itself, or every save would drift the tool
+// surface to a new suffixed name.
+func TestReloadConfiguredMCPKeepsStableToolNames(t *testing.T) {
+	workDir := t.TempDir()
+	settings := testBuildSettings(t)
+
+	runtime, err := (Builder{Settings: settings, SandboxLevel: sandbox.LevelNone}).Build(context.Background(), BuildOptions{
+		Source: SourceTUI, WorkDir: workDir, MCP: MCPConnectPolicy{Optional: true},
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(runtime.Close)
+
+	writeMCPFixtureServer(t, workDir, "alpha-server")
+	writeProjectMCP(t, workDir, `[{"name":"alpha","command":"`+filepath.Join(workDir, "alpha-server")+`"}]`)
+
+	reload := func() []string {
+		t.Helper()
+		if err := runtime.ReloadConfiguredMCP(context.Background(), MCPPolicy{Optional: true}); err != nil {
+			t.Fatalf("reload configured MCP: %v", err)
+		}
+		return runtime.Registry.OwnedToolNames("mcp:alpha")
+	}
+	first := reload()
+	second := reload()
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("owned tool names = %v / %v, want one tool each", first, second)
+	}
+	if first[0] != second[0] {
+		t.Fatalf("tool name drifted across reload: %q -> %q", first[0], second[0])
+	}
+}
+
+// TestReloadConfiguredMCPOptionalFailureKeepsPreviousClient pins that an
+// optional reload whose servers all fail keeps the previously connected client
+// and its tools instead of closing them behind stale registry entries.
+func TestReloadConfiguredMCPOptionalFailureKeepsPreviousClient(t *testing.T) {
+	workDir := t.TempDir()
+	settings := testBuildSettings(t)
+
+	runtime, err := (Builder{Settings: settings, SandboxLevel: sandbox.LevelNone}).Build(context.Background(), BuildOptions{
+		Source: SourceTUI, WorkDir: workDir, MCP: MCPConnectPolicy{Optional: true},
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(runtime.Close)
+
+	writeMCPFixtureServer(t, workDir, "alpha-server")
+	writeProjectMCP(t, workDir, `[{"name":"alpha","command":"`+filepath.Join(workDir, "alpha-server")+`"}]`)
+	if err := runtime.ReloadConfiguredMCP(context.Background(), MCPPolicy{Optional: true}); err != nil {
+		t.Fatalf("reload configured MCP: %v", err)
+	}
+	clients := runtime.MCPClients
+	if len(clients) != 1 {
+		t.Fatalf("MCP clients = %d, want one connected server", len(clients))
+	}
+
+	writeProjectMCP(t, workDir, `[{"name":"alpha","command":"/definitely/missing/mcp-server"}]`)
+	if err := runtime.ReloadConfiguredMCP(context.Background(), MCPPolicy{Optional: true}); err != nil {
+		t.Fatalf("optional reload returned %v", err)
+	}
+	if len(runtime.MCPClients) != 1 || runtime.MCPClients[0] != clients[0] {
+		t.Fatalf("optional failed reload released the working client: %#v", runtime.MCPClients)
+	}
+	if got := runtime.Registry.OwnedToolNames("mcp:alpha"); len(got) == 0 {
+		t.Fatal("optional failed reload dropped the working server's tools")
+	}
+}
+
+// TestReloadConfiguredMCPDropsRemovedServerTools pins that a server removed
+// from the configuration while another server remains does not leave its tools
+// registered against a closed client.
+func TestReloadConfiguredMCPDropsRemovedServerTools(t *testing.T) {
+	workDir := t.TempDir()
+	settings := testBuildSettings(t)
+
+	runtime, err := (Builder{Settings: settings, SandboxLevel: sandbox.LevelNone}).Build(context.Background(), BuildOptions{
+		Source: SourceTUI, WorkDir: workDir, MCP: MCPConnectPolicy{Optional: true},
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(runtime.Close)
+
+	writeMCPFixtureServer(t, workDir, "alpha-server")
+	writeMCPFixtureServer(t, workDir, "beta-server")
+	writeProjectMCP(t, workDir, `[{"name":"alpha","command":"`+filepath.Join(workDir, "alpha-server")+`"},{"name":"beta","command":"`+filepath.Join(workDir, "beta-server")+`"}]`)
+	if err := runtime.ReloadConfiguredMCP(context.Background(), MCPPolicy{Optional: true}); err != nil {
+		t.Fatalf("reload configured MCP: %v", err)
+	}
+	alphaBefore := runtime.Registry.OwnedToolNames("mcp:alpha")
+	if len(alphaBefore) != 1 || len(runtime.Registry.OwnedToolNames("mcp:beta")) != 1 {
+		t.Fatalf("initial owned tools = %v / %v", alphaBefore, runtime.Registry.OwnedToolNames("mcp:beta"))
+	}
+
+	writeProjectMCP(t, workDir, `[{"name":"alpha","command":"`+filepath.Join(workDir, "alpha-server")+`"}]`)
+	if err := runtime.ReloadConfiguredMCP(context.Background(), MCPPolicy{Optional: true}); err != nil {
+		t.Fatalf("reload after removal: %v", err)
+	}
+	if got := runtime.Registry.OwnedToolNames("mcp:beta"); len(got) != 0 {
+		t.Fatalf("removed server still owns tools %v", got)
+	}
+	alphaAfter := runtime.Registry.OwnedToolNames("mcp:alpha")
+	if len(alphaAfter) != 1 || alphaAfter[0] != alphaBefore[0] {
+		t.Fatalf("remaining server tool drift: %v -> %v", alphaBefore, alphaAfter)
+	}
+	if len(runtime.MCPClients) != 1 {
+		t.Fatalf("MCP clients = %d, want one remaining server", len(runtime.MCPClients))
+	}
+}

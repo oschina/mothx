@@ -381,9 +381,22 @@ func ConnectServersWithOptions(ctx context.Context, configs []ServerConfig, regi
 
 	// Snapshot the registered tool names once. Registration is single-threaded
 	// below, so this map stays race-free and name allocation stays deterministic.
+	// The configured servers' own tools are excluded: ConnectServersWithOptions
+	// replaces those owners after a successful connect, so keeping their old
+	// names reserved would make every reload allocate a new suffixed name
+	// (mcp_alpha_ping -> mcp_alpha_ping_2 -> ...).
 	registeredToolNames := make(map[string]struct{})
 	if registry != nil {
+		owned := make(map[string]struct{})
+		for _, cfg := range configs {
+			for _, name := range registry.OwnedToolNames(ToolOwner(cfg.Name)) {
+				owned[name] = struct{}{}
+			}
+		}
 		for _, t := range registry.All() {
+			if _, replaced := owned[t.Name()]; replaced {
+				continue
+			}
 			registeredToolNames[t.Name()] = struct{}{}
 		}
 	}
