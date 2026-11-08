@@ -117,7 +117,15 @@ func (a *App) handleDelegateCommand(parts []string) {
 		a.delegateMode = true
 		if err := a.reconcileAgentManager(false); err != nil {
 			a.delegateMode = false
-			a.addCommandError(err.Error())
+			a.addCommandError(a.translator.Text(i18n.MsgCommandAgentManagerUnavailable))
+			return
+		}
+		if a.agentMgr == nil {
+			// reconcileAgentManager is a no-op while the app is not fully
+			// initialized; keep the old explicit failure instead of reporting
+			// delegate mode as enabled with no manager to spawn from.
+			a.delegateMode = false
+			a.addCommandError(a.translator.Text(i18n.MsgCommandAgentManagerUnavailable))
 			return
 		}
 		a.resetAgent(fmt.Errorf("delegate mode changed"))

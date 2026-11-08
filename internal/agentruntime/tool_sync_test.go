@@ -261,3 +261,62 @@ func TestReconcileManagerBackedToolsUsesRuntimeRegistry(t *testing.T) {
 	}
 	assertToolsPresent(t, registry, workflow.ToolNames(), true)
 }
+
+func TestReconcileManagerBackedToolsRebuildWithoutFactoryFailsClosed(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), nil)
+	rt := &SessionRuntime{Registry: registry}
+	current := &agent.AgentManager{}
+
+	manager, err := rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{
+		Policy:  ToolGroupPolicy{MultiAgent: true},
+		Manager: current,
+		Rebuild: true,
+	})
+	if err == nil {
+		t.Fatal("rebuild without a factory returned no error")
+	}
+	if manager != current {
+		t.Fatalf("rebuild error returned manager %v, want the current handle %v", manager, current)
+	}
+}
+
+func TestReconcileManagerBackedToolsNilFactoryResultRemovesGroups(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), nil)
+	rt := &SessionRuntime{Registry: registry}
+
+	manager, err := rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{
+		Policy: ToolGroupPolicy{MultiAgent: true, Delegate: true, Workflows: true},
+		Build:  func() (*agent.AgentManager, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatalf("reconcile with nil factory result: %v", err)
+	}
+	if manager != nil {
+		t.Fatalf("nil factory result returned manager %v, want nil", manager)
+	}
+	assertToolsPresent(t, registry, toolGroupNames(), false)
+}
+
+func TestReconcileManagerBackedToolsKeepsManagerWithRunningChild(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), nil)
+	rt := &SessionRuntime{Registry: registry}
+	manager := agent.NewAgentManager(&agent.AgentFactory{})
+	if _, err := manager.Create(agent.AgentOptions{ID: "lead"}); err != nil {
+		t.Fatalf("create lead: %v", err)
+	}
+	if _, err := manager.Create(agent.AgentOptions{ID: "child", ParentID: "lead"}); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	manager.MarkRunning("child")
+
+	// Capabilities are off, so the tool surface must be empty, but the handle
+	// still owns a live child and must not be dropped.
+	got, err := rt.ReconcileManagerBackedTools(ManagerBackedToolsOptions{Policy: ToolGroupPolicy{}, Manager: manager})
+	if err != nil {
+		t.Fatalf("reconcile live child: %v", err)
+	}
+	if got != manager {
+		t.Fatalf("reconcile returned manager %v, want the live handle %v", got, manager)
+	}
+	assertToolsPresent(t, registry, toolGroupNames(), false)
+}

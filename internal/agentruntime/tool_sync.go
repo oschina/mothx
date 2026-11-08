@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/oschina/mothx/internal/agent"
@@ -134,7 +135,8 @@ type ManagerBackedToolsOptions struct {
 	Build ManagerFactory
 	// Rebuild discards Manager before Build so manager-owned session state
 	// (expert roster/mailbox, Router worker binding, provider/model changes) is
-	// recreated instead of reusing a stale roster.
+	// recreated instead of reusing a stale roster. Build is required when
+	// Rebuild is set and Manager is non-nil; the Runtime fails closed otherwise.
 	Rebuild bool
 	// RequireManager keeps a manager even when the capability predicate is
 	// false. The TUI and CLI use it because root-agent bookkeeping, ESM
@@ -152,7 +154,13 @@ type ManagerBackedToolsOptions struct {
 // On a build error the current manager handle is preserved and returned with
 // the error so the caller can keep its previous projection instead of
 // silently discarding a manager that is still running children. Passing a nil
-// factory with no current manager is valid: the tool groups are removed.
+// factory with no current manager is valid: the tool groups are removed. A
+// Rebuild with no factory is an error because silently reusing the handle
+// would defeat the caller's explicit request to discard stale manager state.
+//
+// When the capability is off the tool groups are always removed, but a manager
+// that still owns a running child is handed back instead of dropped so the
+// adapter can keep observing and cancelling it.
 func (r *SessionRuntime) ReconcileManagerBackedTools(opts ManagerBackedToolsOptions) (*agent.AgentManager, error) {
 	registry := opts.Registry
 	if registry == nil && r != nil {
@@ -161,22 +169,34 @@ func (r *SessionRuntime) ReconcileManagerBackedTools(opts ManagerBackedToolsOpti
 	required := ManagerBackedToolsEnabled(r, opts.Policy.MultiAgent, opts.Policy.Delegate, opts.Policy.Workflows) || opts.RequireManager
 	if !required {
 		SynchronizeToolGroups(r, registry, opts.Policy, nil)
+		if opts.Manager != nil && opts.Manager.HasRunningChildren() {
+			// No manager-backed capability is visible, but a live child still
+			// needs its owning manager for status and cancellation. Return the
+			// handle instead of orphaning it; the tool surface stays empty.
+			return opts.Manager, nil
+		}
 		return nil, nil
 	}
 	manager := opts.Manager
 	if manager == nil || opts.Rebuild {
-		if opts.Build != nil {
+		switch {
+		case opts.Build != nil:
 			built, err := opts.Build()
 			if err != nil {
 				return manager, err
 			}
 			manager = built
-		} else if manager == nil {
+		case manager == nil:
 			// A manager is required but the caller supplied no construction
 			// path. Remove the manager-backed tools instead of leaving tools
 			// that could only fail at spawn time.
 			SynchronizeToolGroups(r, registry, opts.Policy, nil)
 			return nil, nil
+		default:
+			// Rebuild without a factory cannot produce a fresh manager. Fail
+			// closed instead of silently reusing the stale handle the caller
+			// asked to discard.
+			return manager, fmt.Errorf("manager-backed tool reconciliation: rebuild requires a manager factory")
 		}
 	}
 	SynchronizeToolGroups(r, registry, opts.Policy, manager)

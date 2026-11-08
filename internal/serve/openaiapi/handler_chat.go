@@ -1717,7 +1717,14 @@ func (s *Server) reconcileSessionAgentManager(sess *APISession, rebuild bool) er
 		Manager:  sess.AgentMgr,
 		Rebuild:  rebuild,
 		Build: func() (*agent.AgentManager, error) {
-			return s.newAgentManagerForSession(sess), nil
+			// newAgentManagerForSession reports bind/construction failure as nil.
+			// Surface it instead of letting the Runtime treat it as a deliberate
+			// "no manager" and silently strip the session's manager-backed tools.
+			manager := s.newAgentManagerForSession(sess)
+			if manager == nil {
+				return nil, fmt.Errorf("session agent manager is unavailable")
+			}
+			return manager, nil
 		},
 	})
 	if err != nil {
