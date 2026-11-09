@@ -540,8 +540,9 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
                         ? 'border-primary/45 bg-primary/8 font-semibold text-primary'
                         : 'border-transparent text-muted-foreground hover:bg-hoverbg hover:text-strong',
                     )}
+                    title={t('composer.routerMode')}
                   >
-                    router
+                    {t('composer.routerMode')}
                   </button>
                 )}
               </div>

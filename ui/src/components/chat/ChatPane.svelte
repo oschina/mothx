@@ -3175,7 +3175,7 @@
                 disabled={runtimeUpdating || busy || routerSelection.loading}
                 title={$t('chat.runtime.routerMode')}
                 on:click={() => (routerPanelOpen ? (routerPanelOpen = false) : openRouterPanel())}
-              >router</button>
+              >{$t('chat.runtime.routerButton')}</button>
             </div>
             {#if routerPanelOpen}
               <div class="composer-router-panel">

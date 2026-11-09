@@ -354,7 +354,7 @@ func (a *App) cycleMode() {
 	case "os":
 		modeLabel = "🖥 OS - Bash only, no sandbox"
 	case "router":
-		modeLabel = "🧭 ROUTER - Read-only orchestration"
+		modeLabel = "🧭 ROUTER (BETA) - External ACP worker delegation, preview build"
 	}
 	a.addMessage(statusStyle.Render(fmt.Sprintf("Mode: %s", modeLabel)))
 }

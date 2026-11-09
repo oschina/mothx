@@ -11,7 +11,8 @@
 
 ### ✨ 新功能
 
-- **新增 SenseNova（商汤日日新）提供商。** 内置 `sensenova` 预设使用 SenseNova Token Plan 端点 `https://token.sensenova.cn/v1` 与 OpenAI 兼容的 `openai-chat` 协议，读取 `${SENSENOVA_API_KEY}`，并注册 `sensenova` 厂商适配器以支持 `sensenova.cn` Base URL 自动识别；内置 `sensenova-6.8-flash`，提供 1,000,000 tokens 上下文窗口、131,072 tokens 最大输出、推理支持，以及 `text`/`image` 多模态输入。
+- **新增 SenseNova（商汤日日新）提供商。** 内置 `sensenova` 预设使用 SenseNova Token Plan 端点 `https://token.sensenova.cn/v1` 与 OpenAI 兼容的 `openai-chat` 协议，读取 `${SENSENOVA_API_KEY}`，并注册 `sensenova` 厂商适配器以支持 `sensenova.cn` Base URL 自动识别；内置 `sensenova-6.8-flash` 与 `sensenova-6.8-flash-lite`，均提供 1,000,000 tokens 上下文窗口、131,072 tokens 最大输出、推理支持，以及 `text`/`image` 多模态输入。
+- **Router 模式目前仍是 Beta（预览）模式。** Router 以及为它提供 worker 的 `acpAgents` profile 都是评估功能，而非生产契约：工具面、profile 结构与生命周期可能在任何版本中变更，且不提供兼容性迁移路径；Router 仍被有意排除在 `defaultMode` 之外（遗留的 `defaultMode: router` 依旧解析为只读的 `plan`）。请在临时会话中用 Router 试用外部 ACP worker，不要依赖它做无人值守或生产环境的工作流。TUI、CLI、WebUI 与 Desktop 入口投影的都是同一份 Runtime 行为，因此该评估对所有入口同等适用。现在所有 Router 界面都会明示这一点：TUI 状态栏、模式循环、`/router` 面板与 `/mode` 输出，以及 WebUI 与 Desktop 的 composer，都带有 Beta / 预览标记。
 
 - **Desktop 现在可以进入 Router 模式。** composer 新增 Router 控件，列出已配置的外部 ACP worker 并把所选者绑定到会话。Desktop 仍是纯 ACP 投影：目录来自既有的 `mothx/manage/acp/profiles/list`，激活来自新增的加性投影 `mothx/manage/router/activate`，两者都委派给共享的 Runtime 激活路径，因此 Desktop 无法到达 TUI、CLI 或 WebUI 到不了的 Router 状态。该控件以新的 `manageRouter` feature key 为门槛，选择结果绝不进入 Electron 私有存储。
 - **WebUI 现在可以进入 Router 模式。** composer 新增 Router 按钮，列出已配置的外部 ACP worker 并把所选者绑定到会话。目录来自 `GET /api/acp/profiles`，它与 TUI 面板渲染的是同一份 Runtime 目录，因此可用性与校验结论保持单一事实，而不是在浏览器端重新计算。激活走 `POST /api/sessions/<id>/router`，它委派给共享的 Runtime 激活路径，因此 WebUI 无法到达 TUI 或 CLI 到不了的 Router 状态：profile 校验、非阻塞审批策略、空闲围栏、来源策略与持久化的 mode 条目都仍由 Runtime 独占。渠道会话按设计仍然排除，因为微信与飞书被来源强制为 yolo，永远不能选择 Router。

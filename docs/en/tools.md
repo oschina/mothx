@@ -637,6 +637,8 @@ Use delegate mode for broad searches, multi-step investigations, focused impleme
 
 #### Router external worker
 
+> **Status: beta (preview) mode.** Router is still an evaluation feature: the tools below, their parameters, and the profile schema may change in any release without a compatibility migration path. Use them to try external ACP workers on a scratch session, not as a production integration contract.
+
 In Router mode (`/router` panel, `/router <id>[,<id>...]`, or `--router --acp-agent <id>[,<id>...]`), `delegate_subagent` targets one of the external ACP workers bound to the session. `agent` is required, must name a bound profile, and there is no local-child fallback; the first bound profile is the default. The lead also supplies a bounded task contract:
 
 | Parameter | Description |

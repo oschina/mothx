@@ -1554,6 +1554,9 @@ Source: https://mothx.net/en/changelog.md
 
 ### ✨ New Features
 
+- **Added the SenseNova (商汤日日新) provider.** The built-in `sensenova` preset targets the SenseNova token-plan endpoint `https://token.sensenova.cn/v1` with the OpenAI-compatible `openai-chat` API, reads `${SENSENOVA_API_KEY}`, registers a `sensenova` vendor adapter for `sensenova.cn` base-URL auto-detection, and ships `sensenova-6.8-flash` and `sensenova-6.8-flash-lite`, each with a 1,000,000-token context window, a 131,072-token output ceiling, reasoning support, and `text`/`image` multimodal input.
+- **Router mode is still a beta (preview) mode.** Router and the `acpAgents` profiles that feed it are evaluation features, not a production contract: the tool surface, the profile schema, and the lifecycle may change in any release without a compatibility migration path, and Router stays deliberately excluded from `defaultMode` (a stray `defaultMode: router` still resolves to read-only `plan`). Use Router to try external ACP workers on a scratch session, and do not depend on it for unattended or production workflows. The TUI, CLI, WebUI, and Desktop entry points all project the same Runtime-owned behavior, so the evaluation covers every entry point equally. Every Router surface now says so: the TUI status bar, mode cycle, `/router` panel, and `/mode` output, plus the WebUI and Desktop composers, all carry a beta / preview marker.
+
 - **Desktop can now enter Router mode.** The composer gained a Router control that lists the configured external ACP workers and binds the selected ones to the session. Desktop stays a pure ACP projection: the catalog comes from the existing `mothx/manage/acp/profiles/list` and the activation from the new additive `mothx/manage/router/activate`, both of which delegate to the shared Runtime activation path, so Desktop cannot reach a Router state the TUI, CLI, or WebUI could not. The control is gated on the new `manageRouter` feature key and the selection never enters Electron-owned storage.
 - **The WebUI can now enter Router mode.** The composer gained a Router button that lists the configured external ACP workers and binds the selected ones to the session. The catalog comes from `GET /api/acp/profiles`, which is the same Runtime catalog the TUI panel renders, so eligibility and the validation verdict stay one fact instead of being recomputed in the browser. Activation goes through `POST /api/sessions/<id>/router`, which delegates to the shared Runtime activation path, so the WebUI cannot reach a Router state the TUI or CLI could not: the profile validation, the non-blocking approval strategy, the idle fence, the source policy, and the durable mode entry all stay Runtime-owned. Channel sessions remain excluded by design, because WeChat and Feishu are source-forced to yolo and can never select Router.
 - **A Router profile can opt into parallel base-workspace writers.** An ACP profile may set `allowParallelBaseWorkspaceWrites` to let write-role workers that target the session workspace run concurrently instead of taking it exclusively. The default stays exclusive, so every existing `settings.json` profile keeps its current behavior. This is explicit executable trust rather than a performance default: an external ACP Agent runs its own tools, so MothX cannot confine its writes to the declared `write_scope` and two workers can still touch the same file. The configured `maxConcurrentChildren` ceiling still applies, the Runtime still refuses a parallel writer whose declared `write_scope` overlaps a live base writer because that overlap is statically visible, and `mothx doctor` and the `/router` panel report the opt-in so the residual risk stays visible. Per-child worktrees plus `subagent_integrate` remain the safer default.
@@ -1581,7 +1584,9 @@ Source: https://mothx.net/en/changelog.md
 
 ### 🐛 Bug Fixes
 
+- **Activating a Router ACP profile no longer freezes the TUI.** Activation previously ran `SessionRuntime.ActivateRouter` inline on the Bubble Tea update loop, so the Runtime's pre-activation session reload and the binding/mode writes blocked input, rendering, and cancellation for the whole reload — seconds on a large `sessions.db`. Activation now runs as a `tea.Cmd`: the update loop stays responsive, the panel shows an in-flight state, other panel keys and concurrent submissions are rejected until the result lands, and the adapter applies the Runtime-resolved mode and tool surface only through the completion message. Runtime remains the sole owner of validation, the idle fence, source policy, persistence, and write ordering.
 - **A Router session can now spawn an external ACP worker.** The lead agent was only registered into the `AgentManager` when the adapter's multi-agent, delegate, or workflow capability was enabled, but Router mode installs the same delegation surface without any of those flags. Every spawn therefore failed with `create sub-agent: parent agent agent-master not found`, so a correctly configured and activated worker was never reached. The Runtime now owns the decision through `ManagerBackedToolsEnabled`, which counts Router alongside the ordinary capabilities, and every entry point (TUI, CLI, WebUI/API, ACP/Desktop) registers the lead through it. The TUI, WebUI, and ACP tool-group synchronization also resolve the mode from the Runtime instead of the adapter's own field, so a resumed or freshly activated Router session installs the Router delegation surface rather than the wrong one, and a Router session in ACP/Desktop gets the session-scoped manager its per-session worker binding requires.
+- **Manager creation and tool-group synchronization after activation now have one Runtime entry point.** TUI, CLI, WebUI/API, ACP, and channels each open-coded the same "decide whether a manager is needed, build or reuse it, then install/remove the manager-backed tool groups" sequence, so a newly activated Router session could install `delegate_subagent` without a manager that owned the session (or reuse a stale manager after an expert transition). `SessionRuntime.ReconcileManagerBackedTools` now owns that whole decision: it applies the shared capability predicate (including a bound team and Router), builds only when required or explicitly rebuilt, preserves the current handle when construction fails, and reconciles the tool groups against the exact returned manager. Adapters supply only their capability policy, current handle, and construction factory; the TUI/CLI keep a manager for root-agent, ESM, and cron bookkeeping through an explicit `RequireManager` policy rather than a second implementation.
 - **The TUI `/browser` command now actually enables browser automation.** The command previously only mutated the TUI-local tool registry, so the browser tool was silently removed again as soon as the first prompt created and bound a session: the shared Runtime reloaded its resources from the stale capability state and unregistered the tool before the Agent was built. The command now goes through the Runtime's own capability path, so the tool, its skill prompt, and the persisted session capability stay one fact. The Runtime also keeps the browser capability consistent across build, attach, capability updates, and resource refresh, and a browser toggle applied before the first prompt is persisted onto the session that prompt creates, so reopening that session keeps browser support enabled.
 - **MCP servers no longer require a client restart, and a remote server pinned to an older protocol revision now connects.** Registering or editing an MCP server previously only wrote `mcp.json`, so the change reached the Agent only after a full client restart; the TUI `/mcpmgr` panel, the Serve Web UI `/api/mcp` endpoint, and the ACP `mothx/manage/mcp/set` method now reconnect the affected servers in place through the shared Runtime. MCP tools are owned by their server, so a reconnect replaces exactly that server's tool surface and removes the tools of a server that was deleted or disabled, without disturbing other servers' tools or the built-in ones. A run that is already in flight keeps the tool set it froze at build time, and the change applies to the next run. A failed reload leaves the previous working configuration connected instead of tearing it down. The protocol negotiation also no longer requires the newest revision: a server that answers `initialize` with `2025-06-18`, `2025-03-26`, or `2024-11-05` is accepted, and the `MCP-Protocol-Version` header is only sent for the revisions that define it. An unknown revision is still refused rather than falsely claimed as compatible.
 - **Router's external ACP worker path is hardened.** The ACP client no longer closes its notification channel while a transport reader may be sending, so a worker exit or cancellation cannot panic on a concurrent send; the final response is also preferred over the transport's terminal error when both become ready together. Inbound frames are read in bounded fragments, rejecting an oversized line before allocating the whole payload. A single Router worker remains a schema `const`; a multi-worker binding becomes a bound-only `enum`. Local-child parameters (`mode`, `work_dir`, `worktree`, `tools`, `max_iterations`) are rejected instead of silently ignored. ACP permission cancellation now goes through `DecisionService`, failed resolution commits discard the in-memory pending row after recording a terminal one, output truncation preserves UTF-8, and Windows workers start suspended until they join the Job Object.
@@ -6692,7 +6697,7 @@ Selection order:
 2. Base URL detection
 3. Generic fallback: `openai-chat`, `openai-responses`, `anthropic-messages`, `google-gemini`, or `google-vertex`
 
-Built-in vendor adapters include `openai`, `anthropic`, `claude`, `deepseek`, `agnes`, `google-gemini`, `google-vertex`, `xiaomi`, `xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, `volcengine`, `kimi`, `minimax`, `qianfan`, `bailian`, `gitee`, `openrouter`, `together`, `groq`, `fireworks`, `mistral`, `github-copilot`, `cloudflare-ai-gateway`, `cloudflare-workers-ai`, and `amazon-bedrock`.
+Built-in vendor adapters include `openai`, `anthropic`, `claude`, `deepseek`, `agnes`, `google-gemini`, `google-vertex`, `xiaomi`, `xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, `volcengine`, `kimi`, `minimax`, `qianfan`, `bailian`, `gitee`, `openrouter`, `together`, `groq`, `fireworks`, `mistral`, `github-copilot`, `cloudflare-ai-gateway`, `cloudflare-workers-ai`, `sensenova`, and `amazon-bedrock`.
 
 ```json
 {
@@ -6729,6 +6734,27 @@ The built-in `volcengine` provider uses the Ark OpenAI-compatible endpoint and s
       "models": [
         { "id": "doubao-seed-evolving", "name": "Doubao Seed Evolving", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] },
         { "id": "doubao-seed-2-1-pro-260628", "name": "Doubao Seed 2.1 Pro", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] }
+      ]
+    }
+  }
+}
+```
+
+#### SenseNova (商汤日日新) example
+
+The built-in `sensenova` provider uses the SenseNova token-plan endpoint and the OpenAI-compatible `openai-chat` API. It ships `sensenova-6.8-flash` and `sensenova-6.8-flash-lite`, both with a 1,000,000-token context window, a 131,072-token output ceiling, reasoning support, and `text`/`image` input. The vendor is also detected automatically from `token.sensenova.cn`.
+
+```json
+{
+  "providers": {
+    "sensenova": {
+      "vendor": "sensenova",
+      "baseUrl": "https://token.sensenova.cn/v1",
+      "apiKey": "${SENSENOVA_API_KEY}",
+      "api": "openai-chat",
+      "models": [
+        { "id": "sensenova-6.8-flash", "name": "SenseNova 6.8 Flash", "reasoning": true, "contextWindow": 1000000, "maxTokens": 131072, "input": ["text", "image"] },
+        { "id": "sensenova-6.8-flash-lite", "name": "SenseNova 6.8 Flash Lite", "reasoning": true, "contextWindow": 1000000, "maxTokens": 131072, "input": ["text", "image"] }
       ]
     }
   }
@@ -7119,6 +7145,8 @@ Default run mode:
 | `os` | Shell-only mode — exposes Bash with YOLO-level approval behavior and no sandbox; high-risk protections still apply |
 
 `router` is a valid session execution mode but not a valid `defaultMode`: it binds one or more external ACP workers per session, so enter it with `/router <id>[,<id>...]` (TUI) or `mothx --router --acp-agent <id>[,<id>...]`. If `defaultMode` is set to `router` anyway, it is treated as `plan` rather than failing: a default resolves before any worker is bound, and `plan` is the read-only projection of that intent, so the fallback never widens the tool surface to full access.
+
+> **Status: beta (preview) mode.** Router is still an evaluation feature. Its tool surface, profile schema, and lifecycle may change in any release without a compatibility migration path, and it is deliberately excluded from `defaultMode`. Use it to try external ACP workers on a scratch session, and do not depend on it for unattended or production workflows.
 
 ```json
 { "defaultMode": "yolo" }
@@ -7622,6 +7650,8 @@ Create, list, reset, and remove worktrees with [`mothx worktree`](cli-reference.
 ### acpAgents
 
 `acpAgents` is the global allowlist of external ACP coding agents MothX may use as Router workers. MothX never auto-discovers agents and never accepts a command or endpoint from a model tool call. A local profile's `command[0]` may be an absolute path or a bare command resolved through `PATH` at launch, and launch never runs a shell string. A remote profile selects one administrator-configured `url`.
+
+> **Status: beta (preview) mode.** Router is still an evaluation feature, and so are the `acpAgents` profiles that feed it: the fields below may change in any release without a compatibility migration path. Configure a profile to evaluate an external worker, not as a production integration contract.
 
 ```json
 {
@@ -14594,6 +14624,8 @@ Result shape:
 Use delegate mode for broad searches, multi-step investigations, focused implementation, or verification tasks. Avoid it for one-tool operations, tasks needing user clarification, or highly stateful work that depends on the full conversation.
 
 #### Router external worker
+
+> **Status: beta (preview) mode.** Router is still an evaluation feature: the tools below, their parameters, and the profile schema may change in any release without a compatibility migration path. Use them to try external ACP workers on a scratch session, not as a production integration contract.
 
 In Router mode (`/router` panel, `/router <id>[,<id>...]`, or `--router --acp-agent <id>[,<id>...]`), `delegate_subagent` targets one of the external ACP workers bound to the session. `agent` is required, must name a bound profile, and there is no local-child fallback; the first bound profile is the default. The lead also supplies a bounded task contract:
 

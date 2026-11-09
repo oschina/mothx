@@ -1611,6 +1611,9 @@ Source: https://mothx.net/zh/changelog.md
 
 ### ✨ 新功能
 
+- **新增 SenseNova（商汤日日新）提供商。** 内置 `sensenova` 预设使用 SenseNova Token Plan 端点 `https://token.sensenova.cn/v1` 与 OpenAI 兼容的 `openai-chat` 协议，读取 `${SENSENOVA_API_KEY}`，并注册 `sensenova` 厂商适配器以支持 `sensenova.cn` Base URL 自动识别；内置 `sensenova-6.8-flash` 与 `sensenova-6.8-flash-lite`，均提供 1,000,000 tokens 上下文窗口、131,072 tokens 最大输出、推理支持，以及 `text`/`image` 多模态输入。
+- **Router 模式目前仍是 Beta（预览）模式。** Router 以及为它提供 worker 的 `acpAgents` profile 都是评估功能，而非生产契约：工具面、profile 结构与生命周期可能在任何版本中变更，且不提供兼容性迁移路径；Router 仍被有意排除在 `defaultMode` 之外（遗留的 `defaultMode: router` 依旧解析为只读的 `plan`）。请在临时会话中用 Router 试用外部 ACP worker，不要依赖它做无人值守或生产环境的工作流。TUI、CLI、WebUI 与 Desktop 入口投影的都是同一份 Runtime 行为，因此该评估对所有入口同等适用。现在所有 Router 界面都会明示这一点：TUI 状态栏、模式循环、`/router` 面板与 `/mode` 输出，以及 WebUI 与 Desktop 的 composer，都带有 Beta / 预览标记。
+
 - **Desktop 现在可以进入 Router 模式。** composer 新增 Router 控件，列出已配置的外部 ACP worker 并把所选者绑定到会话。Desktop 仍是纯 ACP 投影：目录来自既有的 `mothx/manage/acp/profiles/list`，激活来自新增的加性投影 `mothx/manage/router/activate`，两者都委派给共享的 Runtime 激活路径，因此 Desktop 无法到达 TUI、CLI 或 WebUI 到不了的 Router 状态。该控件以新的 `manageRouter` feature key 为门槛，选择结果绝不进入 Electron 私有存储。
 - **WebUI 现在可以进入 Router 模式。** composer 新增 Router 按钮，列出已配置的外部 ACP worker 并把所选者绑定到会话。目录来自 `GET /api/acp/profiles`，它与 TUI 面板渲染的是同一份 Runtime 目录，因此可用性与校验结论保持单一事实，而不是在浏览器端重新计算。激活走 `POST /api/sessions/<id>/router`，它委派给共享的 Runtime 激活路径，因此 WebUI 无法到达 TUI 或 CLI 到不了的 Router 状态：profile 校验、非阻塞审批策略、空闲围栏、来源策略与持久化的 mode 条目都仍由 Runtime 独占。渠道会话按设计仍然排除，因为微信与飞书被来源强制为 yolo，永远不能选择 Router。
 - **Router profile 现在可以选择开启并行写入主工作区。** ACP profile 可设置 `allowParallelBaseWorkspaceWrites`，让以会话工作区（而非受管独立 worktree）为目标的写入角色 worker 并发运行，而不再独占它。默认仍为独占，因此每个既有 `settings.json` profile 行为不变。这是显式的可执行代码信任，而不是性能默认值：外部 ACP Agent 会运行自己的工具，MothX 无法把它的写入限制在声明的 `write_scope` 内，两个 worker 仍可能改到同一个文件。配置的 `maxConcurrentChildren` 上限依然生效；Runtime 仍会拒绝与存活 base writer 声明 `write_scope` 重叠的并行 writer，因为这种重叠是静态可见的；`mothx doctor` 与 `/router` 面板会报告该开关，让残余风险保持可见。受管独立 worktree 加 `subagent_integrate` 仍是更安全的默认方案。
@@ -1638,7 +1641,9 @@ Source: https://mothx.net/zh/changelog.md
 
 ### 🐛 问题修复
 
+- **激活 Router ACP profile 不再卡死 TUI。** 此前激活直接在 Bubble Tea 更新循环中同步执行 `SessionRuntime.ActivateRouter`，Runtime 为激活而做的会话 reload 与 binding/mode 写入会使输入、渲染和取消在整个 reload 期间全部阻塞，大体积 `sessions.db` 下可持续数秒。现在激活改为 `tea.Cmd`：更新循环保持响应，面板显示进行中状态并拒绝其他面板按键与并发提交，结果通过消息回到更新循环后才应用 Runtime 解析出的模式与工具面。校验、idle fence、source policy、持久化与写入顺序仍由 Runtime 独占。
 - **Router 会话现在可以正常 spawn 外部 ACP worker。** 此前只有当适配器开启了 multi-agent、delegate 或 workflow 能力时，lead agent 才会被注册进 `AgentManager`，但 Router 模式并不依赖这些开关就会装上同样的委派工具面。结果是每次 spawn 都会以 `create sub-agent: parent agent agent-master not found` 失败，已正确配置并激活的 worker 根本不会被执行到。现在该判定由 Runtime 通过 `ManagerBackedToolsEnabled` 独占，Router 与常规能力一并计入，所有入口（TUI、CLI、WebUI/API、ACP/Desktop）都据此注册 lead。此外，TUI、WebUI 与 ACP 的工具组同步现在从 Runtime 而非适配器自有字段解析模式，因此恢复或刚刚激活的 Router 会话装上的是 Router 委派工具面而不是错误的那一套；ACP/Desktop 下的 Router 会话也会获得其按会话绑定 worker 所需的会话级 manager。
+- **激活后的 manager 创建与工具组同步现在只有一个 Runtime 入口。** TUI、CLI、WebUI/API、ACP 与 channels 此前各自重复实现同一段“判断是否需要 manager、创建或复用、再安装/卸载 manager 绑定的工具组”逻辑，因此刚激活的 Router 会话可能装上 `delegate_subagent` 却没有一个真正拥有该会话的 manager（专家切换后也可能继续复用旧 manager）。现在 `SessionRuntime.ReconcileManagerBackedTools` 独占该决策：它使用共享能力判定（包含绑定团队与 Router），只在需要或显式重建时构造，构造失败时保留当前句柄，并始终针对最终返回的 manager 重新同步工具组。适配器只提供能力策略、当前句柄与构造工厂；TUI/CLI 通过显式的 `RequireManager` 策略保留 root agent、ESM 与 cron 所需的 manager，而不是再维护一套实现。
 - **TUI 的 `/browser` 命令现在能真正启用浏览器自动化。** 该命令此前只修改 TUI 本地的工具注册表，因此浏览器工具会在首次提问创建并绑定会话时再次被悄悄移除：共享 Runtime 会依据过期的能力状态重新加载资源，在构建 Agent 之前注销该工具。现在该命令改为经 Runtime 自身的能力路径执行，工具、对应 Skill 提示词与持久化的会话能力保持为同一个事实。Runtime 也会在构建、附着、能力更新与资源刷新之间保持浏览器能力一致；在首次提问之前打开的浏览器开关会被持久化到该提问所创建的会话上，因此重新打开该会话时浏览器支持依然处于开启状态。
 - **注册 MCP 服务器不再需要重启客户端，绑定旧协议版本的远端服务器也能正常连接。** 此前新增或修改 MCP 服务器只写入 `mcp.json`，必须完整重启客户端后 Agent 才能感知；现在 TUI `/mcpmgr` 面板、Serve Web UI 的 `/api/mcp` 端点与 ACP 的 `mothx/manage/mcp/set` 方法都会经共享 Runtime 就地重连受影响的服务器。MCP 工具按服务器归属，重连只替换该服务器自己的工具集合，并会移除已删除或已关闭服务器遗留的工具，不影响其他服务器与内置工具。已在执行的运行仍使用构建时冻结的工具集合，变更在下一次运行时生效。重连失败会保留此前可用的配置，不会把它一并拆除。协议协商也不再强制要求最新版本：服务端以 `2025-06-18`、`2025-03-26` 或 `2024-11-05` 回应 `initialize` 时均被接受，且只有定义了 `MCP-Protocol-Version` 的版本才会发送该请求头。未知版本仍会被拒绝，不会谎称兼容。
 - **Router 的外部 ACP worker 路径已完成加固。** ACP 客户端不再在传输读取方可能发送时关闭通知通道，因此 worker 退出或取消不会因并发发送而 panic；当最终响应与传输终态同时就绪时，也会优先返回响应。入站帧改为分片限长读取，超长行在分配完整 payload 之前即被拒绝。单个 Router worker 仍是 schema `const`，多 worker 绑定变为仅限已绑定 ID 的 `enum`。本地子 Agent 参数（`mode`、`work_dir`、`worktree`、`tools`、`max_iterations`）会明确拒绝而不是静默忽略。ACP 权限取消现在也经过 `DecisionService`，解析提交失败时在写入终态行后清除内存中的 pending；输出截断保留 UTF-8 字符边界；Windows worker 以 suspended 状态启动，加入 Job Object 后才恢复线程。
@@ -6777,7 +6782,7 @@ TUI 专用状态行命令配置。启用后，MothX 会在交互式 TUI 中把�
 2. `baseUrl` 自动识别
 3. 通用 fallback：`openai-chat`、`openai-responses`、`anthropic-messages`、`google-gemini` 或 `google-vertex`
 
-内置厂商适配器包括 `openai`、`anthropic`、`claude`、`deepseek`、`agnes`、`google-gemini`、`google-vertex`、`xiaomi`、`xiaomi-token-plan-ams`、`xiaomi-token-plan-cn`、`xiaomi-token-plan-sgp`、`volcengine`、`kimi`、`minimax`、`qianfan`、`bailian`、`gitee`、`openrouter`、`together`、`groq`、`fireworks`、`mistral`、`github-copilot`、`cloudflare-ai-gateway`、`cloudflare-workers-ai` 和 `amazon-bedrock`。
+内置厂商适配器包括 `openai`、`anthropic`、`claude`、`deepseek`、`agnes`、`google-gemini`、`google-vertex`、`xiaomi`、`xiaomi-token-plan-ams`、`xiaomi-token-plan-cn`、`xiaomi-token-plan-sgp`、`volcengine`、`kimi`、`minimax`、`qianfan`、`bailian`、`gitee`、`openrouter`、`together`、`groq`、`fireworks`、`mistral`、`github-copilot`、`cloudflare-ai-gateway`、`cloudflare-workers-ai`、`sensenova` 和 `amazon-bedrock`。
 
 ```json
 {
@@ -6814,6 +6819,27 @@ TUI 专用状态行命令配置。启用后，MothX 会在交互式 TUI 中把�
       "models": [
         { "id": "doubao-seed-evolving", "name": "Doubao Seed Evolving", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] },
         { "id": "doubao-seed-2-1-pro-260628", "name": "Doubao Seed 2.1 Pro", "contextWindow": 262144, "maxTokens": 262144, "input": ["text", "image"] }
+      ]
+    }
+  }
+}
+```
+
+#### 商汤日日新（SenseNova）示例
+
+内置 `sensenova` provider 使用 SenseNova Token Plan 端点与 OpenAI 兼容的 `openai-chat` 协议。它内置 `sensenova-6.8-flash` 与 `sensenova-6.8-flash-lite` 两个模型，均为 1,000,000 tokens 上下文窗口、131,072 tokens 最大输出，支持推理以及 `text`/`image` 输入。也可以通过 `token.sensenova.cn` 自动识别该厂商。
+
+```json
+{
+  "providers": {
+    "sensenova": {
+      "vendor": "sensenova",
+      "baseUrl": "https://token.sensenova.cn/v1",
+      "apiKey": "${SENSENOVA_API_KEY}",
+      "api": "openai-chat",
+      "models": [
+        { "id": "sensenova-6.8-flash", "name": "SenseNova 6.8 Flash", "reasoning": true, "contextWindow": 1000000, "maxTokens": 131072, "input": ["text", "image"] },
+        { "id": "sensenova-6.8-flash-lite", "name": "SenseNova 6.8 Flash Lite", "reasoning": true, "contextWindow": 1000000, "maxTokens": 131072, "input": ["text", "image"] }
       ]
     }
   }
@@ -7204,6 +7230,8 @@ WebUI 在“设置 > Tools”中提供这两个字段，TUI 在 `/settings` > Be
 | `os` | 仅 Shell 模式 — 只提供 Bash，使用 YOLO 级审批行为且不启用沙箱；高风险保护仍然生效 |
 
 `router` 是合法的会话运行模式，但不是合法的 `defaultMode`：它为每个会话绑定一个或多个外部 ACP worker，因此需要通过 `/router <id>[,<id>...]`（TUI）或 `mothx --router --acp-agent <id>[,<id>...]` 进入。若仍把 `defaultMode` 设为 `router`，它会被当作 `plan` 处理而不会报错：默认值在绑定 worker 之前就已解析，而 `plan` 是该意图的只读投影，因此这一回退绝不会把工具权限放大到完全访问。
+
+> **状态：Beta（预览）模式。** Router 目前仍是评估阶段的功能：它的工具面、profile 结构与生命周期可能在任何版本中变更，且不提供兼容性迁移路径，并且被有意排除在 `defaultMode` 之外。请在临时会话中用它试用外部 ACP worker，不要依赖它做无人值守或生产环境的工作流。
 
 ```json
 { "defaultMode": "yolo" }
@@ -7705,6 +7733,8 @@ patch、未跟踪内容与摘要）写入持久化子级历史。Router lead 通
 ### acpAgents
 
 `acpAgents` 是 MothX 可用作 Router worker 的外部 ACP 编码 Agent 全局白名单。MothX 不会自动发现 Agent，也不会接受模型工具调用传入的命令或端点。本地 profile 的 `command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名，启动从不经过 shell 字符串；远程 profile 只使用管理员配置的 `url`。
+
+> **状态：Beta（预览）模式。** Router 本身仍处于评估阶段，为它提供 worker 的 `acpAgents` profile 同样如此：下列字段可能在任何版本中变更，且不提供兼容性迁移路径。请把 profile 当作试用外部 worker 的手段，而不是生产集成契约。
 
 ```json
 {
@@ -14569,6 +14599,8 @@ Agent 声明“完成文件可作为交付制品”的唯一入口。它会先�
 Delegate 模式适用于大范围代码搜索、多步调查、聚焦实现或验证任务。不适用于单步操作、需要向用户澄清的任务或强依赖完整会话历史的有状态工作。
 
 #### Router 外部 worker
+
+> **状态：Beta（预览）模式。** Router 仍处于评估阶段：下列工具、参数与 profile 结构可能在任何版本中变更，且不提供兼容性迁移路径。请在临时会话中用它们试用外部 ACP worker，不要当作生产集成契约。
 
 在 Router 模式（`/router` 面板、`/router <id>[,<id>...]` 或 `--router --acp-agent <id>[,<id>...]`）下，`delegate_subagent` 指向会话绑定的外部 ACP worker 之一。`agent` 必填且必须是已绑定 profile，不存在本地子 Agent 回退；第一个绑定 profile 是默认目标。lead 还需要提供有界任务契约：
 

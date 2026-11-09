@@ -229,9 +229,15 @@ try {
   await evaluate(cdp, 'document.querySelector(".composer-config-toggle").click()');
   await waitFor(cdp, '!!document.querySelector(".composer-mode-group")', 'composer mode group');
 
-  // The Router control only appears for a session that can select one.
-  const routerButton = 'Array.from(document.querySelectorAll(".composer-mode-group button")).find((b) => b.textContent.trim() === "router")';
+  // The Router control only appears for a session that can select one. Its
+  // label carries the test/experience marker, so match on the prefix.
+  const routerButton = 'Array.from(document.querySelectorAll(".composer-mode-group button")).find((b) => b.textContent.trim().startsWith("router"))';
   assert.ok(await evaluate(cdp, `!!(${routerButton})`), 'the Router button must be rendered in the composer');
+  assert.match(
+    await evaluate(cdp, `(${routerButton}).textContent.trim()`),
+    /router\s*[（(]beta[）)]/i,
+    'the Router button must be labeled as a beta mode',
+  );
 
   // Opening it loads the catalog and renders only the eligible workers.
   await evaluate(cdp, `(${routerButton}).click()`);

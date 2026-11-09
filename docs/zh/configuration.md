@@ -289,6 +289,27 @@ TUI 专用状态行命令配置。启用后，MothX 会在交互式 TUI 中把�
 }
 ```
 
+#### 商汤日日新（SenseNova）示例
+
+内置 `sensenova` provider 使用 SenseNova Token Plan 端点与 OpenAI 兼容的 `openai-chat` 协议。它内置 `sensenova-6.8-flash` 与 `sensenova-6.8-flash-lite` 两个模型，均为 1,000,000 tokens 上下文窗口、131,072 tokens 最大输出，支持推理以及 `text`/`image` 输入。也可以通过 `token.sensenova.cn` 自动识别该厂商。
+
+```json
+{
+  "providers": {
+    "sensenova": {
+      "vendor": "sensenova",
+      "baseUrl": "https://token.sensenova.cn/v1",
+      "apiKey": "${SENSENOVA_API_KEY}",
+      "api": "openai-chat",
+      "models": [
+        { "id": "sensenova-6.8-flash", "name": "SenseNova 6.8 Flash", "reasoning": true, "contextWindow": 1000000, "maxTokens": 131072, "input": ["text", "image"] },
+        { "id": "sensenova-6.8-flash-lite", "name": "SenseNova 6.8 Flash Lite", "reasoning": true, "contextWindow": 1000000, "maxTokens": 131072, "input": ["text", "image"] }
+      ]
+    }
+  }
+}
+```
+
 #### 指向自建或网关端点
 
 任何实现 OpenAI **Responses** API 的端点都可以作为 provider 使用：把 `api` 设为 `"openai-responses"`，并让 `baseUrl` 指向它。这是把网关、企业代理或自研转换层放到模型前方的受支持方式：
@@ -673,6 +694,8 @@ WebUI 在“设置 > Tools”中提供这两个字段，TUI 在 `/settings` > Be
 | `os` | 仅 Shell 模式 — 只提供 Bash，使用 YOLO 级审批行为且不启用沙箱；高风险保护仍然生效 |
 
 `router` 是合法的会话运行模式，但不是合法的 `defaultMode`：它为每个会话绑定一个或多个外部 ACP worker，因此需要通过 `/router <id>[,<id>...]`（TUI）或 `mothx --router --acp-agent <id>[,<id>...]` 进入。若仍把 `defaultMode` 设为 `router`，它会被当作 `plan` 处理而不会报错：默认值在绑定 worker 之前就已解析，而 `plan` 是该意图的只读投影，因此这一回退绝不会把工具权限放大到完全访问。
+
+> **状态：Beta（预览）模式。** Router 目前仍是评估阶段的功能：它的工具面、profile 结构与生命周期可能在任何版本中变更，且不提供兼容性迁移路径，并且被有意排除在 `defaultMode` 之外。请在临时会话中用它试用外部 ACP worker，不要依赖它做无人值守或生产环境的工作流。
 
 ```json
 { "defaultMode": "yolo" }
@@ -1174,6 +1197,8 @@ patch、未跟踪内容与摘要）写入持久化子级历史。Router lead 通
 ### acpAgents
 
 `acpAgents` 是 MothX 可用作 Router worker 的外部 ACP 编码 Agent 全局白名单。MothX 不会自动发现 Agent，也不会接受模型工具调用传入的命令或端点。本地 profile 的 `command[0]` 可以是绝对路径，也可以是启动时通过 `PATH` 解析的裸命令名，启动从不经过 shell 字符串；远程 profile 只使用管理员配置的 `url`。
+
+> **状态：Beta（预览）模式。** Router 本身仍处于评估阶段，为它提供 worker 的 `acpAgents` profile 同样如此：下列字段可能在任何版本中变更，且不提供兼容性迁移路径。请把 profile 当作试用外部 worker 的手段，而不是生产集成契约。
 
 ```json
 {

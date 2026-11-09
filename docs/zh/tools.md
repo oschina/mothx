@@ -637,6 +637,8 @@ Delegate 模式适用于大范围代码搜索、多步调查、聚焦实现或�
 
 #### Router 外部 worker
 
+> **状态：Beta（预览）模式。** Router 仍处于评估阶段：下列工具、参数与 profile 结构可能在任何版本中变更，且不提供兼容性迁移路径。请在临时会话中用它们试用外部 ACP worker，不要当作生产集成契约。
+
 在 Router 模式（`/router` 面板、`/router <id>[,<id>...]` 或 `--router --acp-agent <id>[,<id>...]`）下，`delegate_subagent` 指向会话绑定的外部 ACP worker 之一。`agent` 必填且必须是已绑定 profile，不存在本地子 Agent 回退；第一个绑定 profile 是默认目标。lead 还需要提供有界任务契约：
 
 | 参数 | 说明 |

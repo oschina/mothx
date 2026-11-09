@@ -42,10 +42,23 @@ test('the Router labels are bilingual', () => {
     'composer.routerWorker',
     'composer.routerNone',
     'composer.routerSelectWorker',
+    'composer.routerMode',
     'composer.routerActivate',
     'composer.routerLeave',
     'composer.routerParallel',
   ]);
+});
+
+test('the Router control is labeled as a beta mode', () => {
+  // Router is still an evaluation feature: the composer must say so instead of
+  // presenting it as a production mode.
+  for (const label of ['Router (beta)', 'Router（Beta）']) {
+    assert.ok(
+      translations.includes(label),
+      `the Router mode label must be marked as a beta mode: ${label}`,
+    );
+  }
+  assert.match(composerTsx, /t\('composer\.routerMode'\)/, 'the Router button must use the labeled mode text');
 });
 
 test('the composer offers only enabled and eligible workers', () => {

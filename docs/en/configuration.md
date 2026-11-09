@@ -289,6 +289,27 @@ The built-in `volcengine` provider uses the Ark OpenAI-compatible endpoint and s
 }
 ```
 
+#### SenseNova (商汤日日新) example
+
+The built-in `sensenova` provider uses the SenseNova token-plan endpoint and the OpenAI-compatible `openai-chat` API. It ships `sensenova-6.8-flash` and `sensenova-6.8-flash-lite`, both with a 1,000,000-token context window, a 131,072-token output ceiling, reasoning support, and `text`/`image` input. The vendor is also detected automatically from `token.sensenova.cn`.
+
+```json
+{
+  "providers": {
+    "sensenova": {
+      "vendor": "sensenova",
+      "baseUrl": "https://token.sensenova.cn/v1",
+      "apiKey": "${SENSENOVA_API_KEY}",
+      "api": "openai-chat",
+      "models": [
+        { "id": "sensenova-6.8-flash", "name": "SenseNova 6.8 Flash", "reasoning": true, "contextWindow": 1000000, "maxTokens": 131072, "input": ["text", "image"] },
+        { "id": "sensenova-6.8-flash-lite", "name": "SenseNova 6.8 Flash Lite", "reasoning": true, "contextWindow": 1000000, "maxTokens": 131072, "input": ["text", "image"] }
+      ]
+    }
+  }
+}
+```
+
 #### Pointing MothX at a self-hosted or gateway endpoint
 
 Any endpoint that speaks the OpenAI **Responses** API can be used as a provider by setting `api` to `"openai-responses"` and pointing `baseUrl` at it. This is the supported way to put a gateway, a corporate proxy, or your own translation shim in front of a model:
@@ -673,6 +694,8 @@ Default run mode:
 | `os` | Shell-only mode — exposes Bash with YOLO-level approval behavior and no sandbox; high-risk protections still apply |
 
 `router` is a valid session execution mode but not a valid `defaultMode`: it binds one or more external ACP workers per session, so enter it with `/router <id>[,<id>...]` (TUI) or `mothx --router --acp-agent <id>[,<id>...]`. If `defaultMode` is set to `router` anyway, it is treated as `plan` rather than failing: a default resolves before any worker is bound, and `plan` is the read-only projection of that intent, so the fallback never widens the tool surface to full access.
+
+> **Status: beta (preview) mode.** Router is still an evaluation feature. Its tool surface, profile schema, and lifecycle may change in any release without a compatibility migration path, and it is deliberately excluded from `defaultMode`. Use it to try external ACP workers on a scratch session, and do not depend on it for unattended or production workflows.
 
 ```json
 { "defaultMode": "yolo" }
@@ -1176,6 +1199,8 @@ Create, list, reset, and remove worktrees with [`mothx worktree`](cli-reference.
 ### acpAgents
 
 `acpAgents` is the global allowlist of external ACP coding agents MothX may use as Router workers. MothX never auto-discovers agents and never accepts a command or endpoint from a model tool call. A local profile's `command[0]` may be an absolute path or a bare command resolved through `PATH` at launch, and launch never runs a shell string. A remote profile selects one administrator-configured `url`.
+
+> **Status: beta (preview) mode.** Router is still an evaluation feature, and so are the `acpAgents` profiles that feed it: the fields below may change in any release without a compatibility migration path. Configure a profile to evaluate an external worker, not as a production integration contract.
 
 ```json
 {

@@ -290,7 +290,7 @@ func (a *App) renderBuiltinFooter() string {
 	case "os":
 		modeStr = "🖥 OS"
 	case "router":
-		modeStr = "🧭 ROUTER"
+		modeStr = "🧭 ROUTER (BETA)"
 	default:
 		modeStr = strings.ToUpper(a.mode)
 	}
