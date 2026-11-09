@@ -80,6 +80,7 @@ PROVIDER_LABELS = {
     "agnes": "Agnes AI（国际版）",
     "agnes-cn": "Agnes AI（国内版）",
     "bai": "B.AI",
+    "sensenova": "商汤日日新（SenseNova）",
 }
 
 API_TYPES = """## API 类型说明

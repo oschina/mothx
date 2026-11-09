@@ -686,6 +686,49 @@ func TestVolcenginePlanModelsUseSharedMaxTokens(t *testing.T) {
 	}
 }
 
+func TestSenseNovaDefaults(t *testing.T) {
+	s := DefaultSettings()
+	p := s.Providers["sensenova"]
+	if p == nil {
+		t.Fatal("expected default sensenova provider")
+	}
+	if p.BaseURL != "https://token.sensenova.cn/v1" || p.API != "openai-chat" {
+		t.Fatalf("sensenova endpoint = (%q, %q), want (%q, %q)", p.BaseURL, p.API, "https://token.sensenova.cn/v1", "openai-chat")
+	}
+	model := s.GetModelConfig("sensenova", "sensenova-6.8-flash")
+	if model == nil {
+		t.Fatal("sensenova missing sensenova-6.8-flash")
+	}
+	if !model.Reasoning || model.ContextWindow != 1000000 || model.MaxTokens != 131072 {
+		t.Fatalf("sensenova-6.8-flash = %#v, want reasoning model with 1M context and 128K output", model)
+	}
+	wantInput := []string{"text", "image"}
+	if len(model.Input) != len(wantInput) {
+		t.Fatalf("sensenova-6.8-flash input = %#v, want %#v", model.Input, wantInput)
+	}
+	for i := range wantInput {
+		if model.Input[i] != wantInput[i] {
+			t.Fatalf("sensenova-6.8-flash input = %#v, want %#v", model.Input, wantInput)
+		}
+	}
+
+	lite := s.GetModelConfig("sensenova", "sensenova-6.8-flash-lite")
+	if lite == nil {
+		t.Fatal("sensenova missing sensenova-6.8-flash-lite")
+	}
+	if !lite.Reasoning || lite.ContextWindow != 1000000 || lite.MaxTokens != 131072 {
+		t.Fatalf("sensenova-6.8-flash-lite = %#v, want reasoning model with 1M context and 128K output", lite)
+	}
+	if len(lite.Input) != len(wantInput) {
+		t.Fatalf("sensenova-6.8-flash-lite input = %#v, want %#v", lite.Input, wantInput)
+	}
+	for i := range wantInput {
+		if lite.Input[i] != wantInput[i] {
+			t.Fatalf("sensenova-6.8-flash-lite input = %#v, want %#v", lite.Input, wantInput)
+		}
+	}
+}
+
 func TestMinimaxM31FlashDefaults(t *testing.T) {
 	s := DefaultSettings()
 	model := s.GetModelConfig("minimax", "MiniMax-M3.1-Flash")

@@ -1438,6 +1438,10 @@ var defaultProviderConfigs = map[string]*ProviderConfig{
 		{ID: "DeepSeek-V4-Flash", Name: "DeepSeek V4 Flash", Reasoning: true, ContextWindow: 1000000, MaxTokens: 384000, Input: []string{"text"}},
 		{ID: "Qwen3.8-Flash-Next", Name: "Qwen3.8 Flash Next", Reasoning: true, ContextWindow: 1000000, Input: []string{"text"}},
 	}},
+	"sensenova": {Vendor: "sensenova", BaseURL: "https://token.sensenova.cn/v1", APIKey: "${SENSENOVA_API_KEY}", API: "openai-chat", Models: []ModelConfig{
+		{ID: "sensenova-6.8-flash", Name: "SenseNova 6.8 Flash", Reasoning: true, ContextWindow: 1000000, MaxTokens: 131072, Input: []string{"text", "image"}},
+		{ID: "sensenova-6.8-flash-lite", Name: "SenseNova 6.8 Flash Lite", Reasoning: true, ContextWindow: 1000000, MaxTokens: 131072, Input: []string{"text", "image"}},
+	}},
 	"bai": {Vendor: "bai", BaseURL: "https://api.b.ai/v1", APIKey: "${BAI_API_KEY}", API: "openai-chat", Models: []ModelConfig{
 		{ID: "minimax-m3", Name: "MiniMax-M3", Reasoning: true, ContextWindow: 1048576, MaxTokens: 128000, Input: []string{"text", "image", "video"}},
 		{ID: "minimax-m2.7", Name: "MiniMax-M2.7", Reasoning: true, ContextWindow: 262144, MaxTokens: 131072, Input: []string{"text"}},

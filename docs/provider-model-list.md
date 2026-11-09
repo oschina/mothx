@@ -2,7 +2,7 @@
 
 > 由 `docs/scripts/generate-models.py` 依据 `internal/config/settings.go`（`defaultProviderConfigs`）与 `internal/provider/vendor_*.go` 生成，请勿手工编辑；运行 `make docs-models` 重新生成。
 
-本文档是 MothX 内置供应商与模型的完整参考：共 **63 个供应商**、**592 个模型**。
+本文档是 MothX 内置供应商与模型的完整参考：共 **64 个供应商**、**594 个模型**。
 
 ## API 类型说明
 
@@ -87,6 +87,7 @@
 | OpenRouter 免费模型 | `openrouter-free-models` | openrouter | openai-chat | - | 11 |
 | 百度千帆 Code Plan | `qianfan-code-plan` | qianfan | openai-chat | - | 4 |
 | 百度千帆 Token Plan | `qianfan-token-plan` | qianfan | openai-chat | - | 6 |
+| 商汤日日新（SenseNova） | `sensenova` | sensenova | openai-chat | - | 2 |
 | 阶跃星辰（StepFun） | `stepfun` | - | openai-chat | - | 2 |
 | 腾讯混元（Tencent Hunyuan） | `tencent-hy-plan` | tencent-hy-plan | openai-chat | - | 1 |
 | Together AI | `together` | - | openai-chat | - | 5 |
@@ -1140,6 +1141,17 @@ Vendor `qianfan` · BaseURL `https://qianfan.baidubce.com/v2/tokenplan/personal`
 
 ---
 
+### 商汤日日新（SenseNova）（`sensenova`） <a id="sensenova"></a>
+
+Vendor `sensenova` · BaseURL `https://token.sensenova.cn/v1` · API `openai-chat` · API Key `${SENSENOVA_API_KEY}`
+
+| 模型 | Context | MaxTokens | 推理 | 输入 | Prompt $/M | Completion $/M | Cache Read $/M | Cache Write $/M |
+|------|---------|-----------|------|------|-----------|----------------|----------------|-----------------|
+| `sensenova-6.8-flash` | 1M | 131K | **是** | text,image | - | - | - | - |
+| `sensenova-6.8-flash-lite` | 1M | 131K | **是** | text,image | - | - | - | - |
+
+---
+
 ### 阶跃星辰（StepFun）（`stepfun`） <a id="stepfun"></a>
 
 BaseURL `https://api.stepfun.com/step_plan/v1` · API `openai-chat` · API Key `${STEPFUN_API_KEY}`
@@ -1289,13 +1301,13 @@ xhigh    // 最高
 
 ## 汇总统计
 
-- 支持推理（reasoning）的模型：**480**
+- 支持推理（reasoning）的模型：**482**
 
 ### 上下文长度分布
 
 | 区间 | 数量 |
 |------|------|
-| 1M+ | 241 |
+| 1M+ | 243 |
 | 500K-1M | 6 |
 | 200K-500K | 230 |
 | 100K-200K | 86 |
@@ -1307,7 +1319,7 @@ xhigh    // 最高
 
 | 模态 | 数量 |
 |------|------|
-| text/image | 326 |
+| text/image | 328 |
 | text | 229 |
 | text/image/video | 35 |
 | text/image/audio/video | 2 |

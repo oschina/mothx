@@ -9,6 +9,8 @@
 
 ### ✨ 新功能
 
+- **新增 SenseNova（商汤日日新）提供商。** 内置 `sensenova` 预设使用 SenseNova Token Plan 端点 `https://token.sensenova.cn/v1` 与 OpenAI 兼容的 `openai-chat` 协议，读取 `${SENSENOVA_API_KEY}`，并注册 `sensenova` 厂商适配器以支持 `sensenova.cn` Base URL 自动识别；内置 `sensenova-6.8-flash`，提供 1,000,000 tokens 上下文窗口、131,072 tokens 最大输出、推理支持，以及 `text`/`image` 多模态输入。
+
 - **Desktop 现在可以进入 Router 模式。** composer 新增 Router 控件，列出已配置的外部 ACP worker 并把所选者绑定到会话。Desktop 仍是纯 ACP 投影：目录来自既有的 `mothx/manage/acp/profiles/list`，激活来自新增的加性投影 `mothx/manage/router/activate`，两者都委派给共享的 Runtime 激活路径，因此 Desktop 无法到达 TUI、CLI 或 WebUI 到不了的 Router 状态。该控件以新的 `manageRouter` feature key 为门槛，选择结果绝不进入 Electron 私有存储。
 - **WebUI 现在可以进入 Router 模式。** composer 新增 Router 按钮，列出已配置的外部 ACP worker 并把所选者绑定到会话。目录来自 `GET /api/acp/profiles`，它与 TUI 面板渲染的是同一份 Runtime 目录，因此可用性与校验结论保持单一事实，而不是在浏览器端重新计算。激活走 `POST /api/sessions/<id>/router`，它委派给共享的 Runtime 激活路径，因此 WebUI 无法到达 TUI 或 CLI 到不了的 Router 状态：profile 校验、非阻塞审批策略、空闲围栏、来源策略与持久化的 mode 条目都仍由 Runtime 独占。渠道会话按设计仍然排除，因为微信与飞书被来源强制为 yolo，永远不能选择 Router。
 - **Router profile 现在可以选择开启并行写入主工作区。** ACP profile 可设置 `allowParallelBaseWorkspaceWrites`，让以会话工作区（而非受管独立 worktree）为目标的写入角色 worker 并发运行，而不再独占它。默认仍为独占，因此每个既有 `settings.json` profile 行为不变。这是显式的可执行代码信任，而不是性能默认值：外部 ACP Agent 会运行自己的工具，MothX 无法把它的写入限制在声明的 `write_scope` 内，两个 worker 仍可能改到同一个文件。配置的 `maxConcurrentChildren` 上限依然生效；Runtime 仍会拒绝与存活 base writer 声明 `write_scope` 重叠的并行 writer，因为这种重叠是静态可见的；`mothx doctor` 与 `/router` 面板会报告该开关，让残余风险保持可见。受管独立 worktree 加 `subagent_integrate` 仍是更安全的默认方案。

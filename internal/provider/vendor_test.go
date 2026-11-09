@@ -189,6 +189,20 @@ func TestVendorFromBaseURLDetectsXiaomiTokenPlan(t *testing.T) {
 	}
 }
 
+func TestVendorFromBaseURLDetectsSenseNova(t *testing.T) {
+	got := VendorFromBaseURL("https://token.sensenova.cn/v1")
+	if got != "sensenova" {
+		t.Fatalf("VendorFromBaseURL = %q, want sensenova", got)
+	}
+	resolved := ResolveAdapterConfig(&config.ProviderConfig{BaseURL: "https://token.sensenova.cn/v1"})
+	if resolved.Vendor != "sensenova" {
+		t.Fatalf("Vendor = %q, want sensenova", resolved.Vendor)
+	}
+	if resolved.API != "openai-chat" {
+		t.Fatalf("API = %q, want openai-chat", resolved.API)
+	}
+}
+
 func TestVendorFromBaseURLDetectsGoogleAdapters(t *testing.T) {
 	tests := []struct {
 		url      string
