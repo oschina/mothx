@@ -201,3 +201,67 @@ func TestSubagentTaskContractWriteScopeNormalization(t *testing.T) {
 		t.Fatalf("sibling write scope rejected: %v", err)
 	}
 }
+
+// Every supported role must render a role-specific playbook, and the prompt
+// must stay bounded. The playbook is prompt guidance, not authorization, so
+// this test asserts only that the shared renderer includes the role's text.
+func TestSubagentTaskContractRendersRolePlaybook(t *testing.T) {
+	contracts := map[SubagentRole]func() SubagentTaskContract{
+		SubagentRoleInvestigate: func() SubagentTaskContract {
+			contract := validContract()
+			contract.Role = SubagentRoleInvestigate
+			contract.WriteScope = nil
+			contract.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableFindings}
+			contract.Verification = ""
+			return contract
+		},
+		SubagentRoleImplement: validContract,
+		SubagentRoleTest: func() SubagentTaskContract {
+			contract := validContract()
+			contract.Role = SubagentRoleTest
+			contract.WriteScope = nil
+			contract.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableTestEvidence}
+			contract.Verification = "go test ./internal/agentruntime"
+			return contract
+		},
+		SubagentRoleReview: func() SubagentTaskContract {
+			contract := validContract()
+			contract.Role = SubagentRoleReview
+			contract.WriteScope = nil
+			contract.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableReview}
+			contract.Verification = ""
+			return contract
+		},
+		SubagentRoleIntegrate: func() SubagentTaskContract {
+			contract := validContract()
+			contract.Role = SubagentRoleIntegrate
+			contract.WriteScope = []string{"src/retry_test.go"}
+			contract.ExpectedDeliverables = []SubagentDeliverable{SubagentDeliverableChangedFiles, SubagentDeliverableTestEvidence}
+			return contract
+		},
+	}
+
+	for role, build := range contracts {
+		t.Run(string(role), func(t *testing.T) {
+			contract := build()
+			if err := contract.Validate(contractProfile()); err != nil {
+				t.Fatalf("valid %s contract rejected: %v", role, err)
+			}
+			playbook := rolePlaybook(role)
+			if strings.TrimSpace(playbook) == "" {
+				t.Fatalf("role %q has no playbook", role)
+			}
+			prompt := contract.RenderPrompt("/tmp/work")
+			if !strings.Contains(prompt, "## Role playbook\n"+playbook) {
+				t.Fatalf("prompt for role %q did not render its playbook:\n%s", role, prompt)
+			}
+			if len(prompt) > maxSubagentContractBytes+2048 {
+				t.Fatalf("prompt for role %q is not bounded: %d bytes", role, len(prompt))
+			}
+		})
+	}
+
+	if playbook := rolePlaybook(SubagentRole("deploy")); playbook != "" {
+		t.Fatalf("unknown role rendered a playbook: %q", playbook)
+	}
+}

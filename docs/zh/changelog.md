@@ -9,6 +9,7 @@
 
 ### ✨ 新功能
 
+- **内置新增 12 个按职责命名的主角团。** 内置目录现在包含 backend-platform、web-frontend、mobile-crossplatform、systems-lowlevel、enterprise-jvm-dotnet、qa-testing、security-compliance、devops-sre、data-ml-ai、product-architecture、docs-research 与 agent-platform，在原有 software-company 与 frontend-developer 之外新增 58 个职责制角色（例如「后端负责人」「数据库与迁移负责人」）。每个团长获得与「一人公司」相同的名册与调度纪律；成员显示名使用职责而非真人姓名。嵌入式资源使二进制增加约 142 KB；没有复制 ECC 的技能脚本：每个团附带一个原创的聚焦 `SKILL.md`，角色职责则蒸馏为有界 persona。WebUI 同时为这些内置分类补充了本地化标签。
 - **新增 SenseNova（商汤日日新）提供商。** 内置 `sensenova` 预设使用 SenseNova Token Plan 端点 `https://token.sensenova.cn/v1` 与 OpenAI 兼容的 `openai-chat` 协议，读取 `${SENSENOVA_API_KEY}`，并注册 `sensenova` 厂商适配器以支持 `sensenova.cn` Base URL 自动识别；内置 `sensenova-6.8-flash` 与 `sensenova-6.8-flash-lite`，均提供 1,000,000 tokens 上下文窗口、131,072 tokens 最大输出、推理支持，以及 `text`/`image` 多模态输入。
 - **Router 模式目前仍是 Beta（预览）模式。** Router 以及为它提供 worker 的 `acpAgents` profile 都是评估功能，而非生产契约：工具面、profile 结构与生命周期可能在任何版本中变更，且不提供兼容性迁移路径；Router 仍被有意排除在 `defaultMode` 之外（遗留的 `defaultMode: router` 依旧解析为只读的 `plan`）。请在临时会话中用 Router 试用外部 ACP worker，不要依赖它做无人值守或生产环境的工作流。TUI、CLI、WebUI 与 Desktop 入口投影的都是同一份 Runtime 行为，因此该评估对所有入口同等适用。现在所有 Router 界面都会明示这一点：TUI 状态栏、模式循环、`/router` 面板与 `/mode` 输出，以及 WebUI 与 Desktop 的 composer，都带有 Beta / 预览标记。
 

@@ -146,6 +146,13 @@
     return $t(`experts.memberState.${memberStatus(member)}`);
   }
 
+  function categoryLabel(id) {
+    if (!id) return $t('experts.uncategorized');
+    const key = `experts.category.${id}`;
+    const label = $t(key);
+    return label === key ? id : label;
+  }
+
   function memberStatusVariant(member) {
     const status = memberStatus(member);
     if (status === 'error') return 'destructive';
@@ -306,7 +313,7 @@
             <div>
               <div class="experts-kicker">{detail.id}</div>
               <h2>{localized(detail.displayName) || detail.id}</h2>
-              <p>{detail.categoryId || $t('experts.uncategorized')}</p>
+              <p>{categoryLabel(detail.categoryId)}</p>
             </div>
             <Badge variant="secondary">{$t(`experts.type.${detail.expertType}`)}</Badge>
           </div>

@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "name": "qa-testing",
+  "expertType": "team",
+  "agentName": "qa-lead",
+  "displayName": {
+    "zh": "质量与测试组",
+    "en": "QA & Testing Team"
+  },
+  "categoryId": "engineering",
+  "quickPrompts": [
+    {
+      "zh": "为这个功能补 TDD 测试并给出覆盖缺口",
+      "en": "Add TDD tests for this feature and report coverage gaps"
+    },
+    {
+      "zh": "为关键用户路径编写 E2E 测试并处理 flaky",
+      "en": "Write E2E tests for critical user journeys and handle flakiness"
+    },
+    {
+      "zh": "审查这次改动的回归风险与静默失败",
+      "en": "Review this change for regression risk and silent failures"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是质量与测试交付负责人。告诉我功能范围、风险点和现有测试，我会拆解 TDD、E2E、回归与静默失败审计。",
+    "en": "I lead the QA and testing team. Tell me the feature scope, risk areas, and existing tests; I will split TDD, E2E, regression, and silent-failure audits."
+  },
+  "teamInfo": {
+    "leadAgent": "qa-lead",
+    "memberAgents": [
+      "tdd-engineer",
+      "e2e-engineer",
+      "regression-analyst",
+      "silent-failure-auditor"
+    ]
+  },
+  "members": [
+    {
+      "id": "qa-lead",
+      "name": {
+        "zh": "质量负责人",
+        "en": "QA Lead"
+      },
+      "profession": {
+        "zh": "质量与测试交付",
+        "en": "QA & Testing Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "tdd-engineer",
+      "name": {
+        "zh": "TDD 负责人",
+        "en": "TDD Lead"
+      },
+      "profession": {
+        "zh": "测试先行与行为测试",
+        "en": "Test-First & Behavioral Tests"
+      },
+      "role": "member"
+    },
+    {
+      "id": "e2e-engineer",
+      "name": {
+        "zh": "端到端测试负责人",
+        "en": "E2E Test Lead"
+      },
+      "profession": {
+        "zh": "Playwright 与用户旅程",
+        "en": "Playwright & User Journeys"
+      },
+      "role": "member"
+    },
+    {
+      "id": "regression-analyst",
+      "name": {
+        "zh": "回归分析负责人",
+        "en": "Regression Analysis Lead"
+      },
+      "profession": {
+        "zh": "基线、风险与覆盖",
+        "en": "Baselines, Risk & Coverage"
+      },
+      "role": "member"
+    },
+    {
+      "id": "silent-failure-auditor",
+      "name": {
+        "zh": "静默失败审计负责人",
+        "en": "Silent Failure Audit Lead"
+      },
+      "profession": {
+        "zh": "错误传播与假成功",
+        "en": "Error Propagation & False Success"
+      },
+      "role": "member"
+    }
+  ]
+}

@@ -21,6 +21,27 @@ mothx --expert software-company
 
 `/expert bind` 可为尚未绑定主角的会话建立绑定；`/expert unbind` 会移除当前会话的身份。两者都不会改写既有对话历史。
 
+## 内置主角团目录
+
+MothX 内置原有的通用主角包，以及 12 个按职责命名的团队（新增 58 个角色）。新增团队的成员显示名统一使用「职责 + 负责人」，不使用真人姓名。每个新增团还附带一个聚焦技能（例如 `backend-change-review`、`llm-eval-gate`），仅在绑定该主角团时加载。
+
+| 包名 | 主角团 | 角色 |
+| --- | --- | --- |
+| software-company | 一人公司 | 交付总监、产品经理、软件架构师、研发工程师、QA 工程师 |
+| frontend-developer | 前端开发专家 | 前端开发工程师 |
+| backend-platform | 后端平台组 | 后端负责人、API 与契约负责人、数据库与迁移负责人、服务运行时负责人、后端验证负责人 |
+| web-frontend | Web 前端组 | Web 前端负责人、React/Next.js 负责人、Vue/Angular 负责人、设计系统与可访问性负责人、前端性能负责人 |
+| mobile-crossplatform | 移动与跨端组 | 移动负责人、Android/KMP 负责人、Flutter 负责人、React Native 负责人、iOS/Swift 负责人 |
+| systems-lowlevel | 系统与底层工程组 | 系统负责人、Rust 负责人、C++ 负责人、Go 系统负责人 |
+| enterprise-jvm-dotnet | 企业级 JVM 与 .NET 组 | 企业级负责人、Java/Spring 负责人、Kotlin 负责人、C#/.NET 负责人、PHP/Ruby 负责人 |
+| qa-testing | 质量与测试组 | 质量负责人、TDD 负责人、端到端测试负责人、回归分析负责人、静默失败审计负责人 |
+| security-compliance | 安全与合规组 | 安全负责人、应用安全负责人、Agent 安全负责人、供应链审计负责人、合规评审负责人 |
+| devops-sre | 平台运维与 SRE 组 | 平台运维负责人、Kubernetes 负责人、CI/CD 与发布负责人、可观测性负责人、配置与环境负责人 |
+| data-ml-ai | 数据、ML 与 AI 工程组 | 数据与模型负责人、MLOps 负责人、PyTorch 负责人、检索与推荐负责人、LLM 评测负责人 |
+| product-architecture | 产品与架构组 | 产品与架构负责人、产品规划负责人、架构设计负责人、代码考古负责人、规格挖掘负责人 |
+| docs-research | 文档与研究组 | 文档与研究负责人、文档治理负责人、代码库入门负责人、深度研究负责人 |
+| agent-platform | Agent 平台与元工程组 | Agent 平台负责人、Agent 架构负责人、评测与 Harness 负责人、循环运维负责人、评测负责人 |
+
 ## 通过分叉切换主角
 
 从一个非空主角切换到另一个主角时，会创建新的会话分支：

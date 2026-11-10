@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "name": "docs-research",
+  "expertType": "team",
+  "agentName": "docs-research-lead",
+  "displayName": {
+    "zh": "文档与研究组",
+    "en": "Docs & Research Team"
+  },
+  "categoryId": "research",
+  "quickPrompts": [
+    {
+      "zh": "为这个模块补一份可维护的架构与入门文档",
+      "en": "Write a maintainable architecture and onboarding doc for this module"
+    },
+    {
+      "zh": "检查文档与代码、README 与双语版本是否一致",
+      "en": "Check docs against code and bilingual README consistency"
+    },
+    {
+      "zh": "对这个技术选型做带引用的深度调研",
+      "en": "Produce a cited deep-research report on this technology choice"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是文档与研究交付负责人。告诉我目标读者、范围与可信来源要求，我会拆解文档治理、入门写作与深度研究任务。",
+    "en": "I lead the docs and research team. Tell me the audience, scope, and source-quality requirements; I will split docs governance, onboarding writing, and deep research."
+  },
+  "teamInfo": {
+    "leadAgent": "docs-research-lead",
+    "memberAgents": [
+      "docs-governance-editor",
+      "codebase-onboarding-writer",
+      "deep-research-analyst"
+    ]
+  },
+  "members": [
+    {
+      "id": "docs-research-lead",
+      "name": {
+        "zh": "文档与研究负责人",
+        "en": "Docs & Research Lead"
+      },
+      "profession": {
+        "zh": "文档与研究交付",
+        "en": "Docs & Research Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "docs-governance-editor",
+      "name": {
+        "zh": "文档治理负责人",
+        "en": "Docs Governance Lead"
+      },
+      "profession": {
+        "zh": "结构、来源与双语",
+        "en": "Structure, Sources & Bilingual"
+      },
+      "role": "member"
+    },
+    {
+      "id": "codebase-onboarding-writer",
+      "name": {
+        "zh": "代码库入门负责人",
+        "en": "Codebase Onboarding Lead"
+      },
+      "profession": {
+        "zh": "架构地图与命令",
+        "en": "Architecture Maps & Commands"
+      },
+      "role": "member"
+    },
+    {
+      "id": "deep-research-analyst",
+      "name": {
+        "zh": "深度研究负责人",
+        "en": "Deep Research Lead"
+      },
+      "profession": {
+        "zh": "多源证据与引用",
+        "en": "Multi-source Evidence & Citations"
+      },
+      "role": "member"
+    }
+  ]
+}

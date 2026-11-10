@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "name": "agent-platform",
+  "expertType": "team",
+  "agentName": "agent-platform-lead",
+  "displayName": {
+    "zh": "Agent 平台与元工程组",
+    "en": "Agent Platform & Meta-Engineering Team"
+  },
+  "categoryId": "engineering",
+  "quickPrompts": [
+    {
+      "zh": "审查这个 Agent 的工具、提示词与上下文预算",
+      "en": "Review this agent's tools, prompts, and context budget"
+    },
+    {
+      "zh": "为 Agent 功能设计评测集与回归门禁",
+      "en": "Design eval sets and regression gates for an agent feature"
+    },
+    {
+      "zh": "诊断自主循环的停滞、重试风暴与成本漂移",
+      "en": "Diagnose stalls, retry storms, and cost drift in an autonomous loop"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是 Agent 平台与元工程交付负责人。告诉我 Agent 目标、工具面与评测标准，我会拆解架构、Harness、循环与评测任务。",
+    "en": "I lead the agent platform and meta-engineering team. Tell me the agent objective, tool surface, and evaluation criteria; I will split architecture, harness, loop, and evaluation work."
+  },
+  "teamInfo": {
+    "leadAgent": "agent-platform-lead",
+    "memberAgents": [
+      "agent-architect",
+      "harness-engineer",
+      "loop-operator",
+      "eval-engineer"
+    ]
+  },
+  "members": [
+    {
+      "id": "agent-platform-lead",
+      "name": {
+        "zh": "Agent 平台负责人",
+        "en": "Agent Platform Lead"
+      },
+      "profession": {
+        "zh": "Agent 平台交付",
+        "en": "Agent Platform Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "agent-architect",
+      "name": {
+        "zh": "Agent 架构负责人",
+        "en": "Agent Architecture Lead"
+      },
+      "profession": {
+        "zh": "动作空间与上下文",
+        "en": "Action Spaces & Context"
+      },
+      "role": "member"
+    },
+    {
+      "id": "harness-engineer",
+      "name": {
+        "zh": "评测与 Harness 负责人",
+        "en": "Harness & Evaluation Lead"
+      },
+      "profession": {
+        "zh": "门禁、成本与回滚",
+        "en": "Gates, Cost & Rollback"
+      },
+      "role": "member"
+    },
+    {
+      "id": "loop-operator",
+      "name": {
+        "zh": "循环运维负责人",
+        "en": "Loop Operations Lead"
+      },
+      "profession": {
+        "zh": "检查点与停止条件",
+        "en": "Checkpoints & Stop Conditions"
+      },
+      "role": "member"
+    },
+    {
+      "id": "eval-engineer",
+      "name": {
+        "zh": "评测负责人",
+        "en": "Evaluation Lead"
+      },
+      "profession": {
+        "zh": "能力与回归评测",
+        "en": "Capability & Regression Evals"
+      },
+      "role": "member"
+    }
+  ]
+}

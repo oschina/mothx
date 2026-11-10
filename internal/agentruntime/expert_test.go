@@ -137,6 +137,34 @@ func TestBuilderLoadsBoundBuiltinExpertSkills(t *testing.T) {
 	}
 }
 
+func TestBuilderLoadsRoleBasedTeamSkill(t *testing.T) {
+	workDir := t.TempDir()
+	mgr, err := CreateSession(CreateSessionOptions{WorkDir: workDir, SessionDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := mgr.SetExpertBinding("backend-platform"); err != nil {
+		t.Fatalf("bind role-based expert: %v", err)
+	}
+
+	runtime, err := testBuilder().Build(context.Background(), BuildOptions{WorkDir: workDir, Manager: mgr})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer runtime.Close()
+
+	skill := runtime.SkillsMgr.Get("backend-change-review")
+	if skill == nil {
+		t.Fatal("role-based expert skill backend-change-review was not loaded")
+	}
+	if skill.Source != "expert" {
+		t.Fatalf("expert skill source = %q, want expert", skill.Source)
+	}
+	if _, ok := runtime.Registry.Get("skill_ref"); !ok {
+		t.Fatal("skill_ref missing after expert skill resource assembly")
+	}
+}
+
 func TestSetExpertPreflightFailureDoesNotPersistBrokenBinding(t *testing.T) {
 	workDir := t.TempDir()
 	sessionDir := t.TempDir()

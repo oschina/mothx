@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "name": "systems-lowlevel",
+  "expertType": "team",
+  "agentName": "systems-lead",
+  "displayName": {
+    "zh": "系统与底层工程组",
+    "en": "Systems & Low-level Team"
+  },
+  "categoryId": "engineering",
+  "quickPrompts": [
+    {
+      "zh": "优化这段系统代码的内存、并发或分配热点",
+      "en": "Optimize memory, concurrency, or allocation hotspots in this systems code"
+    },
+    {
+      "zh": "审查 Rust/C++/Go 的所有权、生命周期或资源管理风险",
+      "en": "Review ownership, lifetime, or resource-management risks in this Rust/C++/Go code"
+    },
+    {
+      "zh": "为底层模块补基准测试并给出前后数据",
+      "en": "Add benchmarks for a low-level module and provide before/after data"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是系统与底层工程交付负责人。告诉我目标语言、性能约束和运行环境，我会拆解内存、并发、性能与验证任务。",
+    "en": "I lead the systems and low-level team. Tell me the language, performance constraints, and runtime environment; I will split memory, concurrency, performance, and verification work."
+  },
+  "teamInfo": {
+    "leadAgent": "systems-lead",
+    "memberAgents": [
+      "rust-engineer",
+      "cpp-engineer",
+      "go-systems-engineer"
+    ]
+  },
+  "members": [
+    {
+      "id": "systems-lead",
+      "name": {
+        "zh": "系统负责人",
+        "en": "Systems Lead"
+      },
+      "profession": {
+        "zh": "系统与底层交付",
+        "en": "Systems & Low-level Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "rust-engineer",
+      "name": {
+        "zh": "Rust 负责人",
+        "en": "Rust Lead"
+      },
+      "profession": {
+        "zh": "所有权、并发与 unsafe",
+        "en": "Ownership, Concurrency & Unsafe"
+      },
+      "role": "member"
+    },
+    {
+      "id": "cpp-engineer",
+      "name": {
+        "zh": "C++ 负责人",
+        "en": "C++ Lead"
+      },
+      "profession": {
+        "zh": "内存、RAII 与构建",
+        "en": "Memory, RAII & Build"
+      },
+      "role": "member"
+    },
+    {
+      "id": "go-systems-engineer",
+      "name": {
+        "zh": "Go 系统负责人",
+        "en": "Go Systems Lead"
+      },
+      "profession": {
+        "zh": "并发、pprof 与错误传播",
+        "en": "Concurrency, pprof & Error Propagation"
+      },
+      "role": "member"
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "name": "mobile-crossplatform",
+  "expertType": "team",
+  "agentName": "mobile-lead",
+  "displayName": {
+    "zh": "移动与跨端组",
+    "en": "Mobile & Cross-platform Team"
+  },
+  "categoryId": "engineering",
+  "quickPrompts": [
+    {
+      "zh": "为这个需求选择 Android、Flutter、React Native 或 iOS 方案并实现",
+      "en": "Choose Android, Flutter, React Native, or iOS for this requirement and implement it"
+    },
+    {
+      "zh": "审查移动端状态管理、生命周期与性能问题",
+      "en": "Review mobile state management, lifecycle, and performance issues"
+    },
+    {
+      "zh": "补齐移动端关键路径测试与发布前检查",
+      "en": "Add critical-path mobile tests and pre-release checks"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是移动与跨端交付负责人。告诉我目标平台、现有技术栈和发布约束，我会拆解平台实现、共享逻辑、测试与发布检查。",
+    "en": "I lead the mobile and cross-platform team. Tell me the target platforms, current stack, and release constraints; I will split platform implementation, shared logic, testing, and release checks."
+  },
+  "teamInfo": {
+    "leadAgent": "mobile-lead",
+    "memberAgents": [
+      "android-kmp-engineer",
+      "flutter-engineer",
+      "react-native-engineer",
+      "ios-swift-engineer"
+    ]
+  },
+  "members": [
+    {
+      "id": "mobile-lead",
+      "name": {
+        "zh": "移动负责人",
+        "en": "Mobile Lead"
+      },
+      "profession": {
+        "zh": "移动与跨端交付",
+        "en": "Mobile & Cross-platform Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "android-kmp-engineer",
+      "name": {
+        "zh": "Android/KMP 负责人",
+        "en": "Android & KMP Lead"
+      },
+      "profession": {
+        "zh": "Android 与 KMP",
+        "en": "Android & KMP"
+      },
+      "role": "member"
+    },
+    {
+      "id": "flutter-engineer",
+      "name": {
+        "zh": "Flutter 负责人",
+        "en": "Flutter Lead"
+      },
+      "profession": {
+        "zh": "Flutter 与 Dart",
+        "en": "Flutter & Dart"
+      },
+      "role": "member"
+    },
+    {
+      "id": "react-native-engineer",
+      "name": {
+        "zh": "React Native 负责人",
+        "en": "React Native Lead"
+      },
+      "profession": {
+        "zh": "React Native 与原生桥接",
+        "en": "React Native & Native Bridges"
+      },
+      "role": "member"
+    },
+    {
+      "id": "ios-swift-engineer",
+      "name": {
+        "zh": "iOS/Swift 负责人",
+        "en": "iOS & Swift Lead"
+      },
+      "profession": {
+        "zh": "iOS 与 Swift",
+        "en": "iOS & Swift"
+      },
+      "role": "member"
+    }
+  ]
+}

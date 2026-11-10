@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "name": "devops-sre",
+  "expertType": "team",
+  "agentName": "sre-lead",
+  "displayName": {
+    "zh": "平台运维与 SRE 组",
+    "en": "Platform Ops & SRE Team"
+  },
+  "categoryId": "operations",
+  "quickPrompts": [
+    {
+      "zh": "审查 Kubernetes 部署的探针、资源与回滚策略",
+      "en": "Review Kubernetes probes, resources, and rollback strategy"
+    },
+    {
+      "zh": "为这次发布补齐 CI/CD 门禁与回滚方案",
+      "en": "Add CI/CD gates and a rollback plan for this release"
+    },
+    {
+      "zh": "为服务设计指标、日志、追踪与告警",
+      "en": "Design metrics, logs, traces, and alerts for this service"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是平台运维与 SRE 交付负责人。告诉我部署环境、SLO 和发布约束，我会拆解 Kubernetes、CI/CD、可观测性与配置任务。",
+    "en": "I lead the platform ops and SRE team. Tell me the deployment environment, SLOs, and release constraints; I will split Kubernetes, CI/CD, observability, and configuration work."
+  },
+  "teamInfo": {
+    "leadAgent": "sre-lead",
+    "memberAgents": [
+      "kubernetes-engineer",
+      "cicd-release-engineer",
+      "observability-engineer",
+      "config-environment-engineer"
+    ]
+  },
+  "members": [
+    {
+      "id": "sre-lead",
+      "name": {
+        "zh": "平台运维负责人",
+        "en": "Platform Ops Lead"
+      },
+      "profession": {
+        "zh": "平台运维与 SRE 交付",
+        "en": "Platform Ops & SRE Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "kubernetes-engineer",
+      "name": {
+        "zh": "Kubernetes 负责人",
+        "en": "Kubernetes Lead"
+      },
+      "profession": {
+        "zh": "工作负载与发布",
+        "en": "Workloads & Rollouts"
+      },
+      "role": "member"
+    },
+    {
+      "id": "cicd-release-engineer",
+      "name": {
+        "zh": "CI/CD 与发布负责人",
+        "en": "CI/CD & Release Lead"
+      },
+      "profession": {
+        "zh": "流水线、门禁与回滚",
+        "en": "Pipelines, Gates & Rollback"
+      },
+      "role": "member"
+    },
+    {
+      "id": "observability-engineer",
+      "name": {
+        "zh": "可观测性负责人",
+        "en": "Observability Lead"
+      },
+      "profession": {
+        "zh": "指标、日志与追踪",
+        "en": "Metrics, Logs & Traces"
+      },
+      "role": "member"
+    },
+    {
+      "id": "config-environment-engineer",
+      "name": {
+        "zh": "配置与环境负责人",
+        "en": "Config & Environment Lead"
+      },
+      "profession": {
+        "zh": "环境一致与密钥边界",
+        "en": "Environment Parity & Secret Boundaries"
+      },
+      "role": "member"
+    }
+  ]
+}

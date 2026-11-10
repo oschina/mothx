@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "name": "backend-platform",
+  "expertType": "team",
+  "agentName": "backend-lead",
+  "displayName": {
+    "zh": "后端平台组",
+    "en": "Backend Platform Team"
+  },
+  "categoryId": "engineering",
+  "quickPrompts": [
+    {
+      "zh": "为这个服务设计 REST API、数据库迁移和错误契约，并实现一个端点",
+      "en": "Design the REST API, database migration, and error contract for this service, then implement one endpoint"
+    },
+    {
+      "zh": "审查后端代码的并发、事务与重试风险",
+      "en": "Review this backend for concurrency, transaction, and retry risks"
+    },
+    {
+      "zh": "补齐后端集成测试并给出可复现的验证证据",
+      "en": "Add backend integration tests and provide reproducible verification evidence"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是后端平台交付负责人。告诉我目标服务、现有技术栈和验收标准，我会拆解 API、数据、运行时与测试任务，派发给对应成员并汇总证据。",
+    "en": "I lead the backend platform team. Tell me the target service, current stack, and acceptance criteria; I will split API, data, runtime, and test work across the team and reconcile the evidence."
+  },
+  "teamInfo": {
+    "leadAgent": "backend-lead",
+    "memberAgents": [
+      "api-contract-engineer",
+      "database-engineer",
+      "service-runtime-engineer",
+      "backend-test-engineer"
+    ]
+  },
+  "members": [
+    {
+      "id": "backend-lead",
+      "name": {
+        "zh": "后端负责人",
+        "en": "Backend Lead"
+      },
+      "profession": {
+        "zh": "后端平台交付",
+        "en": "Backend Platform Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "api-contract-engineer",
+      "name": {
+        "zh": "API 与契约负责人",
+        "en": "API & Contract Lead"
+      },
+      "profession": {
+        "zh": "OpenAPI 与版本演进",
+        "en": "OpenAPI & Versioning"
+      },
+      "role": "member"
+    },
+    {
+      "id": "database-engineer",
+      "name": {
+        "zh": "数据库与迁移负责人",
+        "en": "Database & Migration Lead"
+      },
+      "profession": {
+        "zh": "Schema、索引与迁移",
+        "en": "Schema, Indexes & Migrations"
+      },
+      "role": "member"
+    },
+    {
+      "id": "service-runtime-engineer",
+      "name": {
+        "zh": "服务运行时负责人",
+        "en": "Service Runtime Lead"
+      },
+      "profession": {
+        "zh": "并发、缓存与故障恢复",
+        "en": "Concurrency, Caching & Recovery"
+      },
+      "role": "member"
+    },
+    {
+      "id": "backend-test-engineer",
+      "name": {
+        "zh": "后端验证负责人",
+        "en": "Backend Verification Lead"
+      },
+      "profession": {
+        "zh": "集成与契约测试",
+        "en": "Integration & Contract Testing"
+      },
+      "role": "member"
+    }
+  ]
+}

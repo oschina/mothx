@@ -20,17 +20,57 @@ func loadSeed(t *testing.T, name string) *Bundle {
 	return b
 }
 
+// builtinSeedNames is the complete builtin catalog. Keep it sorted: the test
+// also asserts that the embedded root has exactly these directories.
+var builtinSeedNames = []string{
+	"agent-platform",
+	"backend-platform",
+	"data-ml-ai",
+	"devops-sre",
+	"docs-research",
+	"enterprise-jvm-dotnet",
+	"frontend-developer",
+	"mobile-crossplatform",
+	"product-architecture",
+	"qa-testing",
+	"security-compliance",
+	"software-company",
+	"systems-lowlevel",
+	"web-frontend",
+}
+
+// roleBasedSeedNames are the bundles added in the ECC absorption pass. Their
+// UI names use a duty-based convention ("...负责人") instead of personal names.
+var roleBasedSeedNames = []string{
+	"agent-platform",
+	"backend-platform",
+	"data-ml-ai",
+	"devops-sre",
+	"docs-research",
+	"enterprise-jvm-dotnet",
+	"mobile-crossplatform",
+	"product-architecture",
+	"qa-testing",
+	"security-compliance",
+	"systems-lowlevel",
+	"web-frontend",
+}
+
 func TestBuiltinSeedsLoadValid(t *testing.T) {
-	// The embedded builtin layer exposes exactly the two seed packages.
 	entries, err := fs.ReadDir(experts.BuiltinFS, ".")
 	if err != nil {
 		t.Fatalf("read BuiltinFS root: %v", err)
 	}
 	found := make(map[string]bool, len(entries))
 	for _, entry := range entries {
-		found[entry.Name()] = true
+		if entry.IsDir() {
+			found[entry.Name()] = true
+		}
 	}
-	for _, seed := range []string{"software-company", "frontend-developer"} {
+	if len(found) != len(builtinSeedNames) {
+		t.Fatalf("BuiltinFS has %d bundles, want %d: %v", len(found), len(builtinSeedNames), found)
+	}
+	for _, seed := range builtinSeedNames {
 		if !found[seed] {
 			t.Errorf("BuiltinFS missing seed directory %s", seed)
 		}
@@ -234,5 +274,134 @@ func TestFrontendDeveloperSeed(t *testing.T) {
 	}
 	if len(b.Defs) != 1 {
 		t.Errorf("skills/ must not leak into Defs")
+	}
+}
+
+// The counts below are the intended builtin catalog contract. Adding or
+// removing a bundle or role must update them deliberately instead of letting
+// the catalog drift unnoticed.
+func TestBuiltinSeedTotals(t *testing.T) {
+	newRoleCount := 0
+	totalDefs := 0
+	for _, seed := range builtinSeedNames {
+		b := loadSeed(t, seed)
+		totalDefs += len(b.Defs)
+		for _, name := range roleBasedSeedNames {
+			if name == seed {
+				newRoleCount += len(b.Defs)
+				break
+			}
+		}
+	}
+	if len(builtinSeedNames) != 14 {
+		t.Fatalf("builtin bundle count = %d, want 14", len(builtinSeedNames))
+	}
+	if len(roleBasedSeedNames) != 12 {
+		t.Fatalf("role-based bundle count = %d, want 12", len(roleBasedSeedNames))
+	}
+	if newRoleCount != 58 {
+		t.Fatalf("role-based agent count = %d, want 58", newRoleCount)
+	}
+	if totalDefs != 64 {
+		t.Fatalf("total builtin agent count = %d, want 64", totalDefs)
+	}
+}
+
+func TestRoleBasedSeedsUseDutyNames(t *testing.T) {
+	for _, seed := range roleBasedSeedNames {
+		t.Run(seed, func(t *testing.T) {
+			b := loadSeed(t, seed)
+			if b.Manifest.ExpertType != TypeTeam {
+				t.Fatalf("expertType = %q, want team", b.Manifest.ExpertType)
+			}
+			if b.Manifest.TeamInfo == nil {
+				t.Fatal("teamInfo missing")
+			}
+			if b.Manifest.AgentName != b.Manifest.TeamInfo.LeadAgent {
+				t.Fatalf("agentName %q != leadAgent %q", b.Manifest.AgentName, b.Manifest.TeamInfo.LeadAgent)
+			}
+			if len(b.Manifest.Members) < 4 || len(b.Manifest.Members) > 5 {
+				t.Fatalf("members = %d, want 4-5", len(b.Manifest.Members))
+			}
+			if len(b.Defs) != len(b.Manifest.Members) {
+				t.Fatalf("Defs = %d, members = %d", len(b.Defs), len(b.Manifest.Members))
+			}
+			if len(b.Manifest.QuickPrompts) < 2 || len(b.Manifest.QuickPrompts) > 3 {
+				t.Fatalf("quickPrompts = %d, want 2-3", len(b.Manifest.QuickPrompts))
+			}
+			if b.Manifest.Members[0].ID != b.Manifest.TeamInfo.LeadAgent || b.Manifest.Members[0].Role != RoleLead {
+				t.Fatalf("members[0] = %+v, want the lead first", b.Manifest.Members[0])
+			}
+			seenMembers := make(map[string]bool, len(b.Manifest.Members))
+			for _, member := range b.Manifest.Members {
+				if seenMembers[member.ID] {
+					t.Errorf("duplicate members[] id %q", member.ID)
+				}
+				seenMembers[member.ID] = true
+			}
+			for _, id := range append([]string{b.Manifest.TeamInfo.LeadAgent}, b.Manifest.TeamInfo.MemberAgents...) {
+				if !seenMembers[id] {
+					t.Errorf("teamInfo references %q but members[] does not list it", id)
+				}
+			}
+			if len(seenMembers) != len(b.Manifest.TeamInfo.MemberAgents)+1 {
+				t.Errorf("members[] has %d entries, teamInfo describes %d", len(seenMembers), len(b.Manifest.TeamInfo.MemberAgents)+1)
+			}
+			for i, prompt := range b.Manifest.QuickPrompts {
+				if prompt.Zh == "" || prompt.En == "" {
+					t.Errorf("quickPrompts[%d] missing zh/en: %+v", i, prompt)
+				}
+			}
+			if b.Manifest.DefaultInitPrompt.Zh == "" || b.Manifest.DefaultInitPrompt.En == "" {
+				t.Error("defaultInitPrompt missing zh/en")
+			}
+			if strings.TrimSpace(b.Manifest.CategoryID) == "" {
+				t.Error("categoryId is required for the builtin catalog")
+			}
+			if b.SkillsDir == "" || b.SkillsFS == nil {
+				t.Fatal("role-based team must ship a skills/ pack")
+			}
+			skillEntries, err := fs.ReadDir(b.SkillsFS, b.SkillsDir)
+			if err != nil {
+				t.Fatalf("read bundle skills: %v", err)
+			}
+			if len(skillEntries) == 0 {
+				t.Fatal("bundle skills/ is empty")
+			}
+			for _, member := range b.Manifest.Members {
+				if !strings.HasSuffix(member.Name.Zh, "负责人") {
+					t.Errorf("member %s name %q must use the duty-based 负责人 convention", member.ID, member.Name.Zh)
+				}
+				if member.Name.En == "" || !strings.HasSuffix(member.Name.En, "Lead") {
+					t.Errorf("member %s English name %q must end with Lead", member.ID, member.Name.En)
+				}
+				if member.Profession.Zh == "" || member.Profession.En == "" {
+					t.Errorf("member %s profession missing zh/en", member.ID)
+				}
+				if member.Name.Zh == member.Profession.Zh {
+					t.Errorf("member %s name and profession are identical: %q", member.ID, member.Name.Zh)
+				}
+				def := b.Defs[member.ID]
+				if def == nil {
+					t.Errorf("missing def %s", member.ID)
+					continue
+				}
+				if def.Prompt == "" || def.Description == "" || def.Emoji == "" || def.Meta.Color == "" || def.Meta.Vibe == "" {
+					t.Errorf("member %s persona metadata incomplete: %+v", member.ID, def)
+				}
+				if def.Role != member.Role {
+					t.Errorf("member %s role = %q, want %q", member.ID, def.Role, member.Role)
+				}
+			}
+			lead := b.Defs[b.Manifest.TeamInfo.LeadAgent]
+			if lead == nil {
+				t.Fatalf("missing lead %s", b.Manifest.TeamInfo.LeadAgent)
+			}
+			for _, want := range []string{"subagent_spawn", "写集不相交", "反射式", "调度纪律"} {
+				if !strings.Contains(lead.Prompt, want) {
+					t.Errorf("lead prompt missing %q", want)
+				}
+			}
+		})
 	}
 }

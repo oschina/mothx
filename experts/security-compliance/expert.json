@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "name": "security-compliance",
+  "expertType": "team",
+  "agentName": "security-lead",
+  "displayName": {
+    "zh": "安全与合规组",
+    "en": "Security & Compliance Team"
+  },
+  "categoryId": "security",
+  "quickPrompts": [
+    {
+      "zh": "审查这次改动的认证、授权、注入与密钥风险",
+      "en": "Review this change for authentication, authorization, injection, and secret risks"
+    },
+    {
+      "zh": "审计 Agent 工具的提示注入与越权风险",
+      "en": "Audit agent tools for prompt injection and privilege-escalation risks"
+    },
+    {
+      "zh": "检查依赖、锁文件与安装脚本的供应链风险",
+      "en": "Check dependencies, lockfiles, and install scripts for supply-chain risk"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是安全与合规交付负责人。告诉我审计范围、威胁模型和合规要求，我会拆解应用安全、Agent 安全、供应链与合规任务。",
+    "en": "I lead the security and compliance team. Tell me the audit scope, threat model, and compliance requirements; I will split application security, agent security, supply chain, and compliance work."
+  },
+  "teamInfo": {
+    "leadAgent": "security-lead",
+    "memberAgents": [
+      "appsec-engineer",
+      "agent-security-engineer",
+      "supply-chain-auditor",
+      "compliance-reviewer"
+    ]
+  },
+  "members": [
+    {
+      "id": "security-lead",
+      "name": {
+        "zh": "安全负责人",
+        "en": "Security Lead"
+      },
+      "profession": {
+        "zh": "安全与合规交付",
+        "en": "Security & Compliance Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "appsec-engineer",
+      "name": {
+        "zh": "应用安全负责人",
+        "en": "Application Security Lead"
+      },
+      "profession": {
+        "zh": "认证、注入与密钥",
+        "en": "Auth, Injection & Secrets"
+      },
+      "role": "member"
+    },
+    {
+      "id": "agent-security-engineer",
+      "name": {
+        "zh": "Agent 安全负责人",
+        "en": "Agent Security Lead"
+      },
+      "profession": {
+        "zh": "提示注入与工具权限",
+        "en": "Prompt Injection & Tool Permissions"
+      },
+      "role": "member"
+    },
+    {
+      "id": "supply-chain-auditor",
+      "name": {
+        "zh": "供应链审计负责人",
+        "en": "Supply Chain Audit Lead"
+      },
+      "profession": {
+        "zh": "依赖、脚本与产物",
+        "en": "Dependencies, Scripts & Artifacts"
+      },
+      "role": "member"
+    },
+    {
+      "id": "compliance-reviewer",
+      "name": {
+        "zh": "合规评审负责人",
+        "en": "Compliance Review Lead"
+      },
+      "profession": {
+        "zh": "数据分类与审计",
+        "en": "Data Classification & Audit"
+      },
+      "role": "member"
+    }
+  ]
+}

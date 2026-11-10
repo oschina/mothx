@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "name": "web-frontend",
+  "expertType": "team",
+  "agentName": "web-frontend-lead",
+  "displayName": {
+    "zh": "Web 前端组",
+    "en": "Web Frontend Team"
+  },
+  "categoryId": "engineering",
+  "quickPrompts": [
+    {
+      "zh": "实现一个响应式页面并补齐可访问性与基础测试",
+      "en": "Build a responsive page with accessibility and baseline tests"
+    },
+    {
+      "zh": "审查前端代码的组件边界、渲染性能与 a11y 问题",
+      "en": "Review this frontend for component boundaries, rendering performance, and a11y issues"
+    },
+    {
+      "zh": "优化首屏性能并给出前后对比证据",
+      "en": "Optimize first-load performance and provide before/after evidence"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是 Web 前端交付负责人。告诉我目标页面、现有框架和验收标准，我会拆解实现、设计系统、可访问性与性能任务并汇总证据。",
+    "en": "I lead the web frontend team. Tell me the target page, current framework, and acceptance criteria; I will split implementation, design-system, accessibility, and performance work and reconcile the evidence."
+  },
+  "teamInfo": {
+    "leadAgent": "web-frontend-lead",
+    "memberAgents": [
+      "react-next-engineer",
+      "vue-angular-engineer",
+      "design-system-engineer",
+      "frontend-performance-engineer"
+    ]
+  },
+  "members": [
+    {
+      "id": "web-frontend-lead",
+      "name": {
+        "zh": "Web 前端负责人",
+        "en": "Web Frontend Lead"
+      },
+      "profession": {
+        "zh": "Web 前端交付",
+        "en": "Web Frontend Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "react-next-engineer",
+      "name": {
+        "zh": "React/Next.js 负责人",
+        "en": "React/Next.js Lead"
+      },
+      "profession": {
+        "zh": "React 与 Next.js",
+        "en": "React & Next.js"
+      },
+      "role": "member"
+    },
+    {
+      "id": "vue-angular-engineer",
+      "name": {
+        "zh": "Vue/Angular 负责人",
+        "en": "Vue/Angular Lead"
+      },
+      "profession": {
+        "zh": "Vue 与 Angular",
+        "en": "Vue & Angular"
+      },
+      "role": "member"
+    },
+    {
+      "id": "design-system-engineer",
+      "name": {
+        "zh": "设计系统与可访问性负责人",
+        "en": "Design System & Accessibility Lead"
+      },
+      "profession": {
+        "zh": "设计系统与 WCAG",
+        "en": "Design Systems & WCAG"
+      },
+      "role": "member"
+    },
+    {
+      "id": "frontend-performance-engineer",
+      "name": {
+        "zh": "前端性能负责人",
+        "en": "Frontend Performance Lead"
+      },
+      "profession": {
+        "zh": "Core Web Vitals",
+        "en": "Core Web Vitals"
+      },
+      "role": "member"
+    }
+  ]
+}

@@ -1611,6 +1611,7 @@ Source: https://mothx.net/zh/changelog.md
 
 ### ✨ 新功能
 
+- **内置新增 12 个按职责命名的主角团。** 内置目录现在包含 backend-platform、web-frontend、mobile-crossplatform、systems-lowlevel、enterprise-jvm-dotnet、qa-testing、security-compliance、devops-sre、data-ml-ai、product-architecture、docs-research 与 agent-platform，在原有 software-company 与 frontend-developer 之外新增 58 个职责制角色（例如「后端负责人」「数据库与迁移负责人」）。每个团长获得与「一人公司」相同的名册与调度纪律；成员显示名使用职责而非真人姓名。嵌入式资源使二进制增加约 142 KB；没有复制 ECC 的技能脚本：每个团附带一个原创的聚焦 `SKILL.md`，角色职责则蒸馏为有界 persona。WebUI 同时为这些内置分类补充了本地化标签。
 - **新增 SenseNova（商汤日日新）提供商。** 内置 `sensenova` 预设使用 SenseNova Token Plan 端点 `https://token.sensenova.cn/v1` 与 OpenAI 兼容的 `openai-chat` 协议，读取 `${SENSENOVA_API_KEY}`，并注册 `sensenova` 厂商适配器以支持 `sensenova.cn` Base URL 自动识别；内置 `sensenova-6.8-flash` 与 `sensenova-6.8-flash-lite`，均提供 1,000,000 tokens 上下文窗口、131,072 tokens 最大输出、推理支持，以及 `text`/`image` 多模态输入。
 - **Router 模式目前仍是 Beta（预览）模式。** Router 以及为它提供 worker 的 `acpAgents` profile 都是评估功能，而非生产契约：工具面、profile 结构与生命周期可能在任何版本中变更，且不提供兼容性迁移路径；Router 仍被有意排除在 `defaultMode` 之外（遗留的 `defaultMode: router` 依旧解析为只读的 `plan`）。请在临时会话中用 Router 试用外部 ACP worker，不要依赖它做无人值守或生产环境的工作流。TUI、CLI、WebUI 与 Desktop 入口投影的都是同一份 Runtime 行为，因此该评估对所有入口同等适用。现在所有 Router 界面都会明示这一点：TUI 状态栏、模式循环、`/router` 面板与 `/mode` 输出，以及 WebUI 与 Desktop 的 composer，都带有 Beta / 预览标记。
 
@@ -8821,6 +8822,27 @@ mothx --expert software-company
 ```
 
 `/expert bind` 可为尚未绑定主角的会话建立绑定；`/expert unbind` 会移除当前会话的身份。两者都不会改写既有对话历史。
+
+## 内置主角团目录
+
+MothX 内置原有的通用主角包，以及 12 个按职责命名的团队（新增 58 个角色）。新增团队的成员显示名统一使用「职责 + 负责人」，不使用真人姓名。每个新增团还附带一个聚焦技能（例如 `backend-change-review`、`llm-eval-gate`），仅在绑定该主角团时加载。
+
+| 包名 | 主角团 | 角色 |
+| --- | --- | --- |
+| software-company | 一人公司 | 交付总监、产品经理、软件架构师、研发工程师、QA 工程师 |
+| frontend-developer | 前端开发专家 | 前端开发工程师 |
+| backend-platform | 后端平台组 | 后端负责人、API 与契约负责人、数据库与迁移负责人、服务运行时负责人、后端验证负责人 |
+| web-frontend | Web 前端组 | Web 前端负责人、React/Next.js 负责人、Vue/Angular 负责人、设计系统与可访问性负责人、前端性能负责人 |
+| mobile-crossplatform | 移动与跨端组 | 移动负责人、Android/KMP 负责人、Flutter 负责人、React Native 负责人、iOS/Swift 负责人 |
+| systems-lowlevel | 系统与底层工程组 | 系统负责人、Rust 负责人、C++ 负责人、Go 系统负责人 |
+| enterprise-jvm-dotnet | 企业级 JVM 与 .NET 组 | 企业级负责人、Java/Spring 负责人、Kotlin 负责人、C#/.NET 负责人、PHP/Ruby 负责人 |
+| qa-testing | 质量与测试组 | 质量负责人、TDD 负责人、端到端测试负责人、回归分析负责人、静默失败审计负责人 |
+| security-compliance | 安全与合规组 | 安全负责人、应用安全负责人、Agent 安全负责人、供应链审计负责人、合规评审负责人 |
+| devops-sre | 平台运维与 SRE 组 | 平台运维负责人、Kubernetes 负责人、CI/CD 与发布负责人、可观测性负责人、配置与环境负责人 |
+| data-ml-ai | 数据、ML 与 AI 工程组 | 数据与模型负责人、MLOps 负责人、PyTorch 负责人、检索与推荐负责人、LLM 评测负责人 |
+| product-architecture | 产品与架构组 | 产品与架构负责人、产品规划负责人、架构设计负责人、代码考古负责人、规格挖掘负责人 |
+| docs-research | 文档与研究组 | 文档与研究负责人、文档治理负责人、代码库入门负责人、深度研究负责人 |
+| agent-platform | Agent 平台与元工程组 | Agent 平台负责人、Agent 架构负责人、评测与 Harness 负责人、循环运维负责人、评测负责人 |
 
 ## 通过分叉切换主角
 

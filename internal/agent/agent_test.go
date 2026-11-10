@@ -2007,6 +2007,16 @@ func TestBuildSystemPromptModes(t *testing.T) {
 	if contains(routerPrompt, "You have unrestricted system access") {
 		t.Error("router prompt must not inherit the yolo permission contract")
 	}
+	for _, want := range []string{
+		"Scheduling discipline",
+		"Deduplicate before fan-out",
+		"worker-reported",
+		"same model or provider family",
+	} {
+		if !contains(routerPrompt, want) {
+			t.Errorf("router prompt is missing scheduling guidance %q", want)
+		}
+	}
 
 	// Test unknown mode
 	unknownPrompt := BuildSystemPrompt("custom", nil, "/tmp", "", "", nil, nil, false, false, false)

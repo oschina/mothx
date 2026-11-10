@@ -112,11 +112,13 @@ func TestCenterListMissingLayersTolerated(t *testing.T) {
 
 	c := &Center{}
 	list := c.List()
-	if len(list) != 2 {
-		t.Fatalf("len(List) = %d, want 2 builtin seeds: %+v", len(list), list)
+	if len(list) != len(builtinSeedNames) {
+		t.Fatalf("len(List) = %d, want %d builtin seeds: %+v", len(list), len(builtinSeedNames), list)
 	}
-	if list[0].Name != "frontend-developer" || list[1].Name != "software-company" {
-		t.Errorf("unexpected builtin list order/content: %+v", list)
+	for i, name := range builtinSeedNames {
+		if list[i].Name != name {
+			t.Errorf("builtin list[%d] = %q, want %q", i, list[i].Name, name)
+		}
 	}
 	for _, s := range list {
 		if s.Source != SourceBuiltin {
@@ -134,10 +136,10 @@ func TestCenterListMissingLayersTolerated(t *testing.T) {
 	// activate the project layer.
 	projectRoot := t.TempDir()
 	writeLayerBundle(t, filepath.Join(projectRoot, ".mothx", "experts"), "proj-only", "项目专属")
-	if len((&Center{}).List()) != 2 {
+	if len((&Center{}).List()) != len(builtinSeedNames) {
 		t.Errorf("empty ProjectDir must disable the project layer")
 	}
-	if len((&Center{ProjectDir: projectRoot}).List()) != 3 {
+	if len((&Center{ProjectDir: projectRoot}).List()) != len(builtinSeedNames)+1 {
 		t.Errorf("ProjectDir set must add proj-only to the list")
 	}
 }

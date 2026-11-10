@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "name": "enterprise-jvm-dotnet",
+  "expertType": "team",
+  "agentName": "enterprise-lead",
+  "displayName": {
+    "zh": "企业级 JVM 与 .NET 组",
+    "en": "Enterprise JVM & .NET Team"
+  },
+  "categoryId": "engineering",
+  "quickPrompts": [
+    {
+      "zh": "为这个企业服务实现一个 Spring Boot 端点并补齐事务与测试",
+      "en": "Implement a Spring Boot endpoint with transactions and tests"
+    },
+    {
+      "zh": "审查 Kotlin 协程或 C# 异步代码的并发与资源风险",
+      "en": "Review concurrency and resource risks in Kotlin coroutines or C# async code"
+    },
+    {
+      "zh": "为 Laravel/Rails 功能做安全与回归检查",
+      "en": "Run security and regression checks for a Laravel or Rails feature"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是企业级 JVM 与 .NET 交付负责人。告诉我框架、版本和验收标准，我会拆解实现、事务、安全与测试任务。",
+    "en": "I lead the enterprise JVM and .NET team. Tell me the framework, version, and acceptance criteria; I will split implementation, transaction, security, and test work."
+  },
+  "teamInfo": {
+    "leadAgent": "enterprise-lead",
+    "memberAgents": [
+      "java-spring-engineer",
+      "kotlin-engineer",
+      "dotnet-engineer",
+      "php-ruby-engineer"
+    ]
+  },
+  "members": [
+    {
+      "id": "enterprise-lead",
+      "name": {
+        "zh": "企业级负责人",
+        "en": "Enterprise Lead"
+      },
+      "profession": {
+        "zh": "企业级 JVM/.NET 交付",
+        "en": "Enterprise JVM/.NET Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "java-spring-engineer",
+      "name": {
+        "zh": "Java/Spring 负责人",
+        "en": "Java & Spring Lead"
+      },
+      "profession": {
+        "zh": "Spring Boot 与事务",
+        "en": "Spring Boot & Transactions"
+      },
+      "role": "member"
+    },
+    {
+      "id": "kotlin-engineer",
+      "name": {
+        "zh": "Kotlin 负责人",
+        "en": "Kotlin Lead"
+      },
+      "profession": {
+        "zh": "协程与 KMP",
+        "en": "Coroutines & KMP"
+      },
+      "role": "member"
+    },
+    {
+      "id": "dotnet-engineer",
+      "name": {
+        "zh": "C#/.NET 负责人",
+        "en": "C# & .NET Lead"
+      },
+      "profession": {
+        "zh": "async、DI 与 EF Core",
+        "en": "Async, DI & EF Core"
+      },
+      "role": "member"
+    },
+    {
+      "id": "php-ruby-engineer",
+      "name": {
+        "zh": "PHP/Ruby 负责人",
+        "en": "PHP & Ruby Lead"
+      },
+      "profession": {
+        "zh": "Laravel 与 Rails",
+        "en": "Laravel & Rails"
+      },
+      "role": "member"
+    }
+  ]
+}

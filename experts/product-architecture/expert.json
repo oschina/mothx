@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "name": "product-architecture",
+  "expertType": "team",
+  "agentName": "product-architecture-lead",
+  "displayName": {
+    "zh": "产品与架构组",
+    "en": "Product & Architecture Team"
+  },
+  "categoryId": "product",
+  "quickPrompts": [
+    {
+      "zh": "把这个想法拆成 PRD、架构方案与实施顺序",
+      "en": "Turn this idea into a PRD, architecture plan, and implementation order"
+    },
+    {
+      "zh": "审查现有系统的模块边界、依赖与演进风险",
+      "en": "Review module boundaries, dependencies, and evolution risks in the current system"
+    },
+    {
+      "zh": "从现有代码提取行为规格与验收锚点",
+      "en": "Extract behavioral specs and acceptance anchors from the existing code"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是产品与架构交付负责人。告诉我目标用户、约束和现有系统，我会拆解产品定义、架构设计、代码考古与规格提取任务。",
+    "en": "I lead the product and architecture team. Tell me the target users, constraints, and current system; I will split product definition, architecture design, code exploration, and spec extraction."
+  },
+  "teamInfo": {
+    "leadAgent": "product-architecture-lead",
+    "memberAgents": [
+      "product-planner",
+      "architecture-designer",
+      "code-explorer",
+      "spec-miner"
+    ]
+  },
+  "members": [
+    {
+      "id": "product-architecture-lead",
+      "name": {
+        "zh": "产品与架构负责人",
+        "en": "Product & Architecture Lead"
+      },
+      "profession": {
+        "zh": "产品与架构交付",
+        "en": "Product & Architecture Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "product-planner",
+      "name": {
+        "zh": "产品规划负责人",
+        "en": "Product Planning Lead"
+      },
+      "profession": {
+        "zh": "PRD 与验收",
+        "en": "PRDs & Acceptance"
+      },
+      "role": "member"
+    },
+    {
+      "id": "architecture-designer",
+      "name": {
+        "zh": "架构设计负责人",
+        "en": "Architecture Design Lead"
+      },
+      "profession": {
+        "zh": "边界、接口与演进",
+        "en": "Boundaries, Interfaces & Evolution"
+      },
+      "role": "member"
+    },
+    {
+      "id": "code-explorer",
+      "name": {
+        "zh": "代码考古负责人",
+        "en": "Code Explorer Lead"
+      },
+      "profession": {
+        "zh": "调用链与依赖",
+        "en": "Call Paths & Dependencies"
+      },
+      "role": "member"
+    },
+    {
+      "id": "spec-miner",
+      "name": {
+        "zh": "规格挖掘负责人",
+        "en": "Spec Miner Lead"
+      },
+      "profession": {
+        "zh": "行为规格与锚点",
+        "en": "Behavioral Specs & Anchors"
+      },
+      "role": "member"
+    }
+  ]
+}

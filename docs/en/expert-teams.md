@@ -26,6 +26,32 @@ mothx --expert software-company
 identity from the current session. Neither operation rewrites previous
 conversation history.
 
+## Built-in catalog
+
+MothX ships the original generalist bundles plus twelve role-based teams (58 new roles). New
+team member display names use duty labels such as `Backend Lead` or
+`Database & Migration Lead` instead of personal names. Each role-based bundle
+also ships one focused skill (for example `backend-change-review` or
+`llm-eval-gate`) that is loaded only while that expert is bound.
+
+| Bundle | Team | Roles |
+| --- | --- | --- |
+| software-company | Software Company | Delivery Director, Product Manager, Software Architect, Software Engineer, QA Engineer |
+| frontend-developer | Frontend Developer | Frontend Developer |
+| backend-platform | Backend Platform Team | Backend Lead, API & Contract Lead, Database & Migration Lead, Service Runtime Lead, Backend Verification Lead |
+| web-frontend | Web Frontend Team | Web Frontend Lead, React/Next.js Lead, Vue/Angular Lead, Design System & Accessibility Lead, Frontend Performance Lead |
+| mobile-crossplatform | Mobile & Cross-platform Team | Mobile Lead, Android & KMP Lead, Flutter Lead, React Native Lead, iOS & Swift Lead |
+| systems-lowlevel | Systems & Low-level Team | Systems Lead, Rust Lead, C++ Lead, Go Systems Lead |
+| enterprise-jvm-dotnet | Enterprise JVM & .NET Team | Enterprise Lead, Java & Spring Lead, Kotlin Lead, C# & .NET Lead, PHP & Ruby Lead |
+| qa-testing | QA & Testing Team | QA Lead, TDD Lead, E2E Test Lead, Regression Analysis Lead, Silent Failure Audit Lead |
+| security-compliance | Security & Compliance Team | Security Lead, Application Security Lead, Agent Security Lead, Supply Chain Audit Lead, Compliance Review Lead |
+| devops-sre | Platform Ops & SRE Team | Platform Ops Lead, Kubernetes Lead, CI/CD & Release Lead, Observability Lead, Config & Environment Lead |
+| data-ml-ai | Data, ML & AI Engineering Team | Data & Model Lead, MLOps Lead, PyTorch Lead, Retrieval & Recommender Lead, LLM Evaluation Lead |
+| product-architecture | Product & Architecture Team | Product & Architecture Lead, Product Planning Lead, Architecture Design Lead, Code Explorer Lead, Spec Miner Lead |
+| docs-research | Docs & Research Team | Docs & Research Lead, Docs Governance Lead, Codebase Onboarding Lead, Deep Research Lead |
+| agent-platform | Agent Platform & Meta-Engineering Team | Agent Platform Lead, Agent Architecture Lead, Harness & Evaluation Lead, Loop Operations Lead, Evaluation Lead |
+
+
 ## Switch experts by forking
 
 Changing from one non-empty expert to another creates a new session branch:

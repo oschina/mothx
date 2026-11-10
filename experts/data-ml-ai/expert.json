@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "name": "data-ml-ai",
+  "expertType": "team",
+  "agentName": "data-ml-lead",
+  "displayName": {
+    "zh": "数据、ML 与 AI 工程组",
+    "en": "Data, ML & AI Engineering Team"
+  },
+  "categoryId": "data",
+  "quickPrompts": [
+    {
+      "zh": "为这个模型训练任务排查数据、复现与评估问题",
+      "en": "Diagnose data, reproducibility, and evaluation issues in this training task"
+    },
+    {
+      "zh": "审查 RAG 或推荐管道的检索、排序与评估",
+      "en": "Review retrieval, ranking, and evaluation in this RAG or recommender pipeline"
+    },
+    {
+      "zh": "为 LLM 功能设计评测集、评分器与回归门禁",
+      "en": "Design eval sets, graders, and regression gates for an LLM feature"
+    }
+  ],
+  "defaultInitPrompt": {
+    "zh": "我是数据、ML 与 AI 工程交付负责人。告诉我数据形态、模型目标与评估标准，我会拆解数据、训练、检索与评测任务。",
+    "en": "I lead the data, ML, and AI engineering team. Tell me the data shape, model objective, and evaluation criteria; I will split data, training, retrieval, and evaluation work."
+  },
+  "teamInfo": {
+    "leadAgent": "data-ml-lead",
+    "memberAgents": [
+      "mlops-engineer",
+      "pytorch-engineer",
+      "retrieval-recsys-engineer",
+      "llm-eval-engineer"
+    ]
+  },
+  "members": [
+    {
+      "id": "data-ml-lead",
+      "name": {
+        "zh": "数据与模型负责人",
+        "en": "Data & Model Lead"
+      },
+      "profession": {
+        "zh": "数据、ML 与 AI 交付",
+        "en": "Data, ML & AI Delivery"
+      },
+      "role": "lead"
+    },
+    {
+      "id": "mlops-engineer",
+      "name": {
+        "zh": "MLOps 负责人",
+        "en": "MLOps Lead"
+      },
+      "profession": {
+        "zh": "复现、部署与监控",
+        "en": "Reproducibility, Serving & Monitoring"
+      },
+      "role": "member"
+    },
+    {
+      "id": "pytorch-engineer",
+      "name": {
+        "zh": "PyTorch 负责人",
+        "en": "PyTorch Lead"
+      },
+      "profession": {
+        "zh": "张量、设备与训练",
+        "en": "Tensors, Devices & Training"
+      },
+      "role": "member"
+    },
+    {
+      "id": "retrieval-recsys-engineer",
+      "name": {
+        "zh": "检索与推荐负责人",
+        "en": "Retrieval & Recommender Lead"
+      },
+      "profession": {
+        "zh": "召回、排序与评估",
+        "en": "Retrieval, Ranking & Evaluation"
+      },
+      "role": "member"
+    },
+    {
+      "id": "llm-eval-engineer",
+      "name": {
+        "zh": "LLM 评测负责人",
+        "en": "LLM Evaluation Lead"
+      },
+      "profession": {
+        "zh": "评测集与 pass@k",
+        "en": "Eval Sets & pass@k"
+      },
+      "role": "member"
+    }
+  ]
+}

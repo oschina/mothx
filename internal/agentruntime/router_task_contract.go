@@ -298,7 +298,13 @@ func (c SubagentTaskContract) RenderPrompt(workDir string) string {
 	b.WriteString(strings.TrimSpace(c.Objective))
 	b.WriteString("\n\n## Role\n")
 	b.WriteString(string(role))
-	b.WriteString("\n\n## Working directory\n")
+	b.WriteString("\n")
+	if playbook := rolePlaybook(role); playbook != "" {
+		b.WriteString("\n## Role playbook\n")
+		b.WriteString(playbook)
+		b.WriteString("\n")
+	}
+	b.WriteString("\n## Working directory\n")
 	b.WriteString(workDir)
 	if len(c.ReadScope) > 0 {
 		b.WriteString("\n\n## Read scope\n")

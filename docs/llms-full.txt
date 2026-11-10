@@ -1554,6 +1554,7 @@ Source: https://mothx.net/en/changelog.md
 
 ### ✨ New Features
 
+- **Twelve role-based expert teams now ship as built-in bundles.** The built-in catalog now includes backend-platform, web-frontend, mobile-crossplatform, systems-lowlevel, enterprise-jvm-dotnet, qa-testing, security-compliance, devops-sre, data-ml-ai, product-architecture, docs-research, and agent-platform, adding 58 duty-named roles (for example `Backend Lead` or `Database & Migration Lead`) alongside the existing software-company and frontend-developer bundles. Each team lead receives the same roster and scheduling discipline as the original software team; member display names use duty labels rather than personal names. The embedded assets add roughly 142 KB to the binary, and no ECC skill scripts are copied: each team ships one original, focused `SKILL.md` distilled from the same practices, while role guidance lives in bounded personas. The WebUI also localizes the built-in category labels used by these bundles.
 - **Added the SenseNova (商汤日日新) provider.** The built-in `sensenova` preset targets the SenseNova token-plan endpoint `https://token.sensenova.cn/v1` with the OpenAI-compatible `openai-chat` API, reads `${SENSENOVA_API_KEY}`, registers a `sensenova` vendor adapter for `sensenova.cn` base-URL auto-detection, and ships `sensenova-6.8-flash` and `sensenova-6.8-flash-lite`, each with a 1,000,000-token context window, a 131,072-token output ceiling, reasoning support, and `text`/`image` multimodal input.
 - **Router mode is still a beta (preview) mode.** Router and the `acpAgents` profiles that feed it are evaluation features, not a production contract: the tool surface, the profile schema, and the lifecycle may change in any release without a compatibility migration path, and Router stays deliberately excluded from `defaultMode` (a stray `defaultMode: router` still resolves to read-only `plan`). Use Router to try external ACP workers on a scratch session, and do not depend on it for unattended or production workflows. The TUI, CLI, WebUI, and Desktop entry points all project the same Runtime-owned behavior, so the evaluation covers every entry point equally. Every Router surface now says so: the TUI status bar, mode cycle, `/router` panel, and `/mode` output, plus the WebUI and Desktop composers, all carry a beta / preview marker.
 
@@ -8773,6 +8774,32 @@ mothx --expert software-company
 `/expert bind` can bind an unbound session and `/expert unbind` removes the
 identity from the current session. Neither operation rewrites previous
 conversation history.
+
+## Built-in catalog
+
+MothX ships the original generalist bundles plus twelve role-based teams (58 new roles). New
+team member display names use duty labels such as `Backend Lead` or
+`Database & Migration Lead` instead of personal names. Each role-based bundle
+also ships one focused skill (for example `backend-change-review` or
+`llm-eval-gate`) that is loaded only while that expert is bound.
+
+| Bundle | Team | Roles |
+| --- | --- | --- |
+| software-company | Software Company | Delivery Director, Product Manager, Software Architect, Software Engineer, QA Engineer |
+| frontend-developer | Frontend Developer | Frontend Developer |
+| backend-platform | Backend Platform Team | Backend Lead, API & Contract Lead, Database & Migration Lead, Service Runtime Lead, Backend Verification Lead |
+| web-frontend | Web Frontend Team | Web Frontend Lead, React/Next.js Lead, Vue/Angular Lead, Design System & Accessibility Lead, Frontend Performance Lead |
+| mobile-crossplatform | Mobile & Cross-platform Team | Mobile Lead, Android & KMP Lead, Flutter Lead, React Native Lead, iOS & Swift Lead |
+| systems-lowlevel | Systems & Low-level Team | Systems Lead, Rust Lead, C++ Lead, Go Systems Lead |
+| enterprise-jvm-dotnet | Enterprise JVM & .NET Team | Enterprise Lead, Java & Spring Lead, Kotlin Lead, C# & .NET Lead, PHP & Ruby Lead |
+| qa-testing | QA & Testing Team | QA Lead, TDD Lead, E2E Test Lead, Regression Analysis Lead, Silent Failure Audit Lead |
+| security-compliance | Security & Compliance Team | Security Lead, Application Security Lead, Agent Security Lead, Supply Chain Audit Lead, Compliance Review Lead |
+| devops-sre | Platform Ops & SRE Team | Platform Ops Lead, Kubernetes Lead, CI/CD & Release Lead, Observability Lead, Config & Environment Lead |
+| data-ml-ai | Data, ML & AI Engineering Team | Data & Model Lead, MLOps Lead, PyTorch Lead, Retrieval & Recommender Lead, LLM Evaluation Lead |
+| product-architecture | Product & Architecture Team | Product & Architecture Lead, Product Planning Lead, Architecture Design Lead, Code Explorer Lead, Spec Miner Lead |
+| docs-research | Docs & Research Team | Docs & Research Lead, Docs Governance Lead, Codebase Onboarding Lead, Deep Research Lead |
+| agent-platform | Agent Platform & Meta-Engineering Team | Agent Platform Lead, Agent Architecture Lead, Harness & Evaluation Lead, Loop Operations Lead, Evaluation Lead |
+
 
 ## Switch experts by forking
 
