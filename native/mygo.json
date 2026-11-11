@@ -1,0 +1,7 @@
+{
+  "name": "MothX Native",
+  "identifier": "dev.mothx.native",
+  "version": "0.1.0",
+  "out": "build",
+  "slug": "mothx-native"
+}

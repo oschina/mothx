@@ -1,0 +1,10 @@
+/build/
+/.mygo/
+/native
+/native.exe
+mygo_windows_*.syso
+
+# These source assets are required by //go:embed and MyGo packaging. The
+# repository-wide *.png rule would otherwise omit them from commits.
+!assets/mothx.png
+!resources/icon.png
