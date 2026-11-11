@@ -2670,7 +2670,7 @@ func TestClearCommandResetsTranscriptState(t *testing.T) {
 	a.currentAssistantIdx = 0
 	a.currentThinkIdx = 1
 	a.toolModalOpen = true
-	a.activeSkills["x"] = "skill"
+	a.activeSkills["x"] = true
 	a.extraContext = "base skill"
 
 	a.handleCommand("/clear")
@@ -4125,6 +4125,9 @@ func TestTUIWorkflowErrorMarksManagedMainAgentError(t *testing.T) {
 		nil,
 		nil,
 	)
+	// Pin the lazy session's workdir so workflow resource assembly does not
+	// fall back to the test process directory.
+	app.cwd = cwd
 
 	if cmd := app.processInput("first"); cmd == nil {
 		t.Fatal("processInput returned nil command")

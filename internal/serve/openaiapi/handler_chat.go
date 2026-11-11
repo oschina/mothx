@@ -1777,13 +1777,11 @@ func (s *Server) refreshSessionContext(sess *APISession) error {
 		}
 	}
 	if err := sess.Runtime.RefreshResources(s.settings, agentruntime.RefreshOptions{
-		Workflows: sess.Workflows, Browser: sess.Browser, ActiveSkills: sess.ActiveSkills,
+		Workflows: sess.Workflows, Browser: sess.Browser,
 	}); err != nil {
 		return err
 	}
-	sess.SkillsMgr = sess.Runtime.SkillsMgr
-	sess.ExtraContext = sess.Runtime.ExtraContext
-	sess.RuleContent = sess.Runtime.RuleContent
+	s.adoptSessionRuntimeResources(sess)
 	if sess.AgentMgr != nil {
 		// The resource refresh changed context/skills/settings, so manager-owned
 		// factory state must be rebuilt and re-pointed at the tools.

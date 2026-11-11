@@ -260,7 +260,6 @@ type sessionRuntime struct {
 	activeModel      *provider.Model
 	activeMode       string
 	activeThinking   provider.ThinkingLevel
-	activeSkills     map[string]bool
 	mcp              []*mcp.Client
 	agentMgr         *agent.AgentManager
 	// agentMgrMu guards agentMgr. It is a leaf lock: code holding it must never
@@ -3197,22 +3196,8 @@ func (s *server) activateSkillPrompt(rt *sessionRuntime, text string) (bool, err
 	if name == "" || rt.runtime.SkillsMgr == nil || rt.runtime.SkillsMgr.Get(name) == nil {
 		return false, nil
 	}
-	if rt.activeSkills == nil {
-		rt.activeSkills = make(map[string]bool)
-	}
-	previous, existed := rt.activeSkills[name]
-	rt.activeSkills[name] = true
-	_, browserEnabled, _ := rt.runtime.CapabilitySnapshot()
-	if err := rt.runtime.RefreshResources(s.currentSettings(), agentruntime.RefreshOptions{
-		Workflows:    s.workflows,
-		Browser:      browserEnabled,
-		ActiveSkills: rt.activeSkills,
-	}); err != nil {
-		if existed {
-			rt.activeSkills[name] = previous
-		} else {
-			delete(rt.activeSkills, name)
-		}
+	names := append(rt.runtime.ActiveSkillsSnapshot(), name)
+	if err := rt.runtime.SetActiveSkills(names); err != nil {
 		return true, err
 	}
 	return true, nil

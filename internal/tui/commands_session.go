@@ -460,6 +460,8 @@ func (a *App) sessionsClear() {
 	if a.runtime != nil {
 		if err := a.runtime.UnbindSession(); err != nil {
 			a.addCommandError(fmt.Sprintf("unbind session runtime: %v", err))
+		} else {
+			a.adoptRuntimeResources()
 		}
 	}
 	a.historyLoaded = false

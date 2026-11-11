@@ -17,7 +17,7 @@ import (
 
 // tuiRuntime wraps CLI-prepared resources in the shared Runtime. Resource
 // ownership remains a migration bridge until CLI construction moves into Builder.
-func tuiRuntime(sess *session.Manager, registry *tools.Registry, sandboxInfo, extraContext, ruleContent string, skillsMgr *skills.Manager, settings *config.Settings) *agentruntime.SessionRuntime {
+func tuiRuntime(sess *session.Manager, registry *tools.Registry, sandboxInfo, extraContext, ruleContent string, skillsMgr *skills.Manager, settings *config.Settings, workflows, browserEnabled bool) *agentruntime.SessionRuntime {
 	_ = sandboxInfo
 	if sess == nil || registry == nil {
 		return nil
@@ -29,6 +29,7 @@ func tuiRuntime(sess *session.Manager, registry *tools.Registry, sandboxInfo, ex
 	runtime, err := agentruntime.AttachSessionResources(agentruntime.AttachedResources{
 		ID: header.ID, Source: agentruntime.SourceTUI, WorkDir: header.Cwd, Manager: sess, Registry: registry,
 		ExtraContext: extraContext, RuleContent: ruleContent, SkillsMgr: skillsMgr, Settings: settings,
+		Workflows: workflows, Browser: browserEnabled,
 		ArtifactEnabled: settings.IsArtifactEnabled(),
 	})
 	if err != nil {
@@ -38,7 +39,9 @@ func tuiRuntime(sess *session.Manager, registry *tools.Registry, sandboxInfo, ex
 }
 
 // SetRuntime attaches the shared front-end-neutral runtime to the TUI. The
-// adapter aliases are synchronized for compatibility with existing commands.
+// adapter aliases and the active-skill projection are synchronized from the
+// Runtime; activation state and prompt context are never owned by the TUI once
+// a Runtime is bound.
 func (a *App) SetRuntime(runtime *agentruntime.SessionRuntime) {
 	if a == nil || runtime == nil {
 		return
@@ -47,23 +50,31 @@ func (a *App) SetRuntime(runtime *agentruntime.SessionRuntime) {
 	if runtime.Manager != nil {
 		a.session = runtime.Manager
 	}
-	if runtime.Registry != nil {
-		a.registry = runtime.Registry
-	}
 	if runtime.SandboxMgr != nil {
 		a.sandboxInfo = sandbox.FormatSandboxInfo(runtime.SandboxMgr.GetActive())
 	}
-	if runtime.SkillsMgr != nil {
-		a.skillsMgr = runtime.SkillsMgr
-	}
-	if runtime.ExtraContext != "" {
-		a.extraContext = runtime.ExtraContext
-		a.baseExtraContext = runtime.ExtraContext
-	}
+	a.adoptRuntimeResources()
 	if runtime.RuleContent != "" {
 		a.ruleContent = runtime.RuleContent
 	}
 	a.enableMailboxWake()
+}
+
+// adoptRuntimeResources projects the Runtime-owned resource view into the TUI
+// aliases. It never writes back to the Runtime.
+func (a *App) adoptRuntimeResources() {
+	if a == nil || a.runtime == nil {
+		return
+	}
+	if a.runtime.Registry != nil {
+		a.registry = a.runtime.Registry
+	}
+	if a.runtime.SkillsMgr != nil {
+		a.skillsMgr = a.runtime.SkillsMgr
+	}
+	a.activeSkills = skillNameSet(a.runtime.ActiveSkillsSnapshot())
+	a.extraContext = a.runtime.ExtraContext
+	a.baseExtraContext = a.runtime.BaseExtraContext()
 }
 
 func (a *App) bindRuntimeSession(manager *session.Manager) error {
@@ -159,10 +170,20 @@ func (a *App) ensureRuntime() error {
 	if a.runtime != nil {
 		return nil
 	}
-	runtime := tuiRuntime(a.session, a.registry, a.sandboxInfo, a.extraContext, a.ruleContent, a.skillsMgr, a.settings)
+	// Active skills activated before the first session are a local draft. Capture
+	// them before SetRuntime adopts the (empty) Runtime projection, then hand
+	// ownership over through the shared activation path.
+	draftSkills := sortedSkillNames(a.activeSkills)
+	runtime := tuiRuntime(a.session, a.registry, a.sandboxInfo, a.baseExtraContext, a.ruleContent, a.skillsMgr, a.settings, a.workflows, a.browserEnabled)
 	if runtime == nil {
 		return fmt.Errorf("tui session runtime is unavailable")
 	}
 	a.SetRuntime(runtime)
+	if len(draftSkills) > 0 {
+		if err := runtime.SetActiveSkills(draftSkills); err != nil {
+			return fmt.Errorf("activate pending skills: %w", err)
+		}
+		a.adoptRuntimeResources()
+	}
 	return nil
 }

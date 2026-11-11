@@ -25,6 +25,7 @@ type AgentFactory struct {
 	allow                    *config.AllowConfig
 	sandboxMgr               *sandbox.Manager
 	extraContext             string
+	extraContextProvider     func() string
 	ruleContent              string
 	skillsMgr                *skills.Manager
 	compactionSettings       ctxpkg.CompactionSettings
@@ -87,6 +88,11 @@ type AgentFactoryOptions struct {
 	// (ParentID == ""); sub-agents never receive the lead persona overlay.
 	ExpertIdentity string
 	ExpertRoster   string
+	// ExtraContextProvider, when set, supplies the factory-level extra context at
+	// build time. The Runtime uses it so manager-built top-level agents (ESM
+	// workers, /agent agents, mailbox continuations) see mid-session context
+	// changes without rebuilding the whole AgentManager.
+	ExtraContextProvider func() string
 }
 
 // NewAgentFactoryWithOptions creates a factory with explicit behavior flags.
@@ -114,6 +120,7 @@ func NewAgentFactoryWithOptions(
 		allow:                    allow,
 		sandboxMgr:               sandboxMgr,
 		extraContext:             extraContext,
+		extraContextProvider:     opts.ExtraContextProvider,
 		ruleContent:              ruleContent,
 		skillsMgr:                skillsMgr,
 		compactionSettings:       compactionSettings,
@@ -309,8 +316,12 @@ func (f *AgentFactory) Create(opts AgentOptions) agentpkg.Agent {
 		registry.Remove(name)
 	}
 
-	// Build extra context: factory-level + per-agent
+	// Build extra context: factory-level + per-agent. A provider keeps the
+	// factory-level value live across mid-session skill/context changes.
 	extraContext := f.extraContext
+	if f.extraContextProvider != nil {
+		extraContext = f.extraContextProvider()
+	}
 	if opts.ParentID != "" {
 		extraContext += "\n" + BuildSubAgentContext()
 	}
@@ -432,6 +443,9 @@ func (f *AgentFactory) withParentRuntimeConfig(cfg AgentLoopConfig) *AgentFactor
 	clone.settings = cfg.Settings
 	clone.allow = cfg.Allow
 	clone.extraContext = cfg.ExtraContext
+	// The parent's resolved config already carries the provider's current value;
+	// override again for a child would drop persona/per-agent context.
+	clone.extraContextProvider = nil
 	clone.ruleContent = cfg.RuleContent
 	clone.compactionSettings = cfg.CompactionSettings
 	clone.approvalHandler = cfg.ApprovalHandler

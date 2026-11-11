@@ -391,7 +391,14 @@ func (r *SessionRuntime) publishPreparedExpertResourcesLocked(prepared *prepared
 		}
 		r.synchronizeCoreToolsLocked(r.resourceBrowser, r.WebSearchEnabled, r.resourceSettings)
 		r.SkillsMgr = prepared.skillsMgr
-		r.ExtraContext = prepared.extraContext
+		// Preserve the session's active-skill set across expert/browser/session
+		// resource refreshes. The new manager may no longer contain a skill (for
+		// example after an expert switch), so prune leniently instead of failing
+		// the refresh or leaving stale context in the prompt.
+		activeContext, resolved, _ := activeSkillsContext(prepared.skillsMgr, r.ActiveSkills, false)
+		r.baseExtraContext = prepared.extraContext
+		r.ActiveSkills = resolved
+		r.ExtraContext = prepared.extraContext + activeContext
 		r.RuleContent = prepared.ruleContent
 	}
 	r.LastUsed = time.Now()

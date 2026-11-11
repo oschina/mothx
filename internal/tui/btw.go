@@ -72,20 +72,19 @@ func (a *App) handleBtwCommand(cmd string) tea.Cmd {
 		SkillsMgr:  a.skillsMgr,
 	})
 
+	if a.runtime == nil {
+		if err := a.ensureRuntime(); err != nil {
+			a.addCommandError("Failed to build side query agent: " + err.Error())
+			return nil
+		}
+	}
+
 	extra := a.extraContext
 	if extra != "" {
 		extra += "\n\n"
 	}
 	extra += btwSystemHint
 
-	if a.runtime == nil {
-		runtime := tuiRuntime(a.session, a.registry, a.sandboxInfo, a.extraContext, a.ruleContent, a.skillsMgr, a.settings)
-		if runtime == nil {
-			a.addCommandError("Failed to build side query agent: TUI session runtime is unavailable")
-			return nil
-		}
-		a.SetRuntime(runtime)
-	}
 	sub, err := a.runtime.BuildTransientAgent(roRegistry, agentruntime.AgentBuildOptions{
 		ID: agentpkg.AgentID("btw"), Provider: a.provider, ProviderName: a.providerName,
 		Model: a.model, Mode: agentruntime.ModeAgent, Settings: a.settings, Allow: a.allow,

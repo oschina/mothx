@@ -18,7 +18,7 @@ func TestTUIRuntimeUsesAuthoritativeSourceAndMode(t *testing.T) {
 	}
 	registry := tools.NewRegistry(workDir, nil)
 	app := NewApp(nil, &provider.Model{ID: "test"}, config.DefaultSettings(), mgr, registry, "", "", "", nil, "agent", false, false, nil, nil, nil)
-	app.SetRuntime(tuiRuntime(mgr, registry, "", "", "", nil, app.settings))
+	app.SetRuntime(tuiRuntime(mgr, registry, "", "", "", nil, app.settings, false, false))
 	mode, err := app.effectiveRuntimeMode()
 	if err != nil {
 		t.Fatal(err)

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -192,8 +193,17 @@ func (a *App) enableBrowserTool() {
 	a.browserEnabled = true
 	a.browserSkillInBase = a.runtime != nil
 	a.browserSkillContext = a.skillsMgr.BuildSkillContext(browserfeature.SkillName)
-	a.markBuiltinActiveSkills()
-	a.rebuildExtraContext()
+	if a.isSkillActive(browserfeature.SkillName) {
+		// The base context now injects the browser skill; keeping it in the
+		// activation set would duplicate it in the system prompt.
+		if err := a.applyActiveSkills(excludeSkillName(a.activeSkillNames(), browserfeature.SkillName)); err != nil {
+			a.addCommandError(err.Error())
+			return
+		}
+	}
+	if a.runtime == nil {
+		a.composePreSessionExtraContext()
+	}
 	a.resetAgent(fmt.Errorf("browser tool changed"))
 
 	a.addCommandStatus(a.translator.Text(i18n.MsgCommandBrowserStatus, "ON"), "Using built-in browser skill")
@@ -212,14 +222,13 @@ func (a *App) disableBrowserTool() {
 		}
 	} else {
 		browserfeature.RemoveTool(a.registry)
-		if a.browserSkillInBase && a.browserSkillContext != "" {
-			a.baseExtraContext = strings.Replace(a.baseExtraContext, a.browserSkillContext, "", 1)
-		}
 	}
 	a.browserEnabled = false
 	a.browserSkillInBase = false
 	a.browserSkillContext = ""
-	a.rebuildExtraContext()
+	if a.runtime == nil {
+		a.composePreSessionExtraContext()
+	}
 	a.resetAgent(fmt.Errorf("browser tool changed"))
 	a.addCommandStatus(a.translator.Text(i18n.MsgCommandBrowserStatus, "OFF"))
 }
@@ -855,9 +864,16 @@ func (a *App) handleCommand(cmd string) tea.Cmd {
 		a.totalCacheWrite = 0
 		a.pastes = make(map[int]string)
 		a.pasteCounter = 0
-		a.activeSkills = make(map[string]string)
-		a.markBuiltinActiveSkills()
-		a.rebuildExtraContext()
+		if a.runtime != nil {
+			if err := a.runtime.SetActiveSkills(nil); err != nil {
+				a.addCommandError(err.Error())
+			} else {
+				a.adoptRuntimeResources()
+			}
+		} else {
+			a.activeSkills = make(map[string]bool)
+			a.composePreSessionExtraContext()
+		}
 		a.updateViewportContent()
 		a.printedMessageIdx = make(map[int]bool)
 		a.addCommandStatus(a.translator.Text(i18n.MsgConversationCleared))
@@ -951,10 +967,14 @@ func (a *App) handleEnvCommand(parts []string) {
 	a.openEnvDialog()
 }
 
-// activateSkill loads a skill's content into the extra context.
+// activateSkill loads a skill into the session's active set.
 func (a *App) activateSkill(name string) {
 	if a.skillsMgr == nil {
 		a.addCommandError(a.translator.Text(i18n.MsgSkillsUnavailable))
+		return
+	}
+	if !a.expertControlIdle() {
+		a.addCommandError(a.translator.Text(i18n.MsgSkillMgrBusy))
 		return
 	}
 	skill := a.skillsMgr.Get(name)
@@ -962,53 +982,138 @@ func (a *App) activateSkill(name string) {
 		a.addCommandError(a.translator.Text(i18n.MsgSkillNotFound, name))
 		return
 	}
+	if a.skillLocked(name) {
+		a.addCommandError(a.translator.Text(i18n.MsgSkillMgrLocked, name))
+		return
+	}
 
-	// Check if already active
-	if _, ok := a.activeSkills[name]; ok {
+	if a.isSkillActive(name) {
 		a.addCommandStatus(a.translator.Text(i18n.MsgSkillAlreadyActive, name))
 		return
 	}
 
-	// Add skill content to active skills
-	skillCtx := a.skillsMgr.BuildSkillContext(name)
-	a.activeSkills[name] = skillCtx
-
-	// Rebuild extraContext from base + all active skills
-	a.rebuildExtraContext()
-
-	// Reset agent so next message uses the updated context
+	names := append(a.activeSkillNames(), name)
+	if err := a.applyActiveSkills(names); err != nil {
+		a.addCommandError(err.Error())
+		return
+	}
 	a.resetAgent(fmt.Errorf("skill activated"))
 
 	a.addCommandStatus(a.translator.Text(i18n.MsgSkillActivated, name, skill.Source, skill.Description))
 }
 
-// rebuildExtraContext rebuilds extraContext from base context + all active skills.
-func (a *App) rebuildExtraContext() {
-	sb := strings.Builder{}
-	sb.WriteString(a.baseExtraContext)
-	for _, ctx := range a.activeSkills {
-		sb.WriteString(ctx)
+// isSkillActive reports whether the session (or the pre-session draft) has the
+// skill activated. The Runtime is authoritative once one exists.
+func (a *App) isSkillActive(name string) bool {
+	if a.runtime != nil {
+		for _, active := range a.runtime.ActiveSkillsSnapshot() {
+			if active == name {
+				return true
+			}
+		}
+		return false
 	}
-	a.extraContext = sb.String()
+	return a.activeSkills[name]
 }
 
-func (a *App) markBuiltinActiveSkills() {
-	if a.skillsMgr == nil {
-		return
+// activeSkillNames projects the current active set. Once a Runtime exists it is
+// the sole owner; the local map is only a pre-session draft.
+func (a *App) activeSkillNames() []string {
+	if a.runtime != nil {
+		return a.runtime.ActiveSkillsSnapshot()
 	}
-	if a.activeSkills == nil {
-		a.activeSkills = make(map[string]string)
+	return sortedSkillNames(a.activeSkills)
+}
+
+func sortedSkillNames(set map[string]bool) []string {
+	if len(set) == 0 {
+		return nil
 	}
-	if a.workflows && a.skillsMgr.Get(workflow.SkillName) != nil {
-		a.activeSkills[workflow.SkillName] = ""
-	}
-	if a.browserEnabled && a.skillsMgr.Get(browserfeature.SkillName) != nil {
-		if a.browserSkillInBase {
-			a.activeSkills[browserfeature.SkillName] = ""
-		} else {
-			a.activeSkills[browserfeature.SkillName] = a.skillsMgr.BuildSkillContext(browserfeature.SkillName)
+	names := make([]string, 0, len(set))
+	for name, enabled := range set {
+		if enabled {
+			names = append(names, name)
 		}
 	}
+	sort.Strings(names)
+	return names
+}
+
+func skillNameSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}
+
+func excludeSkillName(names []string, remove string) []string {
+	kept := make([]string, 0, len(names))
+	for _, name := range names {
+		if name != remove {
+			kept = append(kept, name)
+		}
+	}
+	return kept
+}
+
+// applyActiveSkills is the single TUI mutation path for activation changes.
+// With a Runtime it delegates validation and prompt composition there; before
+// the first session it updates the local draft and composes the same shared
+// context helper so the semantic stays aligned.
+func (a *App) applyActiveSkills(names []string) error {
+	// Drop names that are no longer enabled/available before handing the set to
+	// the Runtime. This keeps a skill disabled or uninstalled mid-session from
+	// trapping the panel in a strict-validation error while still failing closed
+	// on genuinely unknown names requested through activateSkill.
+	if a.skillsMgr != nil {
+		filtered := make([]string, 0, len(names))
+		for _, name := range names {
+			if a.skillsMgr.Get(name) != nil {
+				filtered = append(filtered, name)
+			}
+		}
+		names = filtered
+	}
+	if a.runtime != nil {
+		if err := a.runtime.SetActiveSkills(names); err != nil {
+			return err
+		}
+		a.adoptRuntimeResources()
+		return nil
+	}
+	a.activeSkills = skillNameSet(names)
+	a.composePreSessionExtraContext()
+	return nil
+}
+
+// composePreSessionExtraContext builds extraContext while no Runtime exists.
+// It is the only pre-session composition path; once a Runtime is bound, the
+// Runtime owns ExtraContext and this method is never used for prompt assembly.
+func (a *App) composePreSessionExtraContext() {
+	if a.runtime != nil {
+		a.adoptRuntimeResources()
+		return
+	}
+	base := a.baseExtraContext
+	if a.browserEnabled && !a.browserSkillInBase && a.browserSkillContext != "" {
+		base += a.browserSkillContext
+	}
+	names := sortedSkillNames(a.activeSkills)
+	if a.skillsMgr == nil || len(names) == 0 {
+		a.extraContext = base
+		return
+	}
+	activeContext, err := agentruntime.BuildActiveSkillsContext(a.skillsMgr, names)
+	if err != nil {
+		// The panel only lists enabled skills, so this is a transient mismatch.
+		// Keep the base prompt rather than injecting partial content.
+		activeContext = ""
+	}
+	a.extraContext = base + activeContext
 }
 
 // splitRouterProfileIDs parses `/router id1,id2` into an ordered allowlist.

@@ -508,8 +508,17 @@ func (a *App) handleSkillHubInstalled(msg skillHubInstalledMsg) {
 		return
 	}
 	if msg.activate {
-		delete(a.activeSkills, msg.result.Name)
-		a.activateSkill(msg.result.Name)
+		if a.isSkillActive(msg.result.Name) {
+			// Re-apply the current set so the Runtime reloads the updated skill
+			// content; an already-active skill would otherwise be a no-op.
+			if err := a.applyActiveSkills(a.activeSkillNames()); err != nil {
+				a.skillHubMessage = "Installed, but failed to refresh active skills: " + err.Error()
+				return
+			}
+			a.resetAgent(fmt.Errorf("skill reactivated"))
+		} else {
+			a.activateSkill(msg.result.Name)
+		}
 		if msg.update {
 			a.skillHubMessage = "Updated and reactivated " + msg.result.Name + "."
 		} else {
@@ -534,7 +543,7 @@ func (a *App) markSkillHubActive(item *skillhub.SkillSummary) {
 	if item == nil || item.Installed == nil || item.Installed.Dir == "" {
 		return
 	}
-	_, item.Installed.Active = a.activeSkills[filepath.Base(item.Installed.Dir)]
+	item.Installed.Active = a.isSkillActive(filepath.Base(item.Installed.Dir))
 }
 
 func (a *App) reloadSkillHubSkills() error {

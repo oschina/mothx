@@ -92,11 +92,15 @@ func NewAgentManager(opts AgentManagerOptions) (*agent.AgentManager, error) {
 			WorkflowsEnabled:  opts.WorkflowsEnabled,
 			ExpertIdentity:    expertIdentity,
 			ExpertRoster:      expertRoster,
-			ProviderName:      opts.ProviderName,
-			Allow:             opts.Allow,
-			BeforeToolCall:    beforeToolCallForPolicy(policy, nil),
-			BeforeToolExecute: beforeToolExecuteForRuntime(opts.Runtime),
-			ForcedMode:        policy.ForcedMode(),
+			// Manager-built top-level agents must read the live Runtime context so
+			// session-scoped skill activation and expert/browser refreshes apply
+			// without forcing adapters to rebuild the manager.
+			ExtraContextProvider: opts.Runtime.currentExtraContext,
+			ProviderName:         opts.ProviderName,
+			Allow:                opts.Allow,
+			BeforeToolCall:       beforeToolCallForPolicy(policy, nil),
+			BeforeToolExecute:    beforeToolExecuteForRuntime(opts.Runtime),
+			ForcedMode:           policy.ForcedMode(),
 			ResolveMode: func(manager *session.Manager, requestedMode string) (string, error) {
 				if manager == nil {
 					return policy.ResolveMode("", requestedMode)

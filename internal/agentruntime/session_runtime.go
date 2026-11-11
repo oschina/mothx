@@ -43,6 +43,16 @@ type SessionRuntime struct {
 	SkillsMgr    *skills.Manager
 	MCPClients   []*mcp.Client
 	ExtraContext string
+	// baseExtraContext is ExtraContext without active-skill content. Active
+	// skills are session-scoped Runtime state, so every resource refresh and
+	// session rebind recomposes ExtraContext from this stable base instead of
+	// asking adapters to concatenate their own skill strings.
+	baseExtraContext string
+	// ActiveSkills is the session-scoped set of user-activated skills. The
+	// Runtime owns it so TUI, ACP, and Serve share one source of truth and so
+	// resource refreshes (expert binding, browser toggles, session rebinds)
+	// cannot silently drop or duplicate active skill context.
+	ActiveSkills map[string]bool
 	RuleContent  string
 	LastUsed     time.Time
 	Execution    *ExecutionRuntime
@@ -463,6 +473,12 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 	defer r.mu.Unlock()
 	if r.closed {
 		return fmt.Errorf("agent runtime is closed")
+	}
+	// Active skills are session-scoped. Re-binding a different session must not
+	// carry one project's activated skills (or their stale prompt text) into
+	// another; a same-session rebind keeps the user's current activation set.
+	if r.ID != "" && r.ID != header.ID {
+		r.ActiveSkills = nil
 	}
 	r.ID = header.ID
 	r.Source = resolved.Source
@@ -1155,6 +1171,9 @@ func (r *SessionRuntime) UnbindSession() error {
 		return fmt.Errorf("agent runtime is closed")
 	}
 	r.ID = ""
+	// Active skills are session-scoped. Unbinding must not leak them into the
+	// next session lazily created by the same frontend.
+	r.ActiveSkills = nil
 	r.Source = r.EntrySource
 	r.Policy.Source = r.Source
 	r.Manager = nil
@@ -1211,8 +1230,11 @@ type MCPConnectPolicy struct {
 
 // RefreshOptions are mutable resource-affecting session capabilities.
 type RefreshOptions struct {
-	Workflows    bool
-	Browser      bool
+	Workflows bool
+	Browser   bool
+	// ActiveSkills replaces the Runtime's active skill set when non-nil. A nil
+	// map preserves the current set, which is what expert/browser/session
+	// refreshes require; pass an empty map to clear all active skills.
 	ActiveSkills map[string]bool
 }
 
@@ -1304,6 +1326,7 @@ func (b Builder) Build(ctx context.Context, opts BuildOptions) (*SessionRuntime,
 		SandboxMgr:          sandboxMgr,
 		SkillsMgr:           skillsMgr,
 		ExtraContext:        extraContext,
+		baseExtraContext:    extraContext,
 		RuleContent:         resources.RuleContent,
 		LastUsed:            time.Now(),
 		ArtifactEnabled:     opts.ArtifactEnabled,
@@ -1409,7 +1432,18 @@ func (r *SessionRuntime) RefreshResources(settings *config.Settings, opts Refres
 		return err
 	}
 	skillsMgr, extraContext := resources.SkillsMgr, resources.ExtraContext
-	activeContext, err := activeSkillsContext(skillsMgr, opts.ActiveSkills)
+	// A nil ActiveSkills means an internal resource refresh must preserve the
+	// session's current activation set. A non-nil set (including an empty map)
+	// is an explicit replacement, so unknown/disabled names fail closed rather
+	// than disappearing silently.
+	desiredSkills := opts.ActiveSkills
+	strictSkills := desiredSkills != nil
+	if desiredSkills == nil {
+		r.mu.RLock()
+		desiredSkills = cloneActiveSkills(r.ActiveSkills)
+		r.mu.RUnlock()
+	}
+	activeContext, resolvedActiveSkills, err := activeSkillsContext(skillsMgr, desiredSkills, strictSkills)
 	if err != nil {
 		return err
 	}
@@ -1435,6 +1469,8 @@ func (r *SessionRuntime) RefreshResources(settings *config.Settings, opts Refres
 	r.synchronizeCoreToolsLocked(opts.Browser, r.WebSearchEnabled, settings)
 	r.Expert = binding
 	r.SkillsMgr = skillsMgr
+	r.baseExtraContext = extraContext
+	r.ActiveSkills = resolvedActiveSkills
 	r.ExtraContext = extraContext + activeContext
 	r.RuleContent = resources.RuleContent
 	r.resourceSettings = settings
@@ -1443,6 +1479,106 @@ func (r *SessionRuntime) RefreshResources(settings *config.Settings, opts Refres
 	r.BrowserEnabled = opts.Browser
 	r.LastUsed = time.Now()
 	return nil
+}
+
+// SetActiveSkills replaces this session's activated-skill set. It reloads the
+// shared context/skill resources through the same path used by every adapter,
+// so newly installed skills and edited SKILL.md content take effect and the
+// resulting ExtraContext is composed once by the Runtime. Unknown or disabled
+// names fail closed and leave the previous set in place.
+func (r *SessionRuntime) SetActiveSkills(names []string) error {
+	if r == nil {
+		return fmt.Errorf("agent runtime is nil")
+	}
+	if err := r.ensureOpen(); err != nil {
+		return err
+	}
+	desired := activeSkillSet(names)
+	r.mu.RLock()
+	settings := r.resourceSettings
+	workflows := r.resourceWorkflows
+	browserEnabled := r.resourceBrowser
+	r.mu.RUnlock()
+	if settings != nil {
+		return r.RefreshResources(settings, RefreshOptions{
+			Workflows: workflows, Browser: browserEnabled, ActiveSkills: desired,
+		})
+	}
+	// Runtimes built without assembly settings (bare tests and a few
+	// compatibility attaches) still need a working activation path. Recompose
+	// from the currently loaded manager without reloading from disk.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return fmt.Errorf("agent runtime is closed")
+	}
+	activeContext, resolved, err := activeSkillsContext(r.SkillsMgr, desired, true)
+	if err != nil {
+		return err
+	}
+	base := r.baseExtraContext
+	if base == "" && len(r.ActiveSkills) == 0 {
+		// Bare runtimes may only have ExtraContext populated by an attach path.
+		// Adopt it as the stable base the first time activation is requested.
+		base = r.ExtraContext
+		r.baseExtraContext = base
+	}
+	r.ActiveSkills = resolved
+	r.ExtraContext = base + activeContext
+	r.LastUsed = time.Now()
+	return nil
+}
+
+// ActiveSkillsSnapshot returns the session's active skill names in sorted
+// order. Adapters use it to seed their activation UI; they must not maintain a
+// second activation set.
+func (r *SessionRuntime) ActiveSkillsSnapshot() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return sortedActiveSkills(r.ActiveSkills)
+}
+
+// BaseExtraContext returns ExtraContext without active-skill content. Bare
+// runtimes that never went through resource assembly fall back to ExtraContext.
+func (r *SessionRuntime) BaseExtraContext() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.baseExtraContext != "" {
+		return r.baseExtraContext
+	}
+	return r.ExtraContext
+}
+
+func sortedActiveSkills(active map[string]bool) []string {
+	if len(active) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(active))
+	for name, enabled := range active {
+		if enabled {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// currentExtraContext is the factory provider used by manager-built top-level
+// agents. Reading it at build time keeps ESM workers, /agent agents, and
+// mailbox continuations aligned with mid-session context changes.
+func (r *SessionRuntime) currentExtraContext() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.ExtraContext
 }
 
 // rehydrateBoundResources refreshes the resolved expert binding after a
@@ -1618,25 +1754,72 @@ func (r *SessionRuntime) synchronizeCoreToolsLocked(browserEnabled, webSearchEna
 	}
 }
 
-func activeSkillsContext(manager *skills.Manager, active map[string]bool) (string, error) {
+// activeSkillsContext is the single assembler for activated-skill prompt
+// content. It returns the concatenated context and the resolved set (sorted,
+// with disabled or missing skills pruned in lenient mode). Strict mode is used
+// for explicit user/API activation so a bad request cannot silently do nothing.
+func activeSkillsContext(manager *skills.Manager, active map[string]bool, strict bool) (string, map[string]bool, error) {
 	if len(active) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
+	resolved := make(map[string]bool, len(active))
 	names := make([]string, 0, len(active))
-	for name, enabled := range active {
-		if enabled {
-			names = append(names, name)
+	for raw, enabled := range active {
+		if !enabled {
+			continue
 		}
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if manager == nil || manager.Get(name) == nil {
+			if strict {
+				return "", nil, fmt.Errorf("skill not found: %s", name)
+			}
+			continue
+		}
+		resolved[name] = true
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	var context strings.Builder
 	for _, name := range names {
-		if manager == nil || manager.Get(name) == nil {
-			return "", fmt.Errorf("skill not found: %s", name)
-		}
 		context.WriteString(manager.BuildSkillContext(name))
 	}
-	return context.String(), nil
+	return context.String(), resolved, nil
+}
+
+func cloneActiveSkills(active map[string]bool) map[string]bool {
+	if len(active) == 0 {
+		return nil
+	}
+	clone := make(map[string]bool, len(active))
+	for name, enabled := range active {
+		if enabled {
+			clone[name] = true
+		}
+	}
+	return clone
+}
+
+func activeSkillSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}
+
+// BuildActiveSkillsContext assembles activated-skill prompt content through the
+// same sorted/strict implementation the Runtime uses. Adapters that operate
+// before a SessionRuntime exists (the TUI pre-session draft) call this instead
+// of concatenating skill text themselves.
+func BuildActiveSkillsContext(manager *skills.Manager, names []string) (string, error) {
+	context, _, err := activeSkillsContext(manager, activeSkillSet(names), true)
+	return context, err
 }
 
 // LoadContextResources loads context files, project/global skills, and rules.

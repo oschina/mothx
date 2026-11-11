@@ -10,10 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 
-	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/skillhub"
 	"github.com/oschina/mothx/internal/skills"
@@ -322,13 +320,10 @@ func (s *server) handleManageSkillHubUninstall(req rpcRequest) {
 		}
 		if err == nil {
 			err = service.Uninstall(market, strings.TrimSpace(in.ID), in.Scope)
-			if err == nil && activeName != "" {
-				delete(rt.activeSkills, activeName)
-			}
 		}
 	}
 	if err == nil {
-		err = s.refreshManageSkillHubSession(rt, "", false)
+		err = s.refreshManageSkillHubSession(rt, activeName, false)
 	}
 	if err != nil {
 		s.writeManageSkillHubCatalogError(req, err)
@@ -337,41 +332,39 @@ func (s *server) handleManageSkillHubUninstall(req rpcRequest) {
 	s.writeResponse(req.ID, map[string]any{"uninstalled": true, "session": s.manageSkillHubSessionState(rt)}, nil)
 }
 
-// These active names are a Runtime resource choice, not Desktop state.  ACP
-// currently materializes active skills on the loaded SessionRuntime; keeping
-// the list here lets an install/activate preserve earlier choices in the same
-// open session while RefreshResources remains the sole context assembler.
+// Active names are Runtime resource state, not Desktop state. RefreshResources
+// (via SetActiveSkills) remains the sole context assembler; install/uninstall
+// only adjusts the Runtime-owned set before the shared reload runs.
 func (s *server) refreshManageSkillHubSession(rt *sessionRuntime, name string, activate bool) error {
 	if rt == nil || rt.runtime == nil {
 		return fmt.Errorf("unknown or inactive session")
 	}
 	return s.withSessionMutationLease(rt.id, func() error {
-		if rt.activeSkills == nil {
-			rt.activeSkills = make(map[string]bool)
+		names := rt.runtime.ActiveSkillsSnapshot()
+		if name != "" {
+			if activate {
+				names = append(names, name)
+			} else {
+				names = removeActiveSkillName(names, name)
+			}
 		}
-		previous := make(map[string]bool, len(rt.activeSkills))
-		for skill, enabled := range rt.activeSkills {
-			previous[skill] = enabled
-		}
-		if activate && name != "" {
-			rt.activeSkills[name] = true
-		}
-		_, browserEnabled, _ := rt.runtime.CapabilitySnapshot()
-		if err := rt.runtime.RefreshResources(s.settings, agentruntime.RefreshOptions{Workflows: s.workflows, Browser: browserEnabled, ActiveSkills: rt.activeSkills}); err != nil {
-			rt.activeSkills = previous
+		if err := rt.runtime.SetActiveSkills(names); err != nil {
 			return err
 		}
 		return s.notifyAvailableCommandsFor(rt.id, rt.runtime.SkillsMgr)
 	})
 }
 
-func (s *server) manageSkillHubSessionState(rt *sessionRuntime) map[string]any {
-	active := make([]string, 0, len(rt.activeSkills))
-	for name, enabled := range rt.activeSkills {
-		if enabled {
-			active = append(active, name)
+func removeActiveSkillName(names []string, remove string) []string {
+	kept := names[:0]
+	for _, name := range names {
+		if name != remove {
+			kept = append(kept, name)
 		}
 	}
-	sort.Strings(active)
-	return map[string]any{"sessionId": rt.id, "workDir": rt.runtime.WorkDir, "activeSkills": active}
+	return kept
+}
+
+func (s *server) manageSkillHubSessionState(rt *sessionRuntime) map[string]any {
+	return map[string]any{"sessionId": rt.id, "workDir": rt.runtime.WorkDir, "activeSkills": rt.runtime.ActiveSkillsSnapshot()}
 }

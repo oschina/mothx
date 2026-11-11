@@ -141,7 +141,7 @@ func TestSkillHubLoadedMarksActiveManagedSkill(t *testing.T) {
 		skillHubMarket: skillhub.MarketSkillHub,
 		skillHubView:   skillHubBrowse,
 		skillHubPage:   1,
-		activeSkills:   map[string]string{"go": "context"},
+		activeSkills:   map[string]bool{"go": true},
 	}
 	a.handleSkillHubLoaded(skillHubLoadedMsg{
 		market: skillhub.MarketSkillHub,

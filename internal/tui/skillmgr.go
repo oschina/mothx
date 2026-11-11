@@ -18,14 +18,22 @@ import (
 // Up/Down (or j/k) move the cursor, Space toggles a skill's activation, Enter
 // applies the pending set, and Esc/q close without changes.
 //
-// The panel is a thin projection over the existing TUI activation path
-// (activeSkills -> rebuildExtraContext -> resetAgent); it owns no skill
-// discovery, context assembly, or enable/disable persistence of its own. The
-// persisted enable/disable toggle (settings.skills.disabled) stays a settings
-// concern, and feature-forced builtin skills (workflow/browser) are shown as
-// locked because their activation is owned by feature flags, not this panel.
+// The panel is a thin projection over Runtime-owned activation state
+// (SessionRuntime.ActiveSkills/ExtraContext); before the first session it only
+// maintains a local draft. It owns no skill discovery, context assembly, or
+// enable/disable persistence. The persisted enable/disable toggle
+// (settings.skills.disabled) stays a settings concern, and feature-forced
+// builtin skills (workflow/browser) are shown as locked because their
+// activation is owned by feature flags, not this panel.
+// skillLocked reports whether a skill's activation is owned by a feature flag
+// rather than the per-session activation set. Base context already injects the
+// corresponding skill when the feature is enabled.
+func (a *App) skillLocked(name string) bool {
+	return (a.workflows && name == workflow.SkillName) || (a.browserEnabled && name == browserfeature.SkillName)
+}
+
 func (a *App) openSkillMgr() {
-	if a.isThinking {
+	if !a.expertControlIdle() {
 		a.addCommandError(a.translator.Text(i18n.MsgSkillMgrBusy))
 		return
 	}
@@ -42,7 +50,7 @@ func (a *App) openSkillMgr() {
 	// opens reflecting reality; Space then toggles relative to that baseline.
 	selected := make(map[string]bool, len(items))
 	for _, s := range items {
-		if _, ok := a.activeSkills[s.Name]; ok {
+		if a.isSkillActive(s.Name) {
 			selected[s.Name] = true
 		}
 	}
@@ -124,34 +132,61 @@ func (a *App) toggleSkillMgrCurrent() {
 // applySkillMgrSelection diffs the pending selection against the currently
 // active skills and applies activations and deactivations in one pass, so the
 // agent context is rebuilt (and the agent reset) at most once regardless of how
-// many skills were toggled.
+// many skills were toggled. The Runtime remains the single owner of the active
+// set and the composed ExtraContext; this method only projects the panel.
 func (a *App) applySkillMgrSelection() {
 	if a.skillsMgr == nil {
 		a.closeSkillMgr()
 		return
 	}
+	if !a.expertControlIdle() {
+		// A run or team member started after the panel opened. Do not reset the
+		// Agent (which would cancel them) from a stale panel action.
+		a.skillMgrMessage = a.translator.Text(i18n.MsgSkillMgrBusy)
+		return
+	}
+	current := a.activeSkillNames()
+	currentSet := skillNameSet(current)
 	var activated, deactivated []string
 	for _, s := range a.skillMgrItems {
 		if a.skillMgrLocked[s.Name] {
+			// Feature-forced builtins are injected by the base context and are not
+			// part of the user activation set.
 			continue
 		}
 		want := a.skillMgrSelected[s.Name]
-		_, has := a.activeSkills[s.Name]
+		has := currentSet[s.Name]
 		switch {
 		case want && !has:
-			a.activeSkills[s.Name] = a.skillsMgr.BuildSkillContext(s.Name)
 			activated = append(activated, s.Name)
 		case !want && has:
-			delete(a.activeSkills, s.Name)
 			deactivated = append(deactivated, s.Name)
 		}
 	}
-	a.closeSkillMgr()
 	if len(activated) == 0 && len(deactivated) == 0 {
+		a.closeSkillMgr()
 		a.addCommandStatus(a.translator.Text(i18n.MsgSkillMgrNoChange))
 		return
 	}
-	a.rebuildExtraContext()
+
+	names := append([]string{}, current...)
+	names = append(names, activated...)
+	if len(deactivated) > 0 {
+		removed := skillNameSet(deactivated)
+		kept := names[:0]
+		for _, name := range names {
+			if !removed[name] {
+				kept = append(kept, name)
+			}
+		}
+		names = kept
+	}
+	if err := a.applyActiveSkills(names); err != nil {
+		// Keep the panel open so the user can correct the selection.
+		a.skillMgrMessage = err.Error()
+		return
+	}
+	a.closeSkillMgr()
 	a.resetAgent(fmt.Errorf("skills updated"))
 	switch {
 	case len(activated) > 0 && len(deactivated) > 0:

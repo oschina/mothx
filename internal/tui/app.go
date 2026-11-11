@@ -202,9 +202,12 @@ type App struct {
 	skillsMgr         *skills.Manager
 	skillHub          *skillhub.Service
 
-	// Skills state: base extraContext (without skills) and active skill names
-	baseExtraContext string            // extraContext without skill content
-	activeSkills     map[string]string // skill name -> skill context string
+	// Skills state: base extraContext (without skill content) is retained only
+	// for the pre-Runtime window. Once a SessionRuntime exists, it owns the
+	// active skill set and the composed ExtraContext; activeSkills here is a
+	// projection used to seed the panel and does not store skill text.
+	baseExtraContext string          // pre-session extraContext without skill content
+	activeSkills     map[string]bool // active skill names (Runtime projection or pre-session draft)
 
 	// UI Components
 	input      editor.Model
@@ -322,8 +325,8 @@ type App struct {
 	skillHubMessage        string
 
 	// Skill manager overlay: the merged /skills + /skill panel. Space toggles a
-	// skill's activation; Enter applies the pending set through the existing
-	// TUI activation path (activeSkills -> rebuildExtraContext -> resetAgent).
+	// skill's activation; Enter applies the pending set through the Runtime-owned
+	// activation path (SessionRuntime.ActiveSkills/ExtraContext + resetAgent).
 	skillMgrOpen     bool
 	skillMgrItems    []*skills.Skill
 	skillMgrCursor   int
@@ -531,10 +534,15 @@ func (a *App) SetBackgroundSubmitter(submitter serviceruntime.BackgroundSubmitte
 func (a *App) SetBrowserEnabled(enabled bool, skillInBase bool) {
 	a.browserEnabled = enabled
 	a.browserSkillInBase = skillInBase
+	a.browserSkillContext = ""
 	if enabled && a.skillsMgr != nil {
 		a.browserSkillContext = a.skillsMgr.BuildSkillContext(browserfeature.SkillName)
 	}
-	a.markBuiltinActiveSkills()
+	// Before the first session there is no Runtime to own resource assembly, so
+	// keep the pre-session context coherent locally.
+	if a.runtime == nil {
+		a.composePreSessionExtraContext()
+	}
 }
 
 // pendingApproval holds a queued approval request.
@@ -630,7 +638,7 @@ func NewAppWithWorkflowsAndAllow(p provider.Provider, model *provider.Model, set
 		extraContext:      extraContext,
 		ruleContent:       ruleContent,
 		baseExtraContext:  extraContext,
-		activeSkills:      make(map[string]string),
+		activeSkills:      make(map[string]bool),
 		skillsMgr:         skillsMgr,
 		skillHub: skillhub.NewServiceForWorkDir(globalSkillsDir, currentWorkingDir(sess), officialSkillHandles, skillhub.ClientsForSettings(func() config.SkillHubSettings {
 			if settings == nil {
@@ -669,7 +677,6 @@ func NewAppWithWorkflowsAndAllow(p provider.Provider, model *provider.Model, set
 		cronStore:           cronStore,
 		scheduler:           scheduler,
 	}
-	app.markBuiltinActiveSkills()
 
 	app.configureMarkdownRenderer()
 

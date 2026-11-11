@@ -173,25 +173,42 @@ func (s *Server) SetActiveSkillsForSession(sessionID, requestedWorkDir string, n
 }
 
 func (s *Server) setActiveSkillsLocked(sess *APISession, names []string) error {
-	next := make(map[string]bool, len(names))
-	for _, name := range names {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		if sess.SkillsMgr == nil || sess.SkillsMgr.Get(name) == nil {
-			return fmt.Errorf("skill not found: %s", name)
-		}
-		next[name] = true
+	if sess == nil {
+		return errors.New("no active session")
 	}
-	previous := sess.ActiveSkills
-	sess.ActiveSkills = next
-	if err := s.refreshSessionContext(sess); err != nil {
-		sess.ActiveSkills = previous
-		_ = s.refreshSessionContext(sess)
+	if sess.Runtime == nil {
+		// Resource refresh creates the compatibility Runtime for fixtures that
+		// predate Runtime attachment. Do it before mutating the active set.
+		if err := s.refreshSessionContext(sess); err != nil {
+			return err
+		}
+	}
+	// The Runtime owns validation and prompt assembly. It leaves the previous
+	// set in place when a requested skill is missing or disabled.
+	if err := sess.Runtime.SetActiveSkills(names); err != nil {
 		return err
 	}
+	s.adoptSessionRuntimeResources(sess)
+	if sess.AgentMgr != nil {
+		return s.reconcileSessionAgentManager(sess, true)
+	}
 	return nil
+}
+
+// adoptSessionRuntimeResources mirrors Runtime-owned resource state into the
+// API session projection. It never writes back to the Runtime.
+func (s *Server) adoptSessionRuntimeResources(sess *APISession) {
+	if sess == nil || sess.Runtime == nil {
+		return
+	}
+	active := make(map[string]bool)
+	for _, name := range sess.Runtime.ActiveSkillsSnapshot() {
+		active[name] = true
+	}
+	sess.ActiveSkills = active
+	sess.SkillsMgr = sess.Runtime.SkillsMgr
+	sess.ExtraContext = sess.Runtime.ExtraContext
+	sess.RuleContent = sess.Runtime.RuleContent
 }
 
 func (s *Server) RefreshSkillHubSession(sessionID, requestedWorkDir, activate string) (*SkillHubSessionState, error) {
@@ -223,25 +240,17 @@ func (s *Server) activateSkillForSession(sess *APISession, name string) error {
 	if sess == nil {
 		return errors.New("no active session")
 	}
-	if sess.ActiveSkills == nil {
-		sess.ActiveSkills = make(map[string]bool)
-	}
-	previous := sess.ActiveSkills[name]
-	sess.ActiveSkills[name] = true
-	if err := s.refreshSessionContext(sess); err != nil {
-		if !previous {
-			delete(sess.ActiveSkills, name)
+	if sess.Runtime == nil {
+		if err := s.refreshSessionContext(sess); err != nil {
+			return err
 		}
-		return err
 	}
-	if sess.SkillsMgr == nil || sess.SkillsMgr.Get(name) == nil {
-		if !previous {
-			delete(sess.ActiveSkills, name)
-			_ = s.refreshSessionContext(sess)
-		}
-		return fmt.Errorf("skill not found: %s", name)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("skill name is required")
 	}
-	return nil
+	names := append(sess.Runtime.ActiveSkillsSnapshot(), name)
+	return s.setActiveSkillsLocked(sess, names)
 }
 
 func skillHubSessionState(sess *APISession) *SkillHubSessionState {
