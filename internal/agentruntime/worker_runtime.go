@@ -51,20 +51,33 @@ func (r *SessionRuntime) WorkerMessageLog() (*WorkerMessageLog, error) {
 	}
 	r.workerMessagesMu.Lock()
 	defer r.workerMessagesMu.Unlock()
-	r.mu.Lock()
-	if r.workerMessages != nil {
-		existing := r.workerMessages
-		r.mu.Unlock()
+	// Do the file open (including an index rebuild) outside r.mu so a large log
+	// cannot block every Runtime state read while it is being loaded.
+	r.mu.RLock()
+	existing = r.workerMessages
+	closed := r.closed
+	r.mu.RUnlock()
+	if existing != nil {
 		return existing, nil
 	}
-	if r.closed {
-		r.mu.Unlock()
+	if closed {
 		return nil, fmt.Errorf("agent runtime is closed")
 	}
 	log, err := OpenWorkerMessageLog(sessionDir, sessionID)
 	if err != nil {
-		r.mu.Unlock()
 		return nil, err
+	}
+	r.mu.Lock()
+	if r.workerMessages != nil {
+		existing = r.workerMessages
+		r.mu.Unlock()
+		_ = log.Close()
+		return existing, nil
+	}
+	if r.closed {
+		r.mu.Unlock()
+		_ = log.Close()
+		return nil, fmt.Errorf("agent runtime is closed")
 	}
 	r.workerMessages = log
 	r.mu.Unlock()
@@ -304,6 +317,15 @@ func (r *SessionRuntime) installWorkerDeliveryObserver() {
 			}
 		}
 	})
+	// A finding replaced by a newer finding from the same worker never enters
+	// lead context; close its evidence row instead of leaving it "created".
+	mailbox.SetSupersededObserver(func(items []agent.MemberCompletion) {
+		for _, item := range items {
+			if item.MessageID != "" {
+				r.markWorkerMessageSuperseded(item.MessageID, "coalesced")
+			}
+		}
+	})
 }
 
 // MarkWorkerMessageDelivered records that a queued message was consumed by a
@@ -314,6 +336,16 @@ func (r *SessionRuntime) MarkWorkerMessageDelivered(messageID, runID string) {
 		return
 	}
 	_ = log.Mark(messageID, workerMessageOpDelivered, runID, "")
+}
+
+// markWorkerMessageSuperseded records that a queued finding was replaced by a
+// newer finding before the lead consumed it. It never affects decision state.
+func (r *SessionRuntime) markWorkerMessageSuperseded(messageID, reason string) {
+	log, err := r.WorkerMessageLog()
+	if err != nil {
+		return
+	}
+	_ = log.Mark(messageID, workerMessageOpSuperseded, "", reason)
 }
 
 // WorkerMessageContext is a small read-only projection used by adapters that

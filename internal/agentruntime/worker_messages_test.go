@@ -302,3 +302,28 @@ func TestDeleteSessionWithMutationRemovesWorkerMessages(t *testing.T) {
 		t.Fatalf("kept session projection = %#v", messages)
 	}
 }
+
+func TestWorkerMessageLogRecordsSupersededTransition(t *testing.T) {
+	sessionDir := t.TempDir()
+	log, err := OpenWorkerMessageLog(sessionDir, "session-superseded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	message, _, err := log.Create(WorkerMessage{
+		SessionID: "session-superseded", ChildID: "worker-1", Kind: WorkerMessageFinding, Body: "first finding",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Mark(message.ID, workerMessageOpSuperseded, "", "coalesced"); err != nil {
+		t.Fatalf("superseded transition: %v", err)
+	}
+	folded, ok, err := log.Find(message.ID)
+	if err != nil || !ok {
+		t.Fatalf("find superseded message = %#v, %v, %v", folded, ok, err)
+	}
+	if folded.Status != WorkerMessageStatusSuperseded || folded.Reason != "coalesced" {
+		t.Fatalf("superseded message = %#v", folded)
+	}
+}

@@ -83,7 +83,7 @@ func (s *server) handleManageRouterActivate(req rpcRequest) {
 			// rolling back the durable Router selection.
 			log.Printf("[acp] router activation could not build the session manager for %s: %v", sessionID, err)
 		} else {
-			rt.agentMgr = manager
+			rt.setAgentMgr(manager)
 		}
 	}
 
@@ -259,7 +259,7 @@ func (s *server) refreshRouterWorkerManagers() {
 		return
 	}
 	for _, rt := range targets {
-		if rt.agentMgr != nil {
+		if manager := rt.getAgentMgr(); manager != nil {
 			// Refresh the manager that already owns this session's binding and
 			// child bookkeeping; rebuilding would orphan live worker handles.
 			p, providerName, model, _, _ := rt.runtime.ConfigSnapshot()
@@ -267,7 +267,7 @@ func (s *server) refreshRouterWorkerManagers() {
 				log.Printf("[acp] refresh Router worker profile for %s: session provider and model are unavailable", rt.id)
 				continue
 			}
-			rt.agentMgr.UpdateRuntimeConfig(p, providerName, model, settings, s.allow)
+			manager.UpdateRuntimeConfig(p, providerName, model, settings, s.allow)
 			continue
 		}
 		manager, err := s.registerTeamExpertTools(rt.runtime, rt.registry)
@@ -275,6 +275,6 @@ func (s *server) refreshRouterWorkerManagers() {
 			log.Printf("[acp] refresh Router worker profile for %s: %v", rt.id, err)
 			continue
 		}
-		rt.agentMgr = manager
+		rt.setAgentMgr(manager)
 	}
 }

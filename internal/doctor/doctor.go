@@ -849,6 +849,8 @@ func checkWorkerBridgeProtocol() []Check {
 	if status, err := probe(token, "", `{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}`); err != nil || status != http.StatusOK {
 		checks = append(checks, Check{ID: "acp.worker_bridge.protocol", Status: StatusError, Title: "Worker bridge protocol",
 			Detail: fmt.Sprintf("authorized initialize returned %d (err=%v), want 200", status, err)})
+	} else {
+		checks = append(checks, Check{ID: "acp.worker_bridge.protocol", Status: StatusOK, Title: "Worker bridge protocol", Detail: "authorized initialize returned 200"})
 	}
 
 	// Idle shutdown: after the last token is revoked, the listener must close

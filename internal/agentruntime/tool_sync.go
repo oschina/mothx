@@ -257,9 +257,9 @@ func (r *SessionRuntime) RefreshRouterTarget() {
 	if r == nil {
 		return
 	}
-	r.mu.RLock()
-	mode := r.Mode
-	r.mu.RUnlock()
+	// Use the resolved mode rather than the raw field: a session's effective mode
+	// can be Router even when Mode was populated by a policy resolver.
+	_, _, _, mode, _ := r.ConfigSnapshot()
 	publishRouterTarget(r, r.Registry, mode)
 }
 

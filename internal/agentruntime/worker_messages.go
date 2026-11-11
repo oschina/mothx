@@ -30,15 +30,19 @@ const (
 	WorkerMessageStatusObserved  = "observed"
 	WorkerMessageStatusExpired   = "expired"
 	WorkerMessageStatusCancelled = "cancelled"
+	// WorkerMessageStatusSuperseded marks a queued finding that was replaced by
+	// a newer finding from the same worker before the lead consumed it.
+	WorkerMessageStatusSuperseded = "superseded"
 )
 
 // Worker message log operations.
 const (
-	workerMessageOpCreated   = "created"
-	workerMessageOpDelivered = "delivered"
-	workerMessageOpObserved  = "observed"
-	workerMessageOpExpired   = "expired"
-	workerMessageOpCancelled = "cancelled"
+	workerMessageOpCreated    = "created"
+	workerMessageOpDelivered  = "delivered"
+	workerMessageOpObserved   = "observed"
+	workerMessageOpExpired    = "expired"
+	workerMessageOpCancelled  = "cancelled"
+	workerMessageOpSuperseded = "superseded"
 )
 
 // Limits for one worker report/ask. They bound what a hostile or confused
@@ -47,7 +51,13 @@ const (
 	MaxWorkerReportBytes = 8 << 10
 	MaxWorkerAskBytes    = 4 << 10
 	MaxWorkerAskOptions  = 8
-	maxWorkerDedupeKey   = 256
+	// One option is a short choice label, not free-form context. Bounding both
+	// the per-option size and the total keeps a hostile worker from turning the
+	// options array into an unbounded payload for the durable decision log and
+	// the lead mailbox.
+	MaxWorkerAskOptionBytes  = 512
+	MaxWorkerAskOptionsBytes = 2 << 10
+	maxWorkerDedupeKey       = 256
 	// workerMessageDirectoryName is the Runtime-private root below the shared
 	// sessions directory. Each session owns one child directory, so independent
 	// sessions can never append to, dedupe against, or compact the same file.
@@ -315,14 +325,15 @@ func (l *WorkerMessageLog) Create(message WorkerMessage) (WorkerMessage, bool, e
 	return message, false, nil
 }
 
-// Mark appends one state transition. Unknown IDs are rejected so a stale worker
-// cannot silently create a phantom message.
+// Mark appends one state transition. The log is append-only: an event for an
+// unknown ID is retained but ignored by the fold, so a stale worker cannot
+// create a phantom message.
 func (l *WorkerMessageLog) Mark(id, op, runID, reason string) error {
 	if l == nil {
 		return fmt.Errorf("worker message log is not available")
 	}
 	switch op {
-	case workerMessageOpDelivered, workerMessageOpObserved, workerMessageOpExpired, workerMessageOpCancelled:
+	case workerMessageOpDelivered, workerMessageOpObserved, workerMessageOpExpired, workerMessageOpCancelled, workerMessageOpSuperseded:
 	default:
 		return fmt.Errorf("unsupported worker message transition %q", op)
 	}
@@ -537,10 +548,14 @@ func (l *WorkerMessageLog) compactLocked() error {
 		l.file = nil
 	}
 	if err := os.Rename(tempPath, l.path); err != nil {
+		l.reopenLocked()
 		return err
 	}
 	file, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
+		// Keep the log writable for the rest of the session even if the reopen
+		// after a successful rename fails unexpectedly.
+		l.reopenLocked()
 		return err
 	}
 	l.file = file
@@ -548,6 +563,17 @@ func (l *WorkerMessageLog) compactLocked() error {
 		l.compactFloor = info.Size() + workerMessageCompactBytes
 	}
 	return nil
+}
+
+// reopenLocked best-effort restores the append handle after a failed compaction
+// rewrite. Callers hold l.mu.
+func (l *WorkerMessageLog) reopenLocked() {
+	file, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		log.Printf("[agentruntime] reopen worker message log after compaction failure: %v", err)
+		return
+	}
+	l.file = file
 }
 
 // MessagesByChild returns the folded messages for one child, oldest first.

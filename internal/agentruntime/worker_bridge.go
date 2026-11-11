@@ -176,8 +176,15 @@ func (s *WorkerBridgeServer) EnsureStarted() (int, error) {
 		return 0, fmt.Errorf("worker bridge is not initialized")
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ensureStartedLocked()
+}
+
+// ensureStartedLocked binds the listener if needed. Callers hold s.mu, which
+// lets Register install its token atomically with the listener start so a firing
+// idle timer cannot close the port between the two steps.
+func (s *WorkerBridgeServer) ensureStartedLocked() (int, error) {
 	if s.closed {
-		s.mu.Unlock()
 		return 0, fmt.Errorf("worker bridge is closed")
 	}
 	if s.idleTimer != nil {
@@ -185,7 +192,6 @@ func (s *WorkerBridgeServer) EnsureStarted() (int, error) {
 		s.idleTimer = nil
 	}
 	if s.listener != nil {
-		s.mu.Unlock()
 		return s.port, nil
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -205,7 +211,6 @@ func (s *WorkerBridgeServer) EnsureStarted() (int, error) {
 	s.listener = listener
 	s.server = server
 	s.port = port
-	s.mu.Unlock()
 	go func() {
 		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
 			log.Printf("[agentruntime] worker bridge listener stopped: %v", serveErr)
@@ -249,23 +254,22 @@ func (s *WorkerBridgeServer) Register(scope *WorkerBridgeScope) (string, []any, 
 	if !scope.Capabilities.MCPBridge() {
 		return "", nil, fmt.Errorf("worker capabilities do not allow the MCP bridge")
 	}
-	port, err := s.EnsureStarted()
+	s.mu.Lock()
+	port, err := s.ensureStartedLocked()
 	if err != nil {
+		s.mu.Unlock()
 		return "", nil, err
 	}
 	token, err := newWorkerBridgeToken()
 	if err != nil {
+		// A listener may have been bound and its idle timer cleared:
+		// schedule idle shutdown so a failed registration does not retain it.
+		s.scheduleIdleCloseLocked()
+		s.mu.Unlock()
 		return "", nil, err
 	}
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return "", nil, fmt.Errorf("worker bridge is closed")
-	}
-	if s.idleTimer != nil {
-		s.idleTimer.Stop()
-		s.idleTimer = nil
-	}
+	// The mutex has been held continuously since ensureStartedLocked cleared
+	// the idle timer, so no idle close can race the token installation below.
 	childKey := workerBridgeChildKey(scope.SessionID, scope.ChildID)
 	if previous := s.byChild[childKey]; previous != "" {
 		delete(s.tokens, previous)
@@ -317,16 +321,19 @@ func (s *WorkerBridgeServer) scheduleIdleCloseLocked() {
 	}
 	s.idleTimer = time.AfterFunc(timeout, func() {
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		s.idleTimer = nil
 		if s.closed || len(s.tokens) > 0 || s.listener == nil {
+			s.mu.Unlock()
 			return
 		}
 		server := s.server
 		listener := s.listener
+		port := s.port
 		s.server = nil
 		s.listener = nil
-		s.port = 0
+		s.mu.Unlock()
+		// Shutdown outside the lock: it waits for in-flight requests, whose
+		// authentication path needs the same mutex.
 		if server != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			_ = server.Shutdown(ctx)
@@ -335,6 +342,13 @@ func (s *WorkerBridgeServer) scheduleIdleCloseLocked() {
 		if listener != nil {
 			_ = listener.Close()
 		}
+		// Publish port 0 only after the listener is actually closed, and only if
+		// a concurrent registration has not already bound a replacement.
+		s.mu.Lock()
+		if s.listener == nil && s.server == nil && s.port == port {
+			s.port = 0
+		}
+		s.mu.Unlock()
 	})
 }
 
@@ -623,6 +637,16 @@ func (h *workerBridgeMCPHandler) ask(ctx context.Context, scope *WorkerBridgeSco
 	}
 	if len(options) > MaxWorkerAskOptions {
 		return mcp.ServerToolResult{}, fmt.Errorf("ask options exceed %d", MaxWorkerAskOptions)
+	}
+	optionBytes := 0
+	for _, option := range options {
+		if len(option) > MaxWorkerAskOptionBytes {
+			return mcp.ServerToolResult{}, fmt.Errorf("ask option exceeds %d bytes", MaxWorkerAskOptionBytes)
+		}
+		optionBytes += len(option)
+	}
+	if optionBytes > MaxWorkerAskOptionsBytes {
+		return mcp.ServerToolResult{}, fmt.Errorf("ask options exceed %d bytes in total", MaxWorkerAskOptionsBytes)
 	}
 	if !scope.allowRate() {
 		return mcp.ServerToolResult{}, fmt.Errorf("worker message rate limit exceeded (%d per %s)", workerBridgeRateLimit, workerBridgeRateWindow)

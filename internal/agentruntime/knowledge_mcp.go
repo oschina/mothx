@@ -48,6 +48,10 @@ func NewKnowledgeMCPHandler(sessionDir string, knowledgeBaseIDs []string) (*Know
 	return &KnowledgeMCPHandler{sessionDir: sessionDir, allowed: allowed, service: service}, nil
 }
 
+// ServerName keeps the knowledge MCP server's advertised identity stable now
+// that the shared stdio protocol layer supports handler-provided names.
+func (h *KnowledgeMCPHandler) ServerName() string { return "mothx-knowledge" }
+
 func (h *KnowledgeMCPHandler) ListTools(context.Context) ([]mcp.ServerTool, error) {
 	return []mcp.ServerTool{{
 		Name:        knowledgeMCPToolName,

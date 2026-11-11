@@ -130,7 +130,7 @@ func TestMemberMailboxExternalCompletionNamesChildHandle(t *testing.T) {
 	if !strings.Contains(content, "member: agent-child-1（ACP worker opencode）") {
 		t.Fatalf("external completion lost the child handle: %q", content)
 	}
-	if !strings.Contains(content, `subagent_send(handle:"agent-child-1"`) ||
+	if !strings.Contains(content, `delegate_worker_mgr(action:"send", handle:"agent-child-1"`) ||
 		strings.Contains(content, `subagent_spawn(member:`) {
 		t.Fatalf("external completion used the member-only next step: %q", content)
 	}
@@ -287,5 +287,42 @@ func TestMemberMailboxCoalescesFindingsPerWorker(t *testing.T) {
 	}
 	if pending[0].Payload != "latest" {
 		t.Fatalf("first finding was not coalesced: %#v", pending[0])
+	}
+}
+
+func TestMemberMailboxReportsCoalescedFindingForEvidence(t *testing.T) {
+	mailbox := NewMemberMailbox()
+	var superseded []MemberCompletion
+	mailbox.SetSupersededObserver(func(items []MemberCompletion) {
+		superseded = append(superseded, items...)
+	})
+	mailbox.EnqueueCoalesced(MemberCompletion{Kind: MemberItemFinding, MemberID: "worker-1", Payload: "first", MessageID: "wm_1", Wake: true})
+	mailbox.EnqueueCoalesced(MemberCompletion{Kind: MemberItemFinding, MemberID: "worker-1", Payload: "latest", MessageID: "wm_2", Wake: true})
+	if len(superseded) != 1 || superseded[0].MessageID != "wm_1" || superseded[0].Payload != "first" {
+		t.Fatalf("superseded items = %#v, want the replaced finding", superseded)
+	}
+}
+
+func TestMemberMailboxExternalHintsPointAtWorkerManager(t *testing.T) {
+	mailbox := NewMemberMailbox()
+	mailbox.Enqueue(MemberCompletion{
+		Kind: MemberItemFinding, MemberID: "worker-1", Status: MemberStatusFinding,
+		Payload: "a race is possible", External: true, Wake: true,
+	})
+	mailbox.Enqueue(MemberCompletion{
+		Kind: MemberItemCompletion, MemberID: "worker-1", Status: MemberStatusError,
+		Payload: "worker failed", External: true, Wake: true,
+	})
+	steering := mailbox.DrainSteering()
+	if len(steering) != 2 {
+		t.Fatalf("steering = %#v, want finding and completion", steering)
+	}
+	for _, message := range steering {
+		if !strings.Contains(message.Content, "delegate_worker_mgr") {
+			t.Fatalf("external hint does not name delegate_worker_mgr: %q", message.Content)
+		}
+		if strings.Contains(message.Content, "subagent_status") || strings.Contains(message.Content, "subagent_send") || strings.Contains(message.Content, "subagent_spawn") {
+			t.Fatalf("external hint names a Router-removed tool: %q", message.Content)
+		}
 	}
 }

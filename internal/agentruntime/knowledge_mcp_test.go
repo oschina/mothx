@@ -131,3 +131,17 @@ func TestKnowledgeMCPHandlerReturnsBoundedCitedSnapshotEvidence(t *testing.T) {
 		t.Fatal("unconfigured knowledge base must be rejected")
 	}
 }
+
+func TestKnowledgeMCPHandlerAdvertisesStableServerName(t *testing.T) {
+	handler, err := NewKnowledgeMCPHandler(t.TempDir(), []string{"kb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	namer, ok := any(handler).(mcp.ServerNamer)
+	if !ok {
+		t.Fatal("knowledge handler must expose its MCP server name")
+	}
+	if name := namer.ServerName(); name != "mothx-knowledge" {
+		t.Fatalf("knowledge MCP server name = %q, want mothx-knowledge", name)
+	}
+}

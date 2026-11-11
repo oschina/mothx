@@ -263,6 +263,9 @@ type sessionRuntime struct {
 	activeSkills     map[string]bool
 	mcp              []*mcp.Client
 	agentMgr         *agent.AgentManager
+	// agentMgrMu guards agentMgr. It is a leaf lock: code holding it must never
+	// acquire another session/server lock.
+	agentMgrMu sync.RWMutex
 
 	usageMu    sync.Mutex
 	cost       float64
@@ -1839,13 +1842,33 @@ func (s *server) refreshSessionExpertTools(rt *sessionRuntime) error {
 	if rt == nil || rt.runtime == nil || rt.registry == nil {
 		return fmt.Errorf("session runtime is unavailable")
 	}
-	rt.agentMgr = nil
+	rt.setAgentMgr(nil)
 	teamManager, err := s.registerTeamExpertTools(rt.runtime, rt.registry)
 	if err != nil {
 		return err
 	}
-	rt.agentMgr = teamManager
+	rt.setAgentMgr(teamManager)
 	return nil
+}
+
+// getAgentMgr returns the session-scoped manager under its own lock.
+func (rt *sessionRuntime) getAgentMgr() *agent.AgentManager {
+	if rt == nil {
+		return nil
+	}
+	rt.agentMgrMu.RLock()
+	defer rt.agentMgrMu.RUnlock()
+	return rt.agentMgr
+}
+
+// setAgentMgr replaces the session-scoped manager under its own lock.
+func (rt *sessionRuntime) setAgentMgr(manager *agent.AgentManager) {
+	if rt == nil {
+		return
+	}
+	rt.agentMgrMu.Lock()
+	rt.agentMgr = manager
+	rt.agentMgrMu.Unlock()
 }
 
 // configureSessionBindings restores persisted per-session configuration.
@@ -3535,7 +3558,7 @@ func (s *server) handlePromptContext(admissionCtx context.Context, req rpcReques
 		}
 	}
 	rt.execution.SetAgent(a)
-	agentMgr := rt.agentMgr
+	agentMgr := rt.getAgentMgr()
 	if agentMgr == nil {
 		agentMgr = s.agentMgr
 	}

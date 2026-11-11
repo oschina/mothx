@@ -96,6 +96,9 @@ type MemberMailbox struct {
 	// deliveryObserver receives the items removed by DrainSteering. Runtime owns
 	// the concrete observer; the mailbox only reports consumption.
 	deliveryObserver func([]MemberCompletion)
+	// supersededObserver receives items displaced by EnqueueCoalesced. Runtime
+	// uses it to close the evidence row the lead will never consume.
+	supersededObserver func([]MemberCompletion)
 }
 
 // NewMemberMailbox creates an empty mailbox.
@@ -152,6 +155,18 @@ func (m *MemberMailbox) SetDeliveryObserver(observer func([]MemberCompletion)) {
 	m.mu.Unlock()
 }
 
+// SetSupersededObserver installs the Runtime-owned observer for items displaced
+// by EnqueueCoalesced. It is advisory, runs outside the mailbox lock, and must
+// not block.
+func (m *MemberMailbox) SetSupersededObserver(observer func([]MemberCompletion)) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.supersededObserver = observer
+	m.mu.Unlock()
+}
+
 // RunningChildren reports whether members are still running. It always reports
 // false when no predicate is installed, so a mailbox that is only used for
 // notifications never blocks a run.
@@ -198,26 +213,29 @@ func (m *MemberMailbox) Enqueue(c MemberCompletion) {
 
 // EnqueueCoalesced queues a non-terminal finding, replacing an existing pending
 // finding from the same member instead of accumulating a burst. The replaced
-// payload is superseded: the lead only needs the latest finding segment. It
-// still signals activity when the item is waking.
+// payload is superseded: the lead only needs the latest finding segment. The
+// superseded item is reported to the Runtime observer so its evidence row does
+// not stay "created" forever. It still signals activity when the item is waking.
 func (m *MemberMailbox) EnqueueCoalesced(c MemberCompletion) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	replaced := false
+	var superseded []MemberCompletion
 	for i := len(m.queue) - 1; i >= 0; i-- {
 		if m.queue[i].Kind == c.Kind && m.queue[i].MemberID == c.MemberID {
+			superseded = append(superseded, m.queue[i])
 			m.queue[i] = c
-			replaced = true
 			break
 		}
 	}
-	if !replaced {
+	if len(superseded) == 0 {
 		m.queue = append(m.queue, c)
 	}
+	observer := m.supersededObserver
 	if !c.Wake {
 		m.mu.Unlock()
+		notifySuperseded(observer, superseded)
 		return
 	}
 	listeners := make([]func(), 0, len(m.activityListeners))
@@ -225,6 +243,7 @@ func (m *MemberMailbox) EnqueueCoalesced(c MemberCompletion) {
 		listeners = append(listeners, listener)
 	}
 	m.mu.Unlock()
+	notifySuperseded(observer, superseded)
 	select {
 	case m.activity <- struct{}{}:
 	default:
@@ -235,6 +254,16 @@ func (m *MemberMailbox) EnqueueCoalesced(c MemberCompletion) {
 			listener()
 		}()
 	}
+}
+
+func notifySuperseded(observer func([]MemberCompletion), items []MemberCompletion) {
+	if observer == nil || len(items) == 0 {
+		return
+	}
+	func() {
+		defer func() { _ = recover() }()
+		observer(items)
+	}()
 }
 
 // HasPending reports whether undelivered completions are queued.
@@ -352,7 +381,11 @@ func formatMemberFinding(c MemberCompletion) string {
 	b.WriteString("payload:\n")
 	b.WriteString(truncateMemberPayload(c.Payload, memberPayloadRunes))
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "下一步：用 subagent_status(handle:%q) 核对证据；worker 仍在运行，除非你决定 send 或 destroy。", c.MemberID)
+	if c.External {
+		fmt.Fprintf(&b, "下一步：用 delegate_worker_mgr(action:%q, handle:%q) 核对证据；worker 仍在运行，除非你决定 send 或 destroy。", "status", c.MemberID)
+	} else {
+		fmt.Fprintf(&b, "下一步：用 subagent_status(handle:%q) 核对证据；worker 仍在运行，除非你决定 send 或 destroy。", c.MemberID)
+	}
 	return b.String()
 }
 
@@ -399,7 +432,7 @@ func formatMemberCompletion(c MemberCompletion) string {
 		b.WriteString(truncateMemberPayload(c.Payload, memberErrorPayloadRunes))
 		b.WriteString("\n")
 		if c.External {
-			fmt.Fprintf(&b, "下一步：如仍需该外部 worker，用 subagent_status(handle:%q) 检查状态，或用 subagent_send(handle:%q, …) 继续；需要新任务时重新 subagent_spawn。", c.MemberID, c.MemberID)
+			fmt.Fprintf(&b, "下一步：如仍需该外部 worker，用 delegate_worker_mgr(action:%q, handle:%q) 检查状态，或用 delegate_worker_mgr(action:%q, handle:%q, message:\"…\") 继续；需要新任务时用 delegate_worker_mgr(action:%q, agent:<绑定的 profile>, task:…)。", "status", c.MemberID, "send", c.MemberID, "spawn")
 		} else {
 			fmt.Fprintf(&b, "下一步：如仍需该成员，用 subagent_spawn(member:%q, task:…) 重新派发任务。", c.MemberID)
 		}

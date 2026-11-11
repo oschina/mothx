@@ -75,8 +75,10 @@ func (s *server) subagentManager(sessionID string) (*agent.AgentManager, bool) {
 	s.mu.Lock()
 	rt := s.sessions[sessionID]
 	s.mu.Unlock()
-	if rt != nil && rt.agentMgr != nil {
-		return rt.agentMgr, true
+	if rt != nil {
+		if manager := rt.getAgentMgr(); manager != nil {
+			return manager, true
+		}
 	}
 	return s.agentMgr, false
 }

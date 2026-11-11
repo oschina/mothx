@@ -154,6 +154,26 @@ func TestWorkerBridgeAskUnavailableUntilRuntimeInstallsResolver(t *testing.T) {
 	}
 }
 
+func TestWorkerBridgeAskRejectsOversizedOptions(t *testing.T) {
+	scope := &WorkerBridgeScope{
+		SessionID: "s", ChildID: "c", Capabilities: workerdriver.WorkerCapabilities{MCPHTTP: true},
+		Ask: func(_ context.Context, _ string, _ []string, _ time.Duration) (string, string) {
+			return "ok", "answered"
+		},
+	}
+	handler := &workerBridgeMCPHandler{}
+	if _, err := handler.ask(context.Background(), scope, "q", []string{strings.Repeat("x", MaxWorkerAskOptionBytes+1)}, 0); err == nil || !strings.Contains(err.Error(), "option exceeds") {
+		t.Fatalf("oversized single option error = %v", err)
+	}
+	options := make([]string, MaxWorkerAskOptions)
+	for index := range options {
+		options[index] = strings.Repeat("y", MaxWorkerAskOptionBytes)
+	}
+	if _, err := handler.ask(context.Background(), scope, "q", options, 0); err == nil || !strings.Contains(err.Error(), "in total") {
+		t.Fatalf("oversized option total error = %v", err)
+	}
+}
+
 // The bridge must not write its own question row: the Runtime-owned Ask path is
 // the only writer that knows the durable DecisionID. This test exercises the
 // full HTTP -> MCP -> Runtime path and asserts both answered and timeout
