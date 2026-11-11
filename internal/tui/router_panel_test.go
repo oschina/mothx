@@ -1,14 +1,98 @@
 package tui
 
 import (
+	"context"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/tui/i18n"
 )
+
+// tuiRouterTestLead satisfies the manager parent validation for a direct child
+// construction test.
+type tuiRouterTestLead struct{ id agentpkg.AgentID }
+
+func (a *tuiRouterTestLead) ID() agentpkg.AgentID       { return a.id }
+func (a *tuiRouterTestLead) ParentID() agentpkg.AgentID { return "" }
+func (a *tuiRouterTestLead) Run(context.Context, string) <-chan agentpkg.Event {
+	ch := make(chan agentpkg.Event)
+	close(ch)
+	return ch
+}
+func (a *tuiRouterTestLead) RunWithMessages(ctx context.Context, _ []agentpkg.Message) <-chan agentpkg.Event {
+	return a.Run(ctx, "")
+}
+func (a *tuiRouterTestLead) Abort()                                  {}
+func (a *tuiRouterTestLead) GetMessages() []agentpkg.Message         { return nil }
+func (a *tuiRouterTestLead) SetMessages([]agentpkg.Message)          {}
+func (a *tuiRouterTestLead) GetContext() *agentpkg.AgentContext      { return nil }
+func (a *tuiRouterTestLead) SetContext(*agentpkg.AgentContext)       {}
+func (a *tuiRouterTestLead) GetContextUsage() *agentpkg.ContextUsage { return nil }
+func (a *tuiRouterTestLead) LoadHistoryMessages([]agentpkg.Message)  {}
+func (a *tuiRouterTestLead) HandleApprovalResponse(string, bool)     {}
+
+// Saving a worker profile must refresh the manager snapshot the TUI already
+// owns, otherwise the next Router delegation keeps using the pre-edit model.
+func TestRouterPanelProfileSaveRefreshesWorkerModel(t *testing.T) {
+	t.Setenv("MOTHX_DIR", t.TempDir())
+	app := newRouterCommandApp(t)
+	runRouterActivation(t, app, app.handleCommand("/router codex"))
+	if app.agentMgr == nil {
+		t.Fatal("Router activation did not build the session manager")
+	}
+	app.agentMgr.Register(&tuiRouterTestLead{id: "lead"})
+
+	profiles := append([]config.ACPAgentProfile(nil), app.settings.ACPAgents...)
+	if len(profiles) == 0 {
+		t.Fatal("test fixture has no worker profile")
+	}
+	profiles[0].Model = "fast-model"
+	if err := config.SaveACPAgentProfiles(profiles); err != nil {
+		t.Fatal(err)
+	}
+	// This is the reload+sync the panel performs after a successful save.
+	app.refreshSettingsAfterRouterPanelSave()
+
+	create := func() map[string]any {
+		t.Helper()
+		child, err := app.agentMgr.Create(agent.AgentOptions{
+			ParentID: "lead", WorkDir: app.runtime.WorkDir, ExternalAgent: "codex",
+			ExternalTask: "inspect the refreshed model", ExternalRole: "investigate",
+			ExternalDeliverable: []string{"findings"},
+		})
+		if err != nil {
+			t.Fatalf("create delegated worker: %v", err)
+		}
+		status, ok := app.agentMgr.Status(child.ID())
+		if !ok {
+			t.Fatal("delegated worker has no manager status")
+		}
+		if err := app.agentMgr.Destroy(child.ID()); err != nil {
+			t.Fatalf("destroy delegated worker: %v", err)
+		}
+		return status.Metadata
+	}
+
+	if metadata := create(); metadata["model"] != "fast-model" {
+		t.Fatalf("delegated worker metadata = %#v, want the saved model", metadata)
+	}
+
+	// Clearing the field restores the third-party Agent default for the next
+	// delegation, not the previously saved model.
+	profiles[0].Model = ""
+	if err := config.SaveACPAgentProfiles(profiles); err != nil {
+		t.Fatal(err)
+	}
+	app.refreshSettingsAfterRouterPanelSave()
+	if metadata := create(); metadata["model"] != nil {
+		t.Fatalf("delegated worker metadata after clearing = %#v, want no model", metadata)
+	}
+}
 
 // TestRouterCommandWithoutArgumentOpensPanel locks the UI contract: `/router`
 // is a management surface, while `/router <id>` still activates directly.
@@ -156,6 +240,40 @@ func TestRouterPanelOmitsLegacyRoleFields(t *testing.T) {
 		if field.Key == "roles" || field.Key == "writeRoots" {
 			t.Fatalf("legacy profile field %q is still exposed: %#v", field.Key, field)
 		}
+	}
+}
+
+// The worker model is a per-profile default and must be visible/editable; an
+// empty value means the external Agent keeps its own default.
+func TestRouterPanelEditsWorkerModel(t *testing.T) {
+	app := newRouterCommandApp(t)
+	app.openRouterPanel()
+	app.beginRouterPanelCreate()
+	app.beginRouterPanelCreateFromScratch()
+
+	fields := app.routerPanelFormFields()
+	modelIndex := -1
+	for i, field := range fields {
+		if field.Key == "model" {
+			modelIndex = i
+			break
+		}
+	}
+	if modelIndex < 0 {
+		t.Fatal("the profile form does not expose the worker model")
+	}
+	if app.routerPanel.Draft.EffectiveModel() != "" {
+		t.Fatal("a new profile must leave the worker model empty")
+	}
+	app.routerPanel.FormCursor = modelIndex
+	app.handleRouterPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	app.routerPanel.Input.SetValue("fast-model")
+	app.handleRouterPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if app.routerPanel.Draft.EffectiveModel() != "fast-model" {
+		t.Fatalf("worker model draft = %q", app.routerPanel.Draft.EffectiveModel())
+	}
+	if field := app.routerPanelFormFields()[modelIndex]; field.Description != "fast-model" {
+		t.Fatalf("worker model field projection = %q", field.Description)
 	}
 }
 

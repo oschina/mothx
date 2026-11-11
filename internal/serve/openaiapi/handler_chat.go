@@ -288,6 +288,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Build the Agent through the shared SessionRuntime. Request-specific system
 	// instructions and token limits remain per-run inputs; resource and sandbox
 	// assembly stay Runtime-owned.
+	if err := sess.Runtime.ConfigureSession(currentProvider, s.providerName, currentModel, mode, thinkingLevel); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error(), "server_error")
+		return
+	}
 	a, err := sess.Runtime.BuildAgent(agentruntime.AgentBuildOptions{
 		Provider: currentProvider, ProviderName: s.providerName, Model: currentModel,
 		Settings: runtimeSettings, Allow: s.getAllow(), Mode: mode,
@@ -1406,6 +1410,8 @@ func (s *Server) getOrCreateSession(sessionID, workDir string) (*APISession, err
 					return nil, err
 				}
 				s.registerCronTool(gwSess)
+				s.configureSessionRuntime(gwSess)
+				s.enableSessionMailboxWake(gwSess)
 				if err := s.pool.Put(gwSess); err != nil {
 					return nil, err
 				}
@@ -1458,6 +1464,8 @@ func (s *Server) getOrCreateSession(sessionID, workDir string) (*APISession, err
 					return nil, err
 				}
 				s.registerCronTool(gwSess)
+				s.configureSessionRuntime(gwSess)
+				s.enableSessionMailboxWake(gwSess)
 				if err := s.pool.Put(gwSess); err != nil {
 					return nil, err
 				}
@@ -1523,6 +1531,8 @@ func (s *Server) getOrCreateSession(sessionID, workDir string) (*APISession, err
 	if err := s.syncSessionTools(sess, false); err != nil {
 		return nil, err
 	}
+	s.configureSessionRuntime(sess)
+	s.enableSessionMailboxWake(sess)
 
 	if err := s.pool.Put(sess); err != nil {
 		return nil, err
@@ -1596,6 +1606,7 @@ func (s *Server) buildSessionResources(workDir string) (*sessionResources, error
 		Workflows:       s.cfg.EnableWorkflows,
 		Browser:         s.cfg.EnableBrowser,
 		ArtifactEnabled: s.cfg.EnableArtifact,
+		WorkerBridge:    s.sharedWorkerBridge(),
 		RegistryHooks: []agentruntime.RegistryHook{func(runtime *agentruntime.SessionRuntime) error {
 			return s.registerA2AMasterTool(runtime.Registry)
 		}},

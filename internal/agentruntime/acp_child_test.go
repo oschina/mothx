@@ -12,6 +12,7 @@ import (
 	acpclient "github.com/oschina/mothx/internal/acp/client"
 	"github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/config"
+	"github.com/oschina/mothx/internal/provider"
 	"github.com/oschina/mothx/internal/session"
 	"github.com/oschina/mothx/internal/tools"
 )
@@ -156,6 +157,102 @@ func TestACPChildBackendRunsThroughAgentManager(t *testing.T) {
 	if record.RemoteSessionID == "" || record.Status != "success" ||
 		!strings.Contains(record.TranscriptJSON, "bridge output") {
 		t.Fatalf("durable child history = %#v", record)
+	}
+}
+
+func TestUpdateRuntimeConfigRefreshesACPWorkerProfileModel(t *testing.T) {
+	t.Setenv("MOTHX_ACP_POOL_HELPER", "1")
+	t.Setenv("MOTHX_ACP_POOL_MODEL_STATE", "config")
+	modelFile := filepath.Join(t.TempDir(), "model-selection")
+	t.Setenv("MOTHX_ACP_POOL_MODEL_FILE", modelFile)
+	workDir, sessionDir := t.TempDir(), t.TempDir()
+	sessionMgr := session.New(workDir, sessionDir)
+	if err := sessionMgr.InitWithID("router-config-refresh"); err != nil {
+		t.Fatal(err)
+	}
+	settings := config.DefaultSettings()
+	settings.ACPAgents = []config.ACPAgentProfile{{
+		ID: "pool-helper", Command: []string{os.Args[0], "-test.run=TestACPWorkerPoolHelperProcess", "--"},
+		Enabled: true,
+		// The profile captures this snapshot at manager construction. The model
+		// stays empty here and is filled by the live runtime-config refresh.
+		Environment:      []string{"MOTHX_ACP_POOL_HELPER", "MOTHX_ACP_POOL_MODEL_FILE", "MOTHX_ACP_POOL_MODEL_STATE"},
+		PermissionPolicy: config.ACPPermissionAutoAllowOnce,
+	}}
+	runtime := &SessionRuntime{Manager: sessionMgr, ID: "router-config-refresh", Source: SourceTUI, WorkDir: workDir}
+	if err := runtime.ActivateRouter(t.Context(), sessionDir, settings, RouterBinding{ACPProfileID: "pool-helper"}); err != nil {
+		t.Fatalf("ActivateRouter: %v", err)
+	}
+	defer runtime.Close()
+
+	p := provider.NewMockProvider("mock", []*provider.Model{{ID: "model", Name: "model", ContextWindow: 128000}}, nil)
+	model := p.Models()[0]
+	manager, err := NewAgentManager(AgentManagerOptions{
+		Runtime: runtime, Provider: p, ProviderName: "mock", Model: model, Settings: settings,
+	})
+	if err != nil {
+		t.Fatalf("NewAgentManager: %v", err)
+	}
+	manager.Register(&leadStub{id: "lead"})
+
+	// A live profile edit updates the manager's captured settings snapshot even
+	// though the manager itself is reused.
+	patched := *settings
+	patched.ACPAgents = append([]config.ACPAgentProfile(nil), settings.ACPAgents...)
+	patched.ACPAgents[0].Model = "fast-model"
+	manager.UpdateRuntimeConfig(p, "mock", model, &patched, nil)
+
+	create := func() *acpChildProxy {
+		t.Helper()
+		child, createErr := manager.Create(agent.AgentOptions{
+			ParentID: "lead", WorkDir: workDir, ExternalAgent: "pool-helper",
+			ExternalTask: "inspect the refreshed model", ExternalRole: "investigate",
+			ExternalDeliverable: []string{"findings"},
+		})
+		if createErr != nil {
+			t.Fatalf("create external child: %v", createErr)
+		}
+		proxy, ok := child.(*acpChildProxy)
+		if !ok {
+			t.Fatalf("child type = %T", child)
+		}
+		return proxy
+	}
+
+	first := create()
+	if got := first.profile.EffectiveModel(); got != "fast-model" {
+		t.Fatalf("delegated profile model = %q, want the refreshed fast-model", got)
+	}
+	for range first.Run(t.Context(), "") {
+	}
+	raw, err := os.ReadFile(modelFile)
+	if err != nil {
+		t.Fatalf("read model selection: %v", err)
+	}
+	if !strings.Contains(string(raw), "worker-model:fast-model") {
+		t.Fatalf("worker model selection = %q, want the refreshed model", raw)
+	}
+	if err := manager.Destroy(first.ID()); err != nil {
+		t.Fatalf("destroy first child: %v", err)
+	}
+
+	// Clearing the model must reach the next delegation too and restore the
+	// third-party Agent's default behavior (no model selection call).
+	if err := os.Remove(modelFile); err != nil {
+		t.Fatal(err)
+	}
+	manager.UpdateRuntimeConfig(p, "mock", model, settings, nil)
+	second := create()
+	if got := second.profile.EffectiveModel(); got != "" {
+		t.Fatalf("delegated profile model after clearing = %q, want empty", got)
+	}
+	for range second.Run(t.Context(), "") {
+	}
+	if _, statErr := os.Stat(modelFile); !os.IsNotExist(statErr) {
+		t.Fatalf("an empty model still selected a worker model (stat error = %v)", statErr)
+	}
+	if err := manager.Destroy(second.ID()); err != nil {
+		t.Fatalf("destroy second child: %v", err)
 	}
 }
 
@@ -612,5 +709,89 @@ func TestACPRequestHandlerResolvesPermissionThroughDecisions(t *testing.T) {
 	unknown, rpcErr := handler(t.Context(), acpclient.Message{JSONRPC: "2.0", ID: json.RawMessage("9"), Method: "terminal/create"})
 	if rpcErr == nil || unknown != nil || rpcErr.Code != -32601 {
 		t.Fatalf("unknown reverse request = %#v, %#v", unknown, rpcErr)
+	}
+}
+
+// A missing bridge is an availability degradation, not a task failure. The
+// full child path must still run the prompt and persist mcpBridge=unavailable
+// with the degradation reason on both ChildMetadata and session_child_runs.
+func TestACPChildBackendPersistsDegradedBridgeWhenListenerUnavailable(t *testing.T) {
+	t.Setenv("MOTHX_ACP_BRIDGE_HELPER", "1")
+	workDir, sessionDir := t.TempDir(), t.TempDir()
+	manager := session.New(workDir, sessionDir)
+	if err := manager.InitWithID("router-worker-no-bridge"); err != nil {
+		t.Fatal(err)
+	}
+	settings := config.DefaultSettings()
+	settings.ACPAgents = []config.ACPAgentProfile{{
+		ID: "helper", Command: []string{testExecutable(t), "-test.run=TestACPWorkerBridgeHelperProcess", "--"},
+		Enabled: true, Environment: []string{"MOTHX_ACP_BRIDGE_HELPER"},
+		PermissionPolicy: config.ACPPermissionAutoAllowOnce,
+	}}
+	bridge := NewWorkerBridgeServer()
+	if err := bridge.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &SessionRuntime{
+		Manager: manager, ID: "router-worker-no-bridge", Source: SourceTUI,
+		WorkDir: workDir, WorkerBridge: bridge,
+	}
+	if err := runtime.ActivateRouter(t.Context(), sessionDir, settings, RouterBinding{ACPProfileID: "helper"}); err != nil {
+		t.Fatalf("ActivateRouter: %v", err)
+	}
+	defer runtime.Close()
+
+	manager2 := agent.NewAgentManager(nil)
+	manager2.SetChildBackend(ACPChildBackend{Runtime: runtime, Settings: settings})
+	manager2.Register(&leadStub{id: "lead"})
+	child, err := manager2.Create(agent.AgentOptions{
+		ParentID: "lead", WorkDir: workDir, ExternalAgent: "helper", ExternalTask: "inspect the retry path",
+		ExternalRole: "investigate", ExternalDeliverable: []string{"findings"},
+	})
+	if err != nil {
+		t.Fatalf("Create external child: %v", err)
+	}
+	terminal := agentpkg.Event{}
+	for event := range child.Run(t.Context(), "") {
+		if event.Type == agentpkg.EventRunFinished {
+			terminal = event
+		}
+	}
+	if terminal.Status != agentpkg.TaskSuccess {
+		t.Fatalf("terminal status = %q, error = %v", terminal.Status, terminal.Error)
+	}
+	last := child.GetMessages()[len(child.GetMessages())-1]
+	text := last.Content
+	for _, block := range last.Contents {
+		text += block.Text
+	}
+	if !strings.Contains(text, "bridge output") {
+		t.Fatalf("child transcript did not include the prompt output: %#v", child.GetMessages())
+	}
+	metadataProvider, ok := child.(agent.ChildMetadataProvider)
+	if !ok {
+		t.Fatal("external child does not expose ChildMetadata")
+	}
+	metadata := metadataProvider.ChildMetadata()
+	if metadata["mcpBridge"] != "unavailable" {
+		t.Fatalf("child metadata mcpBridge = %v, want unavailable", metadata["mcpBridge"])
+	}
+	degradations, _ := metadata["capabilityDegradations"].([]string)
+	if !strings.Contains(strings.Join(degradations, ","), "no live bridge listener") {
+		t.Fatalf("child metadata degradations = %#v", metadata["capabilityDegradations"])
+	}
+
+	record, found, err := session.LoadChildRun(sessionDir, "router-worker-no-bridge", string(child.ID()))
+	if err != nil || !found {
+		t.Fatalf("load durable child history: found=%t err=%v", found, err)
+	}
+	if record.MCPBridge != "unavailable" {
+		t.Fatalf("persisted mcp_bridge = %q, want unavailable", record.MCPBridge)
+	}
+	if !strings.Contains(record.CapabilityDegradationsJSON, "no live bridge listener") {
+		t.Fatalf("persisted degradations = %s", record.CapabilityDegradationsJSON)
+	}
+	if !strings.Contains(record.ResolvedCapabilitiesJSON, `"mcpHttp":false`) {
+		t.Fatalf("persisted capabilities still enable mcpHttp: %s", record.ResolvedCapabilitiesJSON)
 	}
 }

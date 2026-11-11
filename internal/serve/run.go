@@ -1547,6 +1547,13 @@ type acpWorkerProfileCatalog interface {
 	ListACPWorkerProfiles() []openaiapi.ACPWorkerProfileSummary
 }
 
+// acpWorkerProfilePatcher is the additive write surface for the narrow
+// driver/mcpBridge/capabilityOverrides profile patch. A catalog that does not
+// implement it keeps its read-only behavior.
+type acpWorkerProfilePatcher interface {
+	PatchACPWorkerProfile(id string, patch config.ACPAgentProfilePatch) ([]openaiapi.ACPWorkerProfileSummary, error)
+}
+
 // acpRouterSessionService is the session-scoped Router projection. Activation
 // delegates to the shared Runtime path, so the WebUI cannot reach a Router state
 // the TUI or CLI could not.
@@ -1571,15 +1578,44 @@ func acpProfileCatalogOf(sessions activeSessionManager) acpWorkerProfileCatalog 
 // catalog for the WebUI.
 func (rt *channelRuntime) handleACPWorkerProfiles(catalog acpWorkerProfileCatalog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
+			if catalog == nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "server not ready"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"profiles":        catalog.ListACPWorkerProfiles(),
+				"capabilityNames": agentruntime.ACPCapabilityOverrideNames(),
+			})
+		case http.MethodPatch:
+			patcher, ok := catalog.(acpWorkerProfilePatcher)
+			if !ok {
+				writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "acp profile patch is not available"})
+				return
+			}
+			var body struct {
+				ID                  string           `json:"id"`
+				Driver              *string          `json:"driver"`
+				Model               *string          `json:"model"`
+				MCPBridge           *string          `json:"mcpBridge"`
+				CapabilityOverrides *map[string]bool `json:"capabilityOverrides"`
+			}
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || strings.TrimSpace(body.ID) == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required", "code": "invalid_profile_patch"})
+				return
+			}
+			profiles, err := patcher.PatchACPWorkerProfile(body.ID, config.ACPAgentProfilePatch{
+				Driver: body.Driver, Model: body.Model, MCPBridge: body.MCPBridge, CapabilityOverrides: body.CapabilityOverrides,
+			})
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "acp_profile_patch_failed"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
+		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
 		}
-		if catalog == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "server not ready"})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"profiles": catalog.ListACPWorkerProfiles()})
 	}
 }
 

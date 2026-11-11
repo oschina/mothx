@@ -791,11 +791,13 @@ func setupAgentRuntime(ctx context.Context, p provider.Provider, providerName st
 	if !opts.print {
 		mcpPolicy = agentruntime.MCPConnectPolicy{Deferred: true, Optional: true, OverallTimeout: interactiveMCPConnectTimeout}
 	}
+	workerBridge := agentruntime.NewWorkerBridgeServer()
 	sharedRuntime, err := (agentruntime.Builder{Settings: settings, SandboxLevel: level}).Build(ctx, agentruntime.BuildOptions{
 		ID: sessionID, Source: agentruntime.SourceTUI, WorkDir: workDir, Manager: sessionMgr,
 		Workflows: opts.workflows, Browser: opts.browser,
 		ArtifactEnabled: opts.artifact || settings.IsArtifactEnabled(), RegistryHooks: hooks,
-		MCP: mcpPolicy,
+		WorkerBridge: workerBridge,
+		MCP:          mcpPolicy,
 	})
 	if err != nil {
 		return runtimeSetup{}, err
@@ -836,6 +838,7 @@ func setupAgentRuntime(ctx context.Context, p provider.Provider, providerName st
 			if err := sharedRuntime.Shutdown(shutdownCtx); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: agent runtime shutdown: %v\n", err)
 			}
+			_ = workerBridge.Close()
 		},
 	}
 	registry := sharedRuntime.Registry

@@ -39,6 +39,22 @@ type ServerHandler interface {
 	CallTool(context.Context, string, json.RawMessage) (ServerToolResult, error)
 }
 
+// ServerNamer optionally supplies the MCP serverInfo name. Domain handlers may
+// implement it; the protocol layer remains the only JSON-RPC dispatcher.
+type ServerNamer interface {
+	ServerName() string
+}
+
+func serverInfo(handler ServerHandler) map[string]any {
+	name := "mothx"
+	if namer, ok := handler.(ServerNamer); ok {
+		if configured := strings.TrimSpace(namer.ServerName()); configured != "" {
+			name = configured
+		}
+	}
+	return map[string]any{"name": name, "version": "dev"}
+}
+
 // ServeStdio serves the MCP stdio transport until input closes or ctx is
 // cancelled. It supports initialize, tools/list and tools/call; optional
 // resources/prompts are reported as unsupported.
@@ -97,7 +113,7 @@ func serveRequest(ctx context.Context, handler ServerHandler, request RPCRequest
 		return serverResult(request.ID, map[string]any{
 			"protocolVersion": mcpProtocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "mothx-knowledge", "version": "dev"},
+			"serverInfo":      serverInfo(handler),
 		})
 	case "tools/list":
 		tools, err := handler.ListTools(ctx)

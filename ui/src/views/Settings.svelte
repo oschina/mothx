@@ -14,6 +14,7 @@
   import SettingsSkillHub from './settings/SkillHub.svelte';
   import SettingsEnv from './settings/Env.svelte';
   import SettingsMCP from './settings/MCP.svelte';
+  import SettingsACPWorkers from './settings/ACPWorkers.svelte';
   import {
     LayoutGrid,
     Server,
@@ -25,7 +26,8 @@
     Brain,
     Radio,
     FileText,
-    Sparkles
+    Sparkles,
+    Bot
   } from '@lucide/svelte';
 
   const items = [
@@ -36,6 +38,7 @@
     { key: 'app', label: 'settings.tabs.app', icon: Settings2 },
     { key: 'env', label: 'settings.tabs.env', icon: Terminal },
     { key: 'mcp', label: 'settings.tabs.mcp', icon: Puzzle },
+    { key: 'acpWorkers', label: 'settings.tabs.acpWorkers', icon: Bot },
     { key: 'memory', label: 'settings.tabs.memory', icon: Brain },
     { key: 'channels', label: 'settings.tabs.channels', icon: Radio },
     { key: 'logs', label: 'settings.tabs.logs', icon: FileText },
@@ -93,6 +96,8 @@
         <SettingsEnv />
       {:else if activeKey === 'mcp'}
         <SettingsMCP />
+      {:else if activeKey === 'acpWorkers'}
+        <SettingsACPWorkers />
       {:else if activeKey === 'memory'}
         <SettingsMemory />
       {:else if activeKey === 'channels'}

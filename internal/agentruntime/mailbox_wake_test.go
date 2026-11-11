@@ -115,8 +115,8 @@ func TestMailboxWakeCoalescesCompletionsIntoOneCanonicalRun(t *testing.T) {
 	}
 	t.Cleanup(runtime.DisableMailboxWake)
 
-	runtime.Mailbox.Enqueue(agent.MemberCompletion{MemberID: "worker-a", Status: agent.MemberStatusDone, Payload: "first result", External: true})
-	runtime.Mailbox.Enqueue(agent.MemberCompletion{MemberID: "worker-b", Status: agent.MemberStatusError, Payload: "second result", External: true})
+	runtime.Mailbox.Enqueue(agent.MemberCompletion{Wake: true, MemberID: "worker-a", Status: agent.MemberStatusDone, Payload: "first result", External: true})
+	runtime.Mailbox.Enqueue(agent.MemberCompletion{Wake: true, MemberID: "worker-b", Status: agent.MemberStatusError, Payload: "second result", External: true})
 
 	var runInfo MailboxWakeRun
 	select {
@@ -203,7 +203,7 @@ func TestMailboxWakeDoesNotStartWithoutPendingCompletions(t *testing.T) {
 // completion notification the wake was meant to deliver.
 func TestMailboxWakeKeepsPendingNotificationsOnPreRunFailure(t *testing.T) {
 	runtime := &SessionRuntime{Mailbox: agent.NewMemberMailbox()}
-	runtime.Mailbox.Enqueue(agent.MemberCompletion{MemberID: "worker-1", Status: "done", Payload: "finished"})
+	runtime.Mailbox.Enqueue(agent.MemberCompletion{Wake: true, MemberID: "worker-1", Status: "done", Payload: "finished"})
 
 	if err := runtime.executeMailboxWake(context.Background(), "wake-test", MailboxWakeOptions{}); err == nil {
 		t.Fatal("a wake without a bound session must fail")

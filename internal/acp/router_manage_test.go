@@ -7,11 +7,36 @@ import (
 	"strings"
 	"testing"
 
+	agentpkg "github.com/oschina/mothx/agent"
+	"github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/provider"
 	"github.com/oschina/mothx/internal/session"
 )
+
+// acpRouterTestLead satisfies the manager parent validation for a direct child
+// construction test.
+type acpRouterTestLead struct{ id agentpkg.AgentID }
+
+func (a *acpRouterTestLead) ID() agentpkg.AgentID       { return a.id }
+func (a *acpRouterTestLead) ParentID() agentpkg.AgentID { return "" }
+func (a *acpRouterTestLead) Run(context.Context, string) <-chan agentpkg.Event {
+	ch := make(chan agentpkg.Event)
+	close(ch)
+	return ch
+}
+func (a *acpRouterTestLead) RunWithMessages(ctx context.Context, _ []agentpkg.Message) <-chan agentpkg.Event {
+	return a.Run(ctx, "")
+}
+func (a *acpRouterTestLead) Abort()                                  {}
+func (a *acpRouterTestLead) GetMessages() []agentpkg.Message         { return nil }
+func (a *acpRouterTestLead) SetMessages([]agentpkg.Message)          {}
+func (a *acpRouterTestLead) GetContext() *agentpkg.AgentContext      { return nil }
+func (a *acpRouterTestLead) SetContext(*agentpkg.AgentContext)       {}
+func (a *acpRouterTestLead) GetContextUsage() *agentpkg.ContextUsage { return nil }
+func (a *acpRouterTestLead) LoadHistoryMessages([]agentpkg.Message)  {}
+func (a *acpRouterTestLead) HandleApprovalResponse(string, bool)     {}
 
 // newRouterManageFixture builds an ACP server with one persisted session and a
 // configured external ACP worker, so the Desktop-facing Router management
@@ -91,7 +116,7 @@ func TestManageRouterActivateBindsWorkerThroughRuntime(t *testing.T) {
 	if rt.agentMgr == nil {
 		t.Fatal("Router activation did not create the session manager")
 	}
-	if _, ok := rt.registry.Get("delegate_subagent"); !ok {
+	if _, ok := rt.registry.Get("delegate_worker_mgr"); !ok {
 		t.Fatal("Router activation did not install delegate_subagent")
 	}
 }
@@ -210,20 +235,137 @@ func TestManageRouterDeactivateRemovesRouterTools(t *testing.T) {
 		"sessionId":  sessionID,
 		"profileIds": []string{"codex"},
 	}))
-	if _, ok := rt.registry.Get("subagent_spawn"); !ok {
+	if _, ok := rt.registry.Get("delegate_worker_mgr"); !ok {
 		t.Fatal("activation did not install the Router delegation surface")
 	}
-	if _, ok := rt.registry.Get("delegate_subagent"); !ok {
+	if _, ok := rt.registry.Get("delegate_worker_mgr"); !ok {
 		t.Fatal("activation did not install the Router delegate tool")
 	}
 
 	manageFixtureResult(t, callManageFixture(t, srv, output, 2, "mothx/manage/router/deactivate", map[string]any{
 		"sessionId": sessionID,
 	}))
-	if _, ok := rt.registry.Get("subagent_spawn"); ok {
+	if _, ok := rt.registry.Get("delegate_worker_mgr"); ok {
 		t.Fatal("deactivation left subagent_spawn installed")
 	}
-	if _, ok := rt.registry.Get("delegate_subagent"); ok {
+	if _, ok := rt.registry.Get("delegate_worker_mgr"); ok {
 		t.Fatal("deactivation left delegate_subagent installed")
+	}
+}
+
+// The live profile catalog is published on the server's settings plane, but an
+// already-built Router manager keeps its own ACP child-backend snapshot. The
+// refresh path must push the new snapshot into that manager so the next worker
+// delegation observes the edited model.
+func TestRefreshRouterWorkerManagersUpdatesIdleRouterManager(t *testing.T) {
+	output := &syncedBuffer{}
+	srv, sessionID := newRouterManageFixture(t, output)
+
+	manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/router/activate", map[string]any{
+		"sessionId":  sessionID,
+		"profileIds": []string{"codex"},
+	}))
+	rt := srv.sessionRuntime(sessionID)
+	if rt == nil || rt.agentMgr == nil {
+		t.Fatal("activated Router session has no manager")
+	}
+
+	// Publish the edit without going through the profile patch handler, so this
+	// test exercises refreshRouterWorkerManagers directly.
+	live := *srv.currentSettings()
+	live.ACPAgents = append([]config.ACPAgentProfile(nil), live.ACPAgents...)
+	live.ACPAgents[0].Model = "fast-model"
+	srv.publishSettings(&live)
+	srv.refreshRouterWorkerManagers()
+
+	rt.agentMgr.Register(&acpRouterTestLead{id: "lead"})
+	child, err := rt.agentMgr.Create(agent.AgentOptions{
+		ParentID: "lead", WorkDir: rt.runtime.WorkDir, ExternalAgent: "codex",
+		ExternalTask: "inspect the refreshed model", ExternalRole: "investigate",
+		ExternalDeliverable: []string{"findings"},
+	})
+	if err != nil {
+		t.Fatalf("create delegated worker: %v", err)
+	}
+	status, ok := rt.agentMgr.Status(child.ID())
+	if !ok {
+		t.Fatal("delegated worker has no manager status")
+	}
+	if status.Metadata["model"] != "fast-model" {
+		t.Fatalf("delegated worker metadata = %#v, want the refreshed model", status.Metadata)
+	}
+	if err := rt.agentMgr.Destroy(child.ID()); err != nil {
+		t.Fatalf("destroy delegated worker: %v", err)
+	}
+}
+
+// The profile patch surface edits only behavior metadata. Argv, environment,
+// and trust flags stay untouched, and an invalid patch never persists.
+func TestManageACPProfilePatchUpdatesBehaviorMetadata(t *testing.T) {
+	output := &syncedBuffer{}
+	srv, _ := newRouterManageFixture(t, output)
+
+	result := manageFixtureResult(t, callManageFixture(t, srv, output, 1, "mothx/manage/acp/profiles/patch", map[string]any{
+		"id": "codex", "model": "fast-model", "driver": "codex-acp", "mcpBridge": "off",
+		"capabilityOverrides": map[string]bool{"promptImage": false},
+	}))
+	profiles, _ := result["profiles"].([]any)
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %#v", result["profiles"])
+	}
+	profile, _ := profiles[0].(map[string]any)
+	if profile["driver"] != "codex-acp" || profile["mcpBridge"] != "off" || profile["model"] != "fast-model" {
+		t.Fatalf("patched projection = %#v", profile)
+	}
+	if _, leaked := profile["command"]; leaked {
+		t.Fatalf("profile projection leaked argv: %#v", profile)
+	}
+	settings, err := config.LoadGlobalSettingsOrDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.ACPAgents) != 1 {
+		t.Fatalf("settings profiles = %#v", settings.ACPAgents)
+	}
+	stored := settings.ACPAgents[0]
+	if stored.EffectiveDriver() != "codex-acp" || stored.EffectiveMCPBridge() != config.ACPMCPBridgeOff || stored.EffectiveModel() != "fast-model" {
+		t.Fatalf("patch was not persisted: %#v", stored)
+	}
+	if len(stored.Command) != 2 || stored.Command[0] != "/opt/codex/bin/codex" {
+		t.Fatalf("patch changed argv: %#v", stored.Command)
+	}
+
+	// The published configuration plane must carry the edit too, otherwise a
+	// later session/new/load (and Desktop management read) keeps the old model.
+	live := srv.currentSettings()
+	if live == nil || len(live.ACPAgents) != 1 || live.ACPAgents[0].EffectiveModel() != "fast-model" {
+		t.Fatalf("live settings profile = %#v, want the edited model", live)
+	}
+	if live.ACPAgents[0].EffectiveDriver() != "codex-acp" || live.ACPAgents[0].EffectiveMCPBridge() != config.ACPMCPBridgeOff {
+		t.Fatalf("live settings profile lost the other behavior metadata: %#v", live.ACPAgents[0])
+	}
+
+	// Clearing the model must round-trip through the published plane and mean
+	// "use the third-party Agent's own default".
+	cleared := manageFixtureResult(t, callManageFixture(t, srv, output, 3, "mothx/manage/acp/profiles/patch", map[string]any{
+		"id": "codex", "model": "",
+	}))
+	clearedProfiles, _ := cleared["profiles"].([]any)
+	if len(clearedProfiles) != 1 {
+		t.Fatalf("cleared profiles = %#v", cleared["profiles"])
+	}
+	clearedProfile, _ := clearedProfiles[0].(map[string]any)
+	if model, present := clearedProfile["model"]; present && model != "" {
+		t.Fatalf("cleared projection = %#v, want an empty model", clearedProfile)
+	}
+	if live := srv.currentSettings(); live == nil || len(live.ACPAgents) != 1 || live.ACPAgents[0].EffectiveModel() != "" {
+		t.Fatalf("live settings after clearing = %#v, want an empty model", live)
+	}
+
+	raw := callManageFixture(t, srv, output, 2, "mothx/manage/acp/profiles/patch", map[string]any{
+		"id": "codex", "capabilityOverrides": map[string]bool{"promptImage": true},
+	})
+	if raw["error"] == nil {
+		t.Fatalf("widening override was accepted: %#v", raw)
 	}
 }

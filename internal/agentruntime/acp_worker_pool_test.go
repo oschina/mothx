@@ -266,6 +266,51 @@ func TestACPWorkerSessionEnqueueNeverBlocks(t *testing.T) {
 	}
 }
 
+// acpPoolModelConfigOptions projects the helper's optional modern model
+// config option. Tests select it through MOTHX_ACP_POOL_MODEL_STATE=config.
+func acpPoolModelConfigOptions(current string) []acpclient.SessionConfigOption {
+	if os.Getenv("MOTHX_ACP_POOL_MODEL_STATE") != "config" {
+		return nil
+	}
+	return []acpclient.SessionConfigOption{{
+		Type: "select", ID: "worker-model", Name: "Model", Category: "model", CurrentValue: current,
+		Options: []acpclient.SessionConfigOptionChoice{
+			{Value: "default-model", Name: "Default"},
+			{Value: "fast-model", Name: "Fast"},
+		},
+	}}
+}
+
+// acpPoolLegacyModelState projects the helper's deprecated models state. Tests
+// select it through MOTHX_ACP_POOL_MODEL_STATE=legacy.
+func acpPoolResumeModelConfigOptions(current string) []acpclient.SessionConfigOption {
+	if os.Getenv("MOTHX_ACP_POOL_RESUME_NO_MODEL") == "1" {
+		return nil
+	}
+	return acpPoolModelConfigOptions(current)
+}
+
+func acpPoolLegacyModelState(current string) *acpclient.SessionModelState {
+	if os.Getenv("MOTHX_ACP_POOL_MODEL_STATE") != "legacy" {
+		return nil
+	}
+	return &acpclient.SessionModelState{
+		CurrentModelID: current,
+		AvailableModels: []acpclient.SessionModel{
+			{ModelID: "default-model", Name: "Default"},
+			{ModelID: "fast-model", Name: "Fast"},
+		},
+	}
+}
+
+func acpPoolRecordModelSelection(params acpclient.SetSessionConfigOptionParams) {
+	path := os.Getenv("MOTHX_ACP_POOL_MODEL_FILE")
+	if path == "" {
+		return
+	}
+	_ = os.WriteFile(path, []byte("session/set_config_option:"+params.SessionID+":"+params.ConfigID+":"+params.Value), 0o600)
+}
+
 func TestACPWorkerPoolHelperProcess(t *testing.T) {
 	if os.Getenv("MOTHX_ACP_POOL_HELPER") != "1" {
 		return
@@ -328,7 +373,11 @@ func TestACPWorkerPoolHelperProcess(t *testing.T) {
 			}
 			nextSession++
 			sessionID := "pool-session-" + string(rune('0'+nextSession))
-			respond(request.ID, acpclient.NewSessionResult{SessionID: sessionID})
+			respond(request.ID, acpclient.NewSessionResult{
+				SessionID:     sessionID,
+				ConfigOptions: acpPoolModelConfigOptions("default-model"),
+				Models:        acpPoolLegacyModelState("default-model"),
+			})
 			if os.Getenv("MOTHX_ACP_POOL_EARLY_UPDATE") == "1" {
 				update := map[string]any{
 					"sessionId": sessionID,
@@ -360,6 +409,25 @@ func TestACPWorkerPoolHelperProcess(t *testing.T) {
 			}
 			if path := os.Getenv("MOTHX_ACP_POOL_RESUME_FILE"); path != "" {
 				_ = os.WriteFile(path, []byte("session/resume:"+params.SessionID), 0o600)
+			}
+			respond(request.ID, acpclient.ResumeSessionResult{
+				ConfigOptions: acpPoolResumeModelConfigOptions("default-model"),
+				Models:        acpPoolLegacyModelState("default-model"),
+			})
+		case "session/set_config_option":
+			var params acpclient.SetSessionConfigOptionParams
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				os.Exit(2)
+			}
+			acpPoolRecordModelSelection(params)
+			respond(request.ID, acpclient.SetSessionConfigOptionResult{ConfigOptions: acpPoolModelConfigOptions(params.Value)})
+		case "session/set_model":
+			var params acpclient.SetSessionModelParams
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				os.Exit(2)
+			}
+			if path := os.Getenv("MOTHX_ACP_POOL_MODEL_FILE"); path != "" {
+				_ = os.WriteFile(path, []byte("session/set_model:"+params.SessionID+":"+params.ModelID), 0o600)
 			}
 			respond(request.ID, map[string]any{})
 		case "session/prompt":

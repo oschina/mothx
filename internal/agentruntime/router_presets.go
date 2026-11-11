@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"strings"
 
+	"github.com/oschina/mothx/internal/agentruntime/workerdriver"
 	"github.com/oschina/mothx/internal/config"
 )
 
@@ -22,6 +23,10 @@ type ACPAgentPreset struct {
 	Command []string
 	// Note explains a non-obvious installation or naming detail.
 	Note string
+	// Driver is the ACP flavor. It is generic-acp for every verified preset
+	// today; a flavor is only introduced when real interop exposes a protocol
+	// gap that generic ACP cannot describe.
+	Driver workerdriver.WorkerDriver
 }
 
 // ACPAgentPresets returns the built-in launch recipes for well-known ACP agents.
@@ -37,55 +42,64 @@ func ACPAgentPresets() []ACPAgentPreset {
 			ID:      "opencode",
 			Title:   "OpenCode",
 			Command: []string{"opencode", "acp"},
-			Note:    "Native: `opencode acp` starts the ACP server.",
+			Note:    "Native: `opencode acp` starts the ACP server. Verified with OpenCode 2.0.16 (initialize, session/new, and the loopback worker MCP bridge).",
+			Driver:  workerdriver.WorkerDriverGenericACP,
 		},
 		{
 			ID:      "claude-code",
 			Title:   "Claude Code",
 			Command: []string{"claude-agent-acp"},
 			Note:    "Claude Code has no `acp` subcommand; install the adapter with `npm i -g @zed-industries/claude-agent-acp`.",
+			Driver:  workerdriver.WorkerDriverGenericACP,
 		},
 		{
 			ID:      "codex",
 			Title:   "Codex",
 			Command: []string{"codex-acp"},
-			Note:    "Codex has no `acp` subcommand; install the adapter with `npm i -g @zed-industries/codex-acp`.",
+			Note:    "Codex has no `acp` subcommand; install the adapter with `npm i -g @zed-industries/codex-acp`. Verified with codex-acp 0.16.0 (initialize, session/new, and the loopback worker MCP handshake).",
+			Driver:  workerdriver.WorkerDriverGenericACP,
 		},
 		{
 			ID:      "gemini",
 			Title:   "Gemini CLI",
 			Command: []string{"gemini", "--acp"},
 			Note:    "Native. Older releases only accept the deprecated `--experimental-acp`.",
+			Driver:  workerdriver.WorkerDriverGenericACP,
 		},
 		{
 			ID:      "qwen-code",
 			Title:   "Qwen Code",
 			Command: []string{"qwen", "--acp"},
 			Note:    "Native. Older releases only accept the deprecated `--experimental-acp`.",
+			Driver:  workerdriver.WorkerDriverGenericACP,
 		},
 		{
 			ID:      "copilot",
 			Title:   "GitHub Copilot CLI",
 			Command: []string{"copilot", "--acp", "--stdio"},
 			Note:    "Native public preview: `copilot --acp` starts ACP over stdio.",
+			Driver:  workerdriver.WorkerDriverGenericACP,
 		},
 		{
 			ID:      "cursor",
 			Title:   "Cursor Agent",
 			Command: []string{"agent", "acp"},
 			Note:    "Native. The CLI binary is `agent` (also shipped as `cursor-agent`).",
+			Driver:  workerdriver.WorkerDriverGenericACP,
 		},
 		{
 			ID:      "kiro",
 			Title:   "Kiro CLI",
 			Command: []string{"kiro-cli", "acp"},
 			Note:    "Native: `kiro-cli acp`.",
+			Driver:  workerdriver.WorkerDriverGenericACP,
 		},
 		{
 			ID:      "openclaw",
 			Title:   "OpenClaw",
 			Command: []string{"openclaw", "acp"},
 			Note:    "Native: `openclaw acp`.",
+			Driver:  workerdriver.WorkerDriverGenericACP,
 		},
 	}
 }
@@ -110,6 +124,7 @@ func ACPAgentProfileFromPreset(preset ACPAgentPreset) config.ACPAgentProfile {
 		Title:            preset.Title,
 		Command:          append([]string(nil), preset.Command...),
 		Enabled:          true,
+		Driver:           string(preset.Driver),
 		PermissionPolicy: config.ACPPermissionAutoAllowOnce,
 	}
 }

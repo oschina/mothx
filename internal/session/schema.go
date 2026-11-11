@@ -509,7 +509,7 @@ var requiredSchema = map[string][]string{
 	"session_metadata":                 {"session_id", "project_id", "pinned", "updated_at"},
 	"session_channel_tools":            {"session_id", "tool_name", "enabled", "updated_at"},
 	"session_channel_tool_generations": {"session_id", "generation", "updated_at"},
-	"session_child_runs":               {"child_id", "session_id", "parent_run_id", "backend", "profile_id", "remote_session_id", "work_dir", "worktree_id", "base_revision", "change_set_json", "change_set_error", "integration_id", "integration_digest", "integration_status", "integration_error", "integrated_at", "status", "contract_json", "transcript_json", "created_at", "updated_at"},
+	"session_child_runs":               {"child_id", "session_id", "parent_run_id", "backend", "profile_id", "remote_session_id", "work_dir", "worktree_id", "base_revision", "change_set_json", "change_set_error", "integration_id", "integration_digest", "integration_status", "integration_error", "integrated_at", "status", "contract_json", "transcript_json", "resolved_capabilities_json", "capability_degradations_json", "mcp_bridge", "created_at", "updated_at"},
 	"sub_session":                      {"id", "cwd", "timestamp", "parent_session", "version", "channel_type", "channel_id", "fork_boundary_seq", "seed_length", "fork_kind", "expert_id", "content_store"},
 	"sub_entries":                      {"seq", "session_id", "id", "type", "parent_id", "timestamp", "data"},
 }

@@ -17,8 +17,8 @@ func TestMemberMailboxDrainSteeringOrderAndFormat(t *testing.T) {
 		t.Fatalf("empty drain = %#v, want nil", msgs)
 	}
 
-	m.Enqueue(MemberCompletion{MemberID: "pm", DisplayName: "产品经理", Status: MemberStatusDone, Payload: "PRD 已完成"})
-	m.Enqueue(MemberCompletion{MemberID: "engineer", DisplayName: "工程师", Status: MemberStatusDone, Payload: "Result: done"})
+	m.Enqueue(MemberCompletion{Wake: true, MemberID: "pm", DisplayName: "产品经理", Status: MemberStatusDone, Payload: "PRD 已完成"})
+	m.Enqueue(MemberCompletion{Wake: true, MemberID: "engineer", DisplayName: "工程师", Status: MemberStatusDone, Payload: "Result: done"})
 	if !m.HasPending() {
 		t.Fatal("expected pending after enqueue")
 	}
@@ -62,7 +62,7 @@ func TestMemberMailboxDrainSteeringOrderAndFormat(t *testing.T) {
 func TestMemberMailboxDrainSteeringTruncatesPayloadRunes(t *testing.T) {
 	m := NewMemberMailbox()
 	payload := strings.Repeat("测", 4000) // CJK payload: truncation must be rune-based
-	m.Enqueue(MemberCompletion{MemberID: "qa", Status: MemberStatusDone, Payload: payload})
+	m.Enqueue(MemberCompletion{Wake: true, MemberID: "qa", Status: MemberStatusDone, Payload: payload})
 
 	msgs := m.DrainSteering()
 	if len(msgs) != 1 {
@@ -80,7 +80,7 @@ func TestMemberMailboxDrainSteeringTruncatesPayloadRunes(t *testing.T) {
 func TestMemberMailboxDrainSteeringErrorTruncationAndNextStep(t *testing.T) {
 	m := NewMemberMailbox()
 	payload := strings.Repeat("e", 3500)
-	m.Enqueue(MemberCompletion{MemberID: "engineer", DisplayName: "工程师", Status: MemberStatusError, Payload: payload})
+	m.Enqueue(MemberCompletion{Wake: true, MemberID: "engineer", DisplayName: "工程师", Status: MemberStatusError, Payload: payload})
 
 	msgs := m.DrainSteering()
 	if len(msgs) != 1 {
@@ -104,7 +104,7 @@ func TestMemberMailboxDrainSteeringErrorTruncationAndNextStep(t *testing.T) {
 
 func TestMemberMailboxDrainSteeringErrorShortPayloadKeepsNextStep(t *testing.T) {
 	m := NewMemberMailbox()
-	m.Enqueue(MemberCompletion{MemberID: "qa", Status: MemberStatusError, Payload: "boom"})
+	m.Enqueue(MemberCompletion{Wake: true, MemberID: "qa", Status: MemberStatusError, Payload: "boom"})
 
 	msgs := m.DrainSteering()
 	content := msgs[0].Content
@@ -118,7 +118,7 @@ func TestMemberMailboxDrainSteeringErrorShortPayloadKeepsNextStep(t *testing.T) 
 
 func TestMemberMailboxExternalCompletionNamesChildHandle(t *testing.T) {
 	m := NewMemberMailbox()
-	m.Enqueue(MemberCompletion{
+	m.Enqueue(MemberCompletion{Wake: true,
 		MemberID: "agent-child-1", DisplayName: "ACP worker opencode",
 		Status: MemberStatusError, Payload: "worker exited", External: true,
 	})
@@ -141,8 +141,8 @@ func TestMemberMailboxPendingSummaryDoesNotDrain(t *testing.T) {
 	if summary := m.PendingSummary(); summary != nil {
 		t.Fatalf("empty summary = %#v, want nil", summary)
 	}
-	m.Enqueue(MemberCompletion{MemberID: "pm", Status: MemberStatusDone, Payload: "PRD"})
-	m.Enqueue(MemberCompletion{MemberID: "qa", Status: MemberStatusError, Payload: "boom"})
+	m.Enqueue(MemberCompletion{Wake: true, MemberID: "pm", Status: MemberStatusDone, Payload: "PRD"})
+	m.Enqueue(MemberCompletion{Wake: true, MemberID: "qa", Status: MemberStatusError, Payload: "boom"})
 
 	summary := m.PendingSummary()
 	if len(summary) != 2 {
@@ -167,7 +167,7 @@ func TestMemberMailboxWaitForActivitySignal(t *testing.T) {
 	m := NewMemberMailbox()
 	go func() {
 		time.Sleep(20 * time.Millisecond)
-		m.Enqueue(MemberCompletion{MemberID: "pm", Status: MemberStatusDone})
+		m.Enqueue(MemberCompletion{Wake: true, MemberID: "pm", Status: MemberStatusDone})
 	}()
 	start := time.Now()
 	timedOut, err := m.WaitForActivity(context.Background(), 10*time.Second)
@@ -208,7 +208,7 @@ func TestMemberMailboxWaitForActivityContextCanceled(t *testing.T) {
 
 func TestMemberMailboxDrainClearsActivitySignal(t *testing.T) {
 	m := NewMemberMailbox()
-	m.Enqueue(MemberCompletion{MemberID: "pm", Status: MemberStatusDone})
+	m.Enqueue(MemberCompletion{Wake: true, MemberID: "pm", Status: MemberStatusDone})
 	if msgs := m.DrainSteering(); len(msgs) != 1 {
 		t.Fatalf("drained %d messages, want 1", len(msgs))
 	}
@@ -224,7 +224,7 @@ func TestMemberMailboxDrainClearsActivitySignal(t *testing.T) {
 
 func TestMemberMailboxNilReceiverIsSafe(t *testing.T) {
 	var m *MemberMailbox
-	m.Enqueue(MemberCompletion{MemberID: "x"})
+	m.Enqueue(MemberCompletion{Wake: true, MemberID: "x"})
 	if m.HasPending() {
 		t.Fatal("nil mailbox must report no pending")
 	}
@@ -236,5 +236,56 @@ func TestMemberMailboxNilReceiverIsSafe(t *testing.T) {
 	}
 	if _, err := m.WaitForActivity(context.Background(), time.Millisecond); err == nil {
 		t.Fatal("nil mailbox wait must return an error")
+	}
+}
+
+func TestMemberMailboxNonWakingItemDoesNotSignal(t *testing.T) {
+	mailbox := NewMemberMailbox()
+	mailbox.Enqueue(MemberCompletion{
+		MemberID: "worker-1", Status: MemberStatusFinding, Payload: "found it", Kind: MemberItemFinding,
+	})
+	if !mailbox.HasPending() {
+		t.Fatal("non-waking item was not queued")
+	}
+	if mailbox.HasWakingPending() {
+		t.Fatal("non-waking item reported a waking pending state")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if timedOut, err := mailbox.WaitForActivity(ctx, 20*time.Millisecond); err != nil || !timedOut {
+		t.Fatalf("non-waking item signaled activity: timedOut=%v err=%v", timedOut, err)
+	}
+	if drained := mailbox.DrainSteering(); len(drained) != 1 {
+		t.Fatalf("drained messages = %d, want the queued non-waking item", len(drained))
+	}
+}
+
+func TestMemberMailboxFindingEntersSteeringAsWorkerEvidence(t *testing.T) {
+	mailbox := NewMemberMailbox()
+	mailbox.Enqueue(MemberCompletion{
+		MemberID: "worker-9", Status: MemberStatusFinding, Payload: "a race is possible",
+		Kind: MemberItemFinding, Wake: true,
+	})
+	if !mailbox.HasWakingPending() {
+		t.Fatal("waking finding was not reported as waking")
+	}
+	steering := mailbox.DrainSteering()
+	if len(steering) != 1 || !strings.Contains(steering[0].Content, "[WORKER_FINDING]") ||
+		!strings.Contains(steering[0].Content, "worker-9") || !strings.Contains(steering[0].Content, "worker-reported") {
+		t.Fatalf("finding steering = %#v", steering)
+	}
+}
+
+func TestMemberMailboxCoalescesFindingsPerWorker(t *testing.T) {
+	mailbox := NewMemberMailbox()
+	mailbox.EnqueueCoalesced(MemberCompletion{Kind: MemberItemFinding, MemberID: "worker-1", Status: MemberStatusFinding, Payload: "first", Wake: true})
+	mailbox.EnqueueCoalesced(MemberCompletion{Kind: MemberItemFinding, MemberID: "worker-1", Status: MemberStatusFinding, Payload: "latest", Wake: true})
+	mailbox.EnqueueCoalesced(MemberCompletion{Kind: MemberItemFinding, MemberID: "worker-2", Status: MemberStatusFinding, Payload: "other", Wake: true})
+	pending := mailbox.PendingSummary()
+	if len(pending) != 2 {
+		t.Fatalf("pending findings = %#v, want one per worker", pending)
+	}
+	if pending[0].Payload != "latest" {
+		t.Fatalf("first finding was not coalesced: %#v", pending[0])
 	}
 }

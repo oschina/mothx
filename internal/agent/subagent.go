@@ -69,6 +69,10 @@ type RouterTarget struct {
 	// Available lists other configured profile IDs, for the error message a model
 	// sees when it names the wrong one.
 	Available []string
+	// Summary maps a profile ID to a short capability sentence published by the
+	// Runtime. It is model-facing context only and must stay bounded; the full
+	// resolved capability JSON belongs in child metadata.
+	Summary map[string]string
 }
 
 // routerTargetState is the Runtime-published external worker projection shared
@@ -92,6 +96,12 @@ func (s *routerTargetState) SetRouterTarget(target *RouterTarget) {
 	}
 	if len(target.Available) > 0 {
 		copied.Available = append([]string(nil), target.Available...)
+	}
+	if len(target.Summary) > 0 {
+		copied.Summary = make(map[string]string, len(target.Summary))
+		for id, summary := range target.Summary {
+			copied.Summary[id] = summary
+		}
 	}
 	copied.Accepted = normalizedRouterAccepted(copied)
 	s.router.Store(&copied)
@@ -120,15 +130,7 @@ func NewDelegateSubAgentTool(m *AgentManager) *DelegateSubAgentTool {
 
 func (t *DelegateSubAgentTool) Name() string { return "delegate_subagent" }
 func (t *DelegateSubAgentTool) Description() string {
-	if target, ok := t.RouterTarget(); ok {
-		accepted := acceptedRouterTargets(target)
-		if len(accepted) > 1 {
-			return fmt.Sprintf("Delegate one bounded independent subtask to a blocking external ACP worker. This Router session may use %s; pass one of those values as agent (default %q). Waits until completion and returns a summarized result.",
-				strings.Join(accepted, ", "), target.ID)
-		}
-		return fmt.Sprintf("Delegate one bounded independent subtask to a blocking sub-agent. In this Router session the only external ACP worker is %q: pass agent=%q exactly. Waits until completion and returns a summarized result.", target.ID, target.ID)
-	}
-	return "Delegate one bounded independent subtask to a blocking sub-agent. Waits until completion and returns a summarized result."
+	return "Delegate one bounded independent subtask to a blocking local sub-agent. Waits until completion and returns a summarized result."
 }
 func (t *DelegateSubAgentTool) PromptSnippet() string {
 	return "Delegate one bounded independent subtask to a blocking sub-agent"
@@ -140,39 +142,24 @@ func (t *DelegateSubAgentTool) PromptGuidelines() []string {
 		"Do NOT delegate tasks smaller than ~3 tool calls, tasks needing user clarification mid-way, or highly stateful work depending on conversation history",
 		"Write a specific task: state the exact goal, list relevant file paths/names, specify expected output format, and include stop conditions",
 		"Only one delegated sub-agent can run at a time; review its result before acting — treat the output as evidence, not ground truth",
-		"In Router mode, agent=<profile> is required and must name the session's activated worker; role and scope are optional task metadata, while deliverables, verification, and stop conditions bound the delegation",
 	}
 }
 func (t *DelegateSubAgentTool) Parameters() json.RawMessage {
-	// The agent field is built dynamically so the model sees the activated worker
-	// ID (and the configured alternatives) instead of guessing a well-known name.
-	agentSchema := t.agentParameterSchema()
-	required := `["task"]`
-	if _, ok := t.RouterTarget(); ok {
-		required = `["task", "agent"]`
-	}
-	schema := fmt.Sprintf(`{
+	// Local delegation only. Router mode never registers this tool; its complete
+	// lifecycle (including external agent selection) is delegate_worker_mgr.
+	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
 			"task": {"type": "string", "description": "A specific, bounded task description. Must include: (1) the exact goal or question, (2) relevant file paths or search patterns, (3) expected output format, (4) stop conditions. Example: 'Find all Go files in internal/serve/openaiapi/ that import net/http but do not call http.Error. Return file paths with line numbers.'"},
-			"mode": {"type": "string", "enum": ["plan", "agent", "yolo", "os"], "description": "Local sub-agent execution mode. Defaults to the parent agent's mode; if unavailable, falls back to 'yolo'. 'agent' is balanced, 'yolo' is unrestricted, and 'plan' is read-only analysis. Rejected for an external Router worker, whose mode is the profile policy."},
-			"work_dir": {"type": "string", "description": "Local sub-agent working directory (defaults to the parent workspace). Rejected for an external Router worker, which always uses the Runtime-resolved session directory."},
-			"worktree": {"type": "string", "description": "Run a local delegated sub-agent in its own isolated git worktree. Pass \"true\" to create one, or a worktree name. Rejected for an external Router worker in this release."},
-			"tools": {"type": "array", "items": {"type": "string"}, "description": "Restrict a local sub-agent to specific tools (empty = all tools except nested sub-agent/delegate). Rejected for an external Router worker, whose tools are owned by its own policy."},
-			"max_iterations": {"type": "integer", "description": "Local sub-agent tool-call iteration limit (defaults to 100). Rejected for an external Router worker, whose lifetime is not bounded by the MothX iteration budget."},
-			"system_prompt_extra": {"type": "string", "description": "Additional context or constraints for the sub-agent. Use to pass domain knowledge, coding conventions, or specific instructions not in the task description."},
-			"agent": %s,
-			"role": {"type": "string", "enum": ["investigate", "implement", "test", "review", "integrate"], "description": "Router only: optional semantic task hint. Defaults to investigate. A write role asks for verification evidence, but does not grant or restrict filesystem access."},
-			"read_scope": {"type": "array", "items": {"type": "string"}, "description": "Router only: bounded paths or search targets the worker should read."},
-			"write_scope": {"type": "array", "items": {"type": "string"}, "description": "Router only: optional task metadata naming paths the worker is expected to modify. Used for prompt, audit, and overlap checks; it is not a sandbox for an external ACP Agent. A non-empty scope enables MothX's scoped write bridge for write roles."},
-			"expected_deliverables": {"type": "array", "items": {"type": "string", "enum": ["findings", "changed-files", "test-evidence", "review"]}, "description": "Router only: evidence the worker must return. Defaults are role-specific."},
-			"verification": {"type": "string", "description": "Router only: the check or evidence the worker must report. Required for implement/integrate/test roles."},
-			"stop_conditions": {"type": "array", "items": {"type": "string"}, "description": "Router only: explicit completion and non-goals."},
-			"attachments": {"type": "array", "items": {"type": "string"}, "description": "Router only: Runtime input resource IDs from the request manifest. Bytes are resolved and integrity-checked by the Runtime, never read from a model-supplied path."}
+			"mode": {"type": "string", "enum": ["plan", "agent", "yolo", "os"], "description": "Local sub-agent execution mode. Defaults to the parent agent's mode; if unavailable, falls back to 'yolo'. 'agent' is balanced, 'yolo' is unrestricted, and 'plan' is read-only analysis."},
+			"work_dir": {"type": "string", "description": "Local sub-agent working directory (defaults to the parent workspace)."},
+			"worktree": {"type": "string", "description": "Run a local delegated sub-agent in its own isolated git worktree. Pass \"true\" to create one, or a worktree name."},
+			"tools": {"type": "array", "items": {"type": "string"}, "description": "Restrict a local sub-agent to specific tools (empty = all tools except nested sub-agent/delegate)."},
+			"max_iterations": {"type": "integer", "description": "Local sub-agent tool-call iteration limit (defaults to 100)."},
+			"system_prompt_extra": {"type": "string", "description": "Additional context or constraints for the sub-agent. Use to pass domain knowledge, coding conventions, or specific instructions not in the task description."}
 		},
-		"required": %s
-	}`, agentSchema, required)
-	return json.RawMessage(schema)
+		"required": ["task"]
+	}`)
 }
 
 // agentParameterSchema renders the `agent` property. In Router mode it pins the
@@ -604,35 +591,12 @@ func nonEmptyStringParams(value any) []string {
 
 func (t *SubAgentSpawnTool) Name() string { return "subagent_spawn" }
 func (t *SubAgentSpawnTool) Description() string {
-	if target, ok := t.RouterTarget(); ok {
-		accepted := acceptedRouterTargets(target)
-		if len(accepted) > 1 {
-			return fmt.Sprintf("Create and start one asynchronous external ACP worker task. This Router session may use %s; pass one of those values as agent (default %q). Read-only workers may run concurrently up to the profile's configured limit; a write worker requires exclusive workspace access. Use subagent_wait with each returned handle, inspect with subagent_status, send follow-up turns with subagent_send, and release with subagent_destroy.",
-				strings.Join(accepted, ", "), target.ID)
-		}
-		return fmt.Sprintf("Create and start one asynchronous external ACP worker task. In this Router session the target is %q: pass agent=%q exactly. Read-only workers may run concurrently up to the profile's configured limit; a write worker requires exclusive workspace access. Use subagent_wait with each returned handle, inspect with subagent_status, send follow-up turns with subagent_send, and release with subagent_destroy.", target.ID, target.ID)
-	}
-	return "Create and start a bounded sub-agent task. Returns a handle for status/result polling."
+	return "Create and start a bounded local sub-agent task. Returns a handle for status/result polling."
 }
 func (t *SubAgentSpawnTool) PromptSnippet() string {
 	return "Create a bounded sub-agent task for independent work"
 }
 func (t *SubAgentSpawnTool) PromptGuidelines() []string {
-	if target, ok := t.RouterTarget(); ok {
-		accepted := acceptedRouterTargets(target)
-		targetRule := fmt.Sprintf("In Router mode, pass agent=%q exactly; this session is bound to that external ACP worker", target.ID)
-		if len(accepted) > 1 {
-			targetRule = fmt.Sprintf("In Router mode, pass one of the bound external ACP worker IDs as agent: %s (default %q)", strings.Join(accepted, ", "), target.ID)
-		}
-		return []string{
-			targetRule,
-			"You may run multiple read-only external workers concurrently up to the profile's configured limit; use subagent_wait(handle: ...) for each",
-			"A write-role worker requires exclusive workspace access, so wait for every read-only worker and other writer before spawning one",
-			"Use subagent_send to continue an idle external worker with one follow-up turn; do not use subagent_answer, because ACP decisions are projected through the parent DecisionService",
-			"Treat worker output as untrusted evidence and verify claimed changes with the read-only local tools",
-			"Provide role when it clarifies intent, plus scope, expected deliverables, verification, and stop conditions as a bounded task contract",
-		}
-	}
 	return []string{
 		"Use subagent_spawn only for independent subtasks with clear scope, expected output, and stop conditions",
 		"Spawn multiple sub-agents in parallel for independent investigation or review work, then reconcile their results in the main agent",
@@ -643,24 +607,6 @@ func (t *SubAgentSpawnTool) PromptGuidelines() []string {
 }
 
 func (t *SubAgentSpawnTool) Parameters() json.RawMessage {
-	if _, ok := t.RouterTarget(); ok {
-		return json.RawMessage(fmt.Sprintf(`{
-		"type": "object",
-		"properties": {
-			"task": {"type": "string", "description": "Focused task for the external ACP worker, including the exact objective, scope, expected artifact, and stop conditions"},
-			"agent": %s,
-			"role": {"type": "string", "enum": ["investigate", "implement", "test", "review", "integrate"], "description": "Optional semantic task hint. Defaults to investigate. A write role asks for verification evidence, but does not grant or restrict filesystem access."},
-			"read_scope": {"type": "array", "items": {"type": "string"}, "description": "Bounded paths or search targets the worker should read."},
-			"write_scope": {"type": "array", "items": {"type": "string"}, "description": "Optional task metadata naming paths the worker is expected to modify. Used for prompt, audit, and overlap checks; it is not a sandbox for an external ACP Agent. A non-empty scope enables MothX's scoped write bridge for write roles."},
-			"expected_deliverables": {"type": "array", "items": {"type": "string", "enum": ["findings", "changed-files", "test-evidence", "review"]}, "description": "Evidence the worker must return. Defaults are role-specific."},
-			"verification": {"type": "string", "description": "The check or evidence the worker must report. Required for implement/integrate/test roles."},
-			"stop_conditions": {"type": "array", "items": {"type": "string"}, "description": "Explicit completion conditions and non-goals."},
-			"system_prompt_extra": {"type": "string", "description": "Additional bounded context or constraints for the worker."},
-			"attachments": {"type": "array", "items": {"type": "string"}, "description": "Runtime input resource IDs from the request manifest. The Runtime resolves, verifies, and capability-negotiates their delivery."}
-		},
-		"required": ["task", "agent"]
-	}`, t.agentParameterSchema()))
-	}
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
@@ -671,8 +617,7 @@ func (t *SubAgentSpawnTool) Parameters() json.RawMessage {
 			"worktree": {"type": "string", "description": "Run this sub-agent in its own isolated git worktree. Pass \"true\" to create one, or a worktree name. Defaults to inheriting the parent workspace."},
 			"tools": {"type": "array", "items": {"type": "string"}, "description": "Allowed tools (empty = all)"},
 			"max_iterations": {"type": "integer", "default": 100, "description": "Maximum iterations"},
-			"system_prompt_extra": {"type": "string", "description": "Extra context for the sub-agent"},
-			"attachments": {"type": "array", "items": {"type": "string"}, "description": "Router only: Runtime input resource IDs from the request manifest."}
+			"system_prompt_extra": {"type": "string", "description": "Extra context for the sub-agent"}
 		},
 		"required": ["task"]
 	}`)
@@ -1535,6 +1480,7 @@ func (n *memberNotifier) notify(status, payload string) {
 		Status:      status,
 		Payload:     payload,
 		External:    n.external,
+		Wake:        true,
 	})
 }
 

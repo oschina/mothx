@@ -13,6 +13,7 @@ import (
 	agentpkg "github.com/oschina/mothx/agent"
 	acpclient "github.com/oschina/mothx/internal/acp/client"
 	agentcore "github.com/oschina/mothx/internal/agent"
+	"github.com/oschina/mothx/internal/agentruntime/workerdriver"
 	"github.com/oschina/mothx/internal/config"
 	sessionpkg "github.com/oschina/mothx/internal/session"
 	worktreepkg "github.com/oschina/mothx/internal/worktree"
@@ -31,6 +32,68 @@ type ACPChildBackend struct {
 	// Worktrees is the Runtime-owned worktree manager used for child isolation
 	// and immutable change-set capture. It may be nil for headless tests.
 	Worktrees *WorktreeManager
+	// settingsState is shared by value copies of this backend so the manager can
+	// refresh the profile snapshot after a live settings edit. Tests that build a
+	// backend literal without state still read Settings directly.
+	settingsState *acpChildSettingsState
+}
+
+// acpChildSettingsState owns the mutable post-assembly settings snapshot. It
+// exists because ACPChildBackend is stored by value in AgentManager; a shared
+// pointer lets UpdateChildBackendRuntimeConfig reach every copy without making
+// adapter code coordinate manager rebuilds.
+type acpChildSettingsState struct {
+	mu       sync.RWMutex
+	settings *config.Settings
+}
+
+func newACPChildSettingsState(settings *config.Settings) *acpChildSettingsState {
+	return &acpChildSettingsState{settings: settings}
+}
+
+func (s *acpChildSettingsState) get() *config.Settings {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.settings
+}
+
+func (s *acpChildSettingsState) set(settings *config.Settings) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.settings = settings
+	s.mu.Unlock()
+}
+
+// currentSettings returns the live profile snapshot for a child construction.
+func (b ACPChildBackend) currentSettings() *config.Settings {
+	if settings := b.settingsState.get(); settings != nil {
+		return settings
+	}
+	return b.Settings
+}
+
+// UpdateChildBackendRuntimeConfig refreshes the settings snapshot used for
+// future external children. The session directory stays Runtime-owned: a live
+// settings pointer must not redirect child execution to another session DB.
+func (b ACPChildBackend) UpdateChildBackendRuntimeConfig(settings *config.Settings) {
+	if b.settingsState == nil || settings == nil {
+		return
+	}
+	effective := *settings
+	if b.Runtime != nil {
+		b.Runtime.mu.RLock()
+		manager := b.Runtime.Manager
+		b.Runtime.mu.RUnlock()
+		if manager != nil && manager.GetSessionDir() != "" {
+			effective.SessionDir = manager.GetSessionDir()
+		}
+	}
+	b.settingsState.set(&effective)
 }
 
 // ChildWorktree requests a managed worktree for an implementation worker before
@@ -55,10 +118,10 @@ func (b ACPChildBackend) CreateChild(opts agentcore.AgentOptions) (agentpkg.Agen
 	if target == "" {
 		return nil, false, nil
 	}
-	if b.Runtime == nil || b.Settings == nil {
+	if b.Runtime == nil || b.currentSettings() == nil {
 		return nil, true, fmt.Errorf("external ACP delegation requires an attached Runtime")
 	}
-	profile, binding, err := b.Runtime.ResolveRouterACPProfileByID(b.Settings, target)
+	profile, binding, err := b.Runtime.ResolveRouterACPProfileByID(b.currentSettings(), target)
 	if err != nil {
 		return nil, true, fmt.Errorf("resolve Router ACP worker: %w", err)
 	}
@@ -308,6 +371,10 @@ type acpChildProxy struct {
 	context  *agentpkg.AgentContext
 	cancel   context.CancelFunc
 	remote   *acpRemoteWorker
+	// capabilities is the resolved typed projection of the remote worker's
+	// initialize advertisement. It is written once the remote session opens and
+	// read by metadata, persistence, and tool-facing summaries.
+	capabilities workerdriver.WorkerCapabilities
 	// remoteSessionID survives a dead transport so a later turn can use
 	// session/load instead of silently starting a fresh remote conversation.
 	remoteSessionID string
@@ -410,6 +477,7 @@ func (p *acpChildProxy) Run(ctx context.Context, userMsg string) <-chan agentpkg
 			return
 		}
 		defer cleanup()
+		p.runtime.markWorkerTurnActive(string(p.id))
 		prompt := p.promptContent(remote, firstTurn, retryWithoutSession, userMsg)
 		result, runErr := remote.Prompt(runCtx, prompt, emit)
 		// Preserve the safe partial transcript on error or cancellation. The
@@ -526,6 +594,7 @@ func (p *acpChildProxy) ensureRemote(ctx context.Context, emit func(agentpkg.Eve
 
 	if remote != nil && !remote.Dead() {
 		remote.SetRequestHandler(handler)
+		p.recordCapabilities(remote)
 		return remote, cleanup, nil
 	}
 	if remote != nil {
@@ -542,6 +611,11 @@ func (p *acpChildProxy) ensureRemote(ctx context.Context, emit func(agentpkg.Eve
 		cleanup()
 		return nil, nil, poolErr
 	}
+	bridge := p.runtime.workerBridge()
+	bridgeAvailable := bridge != nil && bridge.Available()
+	prepareMCPServers := func(caps workerdriver.WorkerCapabilities) ([]any, func(), error) {
+		return p.runtime.registerWorkerBridge(string(p.id), p.parentRunID, p.profile, p.contract, caps, p.workDir)
+	}
 	worker, err := (ACPWorkerBridge{}).Open(ctx, ACPWorkerInvocation{
 		Profile:               p.profile,
 		Contract:              p.contract,
@@ -553,6 +627,8 @@ func (p *acpChildProxy) ensureRemote(ctx context.Context, emit func(agentpkg.Eve
 		ReadTextFile:          p.runtime.acpReadTextFileAvailableIn(p.workspace),
 		WriteTextFile:         p.runtime.acpWriteTextFileAvailableIn(p.workspace, p.contract),
 		TerminalAccess:        terminalAccess,
+		MCPBridgeAvailable:    bridgeAvailable,
+		PrepareMCPServers:     prepareMCPServers,
 		pool:                  pool,
 	})
 	if err != nil {
@@ -563,7 +639,30 @@ func (p *acpChildProxy) ensureRemote(ctx context.Context, emit func(agentpkg.Eve
 	p.remote = worker
 	p.remoteSessionID = worker.SessionID()
 	p.mu.Unlock()
+	p.recordCapabilities(worker)
 	return worker, cleanup, nil
+}
+
+// recordCapabilities stores the resolved capability projection once the remote
+// session is available. It is the only write point; readers use a copy.
+func (p *acpChildProxy) recordCapabilities(worker *acpRemoteWorker) {
+	if worker == nil {
+		return
+	}
+	caps := worker.WorkerCapabilities()
+	p.mu.Lock()
+	p.capabilities = caps
+	p.mu.Unlock()
+	// Keep the raw initialize advertisement so a later model-facing Router
+	// summary can report attachment/resume support that only the Agent knows.
+	if p.runtime != nil {
+		p.runtime.recordWorkerAdvertisedCapabilities(p.profile.ID, worker.Capabilities())
+		// The initialize handshake can complete after activation-time tool
+		// synchronization. Republish immediately so the management tool's next
+		// description (and the next frozen prompt) reflects the negotiated set
+		// without requiring an adapter-side tool-group refresh.
+		p.runtime.RefreshRouterTarget()
+	}
 }
 
 func (p *acpChildProxy) newTurnHandler(emit func(agentpkg.Event)) (acpclient.RequestHandler, func(), bool) {
@@ -629,6 +728,9 @@ func (p *acpChildProxy) immediateError(err error) <-chan agentpkg.Event {
 }
 
 func (p *acpChildProxy) finishRun(emit func(agentpkg.Event), status agentpkg.TaskStatus, err error, stopReason string) {
+	if p.runtime != nil {
+		p.runtime.markWorkerTurnTerminal(string(p.id))
+	}
 	p.captureChangeSet()
 	p.persistChildRun(status, err)
 	terminal := agentpkg.Event{Type: agentpkg.EventRunFinished, Status: status, StopReason: stopReason, Error: err}
@@ -708,6 +810,7 @@ func (p *acpChildProxy) persistChildRun(status agentpkg.TaskStatus, runErr error
 	baseRevision := p.baseRevision
 	changeSetJSON := p.changeSetJSON
 	changeSetError := p.changeSetError
+	caps := p.capabilities
 	p.mu.Unlock()
 	transcriptJSON, err := json.Marshal(transcript)
 	if err != nil {
@@ -729,7 +832,10 @@ func (p *acpChildProxy) persistChildRun(status agentpkg.TaskStatus, runErr error
 		WorkDir: p.workDir, WorktreeID: worktreeID, BaseRevision: baseRevision,
 		ChangeSetJSON: changeSetJSON, ChangeSetError: changeSetError, Status: statusText,
 		ContractJSON: string(contractJSON), TranscriptJSON: string(transcriptJSON),
-		CreatedAt: p.createdAt, UpdatedAt: time.Now().UTC(),
+		ResolvedCapabilitiesJSON:   workerCapabilitiesJSON(caps),
+		CapabilityDegradationsJSON: workerDegradationsJSON(caps),
+		MCPBridge:                  workerMCPBridgeState(caps, p.profile),
+		CreatedAt:                  p.createdAt, UpdatedAt: time.Now().UTC(),
 	}); err != nil {
 		log.Printf("[agentruntime] persist child %s run: %v", p.id, err)
 	}
@@ -806,12 +912,28 @@ func (p *acpChildProxy) ChildMetadata() map[string]any {
 	metadata := map[string]any{
 		"external": true, "backend": "acp", "profileId": p.profile.ID,
 		"role": string(p.contract.EffectiveRole()), "deliverables": deliverables,
-		"evidence": "worker-reported",
+		"evidence": "worker-reported", "driver": p.profile.EffectiveDriver(),
+	}
+	// Expose the resolved profile model as bounded behavior metadata. An empty
+	// value means the worker keeps its own default and is intentionally omitted.
+	if model := strings.TrimSpace(p.profile.EffectiveModel()); model != "" {
+		metadata["model"] = model
 	}
 	p.mu.Lock()
 	worktreeID, changeSetDigest, changeSetError := p.worktreeID, p.changeSetDigest, p.changeSetError
 	changeSetFiles, changeSetTruncated := p.changeSetFiles, p.changeSetTruncated
+	caps := p.capabilities
 	p.mu.Unlock()
+	metadata["mcpBridge"] = workerMCPBridgeState(caps, p.profile)
+	if resolved := workerCapabilitiesMetadata(caps); len(resolved) > 0 {
+		metadata["capabilities"] = resolved
+	}
+	if len(caps.Degradations) > 0 {
+		metadata["capabilityDegradations"] = append([]string(nil), caps.Degradations...)
+	}
+	if summary := workerCapabilitySummary(caps); summary != "" {
+		metadata["capabilitySummary"] = summary
+	}
 	if worktreeID != "" {
 		metadata["worktreeId"] = worktreeID
 	}

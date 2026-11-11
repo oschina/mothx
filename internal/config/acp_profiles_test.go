@@ -62,6 +62,7 @@ func TestSaveACPAgentProfilesPersistsNormalizedSparseList(t *testing.T) {
 
 	profile := acpProfileFixture()
 	profile.ID = "  codex  "
+	profile.Model = "  fast-model  "
 	profile.Command = []string{" /opt/codex/bin/codex ", " acp "}
 	profile.Environment = []string{" OPENAI_API_KEY "}
 	profile.WriteRoots = []string{" src "}
@@ -80,6 +81,9 @@ func TestSaveACPAgentProfilesPersistsNormalizedSparseList(t *testing.T) {
 	if stored.ID != "codex" || stored.Command[0] != "/opt/codex/bin/codex" || stored.Command[1] != "acp" {
 		t.Fatalf("stored profile was not normalized: %#v", stored)
 	}
+	if stored.Model != "fast-model" || stored.EffectiveModel() != "fast-model" {
+		t.Fatalf("stored model = %q, want the trimmed value", stored.Model)
+	}
 	if len(stored.Environment) != 1 || stored.Environment[0] != "OPENAI_API_KEY" {
 		t.Fatalf("stored environment = %#v", stored.Environment)
 	}
@@ -92,6 +96,20 @@ func TestSaveACPAgentProfilesPersistsNormalizedSparseList(t *testing.T) {
 	}
 	if _, ok := loaded.ACPAgentProfile("codex"); !ok {
 		t.Fatal("the saved profile is not resolvable through the Runtime-facing accessor")
+	}
+}
+
+func TestSaveACPAgentProfilesRejectsInvalidModel(t *testing.T) {
+	t.Setenv("MOTHX_DIR", t.TempDir())
+	profile := acpProfileFixture()
+	profile.Model = "bad\nmodel"
+	if err := SaveACPAgentProfiles([]ACPAgentProfile{profile}); err == nil {
+		t.Fatal("a model containing a control character was persisted")
+	}
+	// Empty means the worker keeps its own default and is always valid.
+	profile.Model = "   "
+	if err := SaveACPAgentProfiles([]ACPAgentProfile{profile}); err != nil {
+		t.Fatalf("an empty model should mean the worker default: %v", err)
 	}
 }
 

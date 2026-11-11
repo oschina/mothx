@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -47,5 +48,29 @@ func TestSubAgentToolNamesReturnsAFreshSlice(t *testing.T) {
 	names[0] = "mutated"
 	if got := SubAgentToolNames()[0]; got == "mutated" {
 		t.Fatal("SubAgentToolNames shares one mutable slice between callers")
+	}
+}
+
+func TestLocalSubAgentSchemasDoNotAdvertiseRouterFields(t *testing.T) {
+	delegate := NewDelegateSubAgentTool(NewAgentManager(nil))
+	spawn := NewSubAgentSpawnTool(NewAgentManager(nil))
+	for name, raw := range map[string]json.RawMessage{
+		"delegate_subagent": delegate.Parameters(),
+		"subagent_spawn":    spawn.Parameters(),
+	} {
+		var schema struct {
+			Properties map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatalf("%s schema is not valid JSON: %v", name, err)
+		}
+		for _, forbidden := range []string{"agent", "role", "read_scope", "write_scope", "expected_deliverables", "verification", "stop_conditions", "attachments"} {
+			if _, ok := schema.Properties[forbidden]; ok {
+				t.Errorf("%s schema still advertises Router field %q", name, forbidden)
+			}
+		}
+	}
+	if _, ok := delegate.RouterTarget(); ok {
+		t.Fatal("local delegate tool unexpectedly has a Router target")
 	}
 }

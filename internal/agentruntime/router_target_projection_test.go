@@ -48,13 +48,13 @@ func TestDelegateToolCarriesActivatedRouterWorker(t *testing.T) {
 	runtime, registry := newRouterToolRuntime(t, "opencode")
 	defer runtime.Close()
 
-	tool, ok := registry.Get("delegate_subagent")
+	tool, ok := registry.Get("delegate_worker_mgr")
 	if !ok {
-		t.Fatal("delegate_subagent was not registered")
+		t.Fatal("delegate_worker_mgr was not registered")
 	}
-	delegate, ok := tool.(*agent.DelegateSubAgentTool)
+	delegate, ok := tool.(*agent.DelegateWorkerMgrTool)
 	if !ok {
-		t.Fatalf("delegate_subagent has unexpected type %T", tool)
+		t.Fatalf("delegate_worker_mgr has unexpected type %T", tool)
 	}
 	target, ok := delegate.RouterTarget()
 	if !ok {
@@ -102,34 +102,34 @@ func TestDelegateToolCarriesActivatedRouterWorker(t *testing.T) {
 // system prompt where the model reads the contract.
 func TestDelegateToolGuidanceNamesRouterRequirement(t *testing.T) {
 	_, registry := newRouterToolRuntime(t, "opencode")
-	tool, ok := registry.Get("delegate_subagent")
+	tool, ok := registry.Get("delegate_worker_mgr")
 	if !ok {
-		t.Fatal("delegate_subagent was not registered")
+		t.Fatal("delegate_worker_mgr was not registered")
 	}
 	joined := strings.Join(tool.PromptGuidelines(), "\n")
-	if !strings.Contains(joined, "Router") || !strings.Contains(joined, "agent=") {
+	if !strings.Contains(joined, "Router") || !strings.Contains(joined, "agent") {
 		t.Fatalf("guidelines do not state the Router agent requirement: %s", joined)
 	}
 }
 
-func TestRouterSpawnToolCarriesActivatedWorker(t *testing.T) {
+func TestRouterWorkerMgrCarriesActivatedWorker(t *testing.T) {
 	runtime, registry := newRouterToolRuntime(t, "opencode")
 	defer runtime.Close()
 
-	tool, ok := registry.Get("subagent_spawn")
+	tool, ok := registry.Get("delegate_worker_mgr")
 	if !ok {
-		t.Fatal("subagent_spawn was not registered in Router mode")
+		t.Fatal("delegate_worker_mgr was not registered in Router mode")
 	}
-	spawn, ok := tool.(*agent.SubAgentSpawnTool)
+	mgr, ok := tool.(*agent.DelegateWorkerMgrTool)
 	if !ok {
-		t.Fatalf("subagent_spawn has unexpected type %T", tool)
+		t.Fatalf("delegate_worker_mgr has unexpected type %T", tool)
 	}
-	target, ok := spawn.RouterTarget()
+	target, ok := mgr.RouterTarget()
 	if !ok || target.ID != "opencode" {
-		t.Fatalf("spawn target = %#v, ok=%v", target, ok)
+		t.Fatalf("worker mgr target = %#v, ok=%v", target, ok)
 	}
-	if !strings.Contains(spawn.Description(), "opencode") || !strings.Contains(spawn.Description(), "asynchronous") {
-		t.Fatalf("spawn description does not describe the Router worker: %s", spawn.Description())
+	if !strings.Contains(mgr.Description(), "opencode") {
+		t.Fatalf("worker mgr description does not name the Router worker: %s", mgr.Description())
 	}
 	var schema struct {
 		Properties map[string]struct {
@@ -137,21 +137,25 @@ func TestRouterSpawnToolCarriesActivatedWorker(t *testing.T) {
 		} `json:"properties"`
 		Required []string `json:"required"`
 	}
-	if err := json.Unmarshal(spawn.Parameters(), &schema); err != nil {
-		t.Fatalf("spawn parameters are not valid JSON: %v", err)
+	if err := json.Unmarshal(mgr.Parameters(), &schema); err != nil {
+		t.Fatalf("worker mgr parameters are not valid JSON: %v", err)
 	}
 	if schema.Properties["agent"].Const != "opencode" {
-		t.Fatalf("spawn agent schema does not pin the worker: %s", spawn.Parameters())
+		t.Fatalf("worker mgr agent schema does not pin the worker: %s", mgr.Parameters())
 	}
-	required := strings.Join(schema.Required, ",")
-	if !strings.Contains(required, "agent") || !strings.Contains(required, "task") {
-		t.Fatalf("spawn required fields = %v, want task and agent", schema.Required)
+	if strings.Join(schema.Required, ",") != "action" {
+		t.Fatalf("worker mgr required fields = %v, want action", schema.Required)
 	}
 	if _, ok := schema.Properties["member"]; ok {
-		t.Fatal("Router spawn schema advertises the local expert-team member parameter")
+		t.Fatal("Router worker mgr schema advertises the local expert-team member parameter")
 	}
 	if _, ok := schema.Properties["mode"]; ok {
-		t.Fatal("Router spawn schema advertises a local-only mode parameter")
+		t.Fatal("Router worker mgr schema advertises a local-only mode parameter")
+	}
+	for _, name := range []string{"delegate_subagent", "subagent_spawn", "subagent_status", "subagent_send", "subagent_wait", "subagent_integrate", "subagent_destroy"} {
+		if _, ok := registry.Get(name); ok {
+			t.Fatalf("Router surface still registers local tool %q", name)
+		}
 	}
 }
 

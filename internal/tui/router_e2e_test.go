@@ -439,8 +439,8 @@ func TestRouterE2EDelegatesToACPWorker(t *testing.T) {
 	delegate := []provider.StreamEvent{
 		{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{
 			ID:        "call-1",
-			Name:      "delegate_subagent",
-			Arguments: []byte(`{"agent":"e2e-worker","task":"inspect the router path","role":"investigate"}`),
+			Name:      "delegate_worker_mgr",
+			Arguments: []byte(`{"action":"delegate","agent":"e2e-worker","task":"inspect the router path","role":"investigate"}`),
 		}},
 		{Type: provider.StreamDone, StopReason: "toolUse"},
 	}
@@ -495,8 +495,8 @@ func TestRouterE2EProjectsWorkerTranscriptSeparately(t *testing.T) {
 	delegate := []provider.StreamEvent{
 		{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{
 			ID:        "call-1",
-			Name:      "delegate_subagent",
-			Arguments: []byte(`{"agent":"e2e-worker","task":"inspect","role":"investigate"}`),
+			Name:      "delegate_worker_mgr",
+			Arguments: []byte(`{"action":"delegate","agent":"e2e-worker","task":"inspect","role":"investigate"}`),
 		}},
 		{Type: provider.StreamDone, StopReason: "toolUse"},
 	}
@@ -539,13 +539,13 @@ func TestRouterE2EFansOutReadOnlyWorkersConcurrently(t *testing.T) {
 	spawn := []provider.StreamEvent{
 		{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{
 			ID:        "call-1",
-			Name:      "subagent_spawn",
-			Arguments: []byte(`{"agent":"e2e-worker","task":"inspect the first path","role":"investigate"}`),
+			Name:      "delegate_worker_mgr",
+			Arguments: []byte(`{"action":"spawn","agent":"e2e-worker","task":"inspect the first path","role":"investigate"}`),
 		}},
 		{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{
 			ID:        "call-2",
-			Name:      "subagent_spawn",
-			Arguments: []byte(`{"agent":"e2e-worker","task":"inspect the second path","role":"investigate"}`),
+			Name:      "delegate_worker_mgr",
+			Arguments: []byte(`{"action":"spawn","agent":"e2e-worker","task":"inspect the second path","role":"investigate"}`),
 		}},
 		{Type: provider.StreamDone, StopReason: "toolUse"},
 	}
@@ -604,13 +604,13 @@ func TestRouterE2ERejectsFanOutAboveProfileCeiling(t *testing.T) {
 	spawn := []provider.StreamEvent{
 		{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{
 			ID:        "call-1",
-			Name:      "subagent_spawn",
-			Arguments: []byte(`{"agent":"e2e-worker","task":"first inspection","role":"investigate"}`),
+			Name:      "delegate_worker_mgr",
+			Arguments: []byte(`{"action":"spawn","agent":"e2e-worker","task":"first inspection","role":"investigate"}`),
 		}},
 		{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{
 			ID:        "call-2",
-			Name:      "subagent_spawn",
-			Arguments: []byte(`{"agent":"e2e-worker","task":"second inspection","role":"investigate"}`),
+			Name:      "delegate_worker_mgr",
+			Arguments: []byte(`{"action":"spawn","agent":"e2e-worker","task":"second inspection","role":"investigate"}`),
 		}},
 		{Type: provider.StreamDone, StopReason: "toolUse"},
 	}
@@ -650,8 +650,8 @@ func TestRouterE2EReportsWorkerFailureAsEvidence(t *testing.T) {
 	delegate := []provider.StreamEvent{
 		{Type: provider.StreamToolCall, ToolCall: &provider.ToolCallBlock{
 			ID:        "call-1",
-			Name:      "delegate_subagent",
-			Arguments: []byte(`{"agent":"e2e-worker","task":"inspect the failing path","role":"investigate"}`),
+			Name:      "delegate_worker_mgr",
+			Arguments: []byte(`{"action":"delegate","agent":"e2e-worker","task":"inspect the failing path","role":"investigate"}`),
 		}},
 		{Type: provider.StreamDone, StopReason: "toolUse"},
 	}

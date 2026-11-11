@@ -32,8 +32,13 @@ type ChildRunRecord struct {
 	Status            string `bun:"status"`
 	ContractJSON      string `bun:"contract_json"`
 	TranscriptJSON    string `bun:"transcript_json"`
-	CreatedAt         string `bun:"created_at"`
-	UpdatedAt         string `bun:"updated_at"`
+	// ResolvedCapabilitiesJSON and CapabilityDegradationsJSON carry the
+	// negotiated worker capability projection; MCPBridge is its compact state.
+	ResolvedCapabilitiesJSON   string `bun:"resolved_capabilities_json"`
+	CapabilityDegradationsJSON string `bun:"capability_degradations_json"`
+	MCPBridge                  string `bun:"mcp_bridge"`
+	CreatedAt                  string `bun:"created_at"`
+	UpdatedAt                  string `bun:"updated_at"`
 }
 
 // ChildRunDAO owns durable child history persistence.
@@ -67,6 +72,9 @@ func (d *ChildRunDAO) Upsert(ctx context.Context, record *ChildRunRecord) error 
 			status = excluded.status,
 			contract_json = excluded.contract_json,
 			transcript_json = excluded.transcript_json,
+			resolved_capabilities_json = excluded.resolved_capabilities_json,
+			capability_degradations_json = excluded.capability_degradations_json,
+			mcp_bridge = excluded.mcp_bridge,
 			updated_at = excluded.updated_at`).
 		Exec(ctx)
 	return err

@@ -152,8 +152,8 @@ func TestRouterSendRejectsRunningExternalWorker(t *testing.T) {
 	}
 }
 
-func TestRouterSpawnSchemaIsValidAndPinned(t *testing.T) {
-	tool := NewSubAgentSpawnTool(NewAgentManager(nil))
+func TestRouterWorkerMgrSchemaIsValidAndPinned(t *testing.T) {
+	tool := NewDelegateWorkerMgrTool(NewAgentManager(nil))
 	tool.SetRouterTarget(&RouterTarget{ID: `odd"id`})
 	var schema struct {
 		Properties map[string]struct {
@@ -168,7 +168,7 @@ func TestRouterSpawnSchemaIsValidAndPinned(t *testing.T) {
 	}
 }
 
-func TestRouterModeToolsExposeOnlyAsyncExternalSurface(t *testing.T) {
+func TestRouterModeToolsExposeOnlyWorkerMgr(t *testing.T) {
 	registry := tools.NewRegistry(t.TempDir(), nil)
 	manager := NewAgentManager(nil)
 	RegisterRouterSubAgentTools(registry, manager)
@@ -178,12 +178,10 @@ func TestRouterModeToolsExposeOnlyAsyncExternalSurface(t *testing.T) {
 	for _, definition := range registry.ModeTools("router") {
 		names[definition.Name] = true
 	}
-	for _, name := range []string{"delegate_subagent", "subagent_spawn", "subagent_status", "subagent_send", "subagent_wait", "subagent_integrate", "subagent_destroy"} {
-		if !names[name] {
-			t.Errorf("Router tool surface is missing %q", name)
-		}
+	if !names["delegate_worker_mgr"] {
+		t.Fatal("Router tool surface is missing delegate_worker_mgr")
 	}
-	for _, name := range []string{"subagent_answer", "write", "edit", "insert", "bash"} {
+	for _, name := range []string{"delegate_subagent", "subagent_spawn", "subagent_status", "subagent_send", "subagent_wait", "subagent_integrate", "subagent_destroy", "subagent_answer", "write", "edit", "insert", "bash"} {
 		if names[name] {
 			t.Errorf("Router tool surface unexpectedly includes %q", name)
 		}

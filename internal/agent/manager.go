@@ -68,10 +68,11 @@ type AgentManager struct {
 	// childBackend is an optional Runtime-installed child constructor. Agent
 	// Core never imports the external protocol; it only knows whether the
 	// backend handled this validated request.
-	childBackend        ChildBackend
-	childRunRecorder    ChildRunRecorder
-	changeSetIntegrator ChangeSetIntegrator
-	sessionID           string
+	childBackend           ChildBackend
+	childRunRecorder       ChildRunRecorder
+	changeSetIntegrator    ChangeSetIntegrator
+	workerQuestionResolver WorkerQuestionResolver
+	sessionID              string
 }
 
 // ChildBackend constructs a child after AgentManager has validated the parent,
@@ -89,6 +90,15 @@ type ChildBackend interface {
 // WorktreeProvider; the backend never runs git itself.
 type ChildWorktreePlanner interface {
 	ChildWorktree(opts AgentOptions) *WorktreeSpec
+}
+
+// ChildBackendRuntimeConfig is an optional extension for an external child
+// backend whose child constructor captures a configuration snapshot at
+// assembly time. AgentManager refreshes that snapshot when the adapter updates
+// runtime config, so the next child observes edited settings (for example an
+// ACP worker profile's default model) without discarding live child bookkeeping.
+type ChildBackendRuntimeConfig interface {
+	UpdateChildBackendRuntimeConfig(settings *config.Settings)
 }
 
 // ChildRunObservation is the lifecycle fact a child backend reports for
@@ -109,8 +119,15 @@ type ChildRunObservation struct {
 	Status          string
 	ContractJSON    string
 	TranscriptJSON  string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// ResolvedCapabilitiesJSON is the typed capability projection negotiated at
+	// initialize. It is diagnostic child metadata, never prompt content.
+	ResolvedCapabilitiesJSON   string
+	CapabilityDegradationsJSON string
+	// MCPBridge is the compact bridge state: available, unavailable, disabled,
+	// or unreachable.
+	MCPBridge string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // ChildRunRecorder persists child history through the Runtime-owned session
@@ -145,6 +162,43 @@ type ChangeSetIntegrationResult struct {
 	AppliedFiles  []string                    `json:"appliedFiles,omitempty"`
 	Error         string                      `json:"error,omitempty"`
 	EvidenceError string                      `json:"evidenceError,omitempty"`
+}
+
+// WorkerQuestionResolver resolves a Router worker's blocking question through
+// the Runtime-owned decision service. Agent Core only forwards the opaque
+// question ID and the lead's answer; it never owns the durable decision record.
+// It is installed by Runtime during assembly, at the same layer as
+// ChangeSetIntegrator, so internal/agent never imports agentruntime.
+type WorkerQuestionResolver interface {
+	ResolveWorkerQuestion(ctx context.Context, questionID, answer string) error
+}
+
+// SetWorkerQuestionResolver installs the Runtime-owned worker-question
+// resolution service. It must be set during assembly, before Router tools are
+// exposed.
+func (m *AgentManager) SetWorkerQuestionResolver(resolver WorkerQuestionResolver) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.workerQuestionResolver = resolver
+	m.mu.Unlock()
+}
+
+// ResolveWorkerQuestion delegates to the Runtime-owned decision service. A nil
+// resolver fails closed: reporting success would let the lead believe a blocked
+// worker was unblocked when it was not.
+func (m *AgentManager) ResolveWorkerQuestion(ctx context.Context, questionID, answer string) error {
+	if m == nil {
+		return fmt.Errorf("agent manager is not initialized")
+	}
+	m.mu.RLock()
+	resolver := m.workerQuestionResolver
+	m.mu.RUnlock()
+	if resolver == nil {
+		return fmt.Errorf("worker question resolution is not available for this session")
+	}
+	return resolver.ResolveWorkerQuestion(ctx, questionID, answer)
 }
 
 // ChangeSetIntegrator applies selected immutable snapshots through the one
@@ -364,6 +418,7 @@ func (m *AgentManager) NotifyMemberQuestion(memberID, displayName, questionID, q
 		Payload:     question,
 		QuestionID:  questionID,
 		Options:     append([]string(nil), options...),
+		Wake:        true,
 	})
 }
 
@@ -423,17 +478,24 @@ func isTerminalManagedState(state string) bool {
 }
 
 // UpdateRuntimeConfig updates the factory used for future agents while keeping
-// existing managed agents untouched.
+// existing managed agents untouched. A child backend that captured its own
+// settings snapshot is refreshed too, so the next external delegation observes
+// the same runtime config as a newly constructed local child.
 func (m *AgentManager) UpdateRuntimeConfig(p provider.Provider, providerName string, model *provider.Model, settings *config.Settings, allow *config.AllowConfig) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.factory == nil {
-		return
+	if m.factory != nil {
+		m.factory = m.factory.withRuntimeConfig(p, providerName, model, settings, allow)
 	}
-	m.factory = m.factory.withRuntimeConfig(p, providerName, model, settings, allow)
+	backend := m.childBackend
+	m.mu.Unlock()
+	if updater, ok := backend.(ChildBackendRuntimeConfig); ok {
+		// Call outside the manager lock: the backend owns its own synchronization
+		// and must not create a lock-order dependency with Runtime state.
+		updater.UpdateChildBackendRuntimeConfig(settings)
+	}
 }
 
 // Register adds an already-created top-level agent to the manager.

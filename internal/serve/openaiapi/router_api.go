@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/oschina/mothx/internal/agentruntime"
@@ -23,7 +24,14 @@ type ACPWorkerProfileSummary struct {
 	PermissionPolicy      config.ACPPermissionPolicy `json:"permissionPolicy"`
 	MaxConcurrentChildren int                        `json:"maxConcurrentChildren"`
 	ParallelBaseWorkspace bool                       `json:"parallelBaseWorkspaceWrites,omitempty"`
-	InvalidReason         string                     `json:"invalidReason,omitempty"`
+	// Model/Driver/MCPBridge/CapabilityOverrides are the profile's configured
+	// external model, ACP flavor, bridge intent, and tightened capabilities.
+	// They are behavior metadata only, never credentials or argv.
+	Model               string   `json:"model,omitempty"`
+	Driver              string   `json:"driver"`
+	MCPBridge           string   `json:"mcpBridge"`
+	CapabilityOverrides []string `json:"capabilityOverrides,omitempty"`
+	InvalidReason       string   `json:"invalidReason,omitempty"`
 }
 
 // ListACPWorkerProfiles projects the shared Runtime catalog for the WebUI.
@@ -33,7 +41,14 @@ func (s *Server) ListACPWorkerProfiles() []ACPWorkerProfileSummary {
 	if s == nil || s.settings == nil {
 		return nil
 	}
-	descriptors := agentruntime.ListACPWorkerProfiles(s.settings)
+	return projectACPWorkerProfiles(s.settings.ACPAgents)
+}
+
+// projectACPWorkerProfiles resolves the shared Runtime catalog for one profile
+// list. Both the read and patch projections use it so a patch response cannot
+// drift from the list response.
+func projectACPWorkerProfiles(profiles []config.ACPAgentProfile) []ACPWorkerProfileSummary {
+	descriptors := agentruntime.ListACPWorkerProfiles(&config.Settings{ACPAgents: profiles})
 	result := make([]ACPWorkerProfileSummary, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		result = append(result, ACPWorkerProfileSummary{
@@ -45,18 +60,109 @@ func (s *Server) ListACPWorkerProfiles() []ACPWorkerProfileSummary {
 			PermissionPolicy:      descriptor.PermissionPolicy,
 			MaxConcurrentChildren: descriptor.MaxConcurrentChildren,
 			ParallelBaseWorkspace: descriptor.ParallelBaseWorkspaceWrites,
+			Model:                 descriptor.Model,
+			Driver:                descriptor.Driver,
+			MCPBridge:             descriptor.MCPBridge,
+			CapabilityOverrides:   descriptor.CapabilityOverrides,
 			InvalidReason:         descriptor.InvalidReason,
 		})
 	}
 	return result
 }
 
-// RouterBindingSummary is the session's current Router selection.
+// PatchACPWorkerProfile applies the narrow behavior-metadata patch and returns
+// the refreshed catalog. It never exposes or writes argv, URLs, environment, or
+// trust flags, and validation stays in internal/config.
+func (s *Server) PatchACPWorkerProfile(id string, patch config.ACPAgentProfilePatch) ([]ACPWorkerProfileSummary, error) {
+	profiles, err := config.PatchACPAgentProfile(id, patch)
+	if err != nil {
+		return nil, err
+	}
+	// Publish the patched profile set into the live server snapshot. Without
+	// this the catalog returned below would reflect the edit while every later
+	// ListACPWorkerProfiles call and Router activation kept reading the startup
+	// snapshot until the process restarted or another settings save replaced it.
+	s.publishACPAgentProfiles(profiles)
+	return projectACPWorkerProfiles(profiles), nil
+}
+
+// publishACPAgentProfiles swaps the ACP worker profiles inside the server's
+// settings pointer using copy-on-write. The previous struct is never mutated, so
+// concurrent readers that retained it keep a consistent view.
+func (s *Server) publishACPAgentProfiles(profiles []config.ACPAgentProfile) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.settings != nil {
+		runtime := *s.settings
+		runtime.ACPAgents = profiles
+		s.settings = &runtime
+	}
+	s.mu.Unlock()
+	s.refreshRouterSessionManagers()
+}
+
+// refreshRouterSessionManagers refreshes the session-scoped manager snapshot for
+// idle Router sessions so a profile edit (notably the default model) reaches the
+// next worker delegation. Running or busy sessions are skipped: their manager
+// must not be mutated mid-run. TryLock keeps this patch RPC from blocking on an
+// unrelated long request.
+func (s *Server) refreshRouterSessionManagers() {
+	if s == nil || s.pool == nil {
+		return
+	}
+	for _, sess := range s.pool.Snapshot() {
+		if sess == nil || sess.Runtime == nil || sess.Registry == nil {
+			continue
+		}
+		if !sess.Runtime.RouterActive() || sess.IsRunning() {
+			continue
+		}
+		if !sess.mu.TryLock() {
+			continue
+		}
+		running := sess.IsRunning()
+		var err error
+		if !running {
+			if sess.AgentMgr != nil {
+				// Refresh in place so manager-owned child bookkeeping survives a
+				// profile edit. The manager's child backend holds the live ACP
+				// profile snapshot used by the next delegation.
+				s.refreshSessionAgentManagerSettings(sess)
+			} else {
+				err = s.reconcileSessionAgentManager(sess, false)
+			}
+		}
+		sess.mu.Unlock()
+		if err != nil {
+			log.Printf("serve: refresh Router worker profile for %s: %v", sess.ID, err)
+		}
+	}
+}
+
+// refreshSessionAgentManagerSettings publishes the current live settings
+// snapshot into an already-built session manager. It is used when a profile
+// edit must reach the next external delegation without rebuilding the manager
+// and losing its child tracking.
+func (s *Server) refreshSessionAgentManagerSettings(sess *APISession) {
+	if s == nil || sess == nil || sess.AgentMgr == nil {
+		return
+	}
+	sess.AgentMgr.UpdateRuntimeConfig(s.provider, s.providerName, s.model, s.settingsForSession(sess), s.getAllow())
+}
+
+// RouterBindingSummary is the session's current Router selection plus the
+// read-only worker message and pending-question projection. The projection is
+// never an answer surface: only the lead's delegate_worker_mgr can resolve a
+// worker question.
 type RouterBindingSummary struct {
-	Enabled        bool     `json:"enabled"`
-	ProfileIDs     []string `json:"profileIds,omitempty"`
-	PrimaryProfile string   `json:"primaryProfile,omitempty"`
-	Mode           string   `json:"mode,omitempty"`
+	Enabled          bool                              `json:"enabled"`
+	ProfileIDs       []string                          `json:"profileIds,omitempty"`
+	PrimaryProfile   string                            `json:"primaryProfile,omitempty"`
+	Mode             string                            `json:"mode,omitempty"`
+	WorkerMessages   []agentruntime.WorkerMessage      `json:"workerMessages,omitempty"`
+	PendingQuestions []agentruntime.WorkerQuestionView `json:"pendingQuestions,omitempty"`
 }
 
 // GetSessionRouter returns the session's Router selection, if any.
@@ -127,10 +233,12 @@ func (s *Server) ActivateSessionRouter(sessionID string, profileIDs []string) (*
 	if _, _, _, mode, _ := sess.Runtime.ConfigSnapshot(); strings.TrimSpace(mode) != "" {
 		sess.Mode = mode
 	}
-	// Router installs the delegation surface for this session, so the session
+	// Activation installs the delegation surface for this session, so the session
 	// needs its own manager even when the session's capability flags are all
-	// false. The Runtime-owned reconciliation decides that from the resolved
-	// mode, builds or reuses the manager, and installs the matching tool group.
+	// false. Refresh an existing manager's settings snapshot first: its ACP child
+	// backend captured the pre-edit profile catalog and would otherwise delegate
+	// the old/empty model to the next worker.
+	s.refreshSessionAgentManagerSettings(sess)
 	if err := s.reconcileSessionAgentManager(sess, false); err != nil {
 		return nil, err
 	}
@@ -182,6 +290,10 @@ func (s *Server) routerSummary(sess *APISession) *RouterBindingSummary {
 	summary.Enabled = true
 	summary.ProfileIDs = binding.ProfileIDs()
 	summary.PrimaryProfile = binding.ACPProfileID
+	if snapshot, err := sess.Runtime.WorkerSnapshot(); err == nil {
+		summary.WorkerMessages = snapshot.Messages
+		summary.PendingQuestions = snapshot.PendingQuestions
+	}
 	return summary
 }
 

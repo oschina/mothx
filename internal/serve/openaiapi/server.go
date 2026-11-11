@@ -100,6 +100,10 @@ type Server struct {
 	recoveryCoordinator *agentruntime.RecoveryCoordinator
 	responsesRuns       serviceruntime.BackgroundRunDriver
 	esmCoordinator      *esmCoordinator
+	// workerBridge is the process-wide loopback MCP bridge shared by every
+	// session in serve mode. It is created lazily on the first Router worker.
+	workerBridgeMu sync.Mutex
+	workerBridge   *agentruntime.WorkerBridgeServer
 }
 
 // IsWebSearchAvailable reports whether the local web search tools can actually
@@ -757,4 +761,16 @@ func writeErrorInfo(w http.ResponseWriter, status int, info agentruntime.ErrorIn
 		IntentID:        info.IntentID,
 		RequestID:       info.RequestID,
 	}})
+}
+
+// sharedWorkerBridge lazily creates the one process-wide Router worker MCP
+// bridge. Every serve session shares it; the listener binds an ephemeral
+// loopback port on first use.
+func (s *Server) sharedWorkerBridge() *agentruntime.WorkerBridgeServer {
+	s.workerBridgeMu.Lock()
+	defer s.workerBridgeMu.Unlock()
+	if s.workerBridge == nil {
+		s.workerBridge = agentruntime.NewWorkerBridgeServer()
+	}
+	return s.workerBridge
 }

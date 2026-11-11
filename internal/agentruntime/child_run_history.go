@@ -37,6 +37,9 @@ func (r localChildRunRecorder) RecordChildRun(observation agentcore.ChildRunObse
 		BaseRevision: observation.BaseRevision, ChangeSetJSON: observation.ChangeSetJSON,
 		ChangeSetError: observation.ChangeSetError, Status: observation.Status,
 		ContractJSON: observation.ContractJSON, TranscriptJSON: observation.TranscriptJSON,
-		CreatedAt: observation.CreatedAt, UpdatedAt: observation.UpdatedAt,
+		ResolvedCapabilitiesJSON:   observation.ResolvedCapabilitiesJSON,
+		CapabilityDegradationsJSON: observation.CapabilityDegradationsJSON,
+		MCPBridge:                  observation.MCPBridge,
+		CreatedAt:                  observation.CreatedAt, UpdatedAt: observation.UpdatedAt,
 	})
 }

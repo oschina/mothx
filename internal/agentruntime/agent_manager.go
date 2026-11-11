@@ -124,10 +124,14 @@ func NewAgentManager(opts AgentManagerOptions) (*agent.AgentManager, error) {
 	)
 	manager := agent.NewAgentManager(factory)
 	manager.SetChangeSetIntegrator(&RuntimeChangeSetIntegrator{Runtime: opts.Runtime, Worktrees: opts.Worktree})
+	manager.SetWorkerQuestionResolver(RuntimeWorkerQuestionResolver{Runtime: opts.Runtime})
 	// The Runtime installs the external-child backend for the whole manager.
 	// Agent Core never imports ACP; the backend resolves the activated profile,
 	// validates the task contract, and returns an event/input proxy.
-	manager.SetChildBackend(ACPChildBackend{Runtime: opts.Runtime, Settings: effectiveSettings, Worktrees: opts.Worktree})
+	manager.SetChildBackend(ACPChildBackend{
+		Runtime: opts.Runtime, Settings: effectiveSettings, Worktrees: opts.Worktree,
+		settingsState: newACPChildSettingsState(effectiveSettings),
+	})
 	if runtimeManager != nil {
 		if header := runtimeManager.GetHeader(); header != nil && header.ID != "" {
 			manager.SetChildRunRecorder(localChildRunRecorder{runtime: opts.Runtime}, header.ID)

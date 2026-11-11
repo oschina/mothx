@@ -13,17 +13,20 @@ func SubAgentToolNames() []string {
 	return []string{"subagent_spawn", "subagent_status", "subagent_send", "subagent_answer", "subagent_destroy", "subagent_wait"}
 }
 
-// RouterSubAgentToolNames returns the async tools that are valid for an external
-// Router worker. answer is deliberately absent: ACP decisions are projected
-// through the parent DecisionService rather than a child question mailbox.
+// RouterSubAgentToolNames returns the tools that are valid for an external
+// Router worker. Router has one complete management signature: every lifecycle
+// action (delegate/spawn/status/list/send/wait/destroy/integrate/answer) is an
+// action of delegate_worker_mgr, not a separate tool. answer is intentionally
+// absent from the local surface: ACP-worker questions resolve through the
+// parent DecisionService, not the local member question registry.
 func RouterSubAgentToolNames() []string {
-	return []string{"subagent_spawn", "subagent_status", "subagent_send", "subagent_wait", "subagent_integrate", "subagent_destroy"}
+	return []string{delegateWorkerMgrToolName}
 }
 
 // RouterOnlySubAgentToolNames are tools installed only for an external Router
 // worker surface. Local multi-agent sessions must never see them.
 func RouterOnlySubAgentToolNames() []string {
-	return []string{"subagent_integrate"}
+	return []string{delegateWorkerMgrToolName}
 }
 
 // RegisterSubAgentTools registers the built-in sub-agent tools when multi-agent
@@ -41,22 +44,20 @@ func RegisterSubAgentTools(registry *tools.Registry, manager *AgentManager) {
 	registry.Register(NewSubAgentWaitTool(manager))
 }
 
-// RegisterRouterSubAgentTools installs only the async surface supported by the
-// single external Router worker.
+// RegisterRouterSubAgentTools installs the single Router management tool. The
+// local delegate_subagent / subagent_* surface is deliberately not installed:
+// Router differences are expressed by the management tool's action contract,
+// not by two parallel tool sets.
 func RegisterRouterSubAgentTools(registry *tools.Registry, manager *AgentManager) {
 	if registry == nil || manager == nil {
 		return
 	}
-	registry.Register(NewSubAgentSpawnTool(manager))
-	registry.Register(NewSubAgentStatusTool(manager))
-	registry.Register(NewSubAgentSendTool(manager))
-	registry.Register(NewSubAgentWaitTool(manager))
-	registry.Register(NewSubAgentIntegrateTool(manager))
-	registry.Register(NewSubAgentDestroyTool(manager))
+	registry.Register(NewDelegateWorkerMgrTool(manager))
 }
 
 // RegisterDelegateSubAgentTool registers the blocking single sub-agent
-// delegation tool. It is independent from the async multi-agent toolset.
+// delegation tool. It is independent from the async multi-agent toolset and is
+// never installed in Router mode (Router uses delegate_worker_mgr).
 func RegisterDelegateSubAgentTool(registry *tools.Registry, manager *AgentManager) {
 	if registry == nil || manager == nil {
 		return

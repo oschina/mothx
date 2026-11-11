@@ -4,8 +4,13 @@
 package doctor
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agentruntime/workerdriver"
 	"github.com/oschina/mothx/internal/config"
 	database "github.com/oschina/mothx/internal/db"
 	"github.com/oschina/mothx/internal/mcp"
@@ -98,6 +105,7 @@ func RunWithOptions(opts Options) Response {
 		checks = append(checks, checkConfiguredProviders(settings)...)
 		checks = append(checks, checkEnvironmentOverrides()...)
 		checks = append(checks, checkACPAgents(settings)...)
+		checks = append(checks, checkWorkerBridge(settings)...)
 		if strings.TrimSpace(opts.RepairSessionContent) != "" {
 			repairs = RepairSessionContent(context.Background(), settings, opts.RepairSessionContent)
 		}
@@ -731,4 +739,146 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// checkWorkerBridge verifies the Router worker MCP bridge preconditions without
+// launching a worker: the process can bind a tcp4 loopback ephemeral port, and
+// every profile's driver/bridge/override configuration is valid. Remote
+// profiles are reported as unreachable rather than as errors, because a remote
+// worker is a supported configuration without the loopback bridge.
+func checkWorkerBridge(settings *config.Settings) []Check {
+	skip := Check{ID: "acp.worker_bridge", Status: StatusSkip, Title: "Router worker bridge", Detail: "no ACP worker profiles configured"}
+	if settings == nil || len(settings.ACPAgents) == 0 {
+		return []Check{skip}
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return []Check{{ID: "acp.worker_bridge", Status: StatusError, Title: "Router worker bridge",
+			Detail: "loopback tcp4 bind failed: " + err.Error(),
+			Fix:    "Permit local loopback binds; the worker bridge cannot use a public URL or stdio"}}
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	checks := []Check{{ID: "acp.worker_bridge", Status: StatusOK, Title: "Router worker bridge",
+		Detail: "loopback tcp4 bind ok (" + address + ")"}}
+	checks = append(checks, checkWorkerBridgeProtocol()...)
+	for _, profile := range settings.ACPAgents {
+		if !profile.Enabled {
+			continue
+		}
+		if err := profile.Validate(); err != nil {
+			checks = append(checks, Check{ID: "acp.worker_bridge", Status: StatusError, Title: "Router worker bridge",
+				Detail: fmt.Sprintf("profile %q is invalid: %v", profile.ID, err),
+				Fix:    "Fix the profile driver/mcpBridge/capabilityOverrides fields"})
+			continue
+		}
+		switch {
+		case profile.IsRemote():
+			checks = append(checks, Check{ID: "acp.worker_bridge", Status: StatusWarn, Title: "Router worker bridge",
+				Detail: fmt.Sprintf("profile %q is remote; the loopback bridge is unreachable", profile.ID)})
+		case profile.EffectiveMCPBridge() == config.ACPMCPBridgeOff:
+			checks = append(checks, Check{ID: "acp.worker_bridge", Status: StatusSkip, Title: "Router worker bridge",
+				Detail: fmt.Sprintf("profile %q disables the bridge (mcpBridge=off)", profile.ID)})
+		default:
+			checks = append(checks, Check{ID: "acp.worker_bridge", Status: StatusOK, Title: "Router worker bridge",
+				Detail: fmt.Sprintf("profile %q driver=%s bridge=auto", profile.ID, profile.EffectiveDriver())})
+		}
+	}
+	return checks
+}
+
+// checkWorkerBridgeProtocol exercises the real bridge authorization and
+// transport contract on an ephemeral loopback port: a missing token is 401, an
+// SSE request is 406, and an authorized initialize is 200. It uses no session
+// data and never logs the token.
+func checkWorkerBridgeProtocol() []Check {
+	server := agentruntime.NewWorkerBridgeServer()
+	server.SetIdleTimeout(60 * time.Millisecond)
+	defer server.Close()
+	scope := &agentruntime.WorkerBridgeScope{
+		SessionID: "doctor", ChildID: "doctor-probe",
+		Capabilities: workerdriver.WorkerCapabilities{MCPHTTP: true},
+	}
+	token, payload, err := server.Register(scope)
+	if err != nil {
+		return []Check{{ID: "acp.worker_bridge.protocol", Status: StatusError, Title: "Worker bridge protocol",
+			Detail: err.Error(), Fix: "Report this as a bug: the loopback bridge could not start"}}
+	}
+	encoded, _ := json.Marshal(payload)
+	var entries []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(encoded, &entries); err != nil || len(entries) == 0 || entries[0].URL == "" {
+		return []Check{{ID: "acp.worker_bridge.protocol", Status: StatusError, Title: "Worker bridge protocol",
+			Detail: "bridge payload had no usable loopback URL"}}
+	}
+	url := entries[0].URL
+	probe := func(tokenValue, accept, body string) (int, error) {
+		request, requestErr := http.NewRequest(http.MethodPost, url, bytes.NewReader([]byte(body)))
+		if requestErr != nil {
+			return 0, requestErr
+		}
+		request.Header.Set("Content-Type", "application/json")
+		if accept != "" {
+			request.Header.Set("Accept", accept)
+		}
+		if tokenValue != "" {
+			request.Header.Set("Authorization", "Bearer "+tokenValue)
+		}
+		response, doErr := http.DefaultClient.Do(request)
+		if doErr != nil {
+			return 0, doErr
+		}
+		defer response.Body.Close()
+		_, _ = io.Copy(io.Discard, response.Body)
+		return response.StatusCode, nil
+	}
+	checks := make([]Check, 0, 3)
+	if status, err := probe("", "", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`); err != nil || status != http.StatusUnauthorized {
+		checks = append(checks, Check{ID: "acp.worker_bridge.protocol", Status: StatusError, Title: "Worker bridge protocol",
+			Detail: fmt.Sprintf("missing token returned %d (err=%v), want 401", status, err), Fix: "The bridge must reject requests without a per-child token"})
+	} else {
+		checks = append(checks, Check{ID: "acp.worker_bridge.protocol", Status: StatusOK, Title: "Worker bridge protocol", Detail: "401 without a token"})
+	}
+	if status, err := probe(token, "text/event-stream", `{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}`); err != nil || status != http.StatusNotAcceptable {
+		checks = append(checks, Check{ID: "acp.worker_bridge.protocol", Status: StatusError, Title: "Worker bridge protocol",
+			Detail: fmt.Sprintf("SSE request returned %d (err=%v), want 406", status, err), Fix: "The bridge must not open an SSE stream"})
+	} else {
+		checks = append(checks, Check{ID: "acp.worker_bridge.protocol", Status: StatusOK, Title: "Worker bridge protocol", Detail: "406 for text/event-stream"})
+	}
+	if status, err := probe(token, "", `{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}`); err != nil || status != http.StatusOK {
+		checks = append(checks, Check{ID: "acp.worker_bridge.protocol", Status: StatusError, Title: "Worker bridge protocol",
+			Detail: fmt.Sprintf("authorized initialize returned %d (err=%v), want 200", status, err)})
+	}
+
+	// Idle shutdown: after the last token is revoked, the listener must close
+	// within the idle window and stop accepting connections. A long-lived
+	// process must not retain an unused ephemeral port.
+	port := server.Port()
+	server.Revoke(token)
+	idleClosed := false
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if server.Port() == 0 {
+			idleClosed = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !idleClosed {
+		checks = append(checks, Check{ID: "acp.worker_bridge.protocol", Status: StatusError, Title: "Worker bridge protocol",
+			Detail: "listener stayed bound after the last worker token was revoked",
+			Fix:    "The idle timer must close the loopback listener instead of retaining the port"})
+	} else {
+		connection, dialErr := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 150*time.Millisecond)
+		if dialErr == nil {
+			_ = connection.Close()
+			checks = append(checks, Check{ID: "acp.worker_bridge.protocol", Status: StatusError, Title: "Worker bridge protocol",
+				Detail: fmt.Sprintf("idle listener still accepted a connection on port %d", port)})
+		} else {
+			checks = append(checks, Check{ID: "acp.worker_bridge.protocol", Status: StatusOK, Title: "Worker bridge protocol",
+				Detail: "idle listener closed after token revocation"})
+		}
+	}
+	return checks
 }

@@ -100,6 +100,23 @@ type SessionRuntime struct {
 	// lazily by the Runtime and closed only by Close/Shutdown.
 	acpConnections *acpConnectionPool
 
+	// WorkerBridge is the process-wide loopback MCP bridge shared by sessions. It
+	// is injected by top-level assembly; a nil bridge simply degrades every ACP
+	// worker to mcpBridge=unavailable.
+	WorkerBridge *WorkerBridgeServer
+	// workerMessages is this session's append-only worker message log. It is
+	// created lazily on the first bridge registration.
+	workerMessagesMu sync.Mutex
+	workerMessages   *WorkerMessageLog
+	// workerDeliveryObserver records that this mailbox is already wired to the
+	// worker message log's delivery projection.
+	workerDeliveryObserver bool
+	// workerAdvertised is the last initialize capability advertisement seen for
+	// each bound profile. It only enriches the model-facing Router summary after
+	// a worker has negotiated; the authoritative resolved capabilities stay on
+	// the child run. It is keyed by profile ID and never persisted.
+	workerAdvertised map[string]map[string]any
+
 	// resourceSettings and the two capability flags record the shared resource
 	// assembly policy used to create this runtime. They let a lazily-bound
 	// session rebuild context and package skills after its persisted identity is
@@ -256,6 +273,9 @@ func (r *SessionRuntime) Shutdown(ctx context.Context) error {
 		r.mu.Unlock()
 		releaseSubmissionCoordinator(submissions)
 	}
+	if bridge := r.workerBridge(); bridge != nil {
+		bridge.RevokeSession(r.sessionIDForWorkerBridge())
+	}
 	if decisions != nil {
 		if runID != "" {
 			decisions.ClearRunWithValue(runID, "cancelled")
@@ -292,10 +312,17 @@ func (r *SessionRuntime) Close() {
 	r.Submissions = nil
 	acpConnections := r.acpConnections
 	r.acpConnections = nil
+	workerBridge := r.WorkerBridge
+	workerMessages := r.workerMessages
+	r.workerMessages = nil
 	r.mu.Unlock()
 	r.cancelMailboxWake()
 	releaseSubmissionCoordinator(submissions)
+	if workerBridge != nil {
+		workerBridge.RevokeSession(r.sessionIDForWorkerBridge())
+	}
 	acpConnections.Close()
+	_ = workerMessages.Close()
 	mcp.CloseClients(clients)
 }
 
@@ -1157,6 +1184,10 @@ type BuildOptions struct {
 	Browser         bool
 	ArtifactEnabled bool
 	RegistryHooks   []RegistryHook
+	// WorkerBridge is the process-wide loopback MCP bridge for Router workers.
+	// It is created by top-level assembly (TUI/CLI, serve, ACP) and shared by
+	// every session; nil disables the bridge without changing any task path.
+	WorkerBridge *WorkerBridgeServer
 	// MCP controls how configured MCP servers are connected during build. The
 	// zero value preserves strict, synchronous connection; an interactive entry
 	// point defers it so a slow server cannot freeze first paint.
@@ -1282,6 +1313,7 @@ func (b Builder) Build(ctx context.Context, opts BuildOptions) (*SessionRuntime,
 		resourceSettings:    b.Settings,
 		resourceWorkflows:   opts.Workflows,
 		resourceBrowser:     opts.Browser,
+		WorkerBridge:        opts.WorkerBridge,
 	}
 	runtime.Mailbox = agent.NewMemberMailbox()
 	runtime.ExpertCenter = &expert.Center{ProjectDir: opts.WorkDir}

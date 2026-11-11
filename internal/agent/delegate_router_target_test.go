@@ -19,7 +19,7 @@ func TestDelegateParametersAreValidJSON(t *testing.T) {
 	}
 	for name, target := range cases {
 		t.Run(name, func(t *testing.T) {
-			tool := NewDelegateSubAgentTool(nil)
+			tool := NewDelegateWorkerMgrTool(nil)
 			tool.SetRouterTarget(target)
 			var schema map[string]any
 			if err := json.Unmarshal(tool.Parameters(), &schema); err != nil {
@@ -43,7 +43,7 @@ func TestDelegateParametersAreValidJSON(t *testing.T) {
 // model that guesses a plausible product name should be structurally prevented
 // from doing so. Other configured profiles are correction context only.
 func TestDelegateSchemaPinsActivatedWorker(t *testing.T) {
-	tool := NewDelegateSubAgentTool(nil)
+	tool := NewDelegateWorkerMgrTool(nil)
 	tool.SetRouterTarget(&RouterTarget{ID: "opencode", Available: []string{"opencode", "codex"}})
 
 	var schema struct {
@@ -78,7 +78,7 @@ func TestDelegateSchemaPinsActivatedWorker(t *testing.T) {
 // Multiple configured profiles must still produce one const value. Otherwise a
 // provider may legally choose a profile that Execute will reject.
 func TestDelegateSchemaUsesConstWithMultipleProfiles(t *testing.T) {
-	tool := NewDelegateSubAgentTool(nil)
+	tool := NewDelegateWorkerMgrTool(nil)
 	tool.SetRouterTarget(&RouterTarget{ID: "opencode", Available: []string{"opencode", "codex", "claude-code"}})
 	var schema struct {
 		Properties map[string]struct {
@@ -101,7 +101,7 @@ func TestDelegateSchemaUsesConstWithMultipleProfiles(t *testing.T) {
 // A Router session may bind several workers. The schema must then enumerate the
 // bound allowlist and permit each value, rather than pinning only the default.
 func TestDelegateSchemaEnumeratesBoundWorkers(t *testing.T) {
-	tool := NewDelegateSubAgentTool(nil)
+	tool := NewDelegateWorkerMgrTool(nil)
 	tool.SetRouterTarget(&RouterTarget{
 		ID:       "opencode",
 		Accepted: []string{"opencode", "codex"},
@@ -160,7 +160,7 @@ func TestDelegateAcceptsNonDefaultBoundWorker(t *testing.T) {
 
 // With exactly one eligible profile the schema must be the tightest form: const.
 func TestDelegateSchemaUsesConstForSingleWorker(t *testing.T) {
-	tool := NewDelegateSubAgentTool(nil)
+	tool := NewDelegateWorkerMgrTool(nil)
 	tool.SetRouterTarget(&RouterTarget{ID: "opencode", Available: []string{"opencode"}})
 
 	var schema struct {
@@ -183,7 +183,7 @@ func TestDelegateSchemaUsesConstForSingleWorker(t *testing.T) {
 
 // Outside Router mode there is no target, and the schema must not claim one.
 func TestDelegateSchemaWithoutTargetHasNoConst(t *testing.T) {
-	tool := NewDelegateSubAgentTool(nil)
+	tool := NewDelegateWorkerMgrTool(nil)
 	var schema struct {
 		Properties map[string]struct {
 			Enum  []string `json:"enum"`
@@ -201,7 +201,7 @@ func TestDelegateSchemaWithoutTargetHasNoConst(t *testing.T) {
 
 // Clear_target must be reversible: activation publishes, removal clears.
 func TestDelegateRouterTargetIsReplaceable(t *testing.T) {
-	tool := NewDelegateSubAgentTool(nil)
+	tool := NewDelegateWorkerMgrTool(nil)
 	tool.SetRouterTarget(&RouterTarget{ID: "opencode"})
 	if target, ok := tool.RouterTarget(); !ok || target.ID != "opencode" {
 		t.Fatalf("target = %#v, ok=%v", target, ok)
@@ -223,7 +223,7 @@ func TestDelegateRouterTargetIsReplaceable(t *testing.T) {
 // The published target must be defensively copied: a caller mutating its own
 // struct must not change what the model sees.
 func TestDelegateRouterTargetIsCopied(t *testing.T) {
-	tool := NewDelegateSubAgentTool(nil)
+	tool := NewDelegateWorkerMgrTool(nil)
 	available := []string{"opencode", "codex"}
 	tool.SetRouterTarget(&RouterTarget{ID: "opencode", Available: available})
 	available[0] = "mutated"
@@ -240,9 +240,9 @@ func TestDelegateRouterTargetIsCopied(t *testing.T) {
 // that message is the model's only feedback.
 func TestDelegateRejectsWrongAgentWithCorrection(t *testing.T) {
 	manager := NewAgentManager(nil)
-	tool := NewDelegateSubAgentTool(manager)
+	tool := NewDelegateWorkerMgrTool(manager)
 	tool.SetRouterTarget(&RouterTarget{ID: "opencode", Available: []string{"opencode", "codex"}})
-	_, err := tool.Execute(ContextWithParentMode(context.Background(), "router"), map[string]any{"task": "x", "agent": "codex"})
+	_, err := tool.Execute(ContextWithParentMode(context.Background(), "router"), map[string]any{"action": "delegate", "task": "x", "agent": "codex"})
 	if err == nil {
 		t.Fatal("a wrong agent name was accepted")
 	}
@@ -258,14 +258,14 @@ func TestDelegateRejectsWrongAgentWithCorrection(t *testing.T) {
 // Omitting agent in Router mode must also name the required value.
 func TestDelegateMissingAgentNamesWorker(t *testing.T) {
 	manager := NewAgentManager(nil)
-	tool := NewDelegateSubAgentTool(manager)
+	tool := NewDelegateWorkerMgrTool(manager)
 	tool.SetRouterTarget(&RouterTarget{ID: "opencode"})
-	_, err := tool.Execute(ContextWithParentMode(context.Background(), "router"), map[string]any{"task": "x"})
+	_, err := tool.Execute(ContextWithParentMode(context.Background(), "router"), map[string]any{"action": "delegate", "task": "x"})
 	if err == nil {
 		t.Fatal("a missing agent was accepted in Router mode")
 	}
-	if !strings.Contains(err.Error(), "opencode") {
-		t.Fatalf("error does not name the required worker: %s", err.Error())
+	if !strings.Contains(err.Error(), "agent") {
+		t.Fatalf("error does not name the required field: %s", err.Error())
 	}
 }
 
@@ -282,9 +282,9 @@ func TestDelegateRouterRejectsLocalOnlyParameters(t *testing.T) {
 	}
 	for name, extra := range cases {
 		t.Run(name, func(t *testing.T) {
-			tool := NewDelegateSubAgentTool(NewAgentManager(nil))
+			tool := NewDelegateWorkerMgrTool(NewAgentManager(nil))
 			tool.SetRouterTarget(&RouterTarget{ID: "opencode"})
-			params := map[string]any{"task": "inspect", "agent": "opencode"}
+			params := map[string]any{"action": "delegate", "task": "inspect", "agent": "opencode"}
 			for key, value := range extra {
 				params[key] = value
 			}

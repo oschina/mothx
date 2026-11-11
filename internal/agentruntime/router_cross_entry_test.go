@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/oschina/mothx/internal/agent"
 	"github.com/oschina/mothx/internal/config"
@@ -157,9 +158,14 @@ func TestRouterCrossEntrySharesOneToolSurface(t *testing.T) {
 					t.Fatalf("Router surface exposes %q: %#v", name, surface)
 				}
 			}
-			for _, want := range []string{"read", "grep", "ls", "delegate_subagent", "subagent_spawn"} {
+			for _, want := range []string{"read", "grep", "ls", "delegate_worker_mgr"} {
 				if !containsRouterTool(surface, want) {
 					t.Fatalf("Router surface is missing %q: %#v", want, surface)
+				}
+			}
+			for _, unwanted := range []string{"delegate_subagent", "subagent_spawn", "subagent_status", "subagent_send", "subagent_wait", "subagent_integrate", "subagent_destroy"} {
+				if containsRouterTool(surface, unwanted) {
+					t.Fatalf("Router surface still exposes local tool %q: %#v", unwanted, surface)
 				}
 			}
 			continue
@@ -259,4 +265,114 @@ func containsRouterTool(names []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// Worker report/ask/finding semantics are Runtime facts, not adapter behavior.
+// Every entry point must observe the same JSONL projection, the same waking
+// mailbox item, and the same authoritative pending-question ledger.
+func TestRouterCrossEntryWorkerMessageSemantics(t *testing.T) {
+	fixture := newRouterCrossEntryFixture(t)
+	sources := []RuntimeSource{SourceTUI, SourceCLI, SourceWebUI, SourceACP, SourceWeChat}
+	for index, source := range sources {
+		runtime := fixture.attachAs(t, source)
+		if runtime.Decisions == nil {
+			runtime.SetDecisions(&DecisionService{})
+		}
+		childID := "child-" + string(rune('a'+index))
+		messageLog, err := runtime.WorkerMessageLog()
+		if err != nil {
+			t.Fatalf("%s worker log: %v", source, err)
+		}
+		finding, _, err := messageLog.Create(WorkerMessage{
+			SessionID: fixture.sessionID, ChildID: childID, Kind: WorkerMessageFinding, Body: "shared finding",
+		})
+		if err != nil {
+			t.Fatalf("%s create finding: %v", source, err)
+		}
+		runtime.enqueueWorkerFinding(finding)
+		if !runtime.Mailbox.HasWakingPending() {
+			t.Fatalf("%s finding did not signal a waking mailbox item", source)
+		}
+		pending := runtime.Mailbox.PendingSummary()
+		if len(pending) != 1 || pending[0].Kind != agent.MemberItemFinding ||
+			!pending[0].Wake || !pending[0].External || pending[0].Payload != "shared finding" {
+			t.Fatalf("%s finding projection = %#v", source, pending)
+		}
+		runtime.Mailbox.DrainSteering()
+		delivered, err := runtime.WorkerMessages()
+		if err != nil {
+			t.Fatalf("%s delivered projection: %v", source, err)
+		}
+		deliveredFinding := false
+		for _, message := range delivered {
+			if message.ID == finding.ID && message.Status == WorkerMessageStatusDelivered {
+				deliveredFinding = true
+			}
+		}
+		if !deliveredFinding {
+			t.Fatalf("%s finding was not marked delivered: %#v", source, delivered)
+		}
+
+		type askResult struct {
+			answer string
+			status string
+		}
+		done := make(chan askResult, 1)
+		go func() {
+			answer, status := runtime.askWorkerQuestion(context.Background(), childID, "run-"+string(source), "shared question", nil, 2*time.Second)
+			done <- askResult{answer, status}
+		}()
+		var questionID string
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			questions, err := runtime.PendingWorkerQuestions()
+			if err != nil {
+				t.Fatalf("%s pending questions: %v", source, err)
+			}
+			if len(questions) == 1 && questions[0].ChildID == childID {
+				questionID = questions[0].ID
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if questionID == "" {
+			t.Fatalf("%s did not project the pending worker question", source)
+		}
+		if err := runtime.ResolveWorkerQuestion(context.Background(), questionID, "shared answer"); err != nil {
+			t.Fatalf("%s resolve question: %v", source, err)
+		}
+		select {
+		case result := <-done:
+			if result.answer != "shared answer" || result.status != "answered" {
+				t.Fatalf("%s ask result = %#v", source, result)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s ask did not unblock", source)
+		}
+		snapshot, err := runtime.WorkerSnapshot()
+		if err != nil {
+			t.Fatalf("%s snapshot: %v", source, err)
+		}
+		seenFinding, seenQuestion := false, false
+		for _, message := range snapshot.Messages {
+			if message.ChildID != childID {
+				continue
+			}
+			switch message.Kind {
+			case WorkerMessageFinding:
+				seenFinding = true
+			case WorkerMessageQuestion:
+				seenQuestion = true
+				if message.Status != WorkerMessageStatusDelivered {
+					t.Fatalf("%s answered question status = %q", source, message.Status)
+				}
+			}
+		}
+		if !seenFinding || !seenQuestion {
+			t.Fatalf("%s snapshot missing worker messages: %#v", source, snapshot.Messages)
+		}
+		if len(snapshot.PendingQuestions) != 0 {
+			t.Fatalf("%s resolved question stayed pending: %#v", source, snapshot.PendingQuestions)
+		}
+	}
 }

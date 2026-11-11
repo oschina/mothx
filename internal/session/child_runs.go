@@ -31,8 +31,13 @@ type ChildRun struct {
 	Status            string
 	ContractJSON      string
 	TranscriptJSON    string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// ResolvedCapabilitiesJSON and CapabilityDegradationsJSON are the diagnosed
+	// capability projection of an external ACP worker.
+	ResolvedCapabilitiesJSON   string
+	CapabilityDegradationsJSON string
+	MCPBridge                  string
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
 }
 
 // SaveChildRun upserts durable child history for an existing session database.
@@ -64,9 +69,12 @@ func SaveChildRun(sessionDir string, record ChildRun) error {
 		IntegrationStatus: record.IntegrationStatus, IntegrationError: record.IntegrationError,
 		IntegratedAt: formatChildRunTime(record.IntegratedAt),
 		Status:       record.Status, ContractJSON: record.ContractJSON,
-		TranscriptJSON: record.TranscriptJSON,
-		CreatedAt:      created.UTC().Format(time.RFC3339Nano),
-		UpdatedAt:      now.UTC().Format(time.RFC3339Nano),
+		TranscriptJSON:             record.TranscriptJSON,
+		ResolvedCapabilitiesJSON:   record.ResolvedCapabilitiesJSON,
+		CapabilityDegradationsJSON: record.CapabilityDegradationsJSON,
+		MCPBridge:                  record.MCPBridge,
+		CreatedAt:                  created.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:                  now.UTC().Format(time.RFC3339Nano),
 	}
 	return dao.NewChildRunDAO(db.Bun()).Upsert(context.Background(), row)
 }
@@ -121,7 +129,10 @@ func childRunFromRecord(row *dao.ChildRunRecord) *ChildRun {
 		IntegrationStatus: row.IntegrationStatus, IntegrationError: row.IntegrationError,
 		IntegratedAt: integrated,
 		Status:       row.Status, ContractJSON: row.ContractJSON,
-		TranscriptJSON: row.TranscriptJSON, CreatedAt: created, UpdatedAt: updated,
+		TranscriptJSON:             row.TranscriptJSON,
+		ResolvedCapabilitiesJSON:   row.ResolvedCapabilitiesJSON,
+		CapabilityDegradationsJSON: row.CapabilityDegradationsJSON, MCPBridge: row.MCPBridge,
+		CreatedAt: created, UpdatedAt: updated,
 	}
 }
 

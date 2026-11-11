@@ -49,6 +49,12 @@ type acpWorkerSession struct {
 	handleRequest  acpclient.RequestHandler
 	onNotification func(acpclient.Message)
 
+	// configOptions and models are the Agent-advertised session configuration
+	// from session/new/load/resume. They are immutable for the session lifetime
+	// and only used to apply the profile's configured model.
+	configOptions []acpclient.SessionConfigOption
+	models        *acpclient.SessionModelState
+
 	done chan struct{}
 
 	mu   sync.Mutex
@@ -303,7 +309,7 @@ func (c *acpWorkerConnection) newSession(ctx context.Context, params acpclient.N
 	if err != nil {
 		return nil, err
 	}
-	return c.registerSession(result.SessionID, handler, onNotification)
+	return c.registerSession(result.SessionID, result.ConfigOptions, result.Models, handler, onNotification)
 }
 
 // loadSession restores one existing remote session. Capability and resume
@@ -320,7 +326,7 @@ func (c *acpWorkerConnection) loadSession(ctx context.Context, params acpclient.
 	if sessionID == "" {
 		sessionID = strings.TrimSpace(params.SessionID)
 	}
-	return c.registerSession(sessionID, handler, onNotification)
+	return c.registerSession(sessionID, result.ConfigOptions, result.Models, handler, onNotification)
 }
 
 // resumeSession reconnects without replay. The caller has already gated the
@@ -329,13 +335,14 @@ func (c *acpWorkerConnection) resumeSession(ctx context.Context, params acpclien
 	if c == nil || c.client == nil {
 		return nil, fmt.Errorf("ACP connection is not initialized")
 	}
-	if err := c.client.ResumeSession(ctx, params); err != nil {
+	result, err := c.client.ResumeSession(ctx, params)
+	if err != nil {
 		return nil, err
 	}
-	return c.registerSession(strings.TrimSpace(params.SessionID), handler, onNotification)
+	return c.registerSession(strings.TrimSpace(params.SessionID), result.ConfigOptions, result.Models, handler, onNotification)
 }
 
-func (c *acpWorkerConnection) registerSession(sessionID string, handler acpclient.RequestHandler, onNotification func(acpclient.Message)) (*acpWorkerSession, error) {
+func (c *acpWorkerConnection) registerSession(sessionID string, configOptions []acpclient.SessionConfigOption, models *acpclient.SessionModelState, handler acpclient.RequestHandler, onNotification func(acpclient.Message)) (*acpWorkerSession, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, fmt.Errorf("ACP session is missing an id")
 	}
@@ -353,6 +360,8 @@ func (c *acpWorkerConnection) registerSession(sessionID string, handler acpclien
 		id:             sessionID,
 		handleRequest:  handler,
 		onNotification: onNotification,
+		configOptions:  append([]acpclient.SessionConfigOption(nil), configOptions...),
+		models:         models,
 		done:           make(chan struct{}),
 	}
 	session.cond = sync.NewCond(&session.mu)

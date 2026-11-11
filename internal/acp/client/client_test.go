@@ -329,6 +329,21 @@ func TestStartRunsACPHandshakeAndPromptOverRealStdio(t *testing.T) {
 	if session.SessionID != "helper-session" {
 		t.Fatalf("session = %#v", session)
 	}
+	if len(session.ConfigOptions) != 2 || session.ConfigOptions[0].Category != "model" {
+		t.Fatalf("session config options = %#v", session.ConfigOptions)
+	}
+	if value, ok := session.ConfigOptions[1].CurrentValue.(bool); !ok || !value {
+		t.Fatalf("boolean config value was not preserved: %#v", session.ConfigOptions[1].CurrentValue)
+	}
+	updated, err := client.SetSessionConfigOption(context.Background(), SetSessionConfigOptionParams{
+		SessionID: session.SessionID, ConfigID: "model", Value: "fast-model",
+	})
+	if err != nil {
+		t.Fatalf("SetSessionConfigOption: %v", err)
+	}
+	if len(updated.ConfigOptions) != 1 || updated.ConfigOptions[0].CurrentValue != "fast-model" {
+		t.Fatalf("updated config options = %#v", updated.ConfigOptions)
+	}
 	prompt, err := client.Prompt(context.Background(), PromptParams{SessionID: session.SessionID, Prompt: []ContentBlock{{Type: "text", Text: "hello"}}})
 	if err != nil {
 		t.Fatalf("Prompt: %v", err)
@@ -362,7 +377,22 @@ func TestACPHelperProcess(t *testing.T) {
 		case "initialize":
 			result = InitializeResult{ProtocolVersion: ProtocolVersion, AgentInfo: Implementation{Name: "helper", Version: "1"}}
 		case "session/new":
-			result = NewSessionResult{SessionID: "helper-session"}
+			result = NewSessionResult{SessionID: "helper-session", ConfigOptions: []SessionConfigOption{
+				{
+					Type: "select", ID: "model", Name: "Model", Category: "model", CurrentValue: "default-model",
+					Options: []SessionConfigOptionChoice{{Value: "default-model"}, {Value: "fast-model"}},
+				},
+				{Type: "boolean", ID: "web_search", Name: "Web search", Category: "web_search", CurrentValue: true},
+			}}
+		case "session/set_config_option":
+			var params SetSessionConfigOptionParams
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				os.Exit(2)
+			}
+			result = SetSessionConfigOptionResult{ConfigOptions: []SessionConfigOption{{
+				Type: "select", ID: params.ConfigID, Name: "Model", Category: "model", CurrentValue: params.Value,
+				Options: []SessionConfigOptionChoice{{Value: "default-model"}, {Value: "fast-model"}},
+			}}}
 		case "session/prompt":
 			_, _ = writer.WriteString(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"helper-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}}}` + "\n")
 			_ = writer.Flush()

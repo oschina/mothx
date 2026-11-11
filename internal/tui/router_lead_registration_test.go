@@ -31,7 +31,7 @@ func TestRouterSessionRegistersLeadAgentForSpawn(t *testing.T) {
 	if app.agentMgr == nil {
 		t.Fatal("Router session has no AgentManager, so the delegation tools have no parent")
 	}
-	if _, ok := app.registry.Get("subagent_spawn"); !ok {
+	if _, ok := app.registry.Get("delegate_worker_mgr"); !ok {
 		t.Fatal("Router session did not install the subagent_spawn tool")
 	}
 
@@ -93,7 +93,7 @@ func TestLeavingRouterRestoresOrdinarySurface(t *testing.T) {
 	if app.agentManagementEnabled() {
 		t.Fatal("leaving Router kept the manager-backed tool surface enabled")
 	}
-	if _, ok := app.registry.Get("subagent_spawn"); ok {
+	if _, ok := app.registry.Get("delegate_worker_mgr"); ok {
 		t.Fatal("leaving Router kept the subagent_spawn tool installed")
 	}
 }
@@ -113,7 +113,7 @@ func TestRouterToolGroupFollowsRuntimeMode(t *testing.T) {
 	// Router. The tool group must follow the Runtime.
 	app.mode = agentruntime.ModePlan
 	app.syncToolGroups()
-	if _, ok := app.registry.Get("subagent_spawn"); !ok {
+	if _, ok := app.registry.Get("delegate_worker_mgr"); !ok {
 		t.Fatal("the Router tool group was replaced by a stale adapter mode")
 	}
 }
@@ -155,16 +155,16 @@ func TestRouterActivationCreatesMissingManager(t *testing.T) {
 	// Simulate a session that reached activation without a manager (for
 	// example after an expert transition cleared it).
 	app.agentMgr = nil
-	app.registry.Remove("delegate_subagent")
+	app.registry.Remove("delegate_worker_mgr")
 
 	runRouterActivation(t, app, app.handleCommand("/router codex"))
 	if app.agentMgr == nil {
 		t.Fatal("Router activation did not create the session manager")
 	}
-	if _, ok := app.registry.Get("delegate_subagent"); !ok {
+	if _, ok := app.registry.Get("delegate_worker_mgr"); !ok {
 		t.Fatal("Router activation did not install delegate_subagent")
 	}
-	if _, ok := app.registry.Get("subagent_spawn"); !ok {
+	if _, ok := app.registry.Get("delegate_worker_mgr"); !ok {
 		t.Fatal("Router activation did not install subagent_spawn")
 	}
 }

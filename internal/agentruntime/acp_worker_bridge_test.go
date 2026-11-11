@@ -12,6 +12,7 @@ import (
 
 	agentpkg "github.com/oschina/mothx/agent"
 	acpclient "github.com/oschina/mothx/internal/acp/client"
+	"github.com/oschina/mothx/internal/agentruntime/workerdriver"
 	"github.com/oschina/mothx/internal/config"
 )
 
@@ -128,7 +129,18 @@ func TestACPWorkerBridgeHelperProcess(t *testing.T) {
 				rpcErr = &acpclient.RPCError{Code: -32000, Message: "transient session failure"}
 				break
 			}
-			result = acpclient.NewSessionResult{SessionID: "bridge-session"}
+			sessionID := "bridge-session"
+			if os.Getenv("MOTHX_ACP_BRIDGE_ECHO_MCP") == "1" {
+				var params struct {
+					MCPServers []any `json:"mcpServers"`
+				}
+				if unmarshalErr := json.Unmarshal(request.Params, &params); unmarshalErr != nil || len(params.MCPServers) == 0 {
+					sessionID = "bridge-session-no-mcp"
+				} else {
+					sessionID = "bridge-session-mcp"
+				}
+			}
+			result = acpclient.NewSessionResult{SessionID: sessionID}
 		case "session/prompt":
 			text := "bridge output"
 			if os.Getenv("MOTHX_ACP_BRIDGE_PARTIAL") == "1" {
@@ -194,5 +206,68 @@ func TestACPWorkerBridgeKeepsSafePartialOutputOnFailure(t *testing.T) {
 	}
 	if result.Output != "partial output" {
 		t.Fatalf("partial output = %q, want the safe streamed text", result.Output)
+	}
+}
+
+func TestACPWorkerBridgeInjectsAuthorizedMCPServers(t *testing.T) {
+	t.Setenv("MOTHX_ACP_BRIDGE_HELPER", "1")
+	t.Setenv("MOTHX_ACP_BRIDGE_ECHO_MCP", "1")
+	prepareCalls := 0
+	revoked := 0
+	result, err := (ACPWorkerBridge{}).Run(context.Background(), ACPWorkerInvocation{
+		Profile: config.ACPAgentProfile{
+			ID: "helper", Command: []string{os.Args[0], "-test.run=TestACPWorkerBridgeHelperProcess", "--"}, Enabled: true,
+			Environment: []string{"MOTHX_ACP_BRIDGE_HELPER", "MOTHX_ACP_BRIDGE_ECHO_MCP"}, PermissionPolicy: config.ACPPermissionAutoAllowOnce,
+		},
+		WorkDir:            t.TempDir(),
+		Launcher:           acpProcessLauncher{},
+		MCPBridgeAvailable: true,
+		PrepareMCPServers: func(caps workerdriver.WorkerCapabilities) ([]any, func(), error) {
+			prepareCalls++
+			if !caps.MCPHTTP {
+				t.Error("PrepareMCPServers called without a resolved MCPHTTP capability")
+			}
+			return []any{map[string]any{"type": "http", "name": "mothx-worker", "url": "http://127.0.0.1:1/mcp"}},
+				func() { revoked++ }, nil
+		},
+		Contract: SubagentTaskContract{
+			Objective: "inspect this task", Role: SubagentRoleInvestigate,
+			ExpectedDeliverables: []SubagentDeliverable{SubagentDeliverableFindings}, TargetProfile: "helper",
+		},
+	})
+	if err != nil {
+		t.Fatalf("bridge Run: %v", err)
+	}
+	if prepareCalls != 1 {
+		t.Fatalf("PrepareMCPServers calls = %d, want 1", prepareCalls)
+	}
+	if result.SessionID != "bridge-session-mcp" {
+		t.Fatalf("session/new did not receive mcpServers: session = %q", result.SessionID)
+	}
+	if revoked != 1 {
+		t.Fatalf("bridge revoke calls = %d, want 1 after Close", revoked)
+	}
+}
+
+func TestACPWorkerBridgeSkipsMCPServersWithoutBridgePolicy(t *testing.T) {
+	t.Setenv("MOTHX_ACP_BRIDGE_HELPER", "1")
+	t.Setenv("MOTHX_ACP_BRIDGE_ECHO_MCP", "1")
+	result, err := (ACPWorkerBridge{}).Run(context.Background(), ACPWorkerInvocation{
+		Profile: config.ACPAgentProfile{
+			ID: "helper", Command: []string{os.Args[0], "-test.run=TestACPWorkerBridgeHelperProcess", "--"}, Enabled: true,
+			Environment: []string{"MOTHX_ACP_BRIDGE_HELPER", "MOTHX_ACP_BRIDGE_ECHO_MCP"}, PermissionPolicy: config.ACPPermissionAutoAllowOnce,
+		},
+		WorkDir:  t.TempDir(),
+		Launcher: acpProcessLauncher{},
+		Contract: SubagentTaskContract{
+			Objective: "inspect this task", Role: SubagentRoleInvestigate,
+			ExpectedDeliverables: []SubagentDeliverable{SubagentDeliverableFindings}, TargetProfile: "helper",
+		},
+	})
+	if err != nil {
+		t.Fatalf("bridge Run: %v", err)
+	}
+	if result.SessionID != "bridge-session-no-mcp" {
+		t.Fatalf("session/new received an unauthorized bridge payload: session = %q", result.SessionID)
 	}
 }

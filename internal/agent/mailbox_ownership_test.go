@@ -40,7 +40,7 @@ func TestSessionLeadGetsMailboxSteeringWithoutTeamWait(t *testing.T) {
 	if leadAdapter.inner.config.GetFollowUpMessages != nil {
 		t.Fatal("a session without a bound team must not wait for members at the wrap-up turn")
 	}
-	mailbox.Enqueue(MemberCompletion{MemberID: "member-1", Status: MemberStatusDone, Payload: "done"})
+	mailbox.Enqueue(MemberCompletion{Wake: true, MemberID: "member-1", Status: MemberStatusDone, Payload: "done"})
 	if messages := leadAdapter.inner.config.GetSteeringMessages(); len(messages) != 1 {
 		t.Fatalf("mailbox steering = %#v, want the member notification", messages)
 	}

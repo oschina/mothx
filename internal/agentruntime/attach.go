@@ -39,6 +39,9 @@ type AttachedResources struct {
 	Workflows       bool
 	Browser         bool
 	ArtifactEnabled bool
+	// WorkerBridge is the process-wide loopback MCP bridge. ACP and other
+	// attach-based entry points pass their one shared instance; nil disables it.
+	WorkerBridge *WorkerBridgeServer
 }
 
 // AttachSessionResources creates a SessionRuntime around already-selected
@@ -103,6 +106,7 @@ func AttachSessionResources(resources AttachedResources) (*SessionRuntime, error
 		resourceSettings:    resources.Settings,
 		resourceWorkflows:   resources.Workflows,
 		resourceBrowser:     resources.Browser,
+		WorkerBridge:        resources.WorkerBridge,
 	}
 	runtime.Mailbox = agent.NewMemberMailbox()
 	runtime.ExpertCenter = &expert.Center{ProjectDir: resources.WorkDir}

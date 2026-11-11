@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/oschina/mothx/internal/agentruntime/workerdriver"
 	"github.com/oschina/mothx/internal/platform"
 	"github.com/oschina/mothx/internal/sandbox"
 )
@@ -103,6 +105,10 @@ type ACPAgentProfile struct {
 	ID      string   `json:"id"`
 	Title   string   `json:"title,omitempty"`
 	Command []string `json:"command"`
+	// Model selects the external Agent's own model for sessions created from
+	// this profile. It is passed through ACP's session config/model selection;
+	// it is not a MothX provider/model ID. Empty means the worker's own default.
+	Model string `json:"model,omitempty"`
 	// Transport is empty/"stdio" for a local child process, or the ACP remote
 	// transport RFD's "websocket" / "http" profile. URL is required exactly for
 	// remote transports.
@@ -136,7 +142,27 @@ type ACPAgentProfile struct {
 	// only when the operator partitions work by module and accepts that risk.
 	// Per-child worktrees plus subagent_integrate remain the safer default.
 	AllowParallelBaseWorkspaceWrites bool `json:"allowParallelBaseWorkspaceWrites,omitempty"`
+	// Driver selects the ACP flavor used to interpret protocol details. Empty
+	// means generic-acp. A driver may only describe protocol quirks; it never
+	// grants authorization, sandbox policy, concurrency, or an unadvertised
+	// capability.
+	Driver string `json:"driver,omitempty"`
+	// MCPBridge controls whether the Runtime may inject the loopback HTTP worker
+	// bridge into this profile's sessions. Empty/"auto" injects when the worker
+	// is local and reachable; "off" disables injection. Bridge failure never
+	// blocks a task.
+	MCPBridge string `json:"mcpBridge,omitempty"`
+	// CapabilityOverrides can only tighten the resolved capability set: every
+	// value must be false. A true value would widen authority, so validation
+	// rejects it. Keys are canonical WorkerCapabilities JSON names.
+	CapabilityOverrides map[string]bool `json:"capabilityOverrides,omitempty"`
 }
+
+// ACP worker MCP bridge modes.
+const (
+	ACPMCPBridgeAuto = "auto"
+	ACPMCPBridgeOff  = "off"
+)
 
 // EffectiveAllowParallelBaseWorkspaceWrites reports whether this profile permits
 // concurrent base-workspace writers. It requires the explicit opt-in; the zero
@@ -145,8 +171,53 @@ func (p ACPAgentProfile) EffectiveAllowParallelBaseWorkspaceWrites() bool {
 	return p.AllowParallelBaseWorkspaceWrites
 }
 
+// EffectiveModel returns the configured external model ID with surrounding
+// whitespace removed. Empty means the external Agent keeps its own default.
+func (p ACPAgentProfile) EffectiveModel() string {
+	return strings.TrimSpace(p.Model)
+}
+
 // EffectiveTransport returns the validated transport, defaulting to stdio for
 // every existing settings.json profile.
+// EffectiveDriver returns the normalized driver identity. Unknown identities
+// fall back to generic-acp at lookup time; keeping the configured value here
+// lets management projections show what the operator asked for.
+func (p ACPAgentProfile) EffectiveDriver() string {
+	value := strings.ToLower(strings.TrimSpace(p.Driver))
+	if value == "" {
+		return string(workerdriver.WorkerDriverGenericACP)
+	}
+	return value
+}
+
+// EffectiveMCPBridge normalizes the bridge mode. The zero value is auto so
+// existing settings.json profiles gain the bridge without a migration.
+func (p ACPAgentProfile) EffectiveMCPBridge() string {
+	switch strings.ToLower(strings.TrimSpace(p.MCPBridge)) {
+	case ACPMCPBridgeOff:
+		return ACPMCPBridgeOff
+	default:
+		return ACPMCPBridgeAuto
+	}
+}
+
+// CapabilityOverrideNames returns the sorted capability names this profile
+// explicitly tightens. It is a display/diagnostic helper; resolution reads the
+// map directly.
+func (p ACPAgentProfile) CapabilityOverrideNames() []string {
+	if len(p.CapabilityOverrides) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(p.CapabilityOverrides))
+	for name, enabled := range p.CapabilityOverrides {
+		if !enabled {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (p ACPAgentProfile) EffectiveTransport() ACPAgentTransport {
 	switch ACPAgentTransport(strings.ToLower(strings.TrimSpace(p.Transport))) {
 	case "", ACPAgentTransportStdio:
@@ -210,6 +281,13 @@ func (s *Settings) ACPAgentProfile(id string) (ACPAgentProfile, bool) {
 			profile.Environment = append([]string(nil), profile.Environment...)
 			profile.Roles = append([]ACPAgentRole(nil), profile.Roles...)
 			profile.WriteRoots = append([]string(nil), profile.WriteRoots...)
+			if len(profile.CapabilityOverrides) > 0 {
+				overrides := make(map[string]bool, len(profile.CapabilityOverrides))
+				for name, enabled := range profile.CapabilityOverrides {
+					overrides[name] = enabled
+				}
+				profile.CapabilityOverrides = overrides
+			}
 			return profile, true
 		}
 	}
@@ -263,10 +341,49 @@ func (p ACPAgentProfile) Validate() error {
 	}
 	switch p.PermissionPolicy {
 	case "", ACPPermissionAutoAllowOnce, ACPPermissionAutoReject, ACPPermissionInteractive:
-		return nil
 	default:
 		return fmt.Errorf("ACP agent profile %q has invalid permission policy %q", p.ID, p.PermissionPolicy)
 	}
+	if driver := strings.TrimSpace(p.Driver); driver != "" && !validACPDriver(driver) {
+		return fmt.Errorf("ACP agent profile %q has invalid driver %q", p.ID, p.Driver)
+	}
+	if model := p.EffectiveModel(); model != "" {
+		if len(model) > 200 || strings.IndexFunc(model, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+			return fmt.Errorf("ACP agent profile %q has invalid model %q", p.ID, p.Model)
+		}
+	}
+	// Validate the configured value, not EffectiveMCPBridge: the effective helper
+	// intentionally treats unknown values as auto for forward-compatible
+	// resolution, so using it here would silently accept a typo.
+	switch bridge := strings.ToLower(strings.TrimSpace(p.MCPBridge)); bridge {
+	case "", ACPMCPBridgeAuto, ACPMCPBridgeOff:
+	default:
+		return fmt.Errorf("ACP agent profile %q has invalid mcpBridge %q", p.ID, p.MCPBridge)
+	}
+	for name, enabled := range p.CapabilityOverrides {
+		if !workerdriver.KnownCapabilityOverride(name) {
+			return fmt.Errorf("ACP agent profile %q capabilityOverrides has unknown capability %q", p.ID, name)
+		}
+		if enabled {
+			return fmt.Errorf("ACP agent profile %q capabilityOverrides can only tighten: %q must be false", p.ID, name)
+		}
+	}
+	return nil
+}
+
+// validACPDriver accepts the lowercase slug vocabulary, not a closed list: a
+// settings file may name a driver this build does not implement yet, and the
+// registry falls back to generic-acp rather than rejecting the whole profile.
+func validACPDriver(driver string) bool {
+	for i, r := range driver {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+		case r == '-' && i > 0:
+		default:
+			return false
+		}
+	}
+	return driver != ""
 }
 
 func validateACPRemoteURL(profileID string, transport ACPAgentTransport, raw string) error {
@@ -343,6 +460,7 @@ func SaveACPAgentProfiles(profiles []ACPAgentProfile) error {
 	for _, profile := range profiles {
 		profile.ID = strings.TrimSpace(profile.ID)
 		profile.Title = strings.TrimSpace(profile.Title)
+		profile.Model = strings.TrimSpace(profile.Model)
 		command := make([]string, 0, len(profile.Command))
 		for _, arg := range profile.Command {
 			command = append(command, strings.TrimSpace(arg))

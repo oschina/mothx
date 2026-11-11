@@ -419,8 +419,8 @@ func TestComposeSteeringOrderAndNoop(t *testing.T) {
 		t.Fatalf("adapter-only merge = %+v", merged)
 	}
 	mailbox := agent.NewMemberMailbox()
-	mailbox.Enqueue(agent.MemberCompletion{MemberID: "studio-a", DisplayName: "成员A", Status: "done", Payload: "RESULT-A"})
-	mailbox.Enqueue(agent.MemberCompletion{MemberID: "studio-b", Status: "error", Payload: "BOOM"})
+	mailbox.Enqueue(agent.MemberCompletion{Wake: true, MemberID: "studio-a", DisplayName: "成员A", Status: "done", Payload: "RESULT-A"})
+	mailbox.Enqueue(agent.MemberCompletion{Wake: true, MemberID: "studio-b", Status: "error", Payload: "BOOM"})
 	combined := composeSteering(mailbox, adapter)
 	first := combined()
 	if len(first) != 3 {

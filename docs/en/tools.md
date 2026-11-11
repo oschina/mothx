@@ -63,7 +63,7 @@ Calls report their start in the order the model emitted them, so a later call's 
 | [`subagent_status`](#subagent_---delegated-work) | Multi-Agent | Query sub-agent status | Read-only | Multi-Agent Mode |
 | [`subagent_send`](#subagent_---delegated-work) | Multi-Agent | Send commands to sub-agents | Send message | Multi-Agent Mode |
 | [`subagent_wait`](#subagent_---delegated-work) | Multi-Agent | Wait for member activity when the critical path is blocked | Bounded wait (2.5s-120s) | Multi-Agent Mode |
-| [`subagent_integrate`](#subagent_integrate---apply-external-worker-change-sets) | Router | Apply selected immutable worker change sets | Runtime integration lane | Router Mode |
+| [`delegate_worker_mgr`](#delegate_worker_mgr---router-worker-lifecycle) | Router | Manage the external ACP worker lifecycle | Provider profile + Runtime policy | Router Mode |
 | [`subagent_answer`](#subagent_---delegated-work) | Multi-Agent | Answer a member's blocking question so it can continue | Question scoped | Multi-Agent Mode |
 | [`subagent_destroy`](#subagent_---delegated-work) | Multi-Agent | Remove sub-agents & clean up | Destroy | Multi-Agent Mode |
 | [`delegate_subagent`](#delegate_subagent---blocking-single-sub-agent-delegation) | Delegate | Run one synchronous sub-agent task | Sub-agent scoped limits | Delegate Mode |
@@ -637,47 +637,57 @@ Use delegate mode for broad searches, multi-step investigations, focused impleme
 
 #### Router external worker
 
-> **Status: beta (preview) mode.** Router is still an evaluation feature: the tools below, their parameters, and the profile schema may change in any release without a compatibility migration path. Use them to try external ACP workers on a scratch session, not as a production integration contract.
+> **Status: beta (preview) mode.** Router is still an evaluation feature: the tool, its actions, and the profile schema may change in any release without a compatibility migration path. Use it to try external ACP workers on a scratch session, not as a production integration contract.
 
-In Router mode (`/router` panel, `/router <id>[,<id>...]`, or `--router --acp-agent <id>[,<id>...]`), `delegate_subagent` targets one of the external ACP workers bound to the session. `agent` is required, must name a bound profile, and there is no local-child fallback; the first bound profile is the default. The lead also supplies a bounded task contract:
-
-| Parameter | Description |
-|-----------|-------------|
-| `agent` | Required in Router: one of the bound ACP profile IDs (the first is the default). |
-| `role` | Optional semantic hint: `investigate` (default), `implement`, `test`, `review`, or `integrate`. It does not grant or restrict filesystem access. |
-| `read_scope` | Bounded paths or search targets the worker should read. |
-| `write_scope` | Optional task metadata naming paths the worker is expected to modify. Used by the prompt, audit, and overlap checks; it is not a sandbox for an external ACP Agent. A non-empty scope enables MothX's scoped write bridge for write roles. |
-| `expected_deliverables` | `findings`, `changed-files`, `test-evidence`, or `review`; defaults are role-specific. |
-| `verification` | Check or evidence the worker must report; required for `implement`/`integrate`/`test`. |
-| `stop_conditions` | Explicit completion and non-goals. |
-| `attachments` | Runtime input resource IDs; delivery is negotiated from the Agent's ACP prompt capabilities. |
-
-`mode`, `work_dir`, `worktree`, `tools`, and `max_iterations` are local-child parameters and are rejected in Router rather than silently ignored: the external worker's mode, tool authority, lifetime, and working directory come from its ACP profile and the Runtime-resolved session directory.
-
-The result adds a bounded `worker` object (`profileId`, `role`, `deliverables`, `evidence: "worker-reported"`, `outputTruncated`, `stopReason`). Treat that conclusion as untrusted evidence: inspect claimed paths with read-only tools and do not upgrade "worker-reported" to verified without evidence.
-
-`subagent_spawn` is also available in Router for asynchronous external workers. It takes the same `agent` allowlist and bounded contract fields (plus `system_prompt_extra`) and returns a handle immediately. `subagent_status` reads the existing manager status, `subagent_wait(handle: ...)` waits for a handle through the canonical manager status, `subagent_send` sends one follow-up turn to an idle worker on the same remote session, and `subagent_destroy` closes the session and releases it. A spawned external worker outlives the lead turn that created it: its lifecycle is owned by the shared Agent Core/Runtime, so this behavior is identical for TUI, CLI, WebUI/API, ACP, and Channel entry points. It remains explicitly cancellable through `subagent_destroy` and Runtime shutdown. The session mailbox also receives each external completion using the child handle as its member ID, so a later iteration can see the result even when the lead did not call `subagent_wait`. Read-only workers can run concurrently up to the profile's `maxConcurrentChildren`. An `implement` worker in a Runtime-managed per-child worktree may coexist with readers because it cannot write the base workspace; a base-workspace writer (including `subagent_integrate`) remains exclusive in both directions. The Runtime reuses one initialized ACP process for multiple remote sessions in the same profile/workdir, while each child keeps an isolated remote session ID and canonical event stream. If a transport dies, the next turn prefers capability-gated `session/resume` and falls back to `session/load`; a dead in-flight prompt is never replayed. `member`, `mode`, `work_dir`, `worktree`, `tools`, and `max_iterations` are rejected in Router, and `subagent_answer` remains unavailable because ACP decisions use the parent `DecisionService`.
-
-#### `subagent_integrate` - Apply external worker change sets
-
-Applies selected immutable change sets from finished external Router workers to the session workspace. It never copies a mutable child worktree, never reruns the worker, and never starts a second Runner: the Runtime loads the durable snapshot, verifies the digest, status, truncation state, and managed-worktree identity, then uses one exclusive integration lane. A multi-selection is all-or-nothing within that call: if a later snapshot conflicts, snapshots this call already applied are reversed and their evidence is updated.
+Router mode (`/router` panel, `/router <id>[,<id>...]`, or `--router --acp-agent <id>[,<id>...]`) exposes exactly one management tool, `delegate_worker_mgr`. The local `delegate_subagent` and `subagent_*` tools are never registered in Router: every worker lifecycle operation is an `action` of the one signature, sharing the same handle, permission, and state.
 
 ```json
-{
-  "changes": [
-    {"handle": "worker-1", "digest": "sha256:..."},
-    {"handle": "worker-2", "digest": "sha256:..."}
-  ]
-}
+{"action": "delegate", "task": "…", "agent": "opencode", "role": "implement", "write_scope": ["internal/retry/"], "verification": "go test ./internal/retry"}
 ```
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `changes` | array | ✓ | One to eight `{handle, digest}` selections. |
-| `changes[].handle` | string | ✓ | Canonical child handle returned by `subagent_spawn`. |
-| `changes[].digest` | string | ✓ | Exact `changeSetDigest` from `subagent_status` or `subagent_wait`. |
+| action | Required | Behavior |
+|---|---|---|
+| `delegate` | `task`, `agent` | Blocking bounded worker turn; returns `{status, handle, result, worker}`. |
+| `spawn` | `task`, `agent` | Asynchronous worker; returns a handle immediately. |
+| `status` | `handle` | Read one worker's canonical manager status and metadata. |
+| `list` | none | List this session's workers, including retained completed history. |
+| `send` | `handle`, `message` | Append one follow-up turn to an idle worker on the same remote session. |
+| `wait` | `handle` or `handles` | Wait for a terminal state or the bounded window; returns a summary, not full text. |
+| `destroy` | `handle` | Close the remote session and release its permit. |
+| `integrate` | `changes` | Apply immutable change-set snapshots through the exclusive Runtime lane. |
+| `answer` | `question_id`, `answer` | Resolve a worker question through the Runtime-owned `DecisionService`. |
 
-The result reports `integrationId`, `status`, applied files, and per-child evidence. A missing, truncated, failed, or digest-mismatched snapshot is rejected before anything is written. A git apply conflict is returned as structured `conflict` evidence with a nil tool error so the lead can inspect the base workspace and decide how to recover; earlier selections from the same call are rolled back first. An already-applied `{handle, digest}` is idempotent. Integration evidence is persisted on `session_child_runs` (migration 57) as `integration_id`, `integration_digest`, `integration_status`, `integration_error`, and `integrated_at`.
+`delegate`/`spawn` accept the bounded contract fields `task`, `agent`, `role`, `read_scope`, `write_scope`, `expected_deliverables`, `verification`, `stop_conditions`, `system_prompt_extra`, and `attachments`. `agent` is projected as a JSON `const` for one bound worker or an ordered `enum` for several; an unbound profile is rejected with the bound allowlist. `mode`, `work_dir`, `worktree`, `tools`, and `max_iterations` are not accepted: the worker's mode, tools, lifetime, and working directory come from its ACP profile and the Runtime-resolved session directory. The Runtime validates each action's required combination and names a missing field in the error.
+
+`wait` accepts `timeout_seconds` (clamped to 120s; string-form `wait` also accepts a handle). It only limits waiting and never cancels the worker. `integrate` is all-or-nothing across a multi-selection and reuses the existing rollback evidence. `answer` is lead-only; a question ID from another session is rejected.
+
+A spawned external worker outlives the lead turn that created it: its lifecycle is owned by the shared Agent Core/Runtime, so TUI, CLI, WebUI/API, ACP, and Channel entry points behave identically. It remains explicitly cancellable through `destroy` and Runtime shutdown. Read-only workers can run concurrently up to the profile's `maxConcurrentChildren`; a base-workspace writer (including `integrate`) remains exclusive in both directions. The Runtime reuses one initialized ACP process for multiple remote sessions in the same profile/workdir, while each child keeps an isolated remote session ID and canonical event stream. If a transport dies, the next turn prefers capability-gated `session/resume` and falls back to `session/load`; an in-flight prompt is never replayed.
+
+#### Worker MCP bridge (`worker_mgr`)
+
+When the Runtime has a live loopback bridge, a local stdio worker receives one MCP server named `mothx-worker` in `session/new|load|resume`, authenticated by a per-child bearer token. The worker sees exactly one tool:
+
+| action | Required | Behavior |
+|---|---|---|
+| `context` | none | Return the task contract, work directory, and bridge capabilities. |
+| `report` | `kind`, `text` | Append to the session's own `worker-messages/<sessionId>/worker_messages.jsonl`. `notice`/`progress` stay out of lead context; `finding` is injected as a `[WORKER_FINDING]` steering message and may wake an idle lead. |
+| `ask` | `text` | Create a durable `DecisionQuestion`, queue it as a `[MEMBER_QUESTION]`, and block until the lead calls `delegate_worker_mgr(action=answer)`, the deadline elapses, or the worker turn is cancelled. |
+
+There is no spawn/send/destroy/steer control surface and no `childId` parameter: the token is the scope. `report` is limited to 8 KiB, `ask` to 4 KiB, options to 8, and each child to 20 calls/minute. `dedupe_key` is unique per `(session, child, key)` and a repeat returns the same message ID. The per-child token lives for the worker's remote session, not one turn: after a turn reaches its terminal state the scope rejects bridge calls with an MCP tool error naming `child_terminal` (HTTP 200, `isError=true`), and the next `send`/follow-up re-enables the same credential. Tokens are revoked on destroy/close, session shutdown, or process exit, and a resumed remote session receives a fresh token. Only loopback HTTP is implemented; SSE and stdio are rejected/diagnostic. A remote or containerized worker cannot reach host loopback, so it projects `mcpBridge=unreachable` and runs without the bridge. Remote ACP worker completion text remains `worker-reported` evidence; never upgrade it to verified without reading the workspace.
+
+Worker activity is projected read-only in every entry point. The TUI `/router` panel lists recent worker messages and pending questions; the ACP adapter exposes `mothx/worker/messages` (feature key `workerMessages`) and the WebUI reads the same projection from `GET /api/sessions/{id}/router`. Desktop renders it in the Router composer section. None of these surfaces can answer a worker question: only the lead's `delegate_worker_mgr(action=answer)` resolves the durable `DecisionQuestion`. Profile behavior metadata (`model`, `driver`, `mcpBridge`, `capabilityOverrides`) is editable from the TUI `/router` panel, the WebUI Settings → Router Worker page (`PATCH /api/acp/profiles`), and Desktop Settings → Router Workers (`mothx/manage/acp/profiles/patch`); each surface sends only those fields, so argv, URLs, environment names, and trust flags stay operator-owned.
+
+#### Worker integration and capability bridges
+
+`delegate_worker_mgr(action=integrate)` applies selected immutable change sets from finished external Router workers to the session workspace. It never copies a mutable child worktree, never reruns the worker, and never starts a second Runner: the Runtime loads the durable snapshot, verifies the digest, status, truncation state, and managed-worktree identity, then uses one exclusive integration lane. A multi-selection is all-or-nothing within that call: if a later snapshot conflicts, snapshots this call already applied are reversed and their evidence is updated.
+
+```json
+{"action": "integrate", "changes": [{"handle": "worker-1", "digest": "sha256:..."}]}
+```
+
+The result reports `integrationId`, `status`, applied files, and per-child evidence. A missing, truncated, failed, or digest-mismatched snapshot is rejected before anything is written. A git apply conflict is returned as structured `conflict` evidence with a nil tool error so the lead can inspect the base workspace and decide how to recover; earlier selections from the same call are rolled back first. An already-applied `{handle, digest}` is idempotent. Integration evidence is persisted on `session_child_runs` (migration 57).
+
+Resolved worker capabilities (`sessionResume`, `sessionLoad`, `sessionClose`, `additionalDirectories`, prompt media, `mcpHttp`, filesystem/terminal bridges, config-option/thought/subagent support) are persisted on `session_child_runs` (migration 58) as `resolved_capabilities_json`, `capability_degradations_json`, and `mcp_bridge`, and projected in child metadata. The Runtime never enables a capability the Agent did not advertise, and a profile `capabilityOverrides` entry can only tighten it. The `delegate_worker_mgr` description publishes a bounded per-worker summary derived from the same resolver (report/ask, attachments, write, terminal, resume) and names why the bridge is unavailable for a remote, `mcpBridge=off`, closed-listener, or override-tightened profile.
 
 When the Runtime has a workspace Registry, an external worker may also request `fs/read_text_file`. The Runtime resolves the absolute path through the session's workspace roots and symlink fence, limits text reads to 1 MiB of valid UTF-8, and honors ACP's optional 1-based `line`/`limit`. `session/new` sends the same Runtime-authorized roots as `cwd` plus `additionalDirectories` only when the Agent advertises `sessionCapabilities.additionalDirectories`; the same rule applies to `session/load` and `session/resume`. A Registry-backed connection advertises `fs/write_text_file` as part of its capability union; a write-role task with a non-empty `write_scope` may use it. Each write must resolve inside that task scope and uses the shared file lock and atomic-write path. This bridge is optional convenience, not containment: the external Agent's own tools remain outside MothX's write scope. A profile with `"terminal": true` also gets `terminal/create`, `terminal/output`, `terminal/wait_for_exit`, `terminal/kill`, and `terminal/release`; commands run through the shared sandbox and process-group containment with a bounded non-interactive output buffer. Terminal and URL authentication are not implemented.
 

@@ -10,6 +10,7 @@ export type SettingsTabID =
   | 'skills'
   | 'skillhub'
   | 'experts'
+  | 'acpWorkers'
   | 'mcp'
   | 'memory'
   | 'env'
@@ -52,6 +53,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
       { id: 'skills', label: 'settings.tab.skills', description: 'settings.tab.skillsDesc', icon: 'zap' },
       { id: 'skillhub', label: 'settings.tab.skillhub', description: 'settings.tab.skillhubDesc', icon: 'shop' },
       { id: 'experts', label: 'settings.tab.experts', description: 'settings.tab.expertsDesc', icon: 'users' },
+      { id: 'acpWorkers', label: 'settings.tab.acpWorkers', description: 'settings.tab.acpWorkersDesc', icon: 'cpu' },
       { id: 'env', label: 'settings.tab.env', description: 'settings.tab.envDesc', icon: 'terminal' },
     ],
   },
@@ -87,6 +89,7 @@ export type ManagedSettingsTab =
   | 'skills'
   | 'skillhub'
   | 'experts'
+  | 'acpWorkers'
   | 'mcp'
   | 'memory'
   | 'env'
@@ -96,7 +99,7 @@ export type ManagedSettingsTab =
   | 'stats';
 
 const MANAGED_SETTINGS_TABS = new Set<ManagedSettingsTab>([
-  'application', 'providers', 'knowledge', 'skills', 'skillhub', 'experts', 'mcp',
+  'application', 'providers', 'knowledge', 'skills', 'skillhub', 'experts', 'acpWorkers', 'mcp',
   'memory', 'env', 'cron', 'channels', 'serve', 'stats',
 ]);
 

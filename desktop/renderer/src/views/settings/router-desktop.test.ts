@@ -16,6 +16,8 @@ function assertBilingual(keys: string[]): void {
 test('the Router selection goes through the ACP management projection', () => {
   for (const method of [
     'mothx/manage/acp/profiles/list',
+    'mothx/manage/acp/profiles/patch',
+    'mothx/worker/messages',
     'mothx/manage/router/state',
     'mothx/manage/router/activate',
     'mothx/manage/router/deactivate',
@@ -46,6 +48,22 @@ test('the Router labels are bilingual', () => {
     'composer.routerActivate',
     'composer.routerLeave',
     'composer.routerParallel',
+    'composer.routerWorkerMessages',
+    'composer.routerPendingQuestions',
+    'composer.routerLeadOnly',
+    'settings.tab.acpWorkers',
+    'settings.acpWorkers.hint',
+    'settings.acpWorkers.model',
+    'settings.acpWorkers.modelPlaceholder',
+    'settings.acpWorkers.driver',
+    'settings.acpWorkers.bridge',
+    'settings.acpWorkers.overrides',
+    'settings.acpWorkers.save',
+    'settings.acpWorkers.saved',
+    'settings.acpWorkers.saveFailed',
+    'settings.acpWorkers.empty',
+    'settings.acpWorkers.loading',
+    'settings.acpWorkers.unavailable',
   ]);
 });
 
@@ -59,6 +77,14 @@ test('the Router control is labeled as a beta mode', () => {
     );
   }
   assert.match(composerTsx, /t\('composer\.routerMode'\)/, 'the Router button must use the labeled mode text');
+});
+
+test('worker activity is a read-only ACP projection', () => {
+  assert.match(manageApi, /hasFeature\('workerMessages'\)/, 'worker activity must be feature-gated');
+  assert.match(manageApi, /hasFeature\('manageACPProfiles'\)/, 'the profile editor must be feature-gated');
+  assert.match(manageApi, /capabilityOverrides/, 'the profile patch must expose capability tightening');
+  assert.match(manageApi, /model\?: string/, 'the profile patch must expose the worker model');
+  assert.doesNotMatch(manageApi, /command:.*acpAgents|acpAgents.*command/, 'the renderer must not manage argv');
 });
 
 test('the composer offers only enabled and eligible workers', () => {

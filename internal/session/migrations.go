@@ -11,7 +11,7 @@ import (
 	"github.com/oschina/mothx/internal/dao"
 )
 
-const currentSchemaVersion = 57
+const currentSchemaVersion = 58
 
 type schemaMigration struct {
 	version int
@@ -909,6 +909,29 @@ var schemaMigrations = []schemaMigration{
 			}
 			if _, err := tx.Exec(`ALTER TABLE session_child_runs ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
 				return fmt.Errorf("add child run integration fields: %w", err)
+			}
+		}
+		return nil
+	}},
+	{version: 58, name: "add_child_run_worker_capabilities", apply: func(tx *sql.Tx) error {
+		columns := []struct {
+			name       string
+			definition string
+		}{
+			{"resolved_capabilities_json", `TEXT NOT NULL DEFAULT ''`},
+			{"capability_degradations_json", `TEXT NOT NULL DEFAULT ''`},
+			{"mcp_bridge", `TEXT NOT NULL DEFAULT ''`},
+		}
+		for _, column := range columns {
+			exists, err := sqliteColumnExists(tx, "session_child_runs", column.name)
+			if err != nil {
+				return err
+			}
+			if exists {
+				continue
+			}
+			if _, err := tx.Exec(`ALTER TABLE session_child_runs ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
+				return fmt.Errorf("add child run worker capability fields: %w", err)
 			}
 		}
 		return nil

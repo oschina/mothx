@@ -59,10 +59,11 @@ func SynchronizeToolGroups(rt *SessionRuntime, registry *tools.Registry, policy 
 		_, _, _, mode, _ = rt.ConfigSnapshot()
 	}
 	if mode == ModeRouter {
-		// Each Router worker is one bounded external turn. Reconcile the entire
-		// async group so a prior multi-agent selection cannot leave send/answer
-		// (or a local-only tool) alive in the Router surface.
+		// Each Router worker is one bounded external turn. The entire local
+		// multi-agent surface is removed and replaced by the single management
+		// signature, so a prior selection cannot leave a local-only tool alive.
 		removeSubAgentTools(registry)
+		registry.Remove(delegateSubAgentToolName)
 		agent.RegisterRouterSubAgentTools(registry, manager)
 	} else if SubAgentToolsEnabled(rt, policy.MultiAgent) {
 		agent.RegisterSubAgentTools(registry, manager)
@@ -72,16 +73,18 @@ func SynchronizeToolGroups(rt *SessionRuntime, registry *tools.Registry, policy 
 	} else {
 		removeSubAgentTools(registry)
 	}
-	// Router always exposes the blocking delegate tool. The async spawn surface is
-	// installed above; both target the same activated external worker.
-	if policy.Delegate || mode == ModeRouter {
+	// Router exposes only delegate_worker_mgr. The blocking local delegate tool is
+	// independent and must never reappear in the Router surface.
+	if mode != ModeRouter && policy.Delegate {
 		agent.RegisterDelegateSubAgentTool(registry, manager)
-		// Router has exactly one activated worker. Publish it to the tool so the
-		// model-facing description and the `agent` schema carry the real profile ID
-		// instead of leaving the model to guess a well-known product name.
-		publishRouterTarget(rt, registry, mode)
-	} else {
+	} else if mode != ModeRouter {
 		registry.Remove(delegateSubAgentToolName)
+	}
+	if mode == ModeRouter {
+		// Publish the activated worker to the management tool so its description
+		// and `agent` schema carry the real profile ID instead of leaving the model
+		// to guess a well-known product name.
+		publishRouterTarget(rt, registry, mode)
 	}
 	if policy.Workflows {
 		workflow.RegisterTools(registry, manager, nil)
@@ -245,6 +248,21 @@ func trimToolSelection(registry *tools.Registry, names []string, selection map[s
 	}
 }
 
+// RefreshRouterTarget republishes the current Router target from Runtime facts.
+// The ACP child proxy calls it after a real worker initialize so the latest
+// capability advertisement reaches delegate_worker_mgr without waiting for an
+// adapter-side tool-group synchronization. It is a no-op outside Router mode,
+// and the tool description is read lazily when the next prompt is frozen.
+func (r *SessionRuntime) RefreshRouterTarget() {
+	if r == nil {
+		return
+	}
+	r.mu.RLock()
+	mode := r.Mode
+	r.mu.RUnlock()
+	publishRouterTarget(r, r.Registry, mode)
+}
+
 // publishRouterTarget pushes the session's activated ACP worker into every tool
 // that can start an external child. It runs on every tool-group synchronization,
 // so activation, binding changes, and leaving Router mode are all reflected
@@ -259,6 +277,25 @@ func publishRouterTarget(rt *SessionRuntime, registry *tools.Registry, mode stri
 			target = &agent.RouterTarget{
 				ID:       binding.ACPProfileID,
 				Accepted: binding.ProfileIDs(),
+			}
+			// Publish a short, model-facing capability hint derived from the same
+			// resolver the invocation path uses. Bridge availability, remote/off
+			// profiles, capabilityOverrides, and the latest initialize
+			// advertisement all participate, so the prompt never advertises
+			// report/ask for a worker that cannot reach a live bridge.
+			target.Summary = map[string]string{}
+			bridge := rt.workerBridge()
+			bridgeAvailable := bridge != nil && bridge.Available()
+			if settings := rt.SettingsSnapshot(); settings != nil {
+				for _, profileID := range target.Accepted {
+					profile, ok := settings.ACPAgentProfile(profileID)
+					if !ok {
+						continue
+					}
+					target.Summary[profileID] = publishedWorkerCapabilitySummary(
+						publishedWorkerCapabilities(rt, profile), profile, bridgeAvailable, rt.workerAdvertisedCapabilities(profileID),
+					)
+				}
 			}
 			// Other configured-but-unbound profiles appear only as correction
 			// context; the bound allowlist is the accepted schema surface.
@@ -280,6 +317,11 @@ func publishRouterTarget(rt *SessionRuntime, registry *tools.Registry, mode stri
 		case *agent.DelegateSubAgentTool:
 			typed.SetRouterTarget(target)
 		case *agent.SubAgentSpawnTool:
+			typed.SetRouterTarget(target)
+		}
+	}
+	if tool, ok := registry.Get("delegate_worker_mgr"); ok {
+		if typed, ok := tool.(*agent.DelegateWorkerMgrTool); ok {
 			typed.SetRouterTarget(target)
 		}
 	}

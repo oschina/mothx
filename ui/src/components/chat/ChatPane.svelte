@@ -271,7 +271,7 @@
   // server; the composer only projects them and forwards the user's choice.
   let routerSelection = { catalog: [], selectable: [], selection: [], loading: false, error: '' };
   let routerPanelOpen = false;
-  let routerSessionState = { enabled: false, profileIds: [], primaryProfile: '', mode: '' };
+  let routerSessionState = { enabled: false, profileIds: [], primaryProfile: '', mode: '', workerMessages: [], pendingQuestions: [] };
   let approvalHistory = [];
   let runEventCursor = 0;
   let skillPicker;
@@ -347,6 +347,18 @@
       setError(err);
     }
   }
+
+  function workerMessagePreview(message) {
+    const text = String(message?.body || '').replace(/\s+/g, ' ').trim();
+    return text.length > 160 ? `${text.slice(0, 157)}…` : text;
+  }
+
+  function recentWorkerMessages(messages) {
+    return (Array.isArray(messages) ? messages : []).slice(-8).reverse();
+  }
+
+  $: routerWorkerMessages = recentWorkerMessages(routerSessionState.workerMessages);
+  $: routerPendingQuestions = Array.isArray(routerSessionState.pendingQuestions) ? routerSessionState.pendingQuestions : [];
 
   async function activateRouter() {
     const result = await routerManager.activate();
@@ -3212,6 +3224,31 @@
                     <button type="button" class="composer-router-action" disabled={routerSelection.loading} on:click={activateRouter}>
                       {$t('chat.runtime.routerActivate')}
                     </button>
+                  {/if}
+                  {#if routerSessionState.enabled}
+                    {#if routerPendingQuestions.length}
+                      <div class="composer-router-activity">
+                        <span class="composer-config-label">{$t('chat.runtime.routerPendingQuestions')}</span>
+                        {#each routerPendingQuestions as question (question.id)}
+                          <div class="composer-router-question">
+                            <span class="composer-router-meta">{question.childId || question.runId || ''}</span>
+                            <p>{workerMessagePreview({ body: question.question })}</p>
+                            <span class="composer-router-hint">{$t('chat.runtime.routerLeadOnly')}</span>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                    {#if routerWorkerMessages.length}
+                      <div class="composer-router-activity">
+                        <span class="composer-config-label">{$t('chat.runtime.routerWorkerMessages')}</span>
+                        {#each routerWorkerMessages as message (message.id)}
+                          <div class="composer-router-message">
+                            <span class="composer-router-meta">{message.kind} · {message.status}</span>
+                            <span>{workerMessagePreview(message)}</span>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
                   {/if}
                 {/if}
               </div>

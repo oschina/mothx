@@ -139,6 +139,20 @@ func TestValidateProviderReportsMissingModelWhenNoModelCanBeSelected(t *testing.
 	}
 }
 
+func TestCheckWorkerBridgeReportsInvalidMCPBridge(t *testing.T) {
+	settings := config.DefaultSettings()
+	settings.ACPAgents = []config.ACPAgentProfile{{
+		ID: "worker", Enabled: true, Command: []string{"worker"}, MCPBridge: "sometimes",
+	}}
+	checks := checkWorkerBridge(settings)
+	for _, check := range checks {
+		if check.Status == StatusError && strings.Contains(check.Detail, "invalid mcpBridge") {
+			return
+		}
+	}
+	t.Fatalf("invalid mcpBridge did not produce a doctor error: %#v", checks)
+}
+
 func TestRunNeverSerializesAPIKey(t *testing.T) {
 	configDir := t.TempDir()
 	workDir := t.TempDir()

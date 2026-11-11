@@ -606,8 +606,25 @@ export async function patchSessionRuntime(id, patch) {
   });
 }
 
-export async function listACPWorkerProfiles() {
+export async function loadACPWorkerProfileCatalog() {
   const body = await request('/api/acp/profiles');
+  return {
+    profiles: body?.profiles || [],
+    capabilityNames: body?.capabilityNames || []
+  };
+}
+
+export async function listACPWorkerProfiles() {
+  const body = await loadACPWorkerProfileCatalog();
+  return body.profiles;
+}
+
+export async function patchACPWorkerProfile(id, patch) {
+  if (!id) throw new Error('profile ID is required');
+  const body = await request('/api/acp/profiles', {
+    method: 'PATCH',
+    ...jsonBody({ id, ...patch })
+  });
   return body?.profiles || [];
 }
 

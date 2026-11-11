@@ -238,6 +238,11 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 		if r.TeamExpertActive() {
 			return nil, fmt.Errorf("Router mode cannot be combined with an expert team; unbind the expert or choose another mode")
 		}
+		// Re-resolve the model-facing worker summary at every freeze. A worker
+		// initialize recorded since the last tool-group synchronization must reach
+		// delegate_worker_mgr's description, otherwise the next prompt keeps the
+		// activation-time baseline even though the Agent advertised more.
+		publishRouterTarget(r, registry, mode)
 	}
 	beforeToolCall := beforeToolCallForPolicy(policy, opts.BeforeToolCall)
 	beforeToolExecute := beforeToolExecuteForRuntime(r)

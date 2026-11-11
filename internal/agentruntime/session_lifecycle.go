@@ -65,7 +65,10 @@ func DeleteSession(sessionDir, id string) error {
 		return fmt.Errorf("acquire deletion lease for session %s: %w", id, err)
 	}
 	defer guard.Release()
-	return session.DeleteSessionWithMutation(mgr.GetFile(), sessionDir, guard)
+	if err := session.DeleteSessionWithMutation(mgr.GetFile(), sessionDir, guard); err != nil {
+		return err
+	}
+	return RemoveWorkerMessages(sessionDir, id)
 }
 
 // DeleteSessionWithMutation removes a session while the caller already holds
@@ -77,7 +80,10 @@ func DeleteSessionWithMutation(sessionDir, id string, guard *session.RuntimeLeas
 	if err != nil {
 		return err
 	}
-	return session.DeleteSessionWithMutation(mgr.GetFile(), sessionDir, guard)
+	if err := session.DeleteSessionWithMutation(mgr.GetFile(), sessionDir, guard); err != nil {
+		return err
+	}
+	return RemoveWorkerMessages(sessionDir, id)
 }
 
 // OpenSessionForWorkDir opens a persisted session scoped to its working directory.

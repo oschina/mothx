@@ -48,15 +48,15 @@ func TestSynchronizeToolGroupsLifecycle(t *testing.T) {
 	assertToolsPresent(t, registry, toolGroupNames(), false)
 }
 
-func TestSynchronizeToolGroupsRouterAlwaysExposesDelegate(t *testing.T) {
+func TestSynchronizeToolGroupsRouterExposesOnlyWorkerMgr(t *testing.T) {
 	registry := tools.NewRegistry(t.TempDir(), nil)
 	manager := &agent.AgentManager{}
 	rt := &SessionRuntime{Mode: ModeRouter, Registry: registry}
 
 	SynchronizeToolGroups(rt, registry, ToolGroupPolicy{}, manager)
-	assertToolsPresent(t, registry, []string{"delegate_subagent"}, true)
+	assertToolsPresent(t, registry, []string{"delegate_worker_mgr"}, true)
 	assertToolsPresent(t, registry, agent.RouterSubAgentToolNames(), true)
-	assertToolsPresent(t, registry, []string{"subagent_answer"}, false)
+	assertToolsPresent(t, registry, []string{"delegate_subagent", "subagent_spawn", "subagent_answer", "subagent_integrate"}, false)
 
 	// Enabling the ordinary multi-agent capability must not widen Router into
 	// send/answer: an external ACP child is one bounded turn with no mailbox.
@@ -67,12 +67,12 @@ func TestSynchronizeToolGroupsRouterAlwaysExposesDelegate(t *testing.T) {
 	// Leaving Router removes it again unless the adapter policy asks for it.
 	rt.Mode = ModeYolo
 	SynchronizeToolGroups(rt, registry, ToolGroupPolicy{}, manager)
-	assertToolsPresent(t, registry, []string{"delegate_subagent"}, false)
+	assertToolsPresent(t, registry, []string{"delegate_worker_mgr", "delegate_subagent"}, false)
 
 	// An adapter projecting a locally edited mode (TUI /mode) supplies it through
 	// policy.Mode instead of registering tools itself.
 	SynchronizeToolGroups(rt, registry, ToolGroupPolicy{Mode: ModeRouter}, manager)
-	assertToolsPresent(t, registry, []string{"delegate_subagent"}, true)
+	assertToolsPresent(t, registry, []string{"delegate_worker_mgr"}, true)
 }
 
 func TestSynchronizeToolGroupsPerToolSelection(t *testing.T) {
@@ -203,7 +203,7 @@ func TestReconcileManagerBackedToolsRouterRequiresManager(t *testing.T) {
 	if manager != created || builds != 1 {
 		t.Fatalf("router reconcile manager=%v builds=%d, want the built manager and 1", manager, builds)
 	}
-	assertToolsPresent(t, registry, []string{"delegate_subagent"}, true)
+	assertToolsPresent(t, registry, []string{"delegate_worker_mgr"}, true)
 	assertToolsPresent(t, registry, agent.RouterSubAgentToolNames(), true)
 }
 
@@ -319,4 +319,21 @@ func TestReconcileManagerBackedToolsKeepsManagerWithRunningChild(t *testing.T) {
 		t.Fatalf("reconcile returned manager %v, want the live handle %v", got, manager)
 	}
 	assertToolsPresent(t, registry, toolGroupNames(), false)
+}
+
+func TestRouterSynchronizationRemovesPriorLocalDelegate(t *testing.T) {
+	registry := tools.NewRegistry(t.TempDir(), nil)
+	manager := &agent.AgentManager{}
+	rt := &SessionRuntime{Mode: ModeRouter, Registry: registry}
+	agent.RegisterDelegateSubAgentTool(registry, manager)
+	if _, ok := registry.Get("delegate_subagent"); !ok {
+		t.Fatal("precondition failed: local delegate was not registered")
+	}
+	SynchronizeToolGroups(rt, registry, ToolGroupPolicy{Delegate: true}, manager)
+	if _, ok := registry.Get("delegate_subagent"); ok {
+		t.Fatal("Router synchronization left the local delegate_subagent tool installed")
+	}
+	if _, ok := registry.Get("delegate_worker_mgr"); !ok {
+		t.Fatal("Router synchronization did not install delegate_worker_mgr")
+	}
 }

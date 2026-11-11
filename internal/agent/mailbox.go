@@ -25,11 +25,17 @@ const (
 const (
 	MemberItemCompletion = "completion"
 	MemberItemQuestion   = "question"
+	// MemberItemFinding is a non-terminal worker finding. It enters lead
+	// context and may wake an idle lead, but it never ends the worker turn.
+	MemberItemFinding = "finding"
 )
 
 // MemberStatusQuestion is the status projected for MemberItemQuestion entries
 // in subagent_wait summaries.
 const MemberStatusQuestion = "question"
+
+// MemberStatusFinding is the status projected for MemberItemFinding entries.
+const MemberStatusFinding = "finding"
 
 // Rune budgets for the steering-injected completion payload. Error payloads
 // use a smaller budget to reserve room for the appended next-step hint.
@@ -56,6 +62,15 @@ type MemberCompletion struct {
 	// expert-team member. MemberID then carries the canonical child handle and
 	// the next-step hint points at the external-worker tools.
 	External bool
+	// Wake marks an item that may start or wake a lead Run. Completion and
+	// question items are waking; a non-waking item (for example a future
+	// progress/notice projection) stays readable through HasPending but never
+	// signals activity or triggers a mailbox continuation.
+	Wake bool
+	// MessageID optionally identifies the Runtime-owned evidence row for an
+	// external worker item. The mailbox never interprets it; a delivery
+	// observer installed by Runtime uses it to record consumption.
+	MessageID string
 }
 
 // MemberMailbox is the session-level in-memory queue of member completions.
@@ -78,6 +93,9 @@ type MemberMailbox struct {
 	// installed by AgentManager when the member context is bound and lets the
 	// lead's would-stop hook wait for members without knowing the manager.
 	runningChildren func() bool
+	// deliveryObserver receives the items removed by DrainSteering. Runtime owns
+	// the concrete observer; the mailbox only reports consumption.
+	deliveryObserver func([]MemberCompletion)
 }
 
 // NewMemberMailbox creates an empty mailbox.
@@ -123,6 +141,17 @@ func (m *MemberMailbox) AddActivityListener(listener func()) func() {
 	}
 }
 
+// SetDeliveryObserver installs the Runtime-owned consumption observer. It is
+// advisory and may be called with the drained items after they leave the queue.
+func (m *MemberMailbox) SetDeliveryObserver(observer func([]MemberCompletion)) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.deliveryObserver = observer
+	m.mu.Unlock()
+}
+
 // RunningChildren reports whether members are still running. It always reports
 // false when no predicate is installed, so a mailbox that is only used for
 // notifications never blocks a run.
@@ -136,14 +165,61 @@ func (m *MemberMailbox) RunningChildren() bool {
 	return running != nil && running()
 }
 
-// Enqueue appends a completion to the queue and non-blockingly signals
-// activity so a waiting subagent_wait returns promptly.
+// Enqueue appends a completion to the queue and, when it is a waking item,
+// non-blockingly signals activity so a waiting subagent_wait returns promptly
+// and the Runtime continuation scheduler may consider a new Run. A non-waking
+// item is still queued for status/UI reads but never starts a Run.
 func (m *MemberMailbox) Enqueue(c MemberCompletion) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
 	m.queue = append(m.queue, c)
+	if !c.Wake {
+		m.mu.Unlock()
+		return
+	}
+	listeners := make([]func(), 0, len(m.activityListeners))
+	for _, listener := range m.activityListeners {
+		listeners = append(listeners, listener)
+	}
+	m.mu.Unlock()
+	select {
+	case m.activity <- struct{}{}:
+	default:
+	}
+	for _, listener := range listeners {
+		func() {
+			defer func() { _ = recover() }()
+			listener()
+		}()
+	}
+}
+
+// EnqueueCoalesced queues a non-terminal finding, replacing an existing pending
+// finding from the same member instead of accumulating a burst. The replaced
+// payload is superseded: the lead only needs the latest finding segment. It
+// still signals activity when the item is waking.
+func (m *MemberMailbox) EnqueueCoalesced(c MemberCompletion) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	replaced := false
+	for i := len(m.queue) - 1; i >= 0; i-- {
+		if m.queue[i].Kind == c.Kind && m.queue[i].MemberID == c.MemberID {
+			m.queue[i] = c
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		m.queue = append(m.queue, c)
+	}
+	if !c.Wake {
+		m.mu.Unlock()
+		return
+	}
 	listeners := make([]func(), 0, len(m.activityListeners))
 	for _, listener := range m.activityListeners {
 		listeners = append(listeners, listener)
@@ -171,6 +247,23 @@ func (m *MemberMailbox) HasPending() bool {
 	return len(m.queue) > 0
 }
 
+// HasWakingPending reports whether at least one queued item may start or wake
+// a lead Run. Only the mailbox-wake path uses this predicate; status and UI
+// projections keep using HasPending so a non-waking notice stays visible.
+func (m *MemberMailbox) HasWakingPending() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, item := range m.queue {
+		if item.Wake {
+			return true
+		}
+	}
+	return false
+}
+
 // DrainSteering removes and returns every queued completion in enqueue order,
 // formatted as system-injected steering messages (one per completion). It
 // returns nil when nothing is pending. The activity hint is drained alongside
@@ -182,6 +275,7 @@ func (m *MemberMailbox) DrainSteering() []provider.Message {
 	m.mu.Lock()
 	pending := m.queue
 	m.queue = nil
+	observer := m.deliveryObserver
 	m.mu.Unlock()
 	select {
 	case <-m.activity:
@@ -189,6 +283,10 @@ func (m *MemberMailbox) DrainSteering() []provider.Message {
 	}
 	if len(pending) == 0 {
 		return nil
+	}
+	if observer != nil {
+		drained := append([]MemberCompletion(nil), pending...)
+		observer(drained)
 	}
 	messages := make([]provider.Message, 0, len(pending))
 	for _, c := range pending {
@@ -239,7 +337,23 @@ func formatMemberItem(c MemberCompletion) string {
 	if c.Kind == MemberItemQuestion {
 		return formatMemberQuestion(c)
 	}
+	if c.Kind == MemberItemFinding {
+		return formatMemberFinding(c)
+	}
 	return formatMemberCompletion(c)
+}
+
+// formatMemberFinding renders a non-terminal worker finding. It is explicitly
+// worker-reported evidence, never an instruction or a completion replacement.
+func formatMemberFinding(c MemberCompletion) string {
+	var b strings.Builder
+	b.WriteString("[WORKER_FINDING] 系统注入的 worker 上报上下文（非用户输入，worker-reported 证据）。\n")
+	fmt.Fprintf(&b, "worker: %s\n", c.MemberID)
+	b.WriteString("payload:\n")
+	b.WriteString(truncateMemberPayload(c.Payload, memberPayloadRunes))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "下一步：用 subagent_status(handle:%q) 核对证据；worker 仍在运行，除非你决定 send 或 destroy。", c.MemberID)
+	return b.String()
 }
 
 // formatMemberQuestion renders a member question the lead must answer. It never
@@ -259,7 +373,11 @@ func formatMemberQuestion(c MemberCompletion) string {
 	if len(c.Options) > 0 {
 		fmt.Fprintf(&b, "options: %s\n", strings.Join(c.Options, " | "))
 	}
-	fmt.Fprintf(&b, "下一步：用 subagent_answer(handle:%q, question_id:%q, answer:\"…\") 回答；成员会继续执行。", c.MemberID, c.QuestionID)
+	if c.External {
+		fmt.Fprintf(&b, "下一步：用 delegate_worker_mgr(action:%q, question_id:%q, answer:\"…\") 回答；worker 会继续执行。", "answer", c.QuestionID)
+	} else {
+		fmt.Fprintf(&b, "下一步：用 subagent_answer(handle:%q, question_id:%q, answer:\"…\") 回答；成员会继续执行。", c.MemberID, c.QuestionID)
+	}
 	return b.String()
 }
 

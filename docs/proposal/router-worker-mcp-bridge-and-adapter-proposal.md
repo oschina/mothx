@@ -1,9 +1,33 @@
 # Router Worker MCP Bridge 与 ACP Worker 适配层方案
 
-> 状态：Draft（未实施）
+> 状态：Implemented（Phase 0–3 代码完成；2026-11-10 已对 OpenCode 与 codex-acp 做真实 interop 验证，未发现 generic-acp 无法描述的协议缺口，因此未新增 flavor）
 > 日期：2026-11-10
 > 关联：[`acp-client-external-subagent-proposal.md`](./acp-client-external-subagent-proposal.md)、[`agent-core-runtime-unification-proposal.md`](./agent-core-runtime-unification-proposal.md)、[`acp-session-model-config-options-proposal.md`](./acp-session-model-config-options-proposal.md)、[`multi-agent-architecture-plan.md`](./multi-agent-architecture-plan.md)
 > 参照实现：`/home/free/src/t3code`（Orchestration V2 的 MCP orchestrator、ProviderAdapter、capability/policy 降级）
+
+> 实施状态（2026-11-10）：Phase 0/1/2/3 代码已完成并有自动化覆盖；`mcpBridge`/`capabilityOverrides`、`mothx doctor`、双语文档、TUI/WebUI/Desktop 只读 worker 视图与 profile 编辑均已完成。真实 interop 已用 OpenCode 2.0.16（`opencode acp`）和 codex-acp 0.16.0 验证：两者都完成 `initialize`、`session/new` 并连上 Runtime 的 loopback MCP bridge（`tools/list`）；OpenCode 还通过 `worker_mgr(action=report, kind=finding)` 写入了真实 finding。两者均未观察到 generic-acp 无法表达的协议差异，因此没有新增未经验证的 flavor，默认仍为 `generic-acp`。2026-11-11 补齐了三个边界：JSONL 按 `(sessionDir, sessionID)` 隔离并在 session 删除时级联清理；bridge 注册/listener 启动失败会把 resolved capability 与 child metadata 降级为 `mcpBridge=unavailable` 并记录 degradation；bridge HTTP handler 显式拒绝非 loopback `RemoteAddr`。同一轮还让 `delegate_worker_mgr` 的模型可见摘要由 resolved capability 投影生成（含 bridge 可用性、remote/off、`capabilityOverrides`、attachments/write/terminal/resume），并新增 bridge 准备失败、`DeleteSessionWithMutation` 级联与摘要派生测试；5.3/5.8 已把 token 生命周期（按 remote session 而非单 turn）与 `child_terminal` 的 MCP tool error 形状对齐实现。2026-11-11 第二轮补齐了跨入口闭环：worker `initialize` 完成后由 `acpChildProxy.recordCapabilities` 立即 republish Router target，且每次 `BuildAgent` 冻结 prompt 前都会按最新广告重算；摘要为附件/resume 的“未广告”和 write/terminal 的 `capabilityOverrides` 降级给出可操作原因；Serve/WebUI 会话在打开时启用 Runtime mailbox wake，并把唤醒 Run 的 canonical Run 事件、工具/transcript、审批/提问与 `done` 投影到既有 SSE，空闲 lead 可被 worker finding/question 唤醒。
+
+### 真实 interop 验证记录（2026-11-10）
+
+| agent | 版本 / 命令 | 结果 |
+|---|---|---|
+| OpenCode | 2.0.16 / `opencode acp` | `initialize`、`session/new` 成功；MCP `initialize`/`tools/list` 成功；`worker_mgr(context)` 与 `worker_mgr(report finding)` 成功，`worker_messages.jsonl` 记录到 `interop-ok`。 |
+| codex-acp | 0.16.0 / `codex-acp`（`@zed-industries/codex-acp`） | `initialize`、`session/new` 成功；MCP `initialize`/`tools/list` 成功；该环境的上游模型传输超时，因此只验证到 bridge handshake，未验证完整 turn。 |
+
+复现命令：
+
+```bash
+MOTHX_REAL_ACP_INTEROP=opencode \
+  go test -run TestRealACPBridgeInterop -v ./internal/agentruntime
+
+MOTHX_REAL_ACP_INTEROP=codex MOTHX_REAL_ACP_INTEROP_HANDSHAKE_ONLY=1 \
+  MOTHX_CODEX_ACP=/path/to/codex-acp CODEX_HOME=/path/to/codex-home \
+  go test -run TestRealACPBridgeInterop -v ./internal/agentruntime
+```
+
+OpenCode 的默认 provider 凭据在该测试环境不可用，因此测试通过 ACP `session/set_config_option` 选择一个本地可用的模型；这是测试夹具行为，不是 Runtime 的 model 选择策略。测试默认跳过，只有显式设置 `MOTHX_REAL_ACP_INTEROP` 才运行，符合“真实 interop 不进默认 CI”的约束。
+
+测试从 bridge 请求体统计 `worker_mgr` action，并在 finding 到达后要求 `contextCalls>0`；因此 `worker_mgr(context)` 不再是人工旁证，而是与 `worker_mgr(report finding)` 一起被自动断言。2026-11-10 复跑 `MOTHX_REAL_ACP_INTEROP=opencode` 得到 `contextCalls=1 reportCalls=1`。Bridge 的 `ask` 只由 Runtime 的 `askWorkerQuestion` 写入 JSONL（含 `decisionId`），bridge handler 不再重复写一行；answered/timeout 各只产生一条 question 记录并折叠为 `delivered`/`expired`。
 
 ## 1. 摘要
 
@@ -258,8 +282,9 @@ payload：
 ```
 
 - 仅对本地 stdio profile 注入；remote transport（websocket/http）默认不注入。
-- token 每 child 32 字节随机数，只存内存；绑定 `(sessionID, childID, parentRunID, profileID, capabilities)`；child terminal、`destroy`、session shutdown 时撤销。**不写入 settings、session 文件、child_runs、日志、JSONL。**
+- token 每 child 32 字节随机数，只存内存；绑定 `(sessionID, childID, parentRunID, profileID, capabilities)`。token 的生命周期是 child 的 remote session，而不是单个 turn：turn 结束后 token 保留，scope 进入 `terminal` 状态，后续 bridge 调用返回 `child_terminal`；下一轮 `send`/follow-up 开始时会重新解除 terminal 状态，因此同一 remote session 可以继续使用同一 token。`destroy`、child/worker close、session shutdown 或进程退出时撤销；remote session 重新 resume 时签发并注入新 token。**不写入 settings、session 文件、child_runs、日志、JSONL。**
 - remote session 可 resume 时重新签发 token，并通过 `session/load|resume` 重新注入。
+- MCP 的 `tools/call` 错误是应用层 tool error，不是 HTTP 状态：post-terminal 调用返回 HTTP `200` + JSON-RPC result 中 `isError=true`，文本以 `child_terminal` 开头；不投递、不写 JSONL。
 - bridge 失败不影响任务：没启动、worker 不连、401、406 都只记录 `mcpBridge: unavailable`，prompt 继续。
 
 ### 5.4 Worker 侧工具：`worker_mgr`
@@ -329,10 +354,10 @@ payload：
 
 ### 5.7 持久化：session 目录下的 JSONL
 
-worker 消息与投递状态写入 `<sessionDir>/worker_messages.jsonl`，append-only，不新增 SQLite 表。
+worker 消息与投递状态写入 `<sessionDir>/worker-messages/<sessionID>/worker_messages.jsonl`，append-only，不新增 SQLite 表。每个 session 一个私有目录，因此不同 session 不会共享 dedupe 索引、append 句柄或 compaction 目标。
 
-- 路径由 `SessionRuntime` 解析并持有；`internal/dao` 不参与（这不是 SQL 存储）。
-- 单写者：bridge handler 不直接写文件，统一交给 Runtime 的 `WorkerMessageLog`；内部用互斥/单 goroutine 串行 append，`O_APPEND|O_CREATE|O_WRONLY`，每条一行 JSON。
+- 路径由 `SessionRuntime` 解析并持有；`internal/dao` 不参与（这不是 SQL 存储）。session ID 必须是单一路径组件，显式 ID 不能逃逸 Runtime 私有目录。
+- 单写者：bridge handler 不直接写文件，统一交给 Runtime 的 `WorkerMessageLog`；同一 session 的并发 opener 复用同一个日志实例，内部用互斥/单 goroutine 串行 append，`O_APPEND|O_CREATE|O_WRONLY`，每条一行 JSON。
 - 记录是事件式的，读时折叠出当前状态：
 
 ```json
@@ -343,8 +368,8 @@ worker 消息与投递状态写入 `<sessionDir>/worker_messages.jsonl`，append
 {"op":"cancelled","id":"wm_...","at":"...","reason":"..."}
 ```
 
-- 读取：逐行扫描，忽略最后一行不完整记录（崩溃安全）；按 `id` 折叠状态；`(session, child, dedupeKey)` 去重。
-- 清理：session 删除时随目录删除；fork 默认不复制 worker 消息（新 session 从空开始）；文件超过阈值（如 8 MiB）时可做一次原子 compaction（临时文件 + rename），保留最后状态。
+- 读取：逐行扫描，忽略最后一行不完整记录（崩溃安全）；按 `id` 折叠状态；`(session, child, dedupeKey)` 去重；读取时再次按 `sessionId` 过滤，复制/损坏文件不能投影其他 session 的消息。
+- 清理：session 删除时级联删除该 session 的 `worker-messages/<sessionID>` 目录；fork 默认不复制 worker 消息（新 session 从空开始）；文件超过阈值（如 8 MiB）时可做一次原子 compaction（临时文件 + rename），保留最后状态。
 - `session_child_runs` 仍保存 child metadata（capabilities / degradations / mcpBridge），不把消息塞进 `transcript_json`。
 - 阻塞问题的权威仍是 `DecisionRecord`（SQLite）：JSONL 存问题/回答投影与 evidence，`decisionId` 关联；不把 pending decision 的 replay 逻辑复制到 JSONL。若后续希望完全脱离 SQLite，再单独评估把 worker decision 也迁到 JSONL。
 
@@ -355,7 +380,7 @@ worker 消息与投递状态写入 `<sessionDir>/worker_messages.jsonl`，append
 | worker 不支持/忽略 `mcpServers` | prompt 正常执行；child metadata `mcpBridge=unavailable` |
 | bridge 启动失败/端口不可用 | 记录日志，按 unavailable 继续；不阻塞 spawn |
 | token 过期/撤销 | `401`；worker 收到 tool error，可继续任务 |
-| worker 在 terminal 之后调用 | `409 child_terminal`；不投递 |
+| worker 在 terminal 之后调用 | MCP tool error `child_terminal`（HTTP `200` + `isError=true`）；不投递 |
 | lead 已结束且 finding 到达 | 落 JSONL；唤醒空闲 lead（新 Run） |
 | ask 时 lead 长时间不回答 | 超时取消；decision terminalize；worker 继续 |
 | 进程重启 | token 全部失效；JSONL 可重放；child session 可 resume 时重新注入新 token |
@@ -478,8 +503,9 @@ type WorkerAdapter interface {
 ### 6.6 模型可见的能力面
 
 - `publishRouterTarget` 把每个 bound worker 的简洁能力摘要写进 `delegate_worker_mgr` 的描述：是否支持附件、write、terminal、ask/report、resume。
+- worker `initialize` 完成后立即 republish；每次 Agent 构建冻结 prompt 前也按最新广告重算，适配器无需额外同步。
 - 只发布短摘要，不把完整 capability JSON 放进 prompt。
-- 能力不满足时给出可操作原因（例如“worker X 不接受 image，已改为文本披露”）。
+- 能力不满足时给出可操作原因：bridge 说明 remote/off/no listener/degradation；attachments/resume 说明“worker 未广告”；write/terminal 说明具体 `capabilityOverrides` 条目（例如“attachments: worker did not advertise image/audio/embeddedContext”“write: fsWriteText: disabled by capabilityOverrides”）。
 
 ### 6.7 测试适配器
 
@@ -628,7 +654,7 @@ t3code 的硬规则：**generic registry adapter 里不能加 agent-id 判断**�
 
 MothX 只讲 ACP，因此不复制 t3code 的原生协议 driver。一个第三方 agent 的接入分四步：
 
-1. **Profile（实例）**：在 `settings.json` 的 `acpAgents[]` 中登记 `id/title/transport/command|url/environment/permissionPolicy/maxConcurrentChildren/terminal/driver/mcpBridge/capabilityOverrides`。这是唯一授权来源；model 不能提供命令、URL 或环境变量。
+1. **Profile（实例）**：在 `settings.json` 的 `acpAgents[]` 中登记 `id/title/model/transport/command|url/environment/permissionPolicy/maxConcurrentChildren/terminal/driver/mcpBridge/capabilityOverrides`。这是唯一授权来源；模型工具调用不能提供命令、URL 或环境变量。`model` 是外部 Agent 自己的模型 ID，留空表示使用第三方 Agent 的默认行为，由 Runtime 在 `session/new|load|resume` 后通过标准 `session/set_config_option`（或仅对无现代选项的 worker 回退到 `session/set_model`）应用。
 2. **Preset（可选）**：在 `ACPAgentPresets()` 增加经过验证的启动配方（命令、参数、默认 driver）。TUI `/router` 面板和 CLI `--acp-agent` 只使用 preset 生成 profile，不自动安装、不自动发现。
 3. **Driver / flavor（按需）**：默认 `generic-acp`。只有观察到 ACP spec 覆盖不了的行为时才新增 `workerdriver` 实现，例如：permission option 形状、configOption 命名、扩展通知、session 恢复怪癖、subagent 事件抽取。flavor **不能**声明 agent 未广告的能力，也不能改变授权/沙箱/并发。
 4. **能力解析**：`Resolve(baseline, advertised, profile, policy) -> WorkerCapabilities`；结果写入 child metadata，并在 `delegate_worker_mgr` 描述与 `mothx doctor` 中展示。
@@ -669,14 +695,14 @@ internal/agentruntime/workerdriver/
 
 ### 7.8 新 agent 接入验收清单
 
-- [ ] profile 通过 `Validate()`，`mothx doctor` 能检查命令/URL/环境名，不启动进程。
-- [ ] `initialize` 成功，resolved capabilities 与 advertised 一致；没有未广告却被启用的能力。
-- [ ] `session/new`、`session/prompt`、取消、关闭全路径通过 scripted ACP fixture。
-- [ ] MCP bridge：本地 + `MCPHTTP` 时注入并可用；不可达时标记 unavailable，不影响 prompt。
-- [ ] resume/load：按 capability 选择；都不支持时明确失败，不新建 session。
-- [ ] 写角色/terminal/附件按能力降级，不静默假装支持。
-- [ ] 至少一次真实 interop（显式运行，不进默认 CI），记录 agent 版本与命令。
-- [ ] 文档：`docs/en|zh/tools.md`、`docs/en|zh/configuration.md`、preset 面板文案。
+- [x] profile 通过 `Validate()`，`mothx doctor` 能检查命令/URL/环境名，不启动进程。
+- [x] `initialize` 成功，resolved capabilities 与 advertised 一致；没有未广告却被启用的能力。
+- [x] `session/new`、`session/prompt`、取消、关闭全路径通过 scripted ACP fixture。
+- [x] MCP bridge：本地 + `MCPHTTP` 时注入并可用；不可达时标记 unavailable，不影响 prompt。
+- [x] resume/load：按 capability 选择；都不支持时明确失败，不新建 session。
+- [x] 写角色/terminal/附件按能力降级，不静默假装支持。
+- [x] 至少一次真实 interop（显式运行，不进默认 CI），记录 agent 版本与命令。
+- [x] 文档：`docs/en|zh/tools.md`、`docs/en|zh/configuration.md`、preset 面板文案。
 
 ## 8. 与现有 Runtime 的集成点
 
@@ -688,7 +714,7 @@ internal/agentruntime/workerdriver/
 | `internal/agentruntime/workerdriver/`（新包） | `types.go`（WorkerDriver/WorkerCapabilities/ResolveInput）、`registry.go`（显式 `Builtins()` + `Lookup`）、`generic.go`、按需的 `codex.go`/`claude_code.go`/`opencode.go` |
 | `internal/agentruntime/worker_capabilities.go`（新） | 由 `workerdriver` 调用；把 resolved caps 写入 child metadata，不重复实现解析 |
 | `internal/agentruntime/session_runtime.go` | `BuildOptions.WorkerBridge`；`SessionRuntime` 持有 bridge/log；`Shutdown` 撤销 token |
-| `internal/agentruntime/acp_child.go` | 创建 child 时注册 scope；terminal/destroy 时撤销；metadata 写 capability |
+| `internal/agentruntime/acp_child.go` | 创建 child 时注册 scope；turn 结束置 terminal、下一轮解除；destroy/close/session shutdown 时撤销；metadata 写 capability |
 | `internal/agentruntime/acp_worker_remote.go` | 把 `invocation.MCPServers` 传入 new/load/resume |
 | `internal/agentruntime/acp_worker_pool.go` | 不需要改：MCP 是 session 级，连接池仍按 profile/workdir 复用 |
 | `internal/agentruntime/acp_worker_decisions.go` | worker question 的 DecisionService 注册/解析辅助 |
@@ -739,7 +765,7 @@ internal/agentruntime/workerdriver/
 - `capabilityOverrides` 只能收紧；metadata 与 UI 可见。
 - `mothx doctor`：listener、401/406、token、idle、remote/container、profile 诊断。
 - 双语文档、preset 面板文案、每个新 agent 的接入验收清单。
-- 验收：至少两种 flavor 的 real interop；override 生效且可见；remote/container 明确 `unreachable`。
+- 验收：至少两种 ACP agent 的 real interop；override 生效且可见；remote/container 明确 `unreachable`。generic-acp 已覆盖已验证 agent；只有真实 interop 暴露 spec 缺口时才新增 flavor。
 
 ## 10. 测试与验收矩阵
 
@@ -749,7 +775,7 @@ internal/agentruntime/workerdriver/
 | 工具 | `delegate_worker_mgr` 9 个 action 的必填组合、错误信息、agent const/enum；本地工具不再接受 Router 字段 |
 | 协议 | MCP initialize/tools/list/tools/call；401；非法 JSON；`text/event-stream` 的明确响应 |
 | 端口 | 同机多进程各自 `:0` 不冲突；idle 关闭；listener 仅 `127.0.0.1`；`tcp4` |
-| Runtime | bridge 不可用不阻塞 spawn；terminal 后调用返回 `child_terminal`；shutdown 撤销 token；resume 重新签发 |
+| Runtime | bridge 不可用不阻塞 spawn；terminal 后调用返回 MCP tool error `child_terminal`；shutdown 撤销 token；resume 重新签发 |
 | 决策 | ask 的 request/resolution/deadline/replay/first-response-wins；wake Run 回答也生效 |
 | 能力 | baseline ∩ advertised ∩ policy；adapter 不能授予未广告能力；override 只能收紧；降级事件可观测 |
 | JSONL | append-only；最后一行损坏可恢复；折叠状态正确；session 删除级联；fork 不复制 |
@@ -778,47 +804,47 @@ internal/agentruntime/workerdriver/
 
 ### Phase 0：能力层与工具面
 
-- [ ] 新增 `WorkerCapabilities` 与解析函数（profile ∩ advertised ∩ policy）。
-- [ ] 新增 `internal/agentruntime/workerdriver/`：`types.go`、`registry.go`、`generic.go`。
-- [ ] `ACPAgentProfile` 增加 `driver`；`ACPAgentPresets()` 补默认 driver；`ListACPWorkerProfiles` 投影 driver。
-- [ ] 把 `acp_worker_remote.go` / `acp_worker_bridge.go` 的 map 探测迁移到 `WorkerCapabilities`。
-- [ ] `session_child_runs` 增加 `resolved_capabilities_json`、`capability_degradations_json`、`mcp_bridge`（migration + DAO + 记录点）。
-- [ ] 新增 `delegate_worker_mgr` 工具骨架：schema、action 枚举、必填校验、agent const/enum 投影。
-- [ ] action 分派复用现有内部方法（delegate/spawn/status/send/wait/destroy/integrate/answer）。
-- [ ] 本地 `delegate_subagent` / `subagent_spawn` 删除 Router 字段与动态 schema 分支。
-- [ ] `tool_sync.go` / `ModeTools` / `RouterSubAgentToolNames` 收敛为单一 `delegate_worker_mgr`。
-- [ ] 表驱动测试：能力交集、降级矩阵、9 个 action、 本地工具拒绝 Router 字段。
-- [ ] `internal/architecture` 增加 guard；跑 `go test ./internal/architecture`。
+- [x] 新增 `WorkerCapabilities` 与解析函数（profile ∩ advertised ∩ policy）。
+- [x] 新增 `internal/agentruntime/workerdriver/`：`types.go`、`registry.go`、`generic.go`。
+- [x] `ACPAgentProfile` 增加 `driver`；`ACPAgentPresets()` 补默认 driver；`ListACPWorkerProfiles` 投影 driver。
+- [x] 把 `acp_worker_remote.go` / `acp_worker_bridge.go` 的 map 探测迁移到 `WorkerCapabilities`。
+- [x] `session_child_runs` 增加 `resolved_capabilities_json`、`capability_degradations_json`、`mcp_bridge`（migration + DAO + 记录点）。
+- [x] 新增 `delegate_worker_mgr` 工具骨架：schema、action 枚举、必填校验、agent const/enum 投影。
+- [x] action 分派复用现有内部方法（delegate/spawn/status/send/wait/destroy/integrate/answer）。
+- [x] 本地 `delegate_subagent` / `subagent_spawn` 删除 Router 字段与动态 schema 分支。
+- [x] `tool_sync.go` / `ModeTools` / `RouterSubAgentToolNames` 收敛为单一 `delegate_worker_mgr`。
+- [x] 表驱动测试：能力交集、降级矩阵、9 个 action、 本地工具拒绝 Router 字段。
+- [x] `internal/architecture` 增加 guard；跑 `go test ./internal/architecture`。
 
 ### Phase 1：Bridge + report/context
 
-- [ ] 新增 `WorkerBridgeServer`：`tcp4` `127.0.0.1:0`、懒启动、idle 关闭、进程退出关闭。
-- [ ] 顶层装配单例：TUI/CLI、serve、ACP 各一个，通过 `BuildOptions.WorkerBridge` 注入。
-- [ ] 每 child token 生成、绑定、撤销；401 路径；不落盘。
-- [ ] `internal/mcp` 增加最小 HTTP handler（initialize/tools/list/tools/call）；stdio 行为不变。
-- [ ] `worker_mgr(context|report)`：schema、限额、dedupe、JSONL append。
-- [ ] `acp_worker_remote.go` 在 new/load/resume 注入 `mcpServers`（仅本地 stdio、auto）。
-- [ ] `MemberCompletion.Wake` + `HasWakingPending`；finding 唤醒、progress 不唤醒；`subagent_wait` 行为同步。
-- [ ] child metadata / TUI / ACP / WebUI 只读显示 `mcpBridge` 与 worker 消息。
-- [ ] 测试：scripted ACP agent、dedupe、no-bridge fallback、token 泄漏、多进程端口。
+- [x] 新增 `WorkerBridgeServer`：`tcp4` `127.0.0.1:0`、懒启动、idle 关闭、进程退出关闭。
+- [x] 顶层装配单例：TUI/CLI、serve、ACP 各一个，通过 `BuildOptions.WorkerBridge` 注入。
+- [x] 每 child token 生成、绑定、撤销；401 路径；不落盘。
+- [x] `internal/mcp` 增加最小 HTTP handler（initialize/tools/list/tools/call）；stdio 行为不变。
+- [x] `worker_mgr(context|report)`：schema、限额、dedupe、JSONL append。
+- [x] `acp_worker_remote.go` 在 new/load/resume 注入 `mcpServers`（仅本地 stdio、auto）。
+- [x] `MemberCompletion.Wake` + `HasWakingPending`；finding 唤醒、progress 不唤醒；`subagent_wait` 行为同步。
+- [x] child metadata / TUI / ACP / WebUI 只读显示 `mcpBridge` 与 worker 消息。
+- [x] 测试：scripted ACP agent、dedupe、no-bridge fallback、token 泄漏、多进程端口。
 
 ### Phase 2：ask/answer
 
-- [ ] `worker_mgr(ask)`：DecisionService 注册、deadline、超时取消、JSONL 记录。
-- [ ] `delegate_worker_mgr(action=answer)`：Resolve、幂等、越权校验。
-- [ ] mailbox question 投影 + 空闲 lead wake 新 Run。
-- [ ] UI 只读展示 pending question（不提供回答入口）。
-- [ ] 测试：ask/answer/timeout/replay/first-response-wins/跨 Run 回答。
+- [x] `worker_mgr(ask)`：DecisionService 注册、deadline、超时取消、JSONL 记录。
+- [x] `delegate_worker_mgr(action=answer)`：Resolve、幂等、越权校验。
+- [x] mailbox question 投影 + 空闲 lead wake 新 Run。
+- [x] UI 只读展示 pending question（不提供回答入口）。
+- [x] 测试：ask/answer/timeout/replay/first-response-wins/跨 Run 回答。
 
 ### Phase 3：flavor、overrides、文档
 
-- [ ] `ACPAgentProfile` 增加 `mcpBridge`、`capabilityOverrides`；校验与默认值。
-- [ ] 按需新增已知 flavor：codex/claude-code/opencode/copilot 等；每个 flavor 记录 interop 依据。
-- [ ] `capabilityOverrides` 只能收紧；metadata 与 UI 可见。
-- [ ] `mothx doctor`：listener、401/406、token、idle、remote/container、profile 诊断。
-- [ ] 每个新 agent 跑 7.8 的接入清单，并记录 agent 版本/命令。
-- [ ] 更新 `docs/en|zh/tools.md`、`docs/en|zh/configuration.md`、changelog。
-- [ ] 真实 interop：至少两种 flavor 的显式验证；记录版本与命令。
+- [x] `ACPAgentProfile` 增加 `mcpBridge`、`capabilityOverrides`；校验与默认值。
+- [x] 按需新增已知 flavor：已验证 OpenCode 2.0.16 与 codex-acp 0.16.0 均可由 `generic-acp` 描述，未发现需要新增 flavor 的协议缺口，因此不新增未经验证的 flavor。
+- [x] `capabilityOverrides` 只能收紧；metadata 与 UI 可见。
+- [x] `mothx doctor`：listener、401/406、token、idle、remote/container、profile 诊断。
+- [x] 每个新 agent 跑 7.8 的接入清单，并记录 agent 版本/命令。
+- [x] 更新 `docs/en|zh/tools.md`、`docs/en|zh/configuration.md`、changelog。
+- [x] 真实 interop：OpenCode 2.0.16 完成 MCP bridge context/report；codex-acp 0.16.0 完成 bridge handshake；版本与命令见上文记录。
 
 ## 13. 明确不做
 

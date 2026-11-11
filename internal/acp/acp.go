@@ -148,6 +148,9 @@ type server struct {
 	ruleContent   string
 	contextFiles  string
 
+	workerBridgeMu sync.Mutex
+	workerBridge   *agentruntime.WorkerBridgeServer
+
 	multiAgent        bool
 	delegate          bool
 	workflows         bool
@@ -1479,6 +1482,8 @@ func (s *server) dispatchRequest(req rpcRequest) {
 		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handleSubagentList(req) })
 	case "mothx/subagent/messages":
 		s.runSessionOp(req, sessionOpKey(req.Params), func() { s.handleSubagentMessages(req) })
+	case "mothx/worker/messages":
+		s.handleWorkerMessages(req)
 	case "session/list":
 		s.handleListSessions(req)
 	case "mothx/session/listAll":
@@ -2102,6 +2107,9 @@ func (s *server) handleInitialize(req rpcRequest) {
 				// projection (mothx/manage/router/*). Desktop gates its Router
 				// composer control on this key.
 				"manageRouter",
+				// workerMessages advertises the read-only Router worker message
+				// and pending-question projection (mothx/worker/messages).
+				"workerMessages",
 				"manageApplicationSettings",
 				"manageServeConfig",
 				"manageChannels",
@@ -2547,6 +2555,7 @@ func (s *server) handleNewSession(req rpcRequest) {
 		Providers:  s.currentProviderCatalog(),
 		SandboxMgr: s.sbMgr, SkillsMgr: s.skillsMgr, ExtraContext: s.extraContext, RuleContent: s.ruleContent,
 		Settings: s.currentSettings(), Workflows: s.workflows, Browser: s.browser, ArtifactEnabled: s.artifactEnabled(),
+		WorkerBridge: s.sharedWorkerBridge(),
 	})
 	if err == nil {
 		err = s.configureSessionBindings(runtime, mgr, true)
@@ -3046,6 +3055,7 @@ func (s *server) openSessionRuntime(sessionID, cwd string, servers []mcp.ServerC
 		Providers:  s.currentProviderCatalog(),
 		SandboxMgr: s.sbMgr, SkillsMgr: s.skillsMgr, ExtraContext: s.extraContext, RuleContent: s.ruleContent,
 		Settings: s.currentSettings(), Workflows: s.workflows, Browser: s.browser, ArtifactEnabled: s.artifactEnabled(),
+		WorkerBridge: s.sharedWorkerBridge(),
 	})
 	if err == nil {
 		err = s.configureSessionBindings(runtime, mgr, false)
@@ -6452,4 +6462,15 @@ func (s *server) writeMessage(v any) error {
 		}
 	}
 	return nil
+}
+
+// sharedWorkerBridge lazily creates the one process-wide Router worker MCP
+// bridge used by every ACP session in this process.
+func (s *server) sharedWorkerBridge() *agentruntime.WorkerBridgeServer {
+	s.workerBridgeMu.Lock()
+	defer s.workerBridgeMu.Unlock()
+	if s.workerBridge == nil {
+		s.workerBridge = agentruntime.NewWorkerBridgeServer()
+	}
+	return s.workerBridge
 }

@@ -392,6 +392,10 @@ export interface ACPWorkerProfileView {
   permissionPolicy?: string;
   maxConcurrentChildren?: number;
   parallelBaseWorkspaceWrites?: boolean;
+  model?: string;
+  driver?: string;
+  mcpBridge?: string;
+  capabilityOverrides?: string[];
   invalidReason?: string;
 }
 
@@ -403,15 +407,95 @@ export interface RouterSessionView {
   mode?: string;
 }
 
+// WorkerMessageView is the read-only evidence projection of one worker report.
+export interface WorkerMessageView {
+  id: string;
+  sessionId?: string;
+  childId?: string;
+  parentRunId?: string;
+  direction?: string;
+  kind?: string;
+  body?: string;
+  status?: string;
+  runId?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// WorkerQuestionView is the read-only projection of a worker question that is
+// awaiting the lead. It is never an answer surface.
+export interface WorkerQuestionView {
+  id: string;
+  sessionId?: string;
+  runId?: string;
+  childId?: string;
+  question?: string;
+  options?: string[];
+  createdAt?: string;
+  expiresAt?: string;
+}
+
+export interface WorkerMessagesView {
+  messages: WorkerMessageView[];
+  pendingQuestions: WorkerQuestionView[];
+}
+
+export interface ACPWorkerProfileCatalog {
+  profiles: ACPWorkerProfileView[];
+  capabilityNames: string[];
+}
+
+export async function loadACPWorkerProfileCatalog(): Promise<ACPWorkerProfileCatalog> {
+  if (!hasFeature('manageACPProfiles')) return { profiles: [], capabilityNames: [] };
+  const body = await invoke<{ profiles?: ACPWorkerProfileView[]; capabilityNames?: string[] }>(
+    'mothx/manage/acp/profiles/list',
+    {},
+  );
+  return {
+    profiles: body?.profiles || [],
+    capabilityNames: body?.capabilityNames || [],
+  };
+}
+
 export async function listACPWorkerProfiles(): Promise<ACPWorkerProfileView[]> {
   if (!hasFeature('manageRouter')) return [];
-  const body = await invoke<{ profiles?: ACPWorkerProfileView[] }>('mothx/manage/acp/profiles/list', {});
+  const catalog = await loadACPWorkerProfileCatalog();
+  return catalog.profiles;
+}
+
+// patchACPWorkerProfile edits only model/driver/mcpBridge/capabilityOverrides.
+// Argv, URLs, environment, and trust flags never cross this boundary.
+export async function patchACPWorkerProfile(
+  id: string,
+  patch: { model?: string; driver?: string; mcpBridge?: string; capabilityOverrides?: Record<string, boolean> },
+): Promise<ACPWorkerProfileView[]> {
+  if (!hasFeature('manageACPProfiles')) return [];
+  const body = await invoke<{ profiles?: ACPWorkerProfileView[] }>('mothx/manage/acp/profiles/patch', { id, ...patch });
   return body?.profiles || [];
 }
 
 export async function getRouterState(sessionId: string): Promise<RouterSessionView | undefined> {
   if (!hasFeature('manageRouter') || !sessionId) return undefined;
   return invoke<RouterSessionView>('mothx/manage/router/state', { sessionId });
+}
+
+// getWorkerMessages projects the Runtime-owned worker message log and pending
+// questions. The renderer never reads the JSONL file or decision ledger.
+export async function getWorkerMessages(sessionId: string): Promise<WorkerMessagesView> {
+  const empty: WorkerMessagesView = { messages: [], pendingQuestions: [] };
+  if (!hasFeature('workerMessages') || !sessionId) return empty;
+  try {
+    const body = await invoke<Partial<WorkerMessagesView>>('mothx/worker/messages', { sessionId });
+    return {
+      messages: Array.isArray(body?.messages) ? body.messages : [],
+      pendingQuestions: Array.isArray(body?.pendingQuestions) ? body.pendingQuestions : [],
+    };
+  } catch {
+    // The projection is advisory; a session without an attached Runtime or a
+    // closed worker log simply has no worker activity to show.
+    return empty;
+  }
 }
 
 export async function activateRouter(sessionId: string, profileIds: string[]): Promise<RouterSessionView | undefined> {

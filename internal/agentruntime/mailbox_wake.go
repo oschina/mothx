@@ -97,7 +97,7 @@ func (r *SessionRuntime) EnableMailboxWake(ctx context.Context, options MailboxW
 	r.mailboxWakeCancel = cancel
 	r.mailboxWakeDone = done
 	r.mailboxWakeMu.Unlock()
-	if r.Mailbox.HasPending() {
+	if r.Mailbox.HasWakingPending() {
 		select {
 		case wake <- struct{}{}:
 		default:
@@ -202,7 +202,7 @@ func waitMailboxWakeDebounce(ctx context.Context, delay time.Duration) bool {
 }
 
 func (r *SessionRuntime) tryMailboxWake(ctx context.Context, options MailboxWakeOptions) error {
-	if r == nil || r.Mailbox == nil || !r.Mailbox.HasPending() {
+	if r == nil || r.Mailbox == nil || !r.Mailbox.HasWakingPending() {
 		return nil
 	}
 	sessionDir, sessionID := r.mailboxWakeSession()
@@ -256,7 +256,7 @@ func (r *SessionRuntime) executeMailboxWake(ctx context.Context, runID string, o
 	// the mailbox, in which case this wake must not create an empty Run. Do not
 	// drain yet: every step below can fail, and notifications must survive a
 	// failed continuation so the retry path can still deliver them.
-	if !r.Mailbox.HasPending() {
+	if !r.Mailbox.HasWakingPending() {
 		return nil
 	}
 

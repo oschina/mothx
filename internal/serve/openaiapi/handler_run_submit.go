@@ -949,6 +949,13 @@ func (s *Server) executeBackgroundRun(sess *APISession, durableCtx context.Conte
 	}
 	defer artifacts.Close()
 
+	// Keep the Runtime's in-memory provider/model projection aligned with this
+	// run so a later mailbox continuation uses the same session configuration.
+	if err := sess.Runtime.ConfigureSession(runProvider, providerName, model, mode, provider.ThinkingLevel(s.cfg.DefaultThinkingLevel)); err != nil {
+		terminalErrMsg = err.Error()
+		return
+	}
+
 	// Build the local Agent through the shared SessionRuntime. Responses
 	// background runs use a separate remote driver and do not enter here.
 	a, err := sess.Runtime.BuildAgent(agentruntime.AgentBuildOptions{

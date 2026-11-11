@@ -117,7 +117,7 @@ func TestSubAgentWaitToolPendingSummaryExcludesPayload(t *testing.T) {
 	_, mgr := newTestFactoryAndManager(t)
 	mbox := NewMemberMailbox()
 	mgr.SetMemberContext(NewMemberDefRegistry(nil), mbox, "software-company")
-	mbox.Enqueue(MemberCompletion{
+	mbox.Enqueue(MemberCompletion{Wake: true,
 		MemberID:    "engineer",
 		DisplayName: "工程师",
 		Status:      MemberStatusDone,
@@ -159,7 +159,7 @@ func TestSubAgentWaitToolReturnsOnActivity(t *testing.T) {
 	mgr.SetMemberContext(nil, mbox, "")
 	go func() {
 		time.Sleep(30 * time.Millisecond)
-		mbox.Enqueue(MemberCompletion{MemberID: "qa", Status: MemberStatusDone, Payload: "passed"})
+		mbox.Enqueue(MemberCompletion{Wake: true, MemberID: "qa", Status: MemberStatusDone, Payload: "passed"})
 	}()
 
 	tool := NewSubAgentWaitTool(mgr)

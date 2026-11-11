@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/config"
 )
 
 // handleManageRouterActivate binds the session to the requested external ACP
@@ -183,4 +184,97 @@ func (s *server) routerBindingProjection(rt *sessionRuntime) map[string]any {
 	projection["primaryProfile"] = binding.ACPProfileID
 	projection["profileIds"] = binding.ProfileIDs()
 	return projection
+}
+
+// handleManageACPProfilePatch applies the narrow behavior-metadata edit surface
+// for one existing ACP worker profile. It cannot change argv, URLs, environment,
+// trust flags, or authorization; those remain operator-owned settings.json
+// fields. Validation and persistence stay in internal/config.
+func (s *server) handleManageACPProfilePatch(req rpcRequest) {
+	var in struct {
+		ID                  string           `json:"id"`
+		Driver              *string          `json:"driver"`
+		Model               *string          `json:"model"`
+		MCPBridge           *string          `json:"mcpBridge"`
+		CapabilityOverrides *map[string]bool `json:"capabilityOverrides"`
+	}
+	if err := json.Unmarshal(req.Params, &in); err != nil || strings.TrimSpace(in.ID) == "" {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32602, "invalid_params", "id is required", nil))
+		return
+	}
+	if _, err := config.PatchACPAgentProfile(in.ID, config.ACPAgentProfilePatch{
+		Driver: in.Driver, Model: in.Model, MCPBridge: in.MCPBridge, CapabilityOverrides: in.CapabilityOverrides,
+	}); err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "acp_profile_patch_failed", err.Error(), nil))
+		return
+	}
+	// Publish the patched profile set into the live configuration plane. A
+	// Desktop/WebUI edit otherwise only changed settings.json: currentSettings()
+	// (and therefore every later session/new/load/worker delegation) kept the
+	// startup snapshot until the process restarted.
+	settings, err := s.manageSettings()
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "settings_unavailable", err.Error(), nil))
+		return
+	}
+	updated := settings
+	if current := s.currentSettings(); current != nil {
+		copy := *current
+		copy.ACPAgents = settings.ACPAgents
+		updated = &copy
+	}
+	s.publishSettings(updated)
+	// A Router session's session-scoped AgentManager captured the settings
+	// snapshot at construction, so re-resolve idle Router sessions against the
+	// published profile without disturbing an in-flight prompt.
+	s.refreshRouterWorkerManagers()
+	s.writeResponse(req.ID, map[string]any{"profiles": agentruntime.ListACPWorkerProfiles(s.currentSettings())}, nil)
+}
+
+// refreshRouterWorkerManagers refreshes the session-scoped manager snapshot for
+// idle Router sessions so a profile edit (notably the default model) reaches the
+// next worker delegation. Running prompts are skipped: their manager must not
+// be mutated mid-run and already resolve the profile captured at admission.
+func (s *server) refreshRouterWorkerManagers() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	targets := make([]*sessionRuntime, 0, len(s.sessions))
+	for _, rt := range s.sessions {
+		if rt == nil || rt.runtime == nil || rt.registry == nil || !rt.runtime.RouterActive() {
+			continue
+		}
+		rt.cancelMu.Lock()
+		running := rt.promptID != ""
+		rt.cancelMu.Unlock()
+		if running {
+			continue
+		}
+		targets = append(targets, rt)
+	}
+	s.mu.Unlock()
+	settings := s.currentSettings()
+	if settings == nil {
+		return
+	}
+	for _, rt := range targets {
+		if rt.agentMgr != nil {
+			// Refresh the manager that already owns this session's binding and
+			// child bookkeeping; rebuilding would orphan live worker handles.
+			p, providerName, model, _, _ := rt.runtime.ConfigSnapshot()
+			if p == nil || model == nil {
+				log.Printf("[acp] refresh Router worker profile for %s: session provider and model are unavailable", rt.id)
+				continue
+			}
+			rt.agentMgr.UpdateRuntimeConfig(p, providerName, model, settings, s.allow)
+			continue
+		}
+		manager, err := s.registerTeamExpertTools(rt.runtime, rt.registry)
+		if err != nil {
+			log.Printf("[acp] refresh Router worker profile for %s: %v", rt.id, err)
+			continue
+		}
+		rt.agentMgr = manager
+	}
 }

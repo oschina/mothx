@@ -63,7 +63,7 @@ MothX 提供了一套功能强大且可扩展的内置工具，用于文件操�
 | [`subagent_status`](#subagent_---子-agent-委托) | 多 Agent | 查询子 Agent 执行状态与结果 | 只读 | 仅多 Agent 模式 |
 | [`subagent_send`](#subagent_---子-agent-委托) | 多 Agent | 向子 Agent 发送后续追问或指令 | 发送消息 | 仅多 Agent 模式 |
 | [`subagent_wait`](#subagent_---子-agent-委托) | 多 Agent | 关键路径被阻塞时等待成员活动 | 有界等待（2.5s-120s） | 仅多 Agent 模式 |
-| [`subagent_integrate`](#subagent_integrate---应用外部-worker-变更集) | Router | 应用选定的不可变 worker 变更集 | Runtime 集成通道 | 仅 Router 模式 |
+| [`delegate_worker_mgr`](#delegate_worker_mgr---router-worker-生命周期) | Router | 管理外部 ACP worker 生命周期 | Provider profile + Runtime 策略 | 仅 Router 模式 |
 | [`subagent_answer`](#subagent_---子-agent-委托) | 多 Agent | 回答成员的阻塞提问，让其继续执行 | 提问作用域 | 仅多 Agent 模式 |
 | [`subagent_destroy`](#subagent_---子-agent-委托) | 多 Agent | 销毁子 Agent 释放其上下文资源 | 销毁释放 | 仅多 Agent 模式 |
 | [`delegate_subagent`](#delegate_subagent---阻塞式单子-agent-委托) | 委托模式 | 同步执行一个子 Agent 任务 | 子 Agent 级权限限制 | 仅 Delegate 模式 |
@@ -637,47 +637,57 @@ Delegate 模式适用于大范围代码搜索、多步调查、聚焦实现或�
 
 #### Router 外部 worker
 
-> **状态：Beta（预览）模式。** Router 仍处于评估阶段：下列工具、参数与 profile 结构可能在任何版本中变更，且不提供兼容性迁移路径。请在临时会话中用它们试用外部 ACP worker，不要当作生产集成契约。
+> **状态：Beta（预览）模式。** Router 仍处于评估阶段：工具、action 与 profile 结构可能在任何版本中变更，且不提供兼容性迁移路径。请在临时会话中试用外部 ACP worker，不要当作生产集成契约。
 
-在 Router 模式（`/router` 面板、`/router <id>[,<id>...]` 或 `--router --acp-agent <id>[,<id>...]`）下，`delegate_subagent` 指向会话绑定的外部 ACP worker 之一。`agent` 必填且必须是已绑定 profile，不存在本地子 Agent 回退；第一个绑定 profile 是默认目标。lead 还需要提供有界任务契约：
-
-| 参数 | 说明 |
-|------|------|
-| `agent` | Router 必填：已绑定的 ACP profile ID 之一（第一个为默认值）。 |
-| `role` | 可选语义提示：`investigate`（默认）、`implement`、`test`、`review` 或 `integrate`。它不授予也不限制文件系统访问。 |
-| `read_scope` | worker 应读取的路径或搜索目标（有界）。 |
-| `write_scope` | 可选任务元数据，用于说明 worker 预期修改的路径。它参与提示词、审计与重叠检查，但不是外部 ACP Agent 的沙箱。写入角色传入非空 scope 时，MothX 才会提供受该任务范围约束的 write bridge。 |
-| `expected_deliverables` | `findings`、`changed-files`、`test-evidence` 或 `review`；默认值按角色决定。 |
-| `verification` | worker 必须报告的检查或证据；`implement`/`integrate`/`test` 必填。 |
-| `stop_conditions` | 明确的完成条件与非目标。 |
-| `attachments` | Runtime 输入资源 ID；根据 Agent 的 ACP prompt 能力协商传输方式。 |
-
-`mode`、`work_dir`、`worktree`、`tools`、`max_iterations` 是本地子 Agent 参数，Router 下会明确拒绝而不是静默忽略：外部 worker 的模式、工具权限、生命周期和工作目录来自其 ACP profile 与 Runtime 解析出的会话目录。
-
-返回值新增有界 `worker` 对象（`profileId`、`role`、`deliverables`、`evidence: "worker-reported"`、`outputTruncated`、`stopReason`）。请把该结论视为不可信证据：用只读工具核对声称的路径，不要在没有证据时把 `worker-reported` 升级为已验证。
-
-Router 下还提供 `subagent_spawn`，用于启动异步外部 worker。它接受同样的 `agent` 允许列表与有界任务契约字段（另加 `system_prompt_extra`），并立即返回 handle。`subagent_status` 读取既有 manager 状态；`subagent_wait(handle: ...)` 通过规范 manager 状态等待指定 handle 进入终态；`subagent_send` 可在空闲 worker 的同一远程 session 上发送一次后续 turn；`subagent_destroy` 关闭 session 并释放资源。spawn 的外部 worker 会在创建它的 lead turn 结束后继续存活：其生命周期由共享 Agent Core/Runtime 拥有，因此 TUI、CLI、WebUI/API、ACP 与 Channel 入口的行为完全一致；它仍可由 `subagent_destroy` 和 Runtime shutdown 显式取消。会话 mailbox 也会以 child handle 作为成员 ID 接收每次外部完成通知，因此即使 lead 没有调用 `subagent_wait`，后续迭代仍能看到结果。只读 worker 可以按 profile 的 `maxConcurrentChildren` 并发运行。在 Runtime 受管独立 worktree 中执行的 `implement` worker 不会写主工作区，因此可以与 reader 并存；主工作区 writer（包括 `subagent_integrate`）仍然双向独占。对于同一 profile/workdir，Runtime 会复用一个已初始化的 ACP 进程承载多个远程 session；每个 child 仍拥有独立的远程 session ID 与规范事件流。传输断开后，后续 turn 会优先通过能力协商的 `session/resume` 重连，并回退到 `session/load`；已经发出且产生副作用的 prompt 不会被重放。Router 下会拒绝 `member`、`mode`、`work_dir`、`worktree`、`tools` 与 `max_iterations`，且仍不暴露 `subagent_answer`，因为 ACP 决策统一走父级 `DecisionService`。
-
-#### `subagent_integrate` - 应用外部 worker 变更集
-
-把已完成的外部 Router worker 的选定不可变变更集应用到会话工作区。它不会复制可变的子级 worktree，不会重跑 worker，也不会启动第二个 Runner：Runtime 读取持久化快照，校验 digest、状态、截断标记与受管 worktree 身份，然后通过唯一的独占集成通道执行。一次选择多个快照时，该调用内是 all-or-nothing 的：如果后续快照冲突，本次调用已经应用的快照会被回滚，并更新对应证据。
+Router 模式（`/router` 面板、`/router <id>[,<id>...]` 或 `--router --acp-agent <id>[,<id>...]`）只暴露一个管理工具 `delegate_worker_mgr`。本地 `delegate_subagent` 与 `subagent_*` 工具在 Router 下不会注册：worker 生命周期的每个操作都是同一签名的 `action`，共享同一个 handle、权限与状态。
 
 ```json
-{
-  "changes": [
-    {"handle": "worker-1", "digest": "sha256:..."},
-    {"handle": "worker-2", "digest": "sha256:..."}
-  ]
-}
+{"action": "delegate", "task": "…", "agent": "opencode", "role": "implement", "write_scope": ["internal/retry/"], "verification": "go test ./internal/retry"}
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `changes` | array | ✓ | 1 到 8 个 `{handle, digest}` 选择。 |
-| `changes[].handle` | string | ✓ | `subagent_spawn` 返回的规范 child handle。 |
-| `changes[].digest` | string | ✓ | 来自 `subagent_status` 或 `subagent_wait` 的精确 `changeSetDigest`。 |
+| action | 必填 | 行为 |
+|---|---|---|
+| `delegate` | `task`, `agent` | 阻塞执行一个有界 worker turn；返回 `{status, handle, result, worker}`。 |
+| `spawn` | `task`, `agent` | 异步创建 worker，立即返回 handle。 |
+| `status` | `handle` | 读取单个 worker 的规范 manager 状态与元数据。 |
+| `list` | 无 | 列出本会话的 worker（含已完成的保留历史）。 |
+| `send` | `handle`, `message` | 向空闲 worker 的同一远程 session 追加一轮。 |
+| `wait` | `handle` 或 `handles` | 等待终态或有界时间窗口；只返回摘要，不返回全文。 |
+| `destroy` | `handle` | 关闭远程 session 并释放 permit。 |
+| `integrate` | `changes` | 通过独占 Runtime 通道应用不可变变更集快照。 |
+| `answer` | `question_id`, `answer` | 通过 Runtime 拥有的 `DecisionService` 回答 worker 问题。 |
 
-结果包含 `integrationId`、`status`、已应用文件与每个 child 的证据。缺失、截断、失败或 digest 不匹配的快照会在写入前被拒绝。git apply 冲突会作为结构化 `conflict` 证据返回，且工具错误为 nil，便于 lead 用只读工具检查主工作区并决定如何恢复；返回前会先回滚同一次调用中更早应用的快照。已经应用过的 `{handle, digest}` 是幂等的。集成证据通过 migration 57 持久化在 `session_child_runs` 的 `integration_id`、`integration_digest`、`integration_status`、`integration_error` 与 `integrated_at` 字段。
+`delegate`/`spawn` 接受有界契约字段 `task`、`agent`、`role`、`read_scope`、`write_scope`、`expected_deliverables`、`verification`、`stop_conditions`、`system_prompt_extra` 与 `attachments`。`agent` 在单 worker 时投影为 JSON `const`，多 worker 时为有序 `enum`；未绑定 profile 会带绑定允许列表报错。`mode`、`work_dir`、`worktree`、`tools`、`max_iterations` 不再接受：worker 的模式、工具、生命周期与工作目录由 ACP profile 和 Runtime 解析的会话目录决定。Runtime 校验每个 action 的必填组合，并在错误中直接点名字段。
+
+`wait` 接受 `timeout_seconds`（上限 120 秒；字符串形式也接受单个 handle）。它只限制等待，不取消 worker。`integrate` 多选时 all-or-nothing，并复用现有回滚证据。`answer` 仅 lead 可调用；来自其他会话的 question ID 会被拒绝。
+
+spawn 的外部 worker 会在创建它的 lead turn 结束后继续存活：生命周期由共享 Agent Core/Runtime 拥有，因此 TUI、CLI、WebUI/API、ACP 与 Channel 入口行为一致；仍可由 `destroy` 与 Runtime shutdown 显式取消。只读 worker 可按 profile 的 `maxConcurrentChildren` 并发；主工作区 writer（包括 `integrate`）仍然双向独占。Runtime 会为同 profile/workdir 复用已初始化的 ACP 进程，但每个 child 保留独立远程 session ID 与规范事件流。传输断开后优先使用能力协商的 `session/resume`，回退 `session/load`；已发出的 prompt 不会重放。
+
+#### Worker MCP bridge（`worker_mgr`）
+
+当 Runtime 拥有可用的 loopback bridge 时，本地 stdio worker 会在 `session/new|load|resume` 收到一个名为 `mothx-worker` 的 MCP server，使用每 child 独立的 bearer token 鉴权。worker 只能看到一个工具：
+
+| action | 必填 | 行为 |
+|---|---|---|
+| `context` | 无 | 返回任务契约、工作目录与 bridge 能力。 |
+| `report` | `kind`, `text` | 写入该会话私有的 `worker-messages/<sessionId>/worker_messages.jsonl`。`notice`/`progress` 不进入 lead 上下文；`finding` 作为 `[WORKER_FINDING]` steering 注入，并可唤醒空闲 lead。 |
+| `ask` | `text` | 创建 durable `DecisionQuestion`，作为 `[MEMBER_QUESTION]` 排队，并阻塞直到 lead 调用 `delegate_worker_mgr(action=answer)`、超时或 worker turn 被取消。 |
+
+没有 spawn/send/destroy/steer 控制面，也没有 `childId` 参数：token 即作用域。`report` 上限 8 KiB，`ask` 上限 4 KiB，options 最多 8 个，每 child 每分钟 20 次。`dedupe_key` 在 `(session, child, key)` 上唯一，重复返回同一 message ID。per-child token 的生命周期是 worker 的 remote session，而不是单个 turn：turn 结束后 scope 会以 MCP tool error 拒绝 bridge 调用并命名为 `child_terminal`（HTTP 200、`isError=true`），下一次 `send`/follow-up 会重新启用同一凭证。销毁/关闭、会话 shutdown 或进程退出时撤销 token；remote session resume 时会获得新 token。只实现 loopback HTTP；SSE 与 stdio 被拒绝/仅作诊断。远程或容器 worker 无法访问宿主 loopback，因此投影为 `mcpBridge=unreachable` 并在无 bridge 的情况下继续执行。远程 ACP worker 的完成文本仍是 `worker-reported` 证据；未经工作区核对不得升级为 verified。
+
+所有入口都以只读方式投影 worker 活动：TUI 的 `/router` 面板列出最近 worker 消息与待回答问题；ACP 暴露 `mothx/worker/messages`（feature key `workerMessages`），WebUI 通过 `GET /api/sessions/{id}/router` 读取同一投影；Desktop 在 Router composer 中渲染。以上界面都不能回答 worker 问题，只有 lead 的 `delegate_worker_mgr(action=answer)` 能解析 durable `DecisionQuestion`。Profile 行为元数据（`model`、`driver`、`mcpBridge`、`capabilityOverrides`）可在 TUI `/router` 面板、WebUI 设置 → Router Worker（`PATCH /api/acp/profiles`）与 Desktop 设置 → Router Workers（`mothx/manage/acp/profiles/patch`）中编辑；这些界面只提交上述字段，argv、URL、环境变量名与授权标志仍由运维方持有。
+
+#### Worker 集成与能力桥
+
+`delegate_worker_mgr(action=integrate)` 把已完成的外部 Router worker 的选定不可变变更集应用到会话工作区。它不会复制可变的子级 worktree，不会重跑 worker，也不会启动第二个 Runner：Runtime 读取持久化快照，校验 digest、状态、截断标记与受管 worktree 身份，然后通过唯一的独占集成通道执行。一次选择多个快照时，该调用内是 all-or-nothing 的：如果后续快照冲突，本次调用已经应用的快照会被回滚，并更新对应证据。
+
+```json
+{"action": "integrate", "changes": [{"handle": "worker-1", "digest": "sha256:..."}]}
+```
+
+结果包含 `integrationId`、`status`、已应用文件与逐 child 证据。缺失、截断、失败或 digest 不匹配的快照会在写入前被拒绝。git apply 冲突以结构化 `conflict` 证据返回，工具错误为 nil，便于 lead 检查主工作区并决定恢复方式；同一调用中更早的快照会先回滚。已应用的 `{handle, digest}` 是幂等的。集成证据写入 `session_child_runs`（migration 57）。
+
+解析后的 worker 能力（`sessionResume`、`sessionLoad`、`sessionClose`、`additionalDirectories`、prompt media、`mcpHttp`、文件系统/terminal 桥、config-option/thought/subagent 支持）写入 `session_child_runs`（migration 58）的 `resolved_capabilities_json`、`capability_degradations_json` 与 `mcp_bridge`，并投影到 child metadata。Runtime 不会启用 Agent 未广告的能力，profile 的 `capabilityOverrides` 只能收紧。`delegate_worker_mgr` 的描述会发布由同一解析器生成的简短 per-worker 摘要（report/ask、attachments、write、terminal、resume），并为 remote、`mcpBridge=off`、listener 已关闭或被 override 收紧的 profile 说明 bridge 不可用的原因。
 
 当 Runtime 绑定了工作区 Registry 时，外部 worker 还可以请求 `fs/read_text_file`。Runtime 会通过会话工作区根与符号链接围栏解析绝对路径，只返回不超过 1 MiB 的合法 UTF-8 文本，并支持 ACP 可选的 1-based `line`/`limit`。只有当 Agent 声明 `sessionCapabilities.additionalDirectories` 时，`session/new` 才会以 `cwd` 加 `additionalDirectories` 的形式发送同一组 Runtime 授权根；`session/load` 与 `session/resume` 遵循同一规则。绑定 Registry 的连接会在能力并集中广播 `fs/write_text_file`；带非空 `write_scope` 的写入角色任务可以使用它。每次写入都必须解析到该任务 scope 内，并复用共享文件锁和原子写入路径。这个桥是可选便利能力，不是 containment：外部 Agent 自己的工具仍在 MothX 写入范围之外。设置 `"terminal": true` 的 profile 还会获得 `terminal/create`、`terminal/output`、`terminal/wait_for_exit`、`terminal/kill`、`terminal/release`；命令通过共享沙箱与进程组回收执行，并使用有界、非交互的输出缓冲。不实现终端认证或 URL 认证。
 

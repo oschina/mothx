@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/oschina/mothx/internal/agentruntime"
+	"github.com/oschina/mothx/internal/agentruntime/workerdriver"
 	"github.com/oschina/mothx/internal/config"
 	"github.com/oschina/mothx/internal/cron"
 	"github.com/oschina/mothx/internal/mcp"
@@ -80,6 +81,8 @@ func (s *server) handleManageRequest(req rpcRequest) {
 		s.handleManageSettingsPatch(req)
 	case "mothx/manage/acp/profiles/list":
 		s.handleManageACPProfilesList(req)
+	case "mothx/manage/acp/profiles/patch":
+		s.handleManageACPProfilePatch(req)
 	case "mothx/manage/router/state":
 		s.handleManageRouterState(req)
 	case "mothx/manage/router/activate":
@@ -664,7 +667,10 @@ func (s *server) handleManageACPProfilesList(req rpcRequest) {
 		s.writeResponse(req.ID, nil, acpStructuredRPCError(-32000, "settings_unavailable", err.Error(), nil))
 		return
 	}
-	s.writeResponse(req.ID, map[string]any{"profiles": agentruntime.ListACPWorkerProfiles(settings)}, nil)
+	s.writeResponse(req.ID, map[string]any{
+		"profiles":        agentruntime.ListACPWorkerProfiles(settings),
+		"capabilityNames": workerdriver.CapabilityOverrideNames(),
+	}, nil)
 }
 
 func (s *server) handleManageSettingsPatch(req rpcRequest) {

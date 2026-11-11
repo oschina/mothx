@@ -67,7 +67,7 @@ base-workspace writers are available behind an explicit per-profile opt-in.
 | Area | Status | Implemented boundary |
 | --- | --- | --- |
 | First-class Router mode | Implemented | `ModeRouter`, shared policy validation, Router-only frozen local tool surface and system prompt, CLI/TUI/ACP mode catalogs. |
-| ACP profile configuration | Implemented | `settings.json` `acpAgents` schema; argv validation, duplicate ID, environment-name, enabled-state, and permission-policy validation. |
+| ACP profile configuration | Implemented | `settings.json` `acpAgents` schema; argv validation, duplicate ID, environment-name, enabled-state, permission-policy, and optional external `model` validation. A configured model is applied to the worker session through standard `session/set_config_option`, with a `session/set_model` fallback only when no modern option is advertised; empty keeps the Agent default. |
 | Router session binding | Implemented | Replayable `router_binding` session entry for an ordered profile allowlist and one non-blocking strategy per profile, supported by legacy store, EventStore, display projection, fork, and Runtime resolution. |
 | Multi-profile Router target | Implemented | The replayable binding stores an ordered allowlist plus one recorded strategy per profile. The first profile is the default; tools accept any bound ID and reject configured-but-unbound IDs. `ResolveRouterACPProfileByID` resolves the selected worker from the same Runtime-owned binding. |
 | ACP stdio client | Implemented | Transport-only `internal/acp/client`: NDJSON JSON-RPC correlation, notifications, reverse requests, v1 initialize/session helpers (including `session/resume`), frame bounds, and real subprocess tests. |

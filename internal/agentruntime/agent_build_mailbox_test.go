@@ -40,7 +40,7 @@ func mailboxBuildFixtureWithSource(t *testing.T, source RuntimeSource) (*Session
 		t.Fatal("runtime mailbox is not initialized")
 	}
 	runtime.Mailbox.SetRunningPredicate(func() bool { return true })
-	runtime.Mailbox.Enqueue(agent.MemberCompletion{
+	runtime.Mailbox.Enqueue(agent.MemberCompletion{Wake: true,
 		Kind: agent.MemberItemCompletion, MemberID: "member-1", DisplayName: "Engineer",
 		Status: agent.MemberStatusDone, Payload: "member finished",
 	})

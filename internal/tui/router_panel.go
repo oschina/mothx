@@ -53,6 +53,11 @@ type routerPanelState struct {
 	PresetCursor   int
 	Error          string
 	Message        string
+	// WorkerMessages and PendingQuestions are the Runtime-owned read-only
+	// worker projection. The panel never answers a question; only the lead's
+	// delegate_worker_mgr action=answer may resolve it.
+	WorkerMessages   []agentruntime.WorkerMessage
+	PendingQuestions []agentruntime.WorkerQuestionView
 }
 
 // routerPanelPermissionOptions is the ordered permission-policy vocabulary the
@@ -75,6 +80,7 @@ func (a *App) openRouterPanel() {
 	a.input = a.input.Blur()
 	a.routerPanel = routerPanelState{Open: true, EditingIndex: -1}
 	a.loadRouterPanelProfiles()
+	a.refreshRouterPanelWorkerActivity()
 	a.scheduleRender()
 }
 
@@ -99,6 +105,23 @@ func (a *App) loadRouterPanelProfiles() {
 	}
 	a.routerPanel.Error = ""
 	a.routerPanel.Message = ""
+}
+
+// refreshRouterPanelWorkerActivity folds the Runtime-owned worker message log
+// and pending questions. Failure is silent: a session without a directory or
+// attached Runtime simply has no worker activity to show.
+func (a *App) refreshRouterPanelWorkerActivity() {
+	if a.runtime == nil {
+		a.routerPanel.WorkerMessages = nil
+		a.routerPanel.PendingQuestions = nil
+		return
+	}
+	snapshot, err := a.runtime.WorkerSnapshot()
+	if err != nil {
+		return
+	}
+	a.routerPanel.WorkerMessages = snapshot.Messages
+	a.routerPanel.PendingQuestions = snapshot.PendingQuestions
 }
 
 // routerPanelDescriptors projects the shared Runtime catalog for the current
@@ -213,11 +236,15 @@ func (a *App) routerPanelFormFields() []routerPanelField {
 	fields := []routerPanelField{
 		{Key: "id", Title: a.translator.Text(i18n.MsgRouterPanelFieldID), Description: valueOrDefault(draft.ID, a.translator.Text(i18n.MsgRouterPanelValueRequired))},
 		{Key: "title", Title: a.translator.Text(i18n.MsgRouterPanelFieldTitle), Description: valueOrDefault(draft.Title, unknown)},
+		{Key: "model", Title: a.translator.Text(i18n.MsgRouterPanelFieldModel), Description: valueOrDefault(draft.EffectiveModel(), unknown)},
 		{Key: "transport", Title: a.translator.Text(i18n.MsgRouterPanelFieldTransport), Description: string(draft.EffectiveTransport())},
 		{Key: "url", Title: a.translator.Text(i18n.MsgRouterPanelFieldURL), Description: valueOrDefault(draft.URL, unknown)},
 		{Key: "command", Title: a.translator.Text(i18n.MsgRouterPanelFieldCommand), Description: valueOrDefault(strings.Join(draft.Command, " "), a.translator.Text(i18n.MsgRouterPanelValueRequired))},
 		{Key: "environment", Title: a.translator.Text(i18n.MsgRouterPanelFieldEnvironment), Description: valueOrDefault(strings.Join(draft.Environment, ", "), unknown)},
 		{Key: "permission", Title: a.translator.Text(i18n.MsgRouterPanelFieldPermission), Description: valueOrDefault(string(draft.PermissionPolicy), string(config.ACPPermissionAutoReject))},
+		{Key: "driver", Title: a.translator.Text(i18n.MsgRouterPanelFieldDriver), Description: draft.EffectiveDriver()},
+		{Key: "mcpBridge", Title: a.translator.Text(i18n.MsgRouterPanelFieldMCPBridge), Description: draft.EffectiveMCPBridge()},
+		{Key: "capabilityOverrides", Title: a.translator.Text(i18n.MsgRouterPanelFieldCapabilityOverrides), Description: valueOrDefault(strings.Join(draft.CapabilityOverrideNames(), ", "), unknown)},
 		{Key: "terminal", Title: a.translator.Text(i18n.MsgRouterPanelFieldTerminal), Description: terminal},
 		{Key: "parallelWrites", Title: a.translator.Text(i18n.MsgRouterPanelFieldParallelWrites), Description: parallelWrites},
 		{Key: "enabled", Title: a.translator.Text(i18n.MsgRouterPanelFieldEnabled), Description: enabled},
@@ -241,6 +268,8 @@ func (a *App) routerPanelFieldPlaceholder(field string) string {
 		return "codex (lowercase ascii, digits, - and _)"
 	case "title":
 		return "Codex"
+	case "model":
+		return "worker's own model id (empty = worker default)"
 	case "transport":
 		return "stdio | websocket | http"
 	case "url":
@@ -249,6 +278,12 @@ func (a *App) routerPanelFieldPlaceholder(field string) string {
 		return "opencode acp   (or /absolute/path/to/worker acp)"
 	case "environment":
 		return "NAME, NAME (never NAME=value)"
+	case "driver":
+		return "generic-acp"
+	case "mcpBridge":
+		return "auto | off"
+	case "capabilityOverrides":
+		return "promptImage, terminal   (capabilities to disable)"
 	default:
 		return field
 	}
@@ -261,6 +296,8 @@ func (a *App) routerPanelFieldValue(field string) string {
 		return draft.ID
 	case "title":
 		return draft.Title
+	case "model":
+		return draft.EffectiveModel()
 	case "transport":
 		return string(draft.EffectiveTransport())
 	case "url":
@@ -269,6 +306,12 @@ func (a *App) routerPanelFieldValue(field string) string {
 		return strings.Join(draft.Command, " ")
 	case "environment":
 		return strings.Join(draft.Environment, ", ")
+	case "driver":
+		return draft.EffectiveDriver()
+	case "mcpBridge":
+		return draft.EffectiveMCPBridge()
+	case "capabilityOverrides":
+		return strings.Join(draft.CapabilityOverrideNames(), ", ")
 	}
 	return ""
 }
@@ -282,6 +325,8 @@ func (a *App) submitRouterPanelFieldInput() {
 		draft.ID = value
 	case "title":
 		draft.Title = value
+	case "model":
+		draft.Model = value
 	case "transport":
 		draft.Transport = strings.ToLower(value)
 	case "url":
@@ -291,6 +336,21 @@ func (a *App) submitRouterPanelFieldInput() {
 		draft.Command = strings.Fields(value)
 	case "environment":
 		draft.Environment = splitRouterPanelList(value)
+	case "driver":
+		draft.Driver = strings.ToLower(value)
+	case "mcpBridge":
+		draft.MCPBridge = strings.ToLower(value)
+	case "capabilityOverrides":
+		names := splitRouterPanelList(value)
+		if len(names) == 0 {
+			draft.CapabilityOverrides = nil
+			break
+		}
+		overrides := make(map[string]bool, len(names))
+		for _, name := range names {
+			overrides[name] = false
+		}
+		draft.CapabilityOverrides = overrides
 	}
 	a.routerPanel.InputField = ""
 	a.routerPanel.Input = editor.Model{}
@@ -783,6 +843,9 @@ func (a *App) renderRouterPanel() string {
 	if a.routerPanel.Message != "" {
 		lines = append(lines, "", a.routerPanel.Message)
 	}
+	if a.routerPanel.InputField == "" && !a.routerPanel.Editing && !a.routerPanel.ChoosingPreset && !a.routerPanel.ChoosingColon && !a.routerPanel.ConfirmDelete {
+		lines = append(lines, a.routerPanelWorkerActivity(width)...)
+	}
 	if a.routerPanel.Error != "" {
 		lines = append(lines, "", errorStyle.Render(a.routerPanel.Error))
 	}
@@ -790,4 +853,36 @@ func (a *App) renderRouterPanel() string {
 		lines = append(lines[:height-1], "...")
 	}
 	return toolModalStyle.Width(width).Height(height + 2).Render(strings.Join(lines, "\n"))
+}
+
+// routerPanelWorkerActivity renders the read-only worker message and pending
+// question projection. The panel deliberately offers no answer control: the
+// lead is the only writer through delegate_worker_mgr.
+func (a *App) routerPanelWorkerActivity(width int) []string {
+	questions := a.routerPanel.PendingQuestions
+	messages := a.routerPanel.WorkerMessages
+	if len(questions) == 0 && len(messages) == 0 {
+		return nil
+	}
+	lines := []string{"", a.translator.Text(i18n.MsgRouterPanelWorkerMessages)}
+	if len(messages) == 0 {
+		lines = append(lines, "  "+a.translator.Text(i18n.MsgRouterPanelWorkerMessagesEmpty))
+	} else {
+		start := max(0, len(messages)-5)
+		for _, message := range messages[start:] {
+			child := truncatePlain(message.ChildID, 18)
+			body := truncatePlain(message.Body, max(20, width-40))
+			lines = append(lines, xansi.Truncate(fmt.Sprintf("  %-10s %-8s %-10s %s", child, message.Kind, message.Status, body), width, "..."))
+		}
+	}
+	if len(questions) > 0 {
+		lines = append(lines, "", a.translator.Text(i18n.MsgRouterPanelPendingQuestions))
+		for _, question := range questions {
+			child := truncatePlain(question.ChildID, 18)
+			body := truncatePlain(question.Question, max(20, width-40))
+			lines = append(lines, xansi.Truncate(fmt.Sprintf("  %-10s %s", child, body), width, "..."))
+		}
+		lines = append(lines, "  "+a.translator.Text(i18n.MsgRouterPanelWorkerReadOnly))
+	}
+	return lines
 }

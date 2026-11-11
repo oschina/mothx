@@ -2042,7 +2042,7 @@ func TestManageACPProfilesListProjectsSafeCatalog(t *testing.T) {
 	configDir := t.TempDir()
 	writeManageSettings(t, configDir, func(settings *config.Settings) {
 		settings.ACPAgents = []config.ACPAgentProfile{{
-			ID: "codex", Title: "Codex", Command: []string{"/opt/secret-location/codex", "acp"},
+			ID: "codex", Title: "Codex", Model: "fast-model", Command: []string{"/opt/secret-location/codex", "acp"},
 			Enabled: true, Environment: []string{"OPENAI_API_KEY_SHOULD_NOT_LEAK"},
 			PermissionPolicy: config.ACPPermissionAutoAllowOnce,
 		}}
@@ -2055,7 +2055,7 @@ func TestManageACPProfilesListProjectsSafeCatalog(t *testing.T) {
 		t.Fatalf("profiles = %#v", result["profiles"])
 	}
 	profile := profiles[0].(map[string]any)
-	if profile["id"] != "codex" || profile["routerEligible"] != true {
+	if profile["id"] != "codex" || profile["routerEligible"] != true || profile["model"] != "fast-model" {
 		t.Fatalf("profile = %#v", profile)
 	}
 	encoded := fmt.Sprint(result)

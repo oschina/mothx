@@ -39,7 +39,7 @@ import {
 import { t } from '@/core/i18n';
 import { changeSessionWorkingDirectory, chooseWorkingDirectory } from '@/core/sessions';
 import { currentConfigOptions, currentModelLabel, currentProviderLabel, hasFeature, isSessionRunning, sessionRunStatus, state, type SessionConfigOptionShape } from '@/core/state';
-import { activateRouter, deactivateRouter, listACPWorkerProfiles, type ACPWorkerProfileView } from '@/core/manage-api';
+import { activateRouter, deactivateRouter, getWorkerMessages, listACPWorkerProfiles, type ACPWorkerProfileView, type WorkerMessageView, type WorkerQuestionView } from '@/core/manage-api';
 import { refreshSessions } from '@/core/sessions';
 import { formatBytes } from '@/core/transcript';
 import { applyWorkspacePickerTarget } from '@/core/workspace-picker';
@@ -227,6 +227,8 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
   const [routerSelection, setRouterSelection] = useState<string[]>([]);
   const [routerBusy, setRouterBusy] = useState(false);
   const [routerError, setRouterError] = useState('');
+  const [workerMessages, setWorkerMessages] = useState<WorkerMessageView[]>([]);
+  const [workerQuestions, setWorkerQuestions] = useState<WorkerQuestionView[]>([]);
   const routerAvailable = hasFeature('manageRouter');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -257,6 +259,29 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
     return () => { cancelled = true; };
   }, [configOpen, routerAvailable, routerWorkers.length]);
 
+  // Worker messages and pending questions are Runtime-owned read-only
+  // projections. Refresh them whenever the config popover opens or an
+  // activation/deactivation changes the session.
+  useEffect(() => {
+    if (!configOpen || !routerAvailable) return;
+    const sessionId = appState.activeSessionId;
+    if (!sessionId) return;
+    let cancelled = false;
+    void (async () => {
+      const projection = await getWorkerMessages(sessionId);
+      if (cancelled) return;
+      setWorkerMessages(projection.messages);
+      setWorkerQuestions(projection.pendingQuestions);
+    })();
+    return () => { cancelled = true; };
+  }, [configOpen, routerAvailable, appState.activeSessionId, appState.activeRunStatus]);
+
+  const workerMessagePreview = (message: WorkerMessageView | WorkerQuestionView) => {
+    const raw = (message as WorkerQuestionView).question ?? (message as WorkerMessageView).body;
+    const text = String(raw || '').replace(/\s+/g, ' ').trim();
+    return text.length > 160 ? `${text.slice(0, 157)}…` : text;
+  };
+
   const selectableRouterWorkers = routerWorkers.filter((worker) => worker.enabled && worker.routerEligible);
 
   const toggleRouterWorker = (id: string) => {
@@ -279,6 +304,9 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
       await activateRouter(sessionId, routerSelection);
       // The host persisted Router mode and notified the canonical session
       // state; refresh the list so the composer renders the resolved mode.
+      const projection = await getWorkerMessages(sessionId);
+      setWorkerMessages(projection.messages);
+      setWorkerQuestions(projection.pendingQuestions);
       await refreshSessions();
     } catch (error) {
       setRouterError(error instanceof Error ? error.message : String(error));
@@ -294,6 +322,8 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
     setRouterError('');
     try {
       await deactivateRouter(sessionId);
+      setWorkerMessages([]);
+      setWorkerQuestions([]);
       await refreshSessions();
     } catch (error) {
       setRouterError(error instanceof Error ? error.message : String(error));
@@ -593,6 +623,37 @@ export function Composer({ source }: { source: 'home' | 'chat' }) {
                           </button>
                         )}
                       </div>
+                    </>
+                  )}
+                </div>
+              )}
+              {routerAvailable && (workerQuestions.length > 0 || workerMessages.length > 0) && (
+                <div className="space-y-1.5 border-t border-border pt-2">
+                  {workerQuestions.length > 0 && (
+                    <>
+                      <span className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[.3px] text-muted-foreground">
+                        {t('composer.routerPendingQuestions')}
+                      </span>
+                      {workerQuestions.slice(-5).map((question) => (
+                        <div key={question.id} className="space-y-0.5 rounded-[5px] border border-warning/40 px-2 py-1.5 text-[11.5px] text-muted-foreground">
+                          <span className="block text-[10px] uppercase tracking-[.03em] text-faint">{question.childId || question.runId || ''}</span>
+                          <p className="text-foreground">{workerMessagePreview(question)}</p>
+                          <span className="block text-[10.5px] text-faint">{t('composer.routerLeadOnly')}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                  {workerMessages.length > 0 && (
+                    <>
+                      <span className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[.3px] text-muted-foreground">
+                        {t('composer.routerWorkerMessages')}
+                      </span>
+                      {workerMessages.slice(-8).reverse().map((message) => (
+                        <div key={message.id} className="flex flex-col gap-0.5 rounded-[5px] border border-border px-2 py-1.5 text-[11.5px] text-muted-foreground">
+                          <span className="text-[10px] uppercase tracking-[.03em] text-faint">{message.kind} · {message.status}</span>
+                          <span>{workerMessagePreview(message)}</span>
+                        </div>
+                      ))}
                     </>
                   )}
                 </div>

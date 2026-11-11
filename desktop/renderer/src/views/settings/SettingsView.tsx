@@ -19,6 +19,7 @@ import { useAppBackground } from '@/hooks/useAppBackground';
 import { cn } from '@/lib/utils';
 
 import { AboutPanel } from './AboutPanel';
+import { AcpWorkersPanel } from './AcpWorkersPanel';
 import { ApplicationPanel } from './ApplicationPanel';
 import { AppearancePanel } from './AppearancePanel';
 import { ChannelsPanel } from './ChannelsPanel';
@@ -43,6 +44,7 @@ export function useSettingsNav() {
 function tabVisible(tab: SettingsTabID): boolean {
   if (tab === 'knowledge') return hasFeature('manageKnowledgeBases');
   if (tab === 'experts') return hasFeature('manageExperts');
+  if (tab === 'acpWorkers') return hasFeature('manageACPProfiles');
   return true;
 }
 
@@ -148,6 +150,7 @@ export function SettingsView() {
             {activeTab === 'skills' ? <SkillsPanel /> : null}
             {activeTab === 'skillhub' ? <SkillHubPanel /> : null}
             {activeTab === 'experts' ? <ExpertsPanel /> : null}
+            {activeTab === 'acpWorkers' ? <AcpWorkersPanel /> : null}
             {activeTab === 'env' ? <EnvPanel /> : null}
             {activeTab === 'cron' ? <CronPanel /> : null}
             {activeTab === 'channels' ? <ChannelsPanel /> : null}

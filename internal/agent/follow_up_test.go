@@ -98,7 +98,7 @@ func TestMemberFollowUpsWaitsForRunningChildren(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	mbox.Enqueue(MemberCompletion{MemberID: "agent-child-1", DisplayName: "Alice", Status: MemberStatusDone, Payload: "member result"})
+	mbox.Enqueue(MemberCompletion{Wake: true, MemberID: "agent-child-1", DisplayName: "Alice", Status: MemberStatusDone, Payload: "member result"})
 	select {
 	case messages := <-done:
 		if len(messages) != 1 || !strings.Contains(messages[0].Content, "[MEMBER_COMPLETION]") {

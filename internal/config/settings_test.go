@@ -306,6 +306,24 @@ func TestACPAgentProfileRejectsUnsafeCommandAndDuplicates(t *testing.T) {
 	}
 }
 
+func TestACPAgentProfilesRejectUnknownMCPBridge(t *testing.T) {
+	settings := DefaultSettings()
+	settings.ACPAgents = []ACPAgentProfile{{
+		ID: "worker", Enabled: true, Command: []string{"worker"}, MCPBridge: "sometimes",
+	}}
+	if err := settings.ValidateACPAgentProfiles(); err == nil || !strings.Contains(err.Error(), "invalid mcpBridge") {
+		t.Fatalf("unknown mcpBridge validation = %v, want invalid mcpBridge error", err)
+	}
+	if _, ok := settings.ACPAgentProfile("worker"); ok {
+		t.Fatal("profile with an invalid mcpBridge was resolved as usable")
+	}
+
+	settings.ACPAgents[0].MCPBridge = ""
+	if err := settings.ValidateACPAgentProfiles(); err != nil {
+		t.Fatalf("empty mcpBridge should default to auto: %v", err)
+	}
+}
+
 func TestAuthoredSettingRoundTrip(t *testing.T) {
 	data, err := json.Marshal(&Settings{Authored: true})
 	if err != nil {
@@ -2169,5 +2187,71 @@ func TestEffectiveWebSearchYuanbaoBackend(t *testing.T) {
 	cfg = settings.EffectiveWebSearch()
 	if cfg.Backend != WebSearchBackendDeepSeek || cfg.BaseURL != DefaultDeepSeekWebSearchBaseURL {
 		t.Fatalf("deepseek effective = %#v, want DeepSeek endpoint", cfg)
+	}
+}
+
+func TestACPAgentProfileDriverBridgeAndCapabilityOverrides(t *testing.T) {
+	base := ACPAgentProfile{ID: "worker", Enabled: true, Command: []string{"worker"}}
+	if got := base.EffectiveDriver(); got != "generic-acp" {
+		t.Fatalf("default driver = %q, want generic-acp", got)
+	}
+	if got := base.EffectiveMCPBridge(); got != ACPMCPBridgeAuto {
+		t.Fatalf("default mcpBridge = %q, want auto", got)
+	}
+	configured := base
+	configured.Driver = "codex-acp"
+	configured.MCPBridge = "off"
+	configured.CapabilityOverrides = map[string]bool{"promptImage": false, "terminal": false}
+	if err := configured.Validate(); err != nil {
+		t.Fatalf("valid driver/bridge/override profile rejected: %v", err)
+	}
+	if got := configured.EffectiveDriver(); got != "codex-acp" {
+		t.Fatalf("driver = %q", got)
+	}
+	if got := configured.EffectiveMCPBridge(); got != ACPMCPBridgeOff {
+		t.Fatalf("mcpBridge = %q, want off", got)
+	}
+	if got := configured.CapabilityOverrideNames(); len(got) != 2 || got[0] != "promptImage" || got[1] != "terminal" {
+		t.Fatalf("override names = %v", got)
+	}
+
+	// The raw configured value is validated, so a typo is rejected instead of
+	// being silently normalized to auto by EffectiveMCPBridge.
+	padded := base
+	padded.MCPBridge = " AUTO "
+	if err := padded.Validate(); err != nil {
+		t.Fatalf("case-insensitive mcpBridge was rejected: %v", err)
+	}
+
+	invalid := []ACPAgentProfile{
+		func() ACPAgentProfile { p := base; p.Driver = "Bad Driver"; return p }(),
+		func() ACPAgentProfile { p := base; p.MCPBridge = "sometimes"; return p }(),
+		func() ACPAgentProfile {
+			p := base
+			p.CapabilityOverrides = map[string]bool{"unknownCapability": false}
+			return p
+		}(),
+		func() ACPAgentProfile {
+			p := base
+			p.CapabilityOverrides = map[string]bool{"promptImage": true}
+			return p
+		}(),
+	}
+	for _, profile := range invalid {
+		if err := profile.Validate(); err == nil {
+			t.Fatalf("invalid profile %#v was accepted", profile)
+		}
+	}
+
+	// A settings copy must not alias the caller's override map.
+	settings := DefaultSettings()
+	settings.ACPAgents = []ACPAgentProfile{configured}
+	copied, ok := settings.ACPAgentProfile("worker")
+	if !ok {
+		t.Fatal("configured profile was not found")
+	}
+	copied.CapabilityOverrides["promptImage"] = true
+	if settings.ACPAgents[0].CapabilityOverrides["promptImage"] != false {
+		t.Fatal("ACPAgentProfile aliased the settings override map")
 	}
 }

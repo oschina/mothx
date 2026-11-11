@@ -98,7 +98,7 @@ func TestManagerCreatedLeadReceivesTeamToolsAndMailboxSteering(t *testing.T) {
 	if adapter.inner.config.GetSteeringMessages == nil {
 		t.Fatal("manager-created team lead missing mailbox steering")
 	}
-	mailbox.Enqueue(MemberCompletion{MemberID: "engineer", Status: "done", Payload: "completed work"})
+	mailbox.Enqueue(MemberCompletion{Wake: true, MemberID: "engineer", Status: "done", Payload: "completed work"})
 	if messages := adapter.inner.config.GetSteeringMessages(); len(messages) != 1 || !messages[0].SystemInjected {
 		t.Fatalf("mailbox steering = %#v, want one system-injected completion", messages)
 	}

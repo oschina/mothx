@@ -60,8 +60,51 @@ type NewSessionParams struct {
 	AdditionalDirectories []string `json:"additionalDirectories,omitempty"`
 }
 
+// SessionModel is one legacy ACP model choice. Modern Agents prefer
+// SessionConfigOption with category "model"; this wire shape is retained so a
+// worker that still advertises only the deprecated models state can be
+// configured.
+type SessionModel struct {
+	ModelID     string `json:"modelId"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// SessionModelState is the deprecated session/new models payload.
+type SessionModelState struct {
+	CurrentModelID  string         `json:"currentModelId,omitempty"`
+	AvailableModels []SessionModel `json:"availableModels,omitempty"`
+}
+
+// SessionConfigOptionChoice is one selectable value in a session option.
+type SessionConfigOptionChoice struct {
+	Value       string `json:"value"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// SessionConfigOption is the ACP v1 session option payload. Category is the
+// stable protocol-neutral role ("model", "mode", "thought_level", ...); ID is
+// the Agent-chosen identifier used by session/set_config_option.
+type SessionConfigOption struct {
+	Type        string `json:"type,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Category    string `json:"category,omitempty"`
+	// CurrentValue is typed per option kind: a select option carries a string,
+	// while a boolean option carries a bool. Keeping it untyped lets one
+	// session/new result contain every option without failing to decode.
+	CurrentValue any                         `json:"currentValue,omitempty"`
+	Options      []SessionConfigOptionChoice `json:"options,omitempty"`
+}
+
 type NewSessionResult struct {
 	SessionID string `json:"sessionId"`
+	// Models is the deprecated model-selection state. ConfigOptions is the
+	// modern option catalog. Both are optional; an Agent may return neither.
+	Models        *SessionModelState    `json:"models,omitempty"`
+	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
 }
 
 // LoadSessionParams resumes one existing remote ACP session. The caller must
@@ -77,7 +120,9 @@ type LoadSessionParams struct {
 // LoadSessionResult is the Agent's response to session/load. ACP Agents may
 // replay prior session updates before returning this response.
 type LoadSessionResult struct {
-	SessionID string `json:"sessionId,omitempty"`
+	SessionID     string                `json:"sessionId,omitempty"`
+	Models        *SessionModelState    `json:"models,omitempty"`
+	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
 }
 
 // ResumeSessionParams reconnects to an existing ACP session without replaying
@@ -88,6 +133,32 @@ type ResumeSessionParams struct {
 	Cwd                   string   `json:"cwd"`
 	MCPServers            []any    `json:"mcpServers,omitempty"`
 	AdditionalDirectories []string `json:"additionalDirectories,omitempty"`
+}
+
+// ResumeSessionResult is the optional configuration state returned by
+// session/resume. An Agent may return an empty result.
+type ResumeSessionResult struct {
+	Models        *SessionModelState    `json:"models,omitempty"`
+	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
+}
+
+// SetSessionModelParams is the deprecated model-selection request. MothX only
+// uses it when a worker advertises no modern model config option.
+type SetSessionModelParams struct {
+	SessionID string `json:"sessionId"`
+	ModelID   string `json:"modelId"`
+}
+
+// SetSessionConfigOptionParams is the standard ACP v1 config-option request.
+type SetSessionConfigOptionParams struct {
+	SessionID string `json:"sessionId"`
+	ConfigID  string `json:"configId"`
+	Value     string `json:"value"`
+}
+
+// SetSessionConfigOptionResult carries the Agent's complete refreshed catalog.
+type SetSessionConfigOptionResult struct {
+	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
 }
 
 type PromptParams struct {
@@ -429,11 +500,41 @@ func (c *Client) LoadSession(ctx context.Context, params LoadSessionParams) (Loa
 // ResumeSession reconnects to an existing remote session without history
 // replay. ACP's success result may be empty, so the request ID remains the
 // caller's session identity.
-func (c *Client) ResumeSession(ctx context.Context, params ResumeSessionParams) error {
+func (c *Client) ResumeSession(ctx context.Context, params ResumeSessionParams) (ResumeSessionResult, error) {
+	var result ResumeSessionResult
 	if params.SessionID == "" {
-		return fmt.Errorf("ACP session/resume requires a sessionId")
+		return ResumeSessionResult{}, fmt.Errorf("ACP session/resume requires a sessionId")
 	}
-	return c.Call(ctx, "session/resume", params, nil)
+	if err := c.Call(ctx, "session/resume", params, &result); err != nil {
+		return ResumeSessionResult{}, err
+	}
+	return result, nil
+}
+
+// SetSessionConfigOption selects one session config value through the standard
+// ACP v1 method. The caller discovers the Agent-chosen configId from the
+// session's option catalog; the transport performs no policy decision.
+func (c *Client) SetSessionConfigOption(ctx context.Context, params SetSessionConfigOptionParams) (SetSessionConfigOptionResult, error) {
+	var result SetSessionConfigOptionResult
+	if params.SessionID == "" || params.ConfigID == "" {
+		return SetSessionConfigOptionResult{}, fmt.Errorf("ACP session/set_config_option requires sessionId and configId")
+	}
+	if params.Value == "" {
+		return SetSessionConfigOptionResult{}, fmt.Errorf("ACP session/set_config_option requires a non-empty value")
+	}
+	if err := c.Call(ctx, "session/set_config_option", params, &result); err != nil {
+		return SetSessionConfigOptionResult{}, err
+	}
+	return result, nil
+}
+
+// SetSessionModel selects a model through the deprecated legacy method. MothX
+// only calls it for a worker that advertises no modern model config option.
+func (c *Client) SetSessionModel(ctx context.Context, params SetSessionModelParams) error {
+	if params.SessionID == "" || params.ModelID == "" {
+		return fmt.Errorf("ACP session/set_model requires sessionId and modelId")
+	}
+	return c.Call(ctx, "session/set_model", params, nil)
 }
 
 // Prompt starts one remote turn and waits for its canonical stop reason.

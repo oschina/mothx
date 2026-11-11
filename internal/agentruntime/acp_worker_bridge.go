@@ -13,6 +13,7 @@ import (
 
 	agentpkg "github.com/oschina/mothx/agent"
 	acpclient "github.com/oschina/mothx/internal/acp/client"
+	"github.com/oschina/mothx/internal/agentruntime/workerdriver"
 	"github.com/oschina/mothx/internal/config"
 )
 
@@ -46,8 +47,16 @@ type ACPWorkerInvocation struct {
 	ReadTextFile   bool
 	WriteTextFile  bool
 	TerminalAccess bool
-	HandleRequest  acpclient.RequestHandler
-	OnNotification func(acpclient.Message)
+	// MCPBridgeAvailable reports that this process has a live loopback worker
+	// bridge. The Runtime sets it when (and only when) the bridge is running;
+	// a false value degrades MCPHTTP without affecting the prompt.
+	MCPBridgeAvailable bool
+	// PrepareMCPServers is called after initialize negotiated the capability set.
+	// It returns the session/new mcpServers payload and a revoke function. A
+	// preparation failure only logs and degrades the bridge; the prompt proceeds.
+	PrepareMCPServers func(workerdriver.WorkerCapabilities) ([]any, func(), error)
+	HandleRequest     acpclient.RequestHandler
+	OnNotification    func(acpclient.Message)
 	// OnEvent receives canonical, non-terminal child events. The proxy owns the
 	// single EventRunFinished terminal event.
 	OnEvent func(agentpkg.Event)
@@ -96,9 +105,10 @@ func acpPromptContent(capabilities map[string]any, contract SubagentTaskContract
 	if len(contract.Attachments) == 0 {
 		return []acpclient.ContentBlock{{Type: "text", Text: text}}
 	}
-	image := acpPromptCapability(capabilities, "image")
-	audio := acpPromptCapability(capabilities, "audio")
-	embedded := acpPromptCapability(capabilities, "embeddedContext")
+	caps := promptCapabilities(capabilities)
+	image := caps.PromptImage
+	audio := caps.PromptAudio
+	embedded := caps.PromptEmbeddedContext
 	blocks := make([]acpclient.ContentBlock, 0, 1+len(contract.Attachments))
 	var delivery strings.Builder
 	delivery.WriteString("\n## Attachment delivery\n")
@@ -133,15 +143,6 @@ func acpPromptContent(capabilities map[string]any, contract SubagentTaskContract
 	}
 	text += delivery.String()
 	return append([]acpclient.ContentBlock{{Type: "text", Text: text}}, blocks...)
-}
-
-func acpPromptCapability(capabilities map[string]any, name string) bool {
-	prompt, ok := capabilities["promptCapabilities"].(map[string]any)
-	if !ok {
-		return false
-	}
-	value, ok := prompt[name].(bool)
-	return ok && value
 }
 
 // acpAttachmentURI is an opaque identity for a Runtime-owned input resource.
@@ -209,15 +210,6 @@ func decodeACPToolInput(raw json.RawMessage) map[string]any {
 		return map[string]any{"_raw": string(raw)}
 	}
 	return args
-}
-
-func supportsSessionClose(capabilities map[string]any) bool {
-	sessionCaps, ok := capabilities["sessionCapabilities"].(map[string]any)
-	if !ok {
-		return false
-	}
-	_, ok = sessionCaps["close"]
-	return ok
 }
 
 // safeACPBaseEnvironment is the minimal inherited environment an external
