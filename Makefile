@@ -1,6 +1,7 @@
 .PHONY: help build build-all install test test-all test-ui test-desktop test-npm test-pypi fuzz lint fmt clean run serve docs-llms docs-models
 .PHONY: ui-install ui-build ui-dev ui-preview
 .PHONY: desktop-runtime desktop-vendor desktop-build desktop-dev desktop-dist desktop-version-check desktop-dist-dev-mac desktop-dist-dev-win desktop-dist-dev-linux
+.PHONY: native-build native-dev native-test native-vet native-fmt native-dist native-dist-linux native-dist-darwin native-dist-windows native-clean
 .PHONY: build-linux build-linux-loong64 build-linux-musl build-darwin build-windows
 .PHONY: build-freebsd build-openbsd build-netbsd
 .PHONY: dist dist-linux dist-darwin dist-windows
@@ -104,6 +105,17 @@ help:
 	@echo "  desktop-dist-dev-win Build Windows portable development package"
 	@echo "  desktop-dist-dev-linux Build Linux AppImage development package"
 	@echo ""
+	@echo "MothX Native targets:"
+	@echo "  native-build       Build the native UI app for the current platform"
+	@echo "  native-dev         Run the native UI app"
+	@echo "  native-test        Run native UI tests"
+	@echo "  native-vet         Run Go vet and MyGo lifetime checks"
+	@echo "  native-dist        Package the native app for the current platform"
+	@echo "  native-dist-linux  Package the native app for Linux amd64"
+	@echo "  native-dist-darwin Package the native app for macOS universal"
+	@echo "  native-dist-windows Package the native app for Windows amd64"
+	@echo "  native-clean       Remove native build artifacts"
+	@echo ""
 	@echo "Serve UI targets:"
 	@echo "  ui-install        Install Serve Web UI dependencies"
 	@echo "  ui-build          Build Serve Web UI into ui/dist"
@@ -120,9 +132,10 @@ help:
 	@echo "Other targets:"
 	@echo "  install        Install via go install"
 	@echo "  test           Run tests"
-	@echo "  test-all       Run Go, Web UI, desktop, npm, and PyPI tests"
+	@echo "  test-all       Run Go, Web UI, desktop, native, npm, and PyPI tests"
 	@echo "  test-ui        Run Web UI unit tests"
 	@echo "  test-desktop   Run Electron desktop tests"
+	@echo "  test-native    Run MothX Native tests"
 	@echo "  test-npm       Run npm installer tests"
 	@echo "  test-pypi      Run PyPI installer tests"
 	@echo "  fuzz           Run fuzz targets (set FUZZTIME to change duration)"
@@ -220,13 +233,16 @@ test:
 # Cross-surface test suite. Keep the Go target above stable for contributors
 # who only have the Go toolchain; this target verifies every maintained client
 # and installer entry point as well.
-test-all: test test-ui test-desktop test-npm test-pypi
+test-all: test test-ui test-desktop test-native test-npm test-pypi
 
 test-ui:
 	cd ui && $(NPM) test
 
 test-desktop:
 	cd desktop && $(NPM) test
+
+test-native:
+	$(MAKE) -C native test
 
 test-npm:
 	node --test scripts/*.test.js
@@ -293,6 +309,36 @@ desktop-dist-dev-win:
 
 desktop-dist-dev-linux:
 	cd desktop && npm run dist:dev:linux
+
+native-build:
+	$(MAKE) -C native build
+
+native-dev:
+	$(MAKE) -C native dev
+
+native-test:
+	$(MAKE) -C native test
+
+native-vet:
+	$(MAKE) -C native vet
+
+native-fmt:
+	$(MAKE) -C native fmt
+
+native-dist:
+	$(MAKE) -C native dist
+
+native-dist-linux:
+	$(MAKE) -C native dist-linux
+
+native-dist-darwin:
+	$(MAKE) -C native dist-darwin
+
+native-dist-windows:
+	$(MAKE) -C native dist-windows
+
+native-clean:
+	$(MAKE) -C native clean
 
 ui-preview:
 	cd ui && $(NPM) run preview
