@@ -129,9 +129,13 @@ func (r *SessionRuntime) expertConfigOption() SessionConfigOption {
 // session picker while Runtime remains the sole discovery authority.
 func ExpertConfigOption(workDir, current string) SessionConfigOption {
 	choices := []SessionConfigOptionChoice{{
-		Value:       "",
-		Name:        "No expert",
-		Description: "Use the standard session identity",
+		Value:         "",
+		Name:          "No expert",
+		NameZh:        "无主角团",
+		NameEn:        "No expert",
+		Description:   "Use the standard session identity",
+		DescriptionZh: "使用标准会话身份",
+		DescriptionEn: "Use the standard session identity",
 	}}
 	for _, summary := range ListExperts(workDir) {
 		if summary.Invalid || strings.TrimSpace(summary.Name) == "" {
@@ -145,11 +149,15 @@ func ExpertConfigOption(workDir, current string) SessionConfigOption {
 			name = summary.Name
 		}
 		kind := "Single expert"
+		kindZh := "单一主角"
 		if summary.ExpertType == expert.TypeTeam {
 			kind = "Expert team"
+			kindZh = "主角团"
 		}
 		choices = append(choices, SessionConfigOptionChoice{
-			Value: summary.Name, Name: name, Description: kind,
+			Value: summary.Name, Name: name,
+			NameZh: strings.TrimSpace(summary.DisplayName.Zh), NameEn: strings.TrimSpace(summary.DisplayName.En),
+			Description: kind, DescriptionZh: kindZh, DescriptionEn: kind,
 		})
 	}
 	return SessionConfigOption{

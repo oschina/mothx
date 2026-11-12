@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/egoist/mygo/ui"
+)
 
 func TestDraftConfigSelectionStaysLocal(t *testing.T) {
 	a := testApp()
@@ -71,5 +75,80 @@ func TestInsertComposerTextPrependsCommandOnce(t *testing.T) {
 	a.insertComposerText("")
 	if a.draft != "/review help" {
 		t.Fatalf("empty insertion changed draft: %q", a.draft)
+	}
+}
+
+func TestExpertChoiceLabelsFollowUILocale(t *testing.T) {
+	setLocale("zh")
+	t.Cleanup(func() { setLocale("zh") })
+	choice := configChoice{
+		Value: "software-company",
+		Name:  "Software Company", NameZh: "软件公司", NameEn: "Software Company",
+		Description: "Expert team", DescriptionZh: "主角团", DescriptionEn: "Expert team",
+	}
+	if got := localizedChoiceName(choice); got != "软件公司" {
+		t.Fatalf("zh expert name = %q", got)
+	}
+	if got := localizedChoiceDescription(choice); got != "主角团" {
+		t.Fatalf("zh expert description = %q", got)
+	}
+
+	setLocale("en")
+	if got := localizedChoiceName(choice); got != "Software Company" {
+		t.Fatalf("en expert name = %q", got)
+	}
+	if got := localizedChoiceDescription(choice); got != "Expert team" {
+		t.Fatalf("en expert description = %q", got)
+	}
+
+	// Older runtimes only carry the canonical fields; they must still render.
+	legacy := configChoice{Value: "legacy", Name: "Legacy"}
+	if got := localizedChoiceName(legacy); got != "Legacy" {
+		t.Fatalf("legacy expert name = %q", got)
+	}
+}
+
+func TestExpertDisplayNameFollowsUILocale(t *testing.T) {
+	setLocale("zh")
+	t.Cleanup(func() { setLocale("zh") })
+	item := expertSummary{
+		Name:        "software-company",
+		DisplayName: expertLocalizedText{Zh: "软件公司", En: "Software Company"},
+	}
+	if got := expertDisplayName(item); got != "软件公司" {
+		t.Fatalf("zh expert display name = %q", got)
+	}
+	setLocale("en")
+	if got := expertDisplayName(item); got != "Software Company" {
+		t.Fatalf("en expert display name = %q", got)
+	}
+	fallback := expertSummary{Name: "fallback"}
+	if got := expertDisplayName(fallback); got != "fallback" {
+		t.Fatalf("fallback expert display name = %q", got)
+	}
+}
+
+func TestChatExpertMenuLabelFollowsUILocale(t *testing.T) {
+	setLocale("zh")
+	t.Cleanup(func() { setLocale("zh") })
+	a := testApp()
+	a.configOptions = []configOption{{
+		ID: "expert", Name: "Expert", CurrentValue: "team-1",
+		Options: []configChoice{{
+			Value: "team-1", Name: "Team One", NameZh: "一号主角团", NameEn: "Team One",
+		}},
+	}}
+	tt := ui.NewTester(a.view, 1180, 760)
+	if !tt.HasText("一号主角团") {
+		t.Fatalf("zh expert menu label missing: %q", tt.Texts())
+	}
+
+	setLocale("en")
+	tt = ui.NewTester(a.view, 1180, 760)
+	if !tt.HasText("Team One") {
+		t.Fatalf("en expert menu label missing: %q", tt.Texts())
+	}
+	if tt.HasText("一号主角团") {
+		t.Fatalf("zh expert menu label leaked into en mode: %q", tt.Texts())
 	}
 }

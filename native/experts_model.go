@@ -276,8 +276,12 @@ func (a *nativeApp) expertSummaryByName(name string) *expertSummary {
 
 func expertDisplayName(item expertSummary) string {
 	name := strings.TrimSpace(item.DisplayName.Zh)
+	other := strings.TrimSpace(item.DisplayName.En)
+	if currentLocale() == "en" {
+		name, other = other, name
+	}
 	if name == "" {
-		name = strings.TrimSpace(item.DisplayName.En)
+		name = other
 	}
 	if name == "" {
 		name = strings.TrimSpace(item.Name)

@@ -39,6 +39,22 @@ func TestSessionRuntimeExpertConfigOptionUsesRuntimeBindingRules(t *testing.T) {
 	if len(expertOption.Options) < 3 || expertOption.Options[0].Value != "" {
 		t.Fatalf("expert choices = %#v, want unbound/studio/solo", expertOption.Options)
 	}
+	if expertOption.Options[0].NameZh == "" || expertOption.Options[0].NameEn == "" {
+		t.Fatalf("unbound expert choice lost bilingual names: %#v", expertOption.Options[0])
+	}
+	foundStudio := false
+	for _, choice := range expertOption.Options {
+		if choice.Value != "studio" {
+			continue
+		}
+		foundStudio = true
+		if choice.NameZh != "studio" || choice.NameEn != "studio" {
+			t.Fatalf("studio choice bilingual names = zh %q en %q", choice.NameZh, choice.NameEn)
+		}
+	}
+	if !foundStudio {
+		t.Fatalf("studio choice missing: %#v", expertOption.Options)
+	}
 
 	if err := runtime.SetConfigOption(ConfigOptionExpert, "studio"); err != nil {
 		t.Fatalf("bind expert through config option: %v", err)

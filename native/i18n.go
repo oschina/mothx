@@ -992,7 +992,6 @@ var nativeEnglish = map[string]string{
 	"新建项目并移动":       "Create project and move",
 	"新建项目并移动…":      "New project and move…",
 	"新知识库":          "New knowledge base",
-	"无专家":           "No expert",
 	"无主角团":          "No expert",
 	"无效":            "Invalid",
 	"无法读取投递失败列表。":   "Could not read the delivery failure list.",

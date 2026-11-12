@@ -13,7 +13,7 @@ import (
 // project layer is bound to the selected workspace.
 func (a *nativeApp) settingsExpertsPane(c *ui.Context, p palette) {
 	if !a.expertsCapable() {
-		a.settingsCard(c, p, "专家团队", "当前运行时未公开团队管理能力。", func() {
+		a.settingsCard(c, p, "主角团", "当前运行时未公开团队管理能力。", func() {
 			ui.Text(c, T("需要 ACP 能力 manageExperts；当前版本不会显示或调用占位表单。")).
 				FontSize(11).TextColor(p.t.TextMuted).LineHeight(1.45)
 		})

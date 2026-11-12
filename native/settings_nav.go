@@ -62,7 +62,7 @@ func settingsCategories() []settingsCategory {
 				{ID: "knowledge", Label: "知识库", Description: "知识库索引与 MCP 接入", Icon: iconBook, Feature: "manageKnowledgeBases"},
 				{ID: "skills", Label: "技能", Description: "本地与全局技能开关", Icon: iconSpark, Feature: "manageSkills"},
 				{ID: "skillhub", Label: "SkillHub", Description: "技能市场与订阅", Icon: iconShop, Feature: "manageSkillHub"},
-				{ID: "experts", Label: "专家团队", Description: "专家与团队绑定", Icon: iconUsers, Feature: "manageExperts"},
+				{ID: "experts", Label: "主角团", Description: "主角团与成员绑定", Icon: iconUsers, Feature: "manageExperts"},
 				{ID: "acpWorkers", Label: "ACP 工作器", Description: "ACP Worker 配置文件", Icon: iconCpu, Feature: "manageACPProfiles"},
 				{ID: "env", Label: "环境变量", Description: "持久化环境变量", Icon: iconTerminal, Feature: "manageEnv"},
 			},

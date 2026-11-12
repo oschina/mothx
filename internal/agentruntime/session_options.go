@@ -23,10 +23,17 @@ type SessionConfigOption struct {
 }
 
 // SessionConfigOptionChoice is one value in a mutable session option.
+// NameZh/NameEn and DescriptionZh/DescriptionEn are optional display
+// projections for catalogs whose entries carry bilingual labels (currently the
+// expert catalog); Name/Description remain the canonical fallback.
 type SessionConfigOptionChoice struct {
-	Value       string `json:"value"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	Value         string `json:"value"`
+	Name          string `json:"name"`
+	NameZh        string `json:"nameZh,omitempty"`
+	NameEn        string `json:"nameEn,omitempty"`
+	Description   string `json:"description,omitempty"`
+	DescriptionZh string `json:"descriptionZh,omitempty"`
+	DescriptionEn string `json:"descriptionEn,omitempty"`
 }
 
 // SessionConfigOption IDs are stable protocol-neutral identifiers.

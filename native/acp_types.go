@@ -30,9 +30,13 @@ type sessionModeState struct {
 }
 
 type configChoice struct {
-	Value       string `json:"value"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	Value         string `json:"value"`
+	Name          string `json:"name"`
+	NameZh        string `json:"nameZh,omitempty"`
+	NameEn        string `json:"nameEn,omitempty"`
+	Description   string `json:"description,omitempty"`
+	DescriptionZh string `json:"descriptionZh,omitempty"`
+	DescriptionEn string `json:"descriptionEn,omitempty"`
 }
 
 type configOption struct {

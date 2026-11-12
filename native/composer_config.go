@@ -312,38 +312,31 @@ func (a *nativeApp) expertMenu(c *ui.Context, p palette) {
 	if option == nil || len(option.Options) == 0 {
 		return
 	}
-	label := T("无专家")
+	label := T("无主角团")
 	for _, choice := range option.Options {
 		if choice.Value == option.CurrentValue {
-			label = choice.Name
-			if label == "" {
-				label = choice.Value
-			}
+			label = localizedChoiceName(choice)
 			break
 		}
 	}
 	btn := ui.PopoverMenuButton(c.Key("expert-menu"), label, func(m *ui.Menu) {
 		m.MaxWidth(300)
-		if m.Item(T("无专家")).ID("expert:none").Radio(option.CurrentValue == "").Chosen() {
+		if m.Item(T("无主角团")).ID("expert:none").Radio(option.CurrentValue == "").Chosen() {
 			a.chooseSessionExpert("")
 		}
 		m.Separator()
 		for _, choice := range option.Options {
 			choice := choice
-			name := choice.Name
-			if name == "" {
-				name = choice.Value
-			}
-			item := m.Item(name).ID("expert:" + choice.Value).Radio(choice.Value == option.CurrentValue)
-			if choice.Description != "" {
-				item.Subtitle(choice.Description)
+			item := m.Item(localizedChoiceName(choice)).ID("expert:" + choice.Value).Radio(choice.Value == option.CurrentValue)
+			if description := localizedChoiceDescription(choice); description != "" {
+				item.Subtitle(description)
 			}
 			if item.Chosen() {
 				a.chooseSessionExpert(choice.Value)
 			}
 		}
 	}, composerMenuOptions...).FontSize(10.5).TextColor(p.t.TextMuted).Padding(4, 6).Radius(7).Disabled(a.running || a.creatingSession)
-	btn.Tooltip(T("选择当前会话的专家或团队"))
+	btn.Tooltip(T("选择当前会话的主角团"))
 }
 
 // chooseSessionExpert preserves Runtime-owned identity semantics: an initial
@@ -410,6 +403,39 @@ func (a *nativeApp) forkSessionWithExpert(session listedSession, expertID string
 // single capability) would otherwise be placed below the anchor, behind the
 // composer hint/status bar and effectively invisible.
 var composerMenuOptions = []ui.PopoverMenuButtonOptions{{At: ui.AnchorTopEnd, Self: ui.AnchorBottomEnd}}
+
+// localizedChoiceName and localizedChoiceDescription project the optional
+// bilingual labels carried by runtime catalogs (currently the expert catalog)
+// for the active UI locale. They fall back to the canonical fields so older
+// runtimes and non-expert options keep rendering unchanged.
+func localizedChoiceName(choice configChoice) string {
+	name := ""
+	if currentLocale() == "en" {
+		name = strings.TrimSpace(choice.NameEn)
+	} else {
+		name = strings.TrimSpace(choice.NameZh)
+	}
+	if name == "" {
+		name = strings.TrimSpace(choice.Name)
+	}
+	if name == "" {
+		name = strings.TrimSpace(choice.Value)
+	}
+	return name
+}
+
+func localizedChoiceDescription(choice configChoice) string {
+	description := ""
+	if currentLocale() == "en" {
+		description = strings.TrimSpace(choice.DescriptionEn)
+	} else {
+		description = strings.TrimSpace(choice.DescriptionZh)
+	}
+	if description == "" {
+		description = strings.TrimSpace(choice.Description)
+	}
+	return description
+}
 
 func (a *nativeApp) capabilitiesMenu(c *ui.Context, p palette) {
 	type capability struct {

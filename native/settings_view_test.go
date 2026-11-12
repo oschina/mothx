@@ -55,7 +55,7 @@ func TestSettingsStandaloneThreePaneView(t *testing.T) {
 	for _, want := range []string{
 		"分类", "条目",
 		"外观", "Agent", "集成", "自动化", "系统",
-		"应用", "供应商", "知识库", "技能", "SkillHub", "专家团队", "ACP 工作器", "环境变量",
+		"应用", "供应商", "知识库", "技能", "SkillHub", "主角团", "ACP 工作器", "环境变量",
 		"返回对话", "应用设置", "默认行为", "保存", "取消",
 	} {
 		if !textPresent(tt, want) {

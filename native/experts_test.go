@@ -498,7 +498,7 @@ func TestExpertsPanelHeadlessRendersScopesCatalogAndEditor(t *testing.T) {
 	a := expertsTestApp(t, fullExpertFeatures(), expertScopeGlobal)
 	tt := ui.NewTester(a.view, 1180, 980)
 	for _, want := range []string{
-		"专家团队", "主角团", "作用范围", "全局", "项目", "新建主角团", "团队目录",
+		"主角团", "作用范围", "全局", "项目", "新建主角团", "团队目录",
 		"软件公司", "内置", "只读", "全局专家", "项目专家", "无效", "manifest name 不一致",
 		"编辑", "删除",
 	} {
