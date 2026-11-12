@@ -213,7 +213,7 @@ func (b *Builder) Build() (Agent, error) {
 	return buildInternal(b)
 }
 
-// buildInternal is set by internal/agent/init.go to avoid import cycles.
+// buildInternal is set by internal/agent/factory.go to avoid import cycles.
 // The internal package calls agent.SetBuilderFunc() at init time.
 var buildInternal func(b *Builder) (Agent, error)
 
@@ -279,7 +279,8 @@ func (b *Builder) Config() BuilderConfig {
 	}
 }
 
-// resolveProviderFunc is set by internal/provider to avoid import cycles.
+// resolveProviderFunc is set by bootstrap/provider_bridge.go to avoid import
+// cycles. bootstrap calls agent.SetResolveProviderFunc() at init time.
 var resolveProviderFunc func(vendor, baseURL, api, apiKey string) (Provider, error)
 
 // SetResolveProviderFunc registers the provider resolution function.
