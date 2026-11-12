@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -286,7 +285,7 @@ func serveOptionAllowed(options []string, value string) bool {
 func serveParseInt(label, raw string, min int) (int, error) {
 	value, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || value < min {
-		return 0, fmt.Errorf("%s必须是大于等于 %d 的整数", label, min)
+		return 0, localizedErrorf("%s必须是大于等于 %d 的整数", T(label), min)
 	}
 	return value, nil
 }
@@ -294,7 +293,7 @@ func serveParseInt(label, raw string, min int) (int, error) {
 func serveParseFloat(label, raw string, min, max float64) (float64, error) {
 	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
 	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < min || value > max {
-		return 0, fmt.Errorf("%s必须是 %g 到 %g 之间的数字", label, min, max)
+		return 0, localizedErrorf("%s必须是 %g 到 %g 之间的数字", T(label), min, max)
 	}
 	return value, nil
 }
@@ -320,31 +319,31 @@ type serveNumbers struct {
 func parseServeForm(form *serveForm) (serveNumbers, error) {
 	var numbers serveNumbers
 	if form == nil {
-		return numbers, fmt.Errorf("Serve 配置不存在")
+		return numbers, localizedError("Serve 配置不存在")
 	}
 	if strings.TrimSpace(form.Listen) == "" {
-		return numbers, fmt.Errorf("监听地址不能为空")
+		return numbers, localizedError("监听地址不能为空")
 	}
 	if strings.TrimSpace(form.WebUIDir) == "" {
-		return numbers, fmt.Errorf("Web UI 目录不能为空")
+		return numbers, localizedError("Web UI 目录不能为空")
 	}
 	if !serveOptionAllowed(serveModes, strings.TrimSpace(form.DefaultMode)) {
-		return numbers, fmt.Errorf("默认模式必须是以下值之一：%s", strings.Join(serveModes, "、"))
+		return numbers, localizedErrorf("默认模式必须是以下值之一：%s", strings.Join(serveModes, "、"))
 	}
 	if !serveOptionAllowed(serveThinkingLevels, strings.TrimSpace(form.DefaultThinking)) {
-		return numbers, fmt.Errorf("默认思考级别必须是以下值之一：%s", strings.Join(serveThinkingLevels, "、"))
+		return numbers, localizedErrorf("默认思考级别必须是以下值之一：%s", strings.Join(serveThinkingLevels, "、"))
 	}
 	if !serveOptionAllowed(serveLogLevels, strings.TrimSpace(form.LogLevel)) {
-		return numbers, fmt.Errorf("日志级别必须是以下值之一：%s", strings.Join(serveLogLevels, "、"))
+		return numbers, localizedErrorf("日志级别必须是以下值之一：%s", strings.Join(serveLogLevels, "、"))
 	}
 	if !serveOptionAllowed(serveSystemPromptModes, strings.TrimSpace(form.SystemPromptMode)) {
-		return numbers, fmt.Errorf("系统提示模式必须是以下值之一：%s", strings.Join(serveSystemPromptModes, "、"))
+		return numbers, localizedErrorf("系统提示模式必须是以下值之一：%s", strings.Join(serveSystemPromptModes, "、"))
 	}
 	if !serveOptionAllowed(serveToolModes, strings.TrimSpace(form.ToolMode)) {
-		return numbers, fmt.Errorf("工具可见模式必须是以下值之一：%s", strings.Join(serveToolModes, "、"))
+		return numbers, localizedErrorf("工具可见模式必须是以下值之一：%s", strings.Join(serveToolModes, "、"))
 	}
 	if !serveOptionAllowed(serveToolDetails, strings.TrimSpace(form.ToolDetail)) {
-		return numbers, fmt.Errorf("工具详情级别必须是以下值之一：%s", strings.Join(serveToolDetails, "、"))
+		return numbers, localizedErrorf("工具详情级别必须是以下值之一：%s", strings.Join(serveToolDetails, "、"))
 	}
 
 	var err error

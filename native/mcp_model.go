@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync/atomic"
 )
@@ -16,6 +15,7 @@ import (
 
 const (
 	mcpScopeGlobal  = "global"
+	mcpScopeProject = "project"
 	mcpNewServerIdx = -1
 )
 
@@ -162,18 +162,18 @@ func mcpPairNameExists(pairs []mcpPairDraft, name string, skip int) bool {
 // (mcpNewServerIdx for a new entry).
 func validateMCPServerDraft(draft *mcpServerDraft, servers []mcpServerView, editingIndex int) error {
 	if draft == nil {
-		return fmt.Errorf("MCP 服务器草稿不存在")
+		return localizedError("MCP 服务器草稿不存在")
 	}
 	name := strings.TrimSpace(draft.Name)
 	if name == "" {
-		return fmt.Errorf("MCP 服务器名称不能为空")
+		return localizedError("MCP 服务器名称不能为空")
 	}
 	for index, server := range servers {
 		if index == editingIndex {
 			continue
 		}
 		if strings.TrimSpace(server.Name) == name {
-			return fmt.Errorf("MCP 服务器名称 %q 已存在", name)
+			return localizedErrorf("MCP 服务器名称 %q 已存在", name)
 		}
 	}
 	serverType := strings.TrimSpace(draft.Type)
@@ -188,16 +188,16 @@ func validateMCPServerDraft(draft *mcpServerDraft, servers []mcpServerView, edit
 		}
 	}
 	if !allowed {
-		return fmt.Errorf("MCP 传输类型必须是 stdio、http 或 sse")
+		return localizedError("MCP 传输类型必须是 stdio、http 或 sse")
 	}
 	switch serverType {
 	case "stdio":
 		if strings.TrimSpace(draft.Command) == "" {
-			return fmt.Errorf("stdio 服务器必须填写命令")
+			return localizedError("stdio 服务器必须填写命令")
 		}
 	case "http", "sse":
 		if strings.TrimSpace(draft.URL) == "" {
-			return fmt.Errorf("%s 服务器必须填写 URL", serverType)
+			return localizedErrorf("%s 服务器必须填写 URL", serverType)
 		}
 	}
 	for _, field := range []struct {
@@ -211,10 +211,10 @@ func validateMCPServerDraft(draft *mcpServerDraft, servers []mcpServerView, edit
 		for _, entry := range field.pairs {
 			pairName := strings.TrimSpace(entry.Name)
 			if pairName == "" {
-				return fmt.Errorf("%s名称不能为空", field.label)
+				return localizedErrorf("%s名称不能为空", field.label)
 			}
 			if seen[pairName] {
-				return fmt.Errorf("%s名称 %q 重复", field.label, pairName)
+				return localizedErrorf("%s名称 %q 重复", field.label, pairName)
 			}
 			seen[pairName] = true
 		}
@@ -324,7 +324,7 @@ func buildMCPSetRequest(servers []mcpServerView, draft *mcpServerDraft, editingI
 // the mcp/set full-replacement contract.
 func buildMCPDeleteRequest(servers []mcpServerView, index int) (map[string]any, error) {
 	if index < 0 || index >= len(servers) {
-		return nil, fmt.Errorf("要删除的 MCP 服务器不存在")
+		return nil, localizedError("要删除的 MCP 服务器不存在")
 	}
 	payload := make([]map[string]any, 0, len(servers)-1)
 	for i, server := range servers {
@@ -392,6 +392,24 @@ func (a *nativeApp) startMCPPanelLoad() {
 	go a.loadMCPPanel(seq, startReloadSeq)
 }
 
+// mcpScopeParams projects the scope/session target shared by mcp/list and
+// mcp/set. Project scope is authorized by the active Runtime session; the
+// client never derives the project path itself.
+func (a *nativeApp) mcpScopeParams() (map[string]any, error) {
+	scope := strings.TrimSpace(a.mcp.Scope)
+	if scope == "" {
+		scope = mcpScopeGlobal
+	}
+	params := map[string]any{"scope": scope}
+	if scope == mcpScopeProject {
+		if strings.TrimSpace(a.currentSession) == "" {
+			return nil, localizedError("项目 MCP 需要先打开一个会话")
+		}
+		params["sessionId"] = a.currentSession
+	}
+	return params, nil
+}
+
 func (a *nativeApp) loadMCPPanel(seq, startReloadSeq int64) {
 	client := a.acp
 	if client == nil {
@@ -404,7 +422,19 @@ func (a *nativeApp) loadMCPPanel(seq, startReloadSeq int64) {
 		})
 		return
 	}
-	raw, err := client.call("mothx/manage/mcp/list", map[string]any{})
+	params, err := a.mcpScopeParams()
+	if err != nil {
+		a.dispatch(func() {
+			if !a.mcpPanelCurrent(seq, startReloadSeq) {
+				return
+			}
+			a.mcp.Loading = false
+			a.mcp.Loaded = true
+			a.mcp.Err = err.Error()
+		})
+		return
+	}
+	raw, err := client.call("mothx/manage/mcp/list", params)
 	a.dispatch(func() {
 		if !a.mcpPanelCurrent(seq, startReloadSeq) {
 			return
@@ -505,6 +535,14 @@ func (a *nativeApp) saveMCPDraft() {
 		m.DialogErr = err.Error()
 		return
 	}
+	scopeParams, err := a.mcpScopeParams()
+	if err != nil {
+		m.DialogErr = err.Error()
+		return
+	}
+	for key, value := range scopeParams {
+		request[key] = value
+	}
 	client := a.acp
 	if client == nil {
 		m.DialogErr = "保存失败：尚未连接到 MothX ACP。"
@@ -546,7 +584,7 @@ func (a *nativeApp) saveMCPDraft() {
 			m.DialogErr = ""
 			m.Status = "MCP 服务器已保存"
 			if len(view.ReloadedSessions) > 0 {
-				m.Status += fmt.Sprintf("，%d 个会话已重新连接", len(view.ReloadedSessions))
+				m.Status += Tf("，%d 个会话已重新连接", len(view.ReloadedSessions))
 			}
 			m.StatusIsError = false
 		})
@@ -591,6 +629,16 @@ func (a *nativeApp) confirmDeleteMCP() {
 		m.StatusIsError = true
 		return
 	}
+	scopeParams, err := a.mcpScopeParams()
+	if err != nil {
+		m.PendingDelete = false
+		m.Status = err.Error()
+		m.StatusIsError = true
+		return
+	}
+	for key, value := range scopeParams {
+		request[key] = value
+	}
 	client := a.acp
 	if client == nil {
 		m.PendingDelete = false
@@ -626,11 +674,62 @@ func (a *nativeApp) confirmDeleteMCP() {
 				return
 			}
 			a.applyMCPListView(&view)
-			m.Status = fmt.Sprintf("MCP 服务器 %q 已删除", deletedName)
+			m.Status = Tf("MCP 服务器 %q 已删除", deletedName)
 			if len(view.ReloadedSessions) > 0 {
-				m.Status += fmt.Sprintf("，%d 个会话已重新连接", len(view.ReloadedSessions))
+				m.Status += Tf("，%d 个会话已重新连接", len(view.ReloadedSessions))
 			}
 			m.StatusIsError = false
 		})
 	}()
+}
+
+// openMCPPanelForScope opens Settings → MCP at a specific Runtime-owned scope.
+// Project scope is bound to the currently open session; it never guesses a
+// project path in the client.
+func (a *nativeApp) openMCPPanelForScope(scope string) {
+	if !a.mcpCapable() {
+		return
+	}
+	if scope == mcpScopeProject && strings.TrimSpace(a.currentSession) == "" {
+		a.status = "请先打开一个会话再管理项目 MCP"
+		return
+	}
+	m := &a.mcp
+	atomic.AddInt64(&m.Seq, 1)
+	m.Scope = scope
+	m.Path = ""
+	m.Servers = nil
+	m.Loaded = false
+	m.Loading = false
+	m.Saving = false
+	m.Deleting = false
+	m.Err = ""
+	m.Status = ""
+	m.StatusIsError = false
+	if a.historyPanel.DialogOpen {
+		a.closeHistoryDialog()
+	}
+	if a.historyPanel.ProjectDialogOpen {
+		a.closeProjectDialog()
+	}
+	if a.settingsOpen {
+		a.setSettingsTab("mcp")
+		return
+	}
+	a.historyOpen = false
+	a.history = false
+	a.closeRouterPanel()
+	a.closeSubagentPanel()
+	a.closeWorktreePanel()
+	a.settingsOpen = true
+	a.settingsCategory = "integrations"
+	a.settingsTab = "mcp"
+	a.settingsErr = ""
+	a.settingsStatus = ""
+	a.ensureSettingsTabVisible()
+	a.maybeLoadActiveSettingsTab()
+}
+
+func (a *nativeApp) openProjectMCPPanel() {
+	a.openMCPPanelForScope(mcpScopeProject)
 }

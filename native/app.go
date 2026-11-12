@@ -1,14 +1,17 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -38,12 +41,27 @@ type nativeApp struct {
 	stderr     []string
 	features   map[string]bool
 	featuresMu sync.RWMutex
-	closing    atomic.Bool
-	reloadSeq  int64
+	// featuresReady separates “initialize has not completed yet” from a real
+	// runtime that advertises no optional capabilities. Panels must wait for
+	// the handshake instead of permanently accepting a pre-init empty set.
+	featuresReady bool
+	closing       atomic.Bool
+	reloadSeq     int64
 
-	sessions       []listedSession
-	sessionsLoaded bool
-	sessionsErr    string
+	sessions            []listedSession
+	sessionsLoaded      bool
+	sessionsErr         string
+	sessionPages        map[string]sessionPage
+	sessionPageInFlight sync.Map
+	sessionCatalogSeq   int64
+
+	// projects is the shared task-library project catalog. The sidebar task
+	// tree and the history filters both project it; neither keeps a second
+	// copy or reads the project registry directly.
+	projects       []projectView
+	projectsLoaded bool
+	projectsErr    string
+	projectsSeq    int64
 
 	currentSession string
 	loadingSession string
@@ -52,12 +70,16 @@ type nativeApp struct {
 	draftCwd       string
 	cwd            string
 
-	messages        []*chatMessage
-	messageIndex    map[string]*chatMessage
-	planMessageID   string
-	localMessageSeq int
-	list            ui.ListState
-	md              markdown.Options
+	messages             []*chatMessage
+	messageIndex         map[string]*chatMessage
+	planMessageID        string
+	statusMessageID      string
+	transcriptNextCursor string
+	transcriptLoading    bool
+	transcriptSeq        int64
+	localMessageSeq      int
+	list                 ui.ListState
+	md                   markdown.Options
 
 	running            bool
 	creatingSession    bool
@@ -68,6 +90,7 @@ type nativeApp struct {
 	usageSize          int
 	usageCost          float64
 	usageCurrency      string
+	usageCache         *usageCacheProjection
 
 	draft       string
 	attachments []attachment
@@ -80,22 +103,60 @@ type nativeApp struct {
 	mode           string
 	availableModes []sessionMode
 	commands       []command
+	// draftConfig holds selections made before session/new. It is flushed
+	// once through session/set_config_option; selecting a model must never
+	// create an empty session by itself.
+	draftConfig map[string]string
 
-	search       string
-	searching    bool
-	history      bool
-	historyOpen  bool
-	historyQuery string
-	sidebar      bool
-	collapsed    map[string]bool
+	search            string
+	searching         bool
+	history           bool
+	historyOpen       bool
+	historyQuery      string
+	page              string
+	historyPanel      historyState
+	worktree          worktreePanelState
+	router            routerPanelState
+	subagent          subagentPanelState
+	sidebar           bool
+	expandedProjects  map[string]bool
+	sessionStates     map[string]sessionSnapshot
+	backgroundRouting bool
 
-	dark     bool
-	themeSet bool
+	dark      bool
+	themeSet  bool
+	themeMode string
 
-	decisions       []decision
-	decisionOpen    bool
-	questionText    string
-	questionChoices map[string]*bool
+	prefsPath string
+	home      homeAppearance
+
+	toasts   []toastItem
+	toastSeq int64
+
+	// services is the current window service handle, refreshed on every frame.
+	// It only provides UI-thread clipboard/file-dialog access; it is never a
+	// session or artifact authority.
+	services ui.Services
+
+	diagnosticsFilter string
+
+	modelPickerOpen     bool
+	modelPickerQuery    string
+	modelPickerProvider string
+	modelPickerModels   []providerCatalogModel
+	modelPickerLoading  bool
+	modelPickerErr      string
+	modelCatalog        []providerCatalogModel
+	skillsPageQuery     string
+
+	previewOpen      bool
+	previewTitle     string
+	previewImage     ui.ImageSource
+	previewData      []byte
+	previewMediaType string
+	previewErr       string
+	previewLoading   bool
+	previewSeq       int64
 
 	refreshing atomic.Bool
 
@@ -117,10 +178,13 @@ type nativeApp struct {
 	skillhub   skillHubPanelState
 	experts    expertsPanelState
 	acpWorkers acpWorkersPanelState
+	env        envPanelState
+	stats      statsPanelState
 	memory     memoryPanelState
 	cron       cronPanelState
 	channels   channelsPanelState
 	serve      servePanelState
+	runtime    runtimePanelState
 }
 
 func newNativeApp() *nativeApp {
@@ -130,26 +194,35 @@ func newNativeApp() *nativeApp {
 	}
 	cwd, _ = filepath.Abs(cwd)
 	a := &nativeApp{
-		conn:            connIdle,
-		cwd:             cwd,
-		workspace:       cwd,
-		draftCwd:        cwd,
-		sidebar:         true,
-		collapsed:       make(map[string]bool),
-		messageIndex:    make(map[string]*chatMessage),
-		questionChoices: make(map[string]*bool),
-		dark:            true,
-		providers:       newProviderPanelState(),
-		mcp:             newMCPPanelState(),
-		knowledge:       newKnowledgePanelState(),
-		skills:          newSkillsPanelState(),
-		skillhub:        newSkillHubPanelState(),
-		experts:         newExpertsPanelState(),
-		acpWorkers:      newACPWorkersPanelState(),
-		memory:          newMemoryPanelState(),
-		cron:            newCronPanelState(),
-		channels:        newChannelsPanelState(),
-		serve:           newServePanelState(),
+		conn:             connIdle,
+		cwd:              cwd,
+		workspace:        cwd,
+		draftCwd:         cwd,
+		sidebar:          true,
+		expandedProjects: make(map[string]bool),
+		sessionStates:    make(map[string]sessionSnapshot),
+		draftConfig:      make(map[string]string),
+		messageIndex:     make(map[string]*chatMessage),
+		dark:             true,
+		themeMode:        "system",
+		home:             defaultHomeAppearance(),
+		providers:        newProviderPanelState(),
+		mcp:              newMCPPanelState(),
+		knowledge:        newKnowledgePanelState(),
+		skills:           newSkillsPanelState(),
+		skillhub:         newSkillHubPanelState(),
+		experts:          newExpertsPanelState(),
+		acpWorkers:       newACPWorkersPanelState(),
+		env:              newEnvPanelState(),
+		stats:            newStatsPanelState(),
+		memory:           newMemoryPanelState(),
+		cron:             newCronPanelState(),
+		channels:         newChannelsPanelState(),
+		serve:            newServePanelState(),
+		sessionPages:     make(map[string]sessionPage),
+		historyPanel:     newHistoryState(),
+		worktree:         newWorktreePanelState(),
+		router:           newRouterPanelState(),
 	}
 	a.md = markdown.Options{WrapCode: true}
 	a.list.FollowEnd = true
@@ -167,12 +240,29 @@ func (a *nativeApp) dispatch(fn func()) {
 func (a *nativeApp) setConn(state connState, errText string) {
 	a.conn = state
 	a.connErr = errText
+	if state == connFailed {
+		// The sidebar task tree is an ACP projection. Once the child cannot be
+		// started there will be no initial page, so keep the catalogs idle
+		// instead of leaving a perpetual "loading tasks" placeholder.
+		a.sessionsLoaded = true
+		a.projectsLoaded = true
+		if a.sessionsErr == "" {
+			a.sessionsErr = errText
+		}
+		if a.historyPanel.Loading && !a.historyPanel.Loaded {
+			a.historyPanel.Loading = false
+			a.historyPanel.Loaded = true
+			a.historyPanel.Err = errText
+		}
+	}
 }
 
 func (a *nativeApp) connect() {
 	seq := atomic.AddInt64(&a.reloadSeq, 1)
-	bin := resolveMothxBinary()
+	bin, source := resolveMothxBinarySource()
+	addDiagnostic("info", "connect: binary="+bin+" source="+source)
 	if bin == "" {
+		addDiagnostic("error", "connect: no mothx binary resolved")
 		a.dispatch(func() {
 			a.setConn(connFailed, "找不到 mothx 可执行文件。请设置 MOTHX_BIN，或把 mothx 放进 PATH。")
 		})
@@ -181,11 +271,22 @@ func (a *nativeApp) connect() {
 	a.dispatch(func() {
 		a.setConn(connStarting, "")
 		a.stderr = nil
+		a.featuresMu.Lock()
 		a.features = make(map[string]bool)
+		a.featuresReady = false
+		a.featuresMu.Unlock()
 		// A reconnect invalidates the management projection as well as ordinary
 		// session requests. Leave the settings page so an in-flight response
 		// can neither render stale values nor leave its spinner active.
 		a.closeSettings()
+		a.projects = nil
+		a.projectsLoaded = false
+		a.projectsErr = ""
+		a.resetSessionPages()
+		atomic.AddInt64(&a.projectsSeq, 1)
+		a.invalidateRouterPanel()
+		a.invalidateSubagentPanel()
+		a.closeWorktreePanel()
 	})
 
 	var client *acpClient
@@ -213,11 +314,15 @@ func (a *nativeApp) connect() {
 				}
 				a.running = false
 				a.creatingSession = false
+				// The ACP child is gone, so a queued worktree open can no longer be
+				// fulfilled. Drop it instead of leaving a resolved-looking promise.
+				a.clearPendingWorktreeOpen()
 				a.status = ""
 			})
 		},
 	)
 	if err := client.start(bin, a.cwd, os.Environ()); err != nil {
+		addDiagnostic("error", "ACP start failed: "+err.Error())
 		a.dispatch(func() { a.setConn(connFailed, "无法启动 ACP："+err.Error()) })
 		return
 	}
@@ -239,12 +344,14 @@ func (a *nativeApp) connect() {
 	})
 	if err != nil {
 		client.close()
+		addDiagnostic("error", "ACP initialize failed: "+err.Error())
 		a.dispatch(func() { a.setConn(connFailed, "ACP 初始化失败："+err.Error()) })
 		return
 	}
 	var init initializeResult
 	if err := json.Unmarshal(raw, &init); err != nil {
 		client.close()
+		addDiagnostic("error", "ACP initialize response invalid: "+err.Error())
 		a.dispatch(func() { a.setConn(connFailed, "ACP initialize 响应无效："+err.Error()) })
 		return
 	}
@@ -262,12 +369,26 @@ func (a *nativeApp) connect() {
 	}
 	a.refreshDraftConfig(client, a.cwd, features)
 	a.refreshSessions(client, a.cwd, features)
+	go a.refreshModelCatalog(client, features)
 }
 
 func (a *nativeApp) setFeatures(features map[string]bool) {
 	a.featuresMu.Lock()
 	a.features = features
+	a.featuresReady = true
 	a.featuresMu.Unlock()
+	// A history view opened during initialize must resume once capabilities are
+	// known instead of keeping the pre-init “not advertised” fallback forever.
+	if a.acp != nil && a.historyOpen && !a.historyPanel.Loaded {
+		a.historyPanel.Loading = false
+		a.startHistoryLoad(false)
+	}
+}
+
+func (a *nativeApp) featuresInitialized() bool {
+	a.featuresMu.RLock()
+	defer a.featuresMu.RUnlock()
+	return a.featuresReady
 }
 
 func (a *nativeApp) featureSnapshot() map[string]bool {
@@ -334,7 +455,15 @@ func (a *nativeApp) refreshDraftConfig(client *acpClient, cwd string, features m
 			return
 		}
 		a.configOptions = res.ConfigOptions
+		for configID, value := range a.draftConfig {
+			if option := a.configOptionByID(configID); option != nil {
+				option.CurrentValue = value
+			}
+		}
 		a.syncModelState()
+		if provider := a.draftConfig["provider"]; provider != "" {
+			a.refreshDraftProviderModels(provider)
+		}
 	})
 }
 
@@ -342,6 +471,9 @@ func (a *nativeApp) refreshSessions(client *acpClient, cwd string, features map[
 	if client == nil {
 		return
 	}
+	// The task tree is one projection: keep the project catalog in step with
+	// every session refresh, including refreshes that the sidebar coalesces.
+	go a.refreshProjectsWith(features)
 	if a.refreshing.Swap(true) {
 		return
 	}
@@ -372,8 +504,14 @@ func (a *nativeApp) refreshSessions(client *acpClient, cwd string, features map[
 		})
 		return
 	}
+	allPage := newSessionPage(sessionPageAll, sessionPageAll, "")
+	allPage.Sessions = res.Sessions
+	allPage.NextCursor = res.NextCursor
+	allPage.Loaded = true
 	a.dispatch(func() {
-		a.sessions = res.Sessions
+		a.resetSessionPages()
+		a.setSessionPage(allPage)
+		a.rebuildSessionCatalog()
 		a.sessionsErr = ""
 		a.sessionsLoaded = true
 		for _, listed := range res.Sessions {
@@ -381,11 +519,14 @@ func (a *nativeApp) refreshSessions(client *acpClient, cwd string, features map[
 				continue
 			}
 			a.workspace = listed.Cwd
-			a.draftCwd = listed.Cwd
-			if a.currentTitle == "" || a.currentTitle == "新会话" {
+			if a.draftCwd == "" {
+				a.draftCwd = listed.Cwd
+			}
+			if a.currentTitle == "" || a.currentTitle == T("新会话") {
 				a.currentTitle = listed.Title
 			}
 		}
+		a.startFirstSidebarPages(features)
 	})
 }
 
@@ -403,6 +544,12 @@ func (a *nativeApp) handleIncoming(client *acpClient, msg incoming) {
 			return
 		}
 		a.dispatch(func() { a.handleSessionEvent(ev) })
+	case "mothx/worktree/status":
+		var payload worktreeStatusPayload
+		if err := json.Unmarshal(msg.Params, &payload); err != nil {
+			return
+		}
+		a.dispatch(func() { a.applyWorktreeStatus(payload) })
 	case "$/cancel_request":
 		return
 	default:
@@ -424,24 +571,18 @@ func (a *nativeApp) handleReverse(client *acpClient, msg incoming) {
 		}
 		title := p.ToolCall.Title
 		if title == "" {
-			title = "工具调用"
+			title = T("工具调用")
 		}
 		d := decision{
-			ID:      append(json.RawMessage(nil), msg.ID...),
-			Kind:    "permission",
-			Session: p.SessionID,
-			Title:   title,
-			Prompt:  permissionPrompt(p.ToolCall.RawInput),
+			ID:       append(json.RawMessage(nil), msg.ID...),
+			Kind:     "permission",
+			Session:  p.SessionID,
+			Title:    title,
+			Prompt:   permissionPrompt(p.ToolCall.RawInput),
+			RawInput: p.ToolCall.RawInput,
 		}
 		for _, opt := range p.Options {
-			label := opt.Name
-			switch opt.Kind {
-			case "allow_once", "allow":
-				label = "允许一次"
-			case "reject_once":
-				label = "拒绝"
-			}
-			d.Options = append(d.Options, decisionOption{ID: opt.OptionID, Label: label, Kind: opt.Kind})
+			d.Options = append(d.Options, decisionOption{ID: opt.OptionID, Label: permissionOptionLabel(opt.Name, opt.Kind), Kind: opt.Kind})
 		}
 		a.queueDecision(d)
 	case "mothx/requestQuestion", "_mothx/request_question":
@@ -468,6 +609,9 @@ func (a *nativeApp) handleReverse(client *acpClient, msg incoming) {
 			Prompt:  prompt,
 			Multi:   p.Multi,
 		}
+		if p.TimeoutMs > 0 {
+			d.Deadline = time.Now().Add(time.Duration(p.TimeoutMs) * time.Millisecond)
+		}
 		d.Options = parseQuestionOptions(p.Options)
 		a.queueDecision(d)
 	case "elicitation/create":
@@ -482,7 +626,7 @@ func (a *nativeApp) handleReverse(client *acpClient, msg incoming) {
 			ID:      append(json.RawMessage(nil), msg.ID...),
 			Kind:    "elicitation",
 			Session: p.SessionID,
-			Title:   "MothX 想确认一下",
+			Title:   T("MothX 想确认一下"),
 			Prompt:  p.Message,
 			Elicit:  true,
 		}
@@ -502,6 +646,24 @@ func (a *nativeApp) handleReverse(client *acpClient, msg incoming) {
 		if client != nil && msg.hasID() {
 			_ = client.respondError(msg.ID, -32601, "method not found: "+msg.Method)
 		}
+	}
+}
+
+// permissionOptionLabel keeps the Runtime-provided option name, which is the
+// canonical user-facing label, and only falls back to a Native translation for
+// older projections that omit it. Never overwrite an ACP name with a
+// client-local string: the Runtime may already have localized it.
+func permissionOptionLabel(name, kind string) string {
+	if label := strings.TrimSpace(name); label != "" {
+		return label
+	}
+	switch kind {
+	case "allow_once", "allow":
+		return T("允许一次")
+	case "reject_once", "reject":
+		return T("拒绝")
+	default:
+		return kind
 	}
 }
 
@@ -550,45 +712,53 @@ func parseQuestionOptions(raw json.RawMessage) []decisionOption {
 
 func (a *nativeApp) queueDecision(d decision) {
 	a.dispatch(func() {
-		a.decisions = append(a.decisions, d)
-		if !a.decisionOpen {
-			a.openNextDecision()
+		add := func() {
+			id := "decision:" + decisionIDString(d.ID)
+			if id == "decision:" {
+				id = a.nextLocalMessageID("decision")
+			}
+			message := a.upsertMessage(id, messageDecision)
+			copy := d
+			if copy.Multi {
+				copy.Choices = make(map[string]*bool, len(copy.Options))
+				for _, option := range copy.Options {
+					copy.Choices[option.ID] = new(bool)
+				}
+			}
+			message.Decision = &copy
+			message.Done = false
 		}
+		if d.Session != "" && d.Session != a.currentSession && d.Session != a.loadingSession {
+			a.withSessionState(d.Session, add)
+			a.showErrorToast("后台会话需要确认，切换到该任务处理")
+			return
+		}
+		add()
 	})
 }
 
-func (a *nativeApp) openNextDecision() {
-	a.questionText = ""
-	a.questionChoices = make(map[string]*bool)
-	a.decisionOpen = len(a.decisions) > 0
-	if d := a.currentDecision(); d != nil && d.Multi {
-		for _, opt := range d.Options {
-			v := false
-			a.questionChoices[opt.ID] = &v
+func (a *nativeApp) decisionMessage(d *decision) *chatMessage {
+	for _, message := range a.messages {
+		if message.Decision == d {
+			return message
 		}
 	}
+	return nil
 }
 
-func (a *nativeApp) currentDecision() *decision {
-	if len(a.decisions) == 0 {
-		return nil
-	}
-	return &a.decisions[0]
-}
-
-func (a *nativeApp) answerDecision(optionID string) {
-	d := a.currentDecision()
-	if d == nil {
+func (a *nativeApp) answerDecision(d *decision, optionID string) {
+	if d == nil || d.Resolved {
 		return
 	}
 	client := a.acp
-	answer := strings.TrimSpace(a.questionText)
+	answer := strings.TrimSpace(d.Answer)
 	if optionID != "" {
 		answer = optionID
 		if !d.Multi {
-			a.questionText = optionID
+			d.Answer = optionID
 		}
 	}
+	resolved := ""
 	switch d.Kind {
 	case "permission":
 		if client != nil {
@@ -596,6 +766,15 @@ func (a *nativeApp) answerDecision(optionID string) {
 				_ = client.respond(d.ID, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
 			} else {
 				_ = client.respond(d.ID, map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}})
+			}
+		}
+		resolved = T("已取消")
+		if optionID != "" {
+			for _, option := range d.Options {
+				if option.ID == optionID {
+					resolved = Tf("已选择：%s", option.Label)
+					break
+				}
 			}
 		}
 	case "elicitation":
@@ -606,13 +785,17 @@ func (a *nativeApp) answerDecision(optionID string) {
 				_ = client.respond(d.ID, map[string]any{"action": "accept", "content": map[string]any{"answer": answer}})
 			}
 		}
+		resolved = T("已取消")
+		if answer != "" {
+			resolved = Tf("已提交：%s", answer)
+		}
 	default:
 		if client != nil {
 			if d.Multi {
 				var answers []string
-				for _, opt := range d.Options {
-					if ptr := a.questionChoices[opt.ID]; ptr != nil && *ptr {
-						answers = append(answers, opt.ID)
+				for _, option := range d.Options {
+					if ptr := d.Choices[option.ID]; ptr != nil && *ptr {
+						answers = append(answers, option.Label)
 					}
 				}
 				if answer != "" {
@@ -629,15 +812,20 @@ func (a *nativeApp) answerDecision(optionID string) {
 				_ = client.respond(d.ID, map[string]any{"answer": answer})
 			}
 		}
+		resolved = T("已取消")
+		if answer != "" {
+			resolved = Tf("已回答：%s", answer)
+		}
 	}
-	a.decisions = a.decisions[1:]
-	a.openNextDecision()
+	d.Resolved = true
+	d.ResolvedValue = resolved
+	if message := a.decisionMessage(d); message != nil {
+		message.Done = true
+	}
 }
 
-func (a *nativeApp) cancelDecision() {
-	d := a.currentDecision()
-	if d == nil {
-		a.decisionOpen = false
+func (a *nativeApp) cancelDecision(d *decision) {
+	if d == nil || d.Resolved {
 		return
 	}
 	client := a.acp
@@ -655,41 +843,47 @@ func (a *nativeApp) cancelDecision() {
 			_ = client.respond(d.ID, map[string]any{"cancelled": true})
 		}
 	}
-	a.decisions = a.decisions[1:]
-	a.openNextDecision()
+	d.Resolved = true
+	d.ResolvedValue = T("已取消")
+	if message := a.decisionMessage(d); message != nil {
+		message.Done = true
+	}
 }
 
 func (a *nativeApp) newChat() {
-	if a.running || a.creatingSession || a.loadingSession != "" {
-		a.status = "请先停止当前运行"
+	if a.creatingSession {
+		a.status = "请等待当前会话创建完成"
 		return
 	}
 	if a.settingsOpen {
 		a.closeSettings()
 	}
-	a.currentSession = ""
-	a.loadingSession = ""
+	a.saveActiveSession()
+	a.invalidateRouterPanel()
+	a.invalidateSubagentPanel()
+	a.closeArtifactPreview()
+	a.page = ""
+	a.clearSessionState("")
 	a.currentTitle = ""
-	a.running = false
-	a.awaitingUserEcho = false
-	a.localUserMessageID = ""
-	a.status = ""
 	a.draft = ""
 	a.attachments = nil
+	a.draftConfig = make(map[string]string)
 	a.resetTranscript()
-	cwd := a.workspace
+	cwd := a.draftCwd
 	if cwd == "" {
-		cwd = a.draftCwd
+		cwd = a.workspace
 	}
 	if cwd == "" {
 		cwd = a.cwd
 	}
+	a.workspace = cwd
+	a.draftCwd = cwd
 	go a.refreshDraftConfig(a.acp, cwd, a.featureSnapshot())
 }
 
 func (a *nativeApp) newChatIn(cwd string) {
-	if a.running || a.creatingSession || a.loadingSession != "" {
-		a.status = "请先停止当前运行"
+	if a.creatingSession {
+		a.status = "请等待当前会话创建完成"
 		return
 	}
 	if cwd != "" {
@@ -700,11 +894,29 @@ func (a *nativeApp) newChatIn(cwd string) {
 }
 
 func (a *nativeApp) chooseWorkspace() {
+	// An open session owns its cwd: the picker changes that session through
+	// the canonical setWorkDir path. Only a draft shell changes the directory
+	// for the next new session; it must never silently replace the chat.
+	if a.currentSession != "" {
+		session, ok := a.sessionByID(a.currentSession)
+		if !ok {
+			session = listedSession{SessionID: a.currentSession, Cwd: a.workspace}
+		} else if a.sessionRunActive(session) {
+			a.status = "该会话正在运行，请先停止"
+			return
+		}
+		if !a.historyWorkDirCapable() {
+			a.status = "当前运行时不支持修改会话工作目录"
+			return
+		}
+		a.chooseHistoryWorkDir(session)
+		return
+	}
 	win := a.win
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:            win,
-			Title:             "打开工作区",
+			Title:             T("选择新会话工作区"),
 			Directory:         true,
 			CreateDirectories: true,
 		})
@@ -712,7 +924,12 @@ func (a *nativeApp) chooseWorkspace() {
 			return
 		}
 		path := paths[0]
-		a.dispatch(func() { a.newChatIn(path) })
+		a.dispatch(func() {
+			a.workspace = path
+			a.draftCwd = path
+			a.status = "新会话工作区已切换"
+			go a.refreshDraftConfig(a.acp, path, a.featureSnapshot())
+		})
 	}()
 }
 
@@ -721,19 +938,52 @@ func (a *nativeApp) attachFiles() {
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:   win,
-			Title:    "附加文件",
+			Title:    T("附加文件"),
 			Multiple: true,
 		})
 		if err != nil || len(paths) == 0 {
 			return
 		}
 		a.dispatch(func() {
+			root := a.workspace
+			if root == "" {
+				root = a.draftCwd
+			}
 			for _, p := range paths {
 				abs, err := filepath.Abs(p)
 				if err != nil {
 					abs = p
 				}
-				a.attachments = append(a.attachments, attachment{Name: filepath.Base(abs), Path: abs})
+				entry := attachment{Name: filepath.Base(abs), Path: abs, MimeType: mime.TypeByExtension(filepath.Ext(abs))}
+				if strings.HasPrefix(strings.ToLower(entry.MimeType), "image/") {
+					if info, statErr := os.Stat(abs); statErr == nil && info.Size() <= nativeMaxEmbeddedAttachment {
+						if data, readErr := os.ReadFile(abs); readErr == nil {
+							if image, decodeErr := ui.DecodeImage(data); decodeErr == nil {
+								entry.Preview = image
+							}
+						}
+					}
+				}
+				if !pathWithinDirectory(root, abs) {
+					info, statErr := os.Stat(abs)
+					if statErr != nil {
+						a.status = "无法读取附件：" + entry.Name
+						continue
+					}
+					if info.Size() > nativeMaxEmbeddedAttachment {
+						a.status = "附件过大，未附加：" + entry.Name
+						continue
+					}
+					data, readErr := os.ReadFile(abs)
+					if readErr != nil {
+						a.status = "无法读取附件：" + entry.Name
+						continue
+					}
+					entry.Data = base64.StdEncoding.EncodeToString(data)
+					entry.Size = info.Size()
+					entry.Embedded = true
+				}
+				a.attachments = append(a.attachments, entry)
 			}
 		})
 	}()
@@ -747,66 +997,99 @@ func (a *nativeApp) removeAttachment(i int) {
 }
 
 func (a *nativeApp) selectSession(s listedSession) {
-	if a.running || a.loadingSession != "" {
-		a.status = "请先停止当前运行"
+	if a.currentSession == s.SessionID {
 		return
 	}
 	if a.settingsOpen {
 		a.closeSettings()
 	}
-	a.currentSession = s.SessionID
+	a.invalidateRouterPanel()
+	a.invalidateSubagentPanel()
+	a.closeArtifactPreview()
+	a.page = ""
+	a.selectSessionState(s.SessionID)
 	a.loadingSession = s.SessionID
 	a.currentTitle = s.Title
 	a.workspace = s.Cwd
-	a.draftCwd = s.Cwd
-	a.running = false
-	a.status = "正在载入会话…"
-	a.resetTranscript()
+	a.draftConfig = make(map[string]string)
+	if a.draftCwd == "" {
+		a.draftCwd = s.Cwd
+	}
+	if !a.running {
+		a.status = "正在载入会话…"
+	} else {
+		a.status = "该会话正在运行…"
+	}
 	client := a.acp
 	if client == nil {
+		a.loadingSession = ""
+		a.running = false
 		a.status = ""
+		a.settleWorktreeOpen()
 		return
 	}
 	features := a.featureSnapshot()
+	params := map[string]any{
+		"sessionId": s.SessionID,
+		"cwd":       s.Cwd,
+	}
+	if a.transcriptPagingEnabled() || features["sessionHistoryPaging"] {
+		params["historyLimit"] = transcriptPageSize
+	}
 	go func() {
-		raw, err := client.call("session/load", map[string]any{
-			"sessionId":    s.SessionID,
-			"cwd":          s.Cwd,
-			"historyLimit": 0,
-		})
+		raw, err := client.call("session/load", params)
 		if err != nil {
-			a.dispatch(func() {
-				a.loadingSession = ""
-				a.currentSession = ""
-				a.currentTitle = ""
-				a.status = ""
-				a.appendMessage(&chatMessage{ID: a.nextLocalMessageID("error"), Kind: messageSystem, Text: "载入会话失败：" + err.Error(), Done: true})
-			})
+			a.dispatch(func() { a.failSessionLoad(err) })
 			return
 		}
 		var res sessionResult
 		_ = json.Unmarshal(raw, &res)
-		a.dispatch(func() {
-			if a.currentSession != s.SessionID {
-				return
-			}
-			a.loadingSession = ""
-			a.running = false
-			a.status = ""
-			a.applySessionResult(res)
-			if res.Execution != nil && res.Execution.Busy {
-				a.running = true
-				a.status = "该会话正在运行…"
-			}
-			for _, m := range a.messages {
-				m.Done = true
-			}
-			if a.currentTitle == "" && res.SessionID != "" {
-				a.currentTitle = s.Title
-			}
-		})
+		a.dispatch(func() { a.finishSessionLoad(s.SessionID, res, s.Title) })
 		go a.refreshSessions(client, s.Cwd, features)
 	}()
+}
+
+// finishSessionLoad applies a completed session/load and then gives a deferred
+// worktree open intent the chance to run now that loadingSession is clear.
+func (a *nativeApp) finishSessionLoad(sessionID string, res sessionResult, title string) {
+	if a.currentSession != sessionID {
+		return
+	}
+	a.loadingSession = ""
+	a.status = ""
+	busy := false
+	if res.Execution != nil {
+		busy = res.Execution.Busy
+	} else if session, ok := a.sessionByID(sessionID); ok {
+		busy = a.sessionRunActive(session)
+	}
+	a.running = busy
+	a.applySessionResult(res)
+	if busy {
+		a.status = "该会话正在运行…"
+		for i := 0; i < len(a.messages)-1; i++ {
+			a.messages[i].Done = true
+		}
+	} else {
+		for _, m := range a.messages {
+			m.Done = true
+		}
+	}
+	if a.currentTitle == "" && res.SessionID != "" {
+		a.currentTitle = title
+	}
+	a.settleWorktreeOpen()
+}
+
+// failSessionLoad restores the idle shell after a failed load. The deferred
+// worktree intent is consumed first so its new session does not hide the error.
+func (a *nativeApp) failSessionLoad(err error) {
+	a.loadingSession = ""
+	a.currentSession = ""
+	a.currentTitle = ""
+	a.status = ""
+	a.settleWorktreeOpen()
+	a.appendErrorFromErr("载入会话失败：", err)
 }
 
 func (a *nativeApp) send() {
@@ -826,6 +1109,7 @@ func (a *nativeApp) send() {
 	}
 	client := a.acp
 	features := a.featureSnapshot()
+	draftConfig := a.cloneDraftConfig()
 
 	a.draft = ""
 	a.attachments = nil
@@ -834,16 +1118,17 @@ func (a *nativeApp) send() {
 		a.creatingSession = true
 	}
 	a.status = "正在生成…"
+	a.setStatusLine("正在生成…")
 	display := text
 	if len(attachments) > 0 {
 		var names []string
 		for _, f := range attachments {
 			names = append(names, f.Name)
 		}
-		display += "\n\n附件：" + strings.Join(names, "、")
+		display += "\n\n" + T("附件：") + strings.Join(names, T("、"))
 	}
 	localUserID := a.nextLocalMessageID("user")
-	a.appendMessage(&chatMessage{ID: localUserID, Kind: messageUser, Text: display, Done: true})
+	a.appendMessage(&chatMessage{ID: localUserID, Kind: messageUser, Text: display, Done: true, Images: attachmentChatImages(attachments)})
 	a.awaitingUserEcho = true
 	a.localUserMessageID = localUserID
 
@@ -863,15 +1148,24 @@ func (a *nativeApp) send() {
 			a.dispatch(func() {
 				a.applySessionResult(res)
 				a.currentTitle = "新会话"
-				a.creatingSession = false
+				a.draftConfig = make(map[string]string)
+				a.finishSessionCreation()
 			})
+			if warning := a.flushDraftConfig(client, sessionID, draftConfig); warning != "" {
+				a.dispatch(func() { a.status = warning })
+			}
 			go a.refreshSessions(client, cwd, features)
 		}
 		blocks := []contentBlock{{Type: "text", Text: text}}
 		for _, f := range attachments {
+			if f.Embedded && f.Data != "" {
+				blocks = append(blocks, contentBlock{Type: "resource", Name: f.Name, MimeType: f.MimeType, Data: f.Data})
+				continue
+			}
 			uri := fileURI(f.Path)
-			blocks = append(blocks, contentBlock{Type: "resource_link", Name: f.Name, URI: uri})
+			blocks = append(blocks, contentBlock{Type: "resource_link", Name: f.Name, URI: uri, MimeType: f.MimeType})
 		}
+		addDiagnostic("info", "session/prompt session="+sessionID)
 		raw, err := client.call("session/prompt", map[string]any{
 			"sessionId": sessionID,
 			"prompt":    blocks,
@@ -888,22 +1182,63 @@ func (a *nativeApp) send() {
 		a.dispatch(func() {
 			a.markRunDone(res.StopReason)
 			if res.StopReason != "" && res.StopReason != "end_turn" && res.StopReason != "cancelled" {
-				a.appendMessage(&chatMessage{ID: a.nextLocalMessageID("system"), Kind: messageSystem, Text: "运行结束：" + res.StopReason, Done: true})
+				a.appendRunFinished(res.StopReason)
 			}
 		})
 		go a.refreshSessions(client, cwd, features)
 	}()
 }
 
-func (a *nativeApp) promptFailed(err error) {
-	a.dispatch(func() {
-		a.running = false
-		a.creatingSession = false
-		a.awaitingUserEcho = false
-		a.localUserMessageID = ""
-		a.status = ""
-		a.appendMessage(&chatMessage{ID: a.nextLocalMessageID("error"), Kind: messageSystem, Text: "发送失败：" + err.Error(), Done: true})
+// appendRunFinished records a non-normal terminal stop reason as a transcript
+// system line. The canonical Chinese text stays the dictionary key; the
+// transcript renderer projects it through T, so both locales read naturally and
+// a later locale switch re-renders existing history consistently.
+func (a *nativeApp) appendRunFinished(stopReason string) {
+	a.appendMessage(&chatMessage{
+		ID:   a.nextLocalMessageID("system"),
+		Kind: messageSystem,
+		Text: "运行结束：" + stopReason,
+		Done: true,
 	})
+}
+
+func (a *nativeApp) promptFailed(err error) {
+	a.dispatch(func() { a.applyPromptFailure(err) })
+}
+
+// applyPromptFailure restores the idle shell after a failed send. Any deferred
+// worktree intent is consumed before the error is appended, so the new chat
+// keeps the failure visible instead of silently swallowing it.
+func (a *nativeApp) applyPromptFailure(err error) {
+	addDiagnostic("error", "prompt failed: "+err.Error())
+	a.showErrorToast("发送失败：" + err.Error())
+	a.running = false
+	a.creatingSession = false
+	a.awaitingUserEcho = false
+	a.localUserMessageID = ""
+	a.status = ""
+	a.settleWorktreeOpen()
+	a.appendErrorFromErr("发送失败：", err)
+}
+
+func pathWithinDirectory(root, path string) bool {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func fileURI(path string) string {
@@ -916,6 +1251,23 @@ func fileURI(path string) string {
 		uriPath = "/" + uriPath
 	}
 	return (&url.URL{Scheme: "file", Path: uriPath}).String()
+}
+
+// cancelSessionRun stops one projected session, active or background. The
+// Runtime decides whether the cancel is accepted; the client only forwards the
+// canonical session/cancel request and projects the immediate status.
+func (a *nativeApp) cancelSessionRun(sessionID string) {
+	client := a.acp
+	if client == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	a.setSessionRunLocal(sessionID, "cancelling", true)
+	if a.currentSession == sessionID {
+		a.status = "正在停止…"
+	}
+	go func() {
+		_, _ = client.call("session/cancel", map[string]any{"sessionId": sessionID})
+	}()
 }
 
 func (a *nativeApp) stop() {
@@ -935,59 +1287,48 @@ func (a *nativeApp) stop() {
 }
 
 func (a *nativeApp) setConfigOption(configID, value string) {
-	client := a.acp
-	if client == nil || a.running || a.creatingSession {
+	if a.running || a.creatingSession {
 		return
 	}
-	features := a.featureSnapshot()
+	// A draft shell has no session to mutate. Keep the selection local and
+	// flush it once after session/new; browsing menus must not create rows.
+	if a.currentSession == "" {
+		a.applyDraftConfigOption(configID, value)
+		return
+	}
+	client := a.acp
+	if client == nil {
+		return
+	}
 	sessionID := a.currentSession
-	cwd := a.workspace
-	if cwd == "" {
-		cwd = a.draftCwd
-	}
-	creating := sessionID == ""
-	if creating {
-		a.creatingSession = true
-	}
 	go func() {
-		if sessionID == "" {
-			raw, err := client.call("session/new", map[string]any{"cwd": cwd})
-			if err != nil {
-				a.dispatch(func() { a.creatingSession = false })
-				return
-			}
-			var res sessionResult
-			if err := json.Unmarshal(raw, &res); err != nil {
-				a.dispatch(func() { a.creatingSession = false })
-				return
-			}
-			sessionID = res.SessionID
-			a.dispatch(func() { a.applySessionResult(res) })
-			go a.refreshSessions(client, cwd, features)
-		}
 		raw, err := client.call("session/set_config_option", map[string]any{
 			"sessionId": sessionID,
 			"configId":  configID,
 			"value":     value,
 		})
 		if err != nil {
-			a.dispatch(func() {
-				a.creatingSession = false
-				a.status = "切换失败：" + err.Error()
-			})
+			a.dispatch(func() { a.status = "切换失败：" + err.Error() })
 			return
 		}
 		var res sessionResult
 		if err := json.Unmarshal(raw, &res); err == nil && len(res.ConfigOptions) > 0 {
 			a.dispatch(func() {
+				if a.currentSession != sessionID {
+					return
+				}
 				a.configOptions = res.ConfigOptions
 				a.syncModelState()
-				a.creatingSession = false
 			})
-		} else if creating {
-			a.dispatch(func() { a.creatingSession = false })
 		}
 	}()
+}
+
+// finishSessionCreation clears the transient create guard and consumes a
+// deferred worktree open intent now that the shell can accept a new chat.
+func (a *nativeApp) finishSessionCreation() {
+	a.creatingSession = false
+	a.settleWorktreeOpen()
 }
 
 func (a *nativeApp) shutdown() {
@@ -1119,13 +1460,13 @@ func (a *nativeApp) currentThinkingOption() *configOption {
 func (a *nativeApp) connectionLabel() string {
 	switch a.conn {
 	case connStarting:
-		return "连接中"
+		return T("连接中")
 	case connReady:
-		return "已连接"
+		return T("已连接")
 	case connFailed:
-		return "离线"
+		return T("离线")
 	default:
-		return "未连接"
+		return T("未连接")
 	}
 }
 
@@ -1133,10 +1474,22 @@ func (a *nativeApp) usageLabel() string {
 	if a.usageUsed <= 0 {
 		return ""
 	}
-	if a.usageSize <= 0 {
-		return fmt.Sprintf("%d tokens", a.usageUsed)
+	label := fmt.Sprintf("%d tokens", a.usageUsed)
+	if a.usageSize > 0 {
+		percent := int(float64(a.usageUsed) / float64(a.usageSize) * 100)
+		label = fmt.Sprintf("%d / %d (%d%%)", a.usageUsed, a.usageSize, percent)
 	}
-	return fmt.Sprintf("%d / %d", a.usageUsed, a.usageSize)
+	if a.usageCost > 0 {
+		currency := a.usageCurrency
+		if currency == "" {
+			currency = "$"
+		}
+		if currency == "USD" || currency == "usd" {
+			currency = "$"
+		}
+		label += fmt.Sprintf(" · %s%.4f", currency, a.usageCost)
+	}
+	return label
 }
 
 func (a *nativeApp) workspaceLabel() string {

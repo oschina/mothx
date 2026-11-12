@@ -41,9 +41,11 @@ var (
 	iconWrench       = svg(`<path d="M14.5 6.5a4 4 0 0 0-5.2 5.2L4 17l3 3 5.3-5.3a4 4 0 0 0 5.2-5.2l-2.4 2.4-2.9-.6-.6-2.9z"/>`)
 	iconTerminal     = svg(`<path d="m5 7 5 5-5 5M13 17h6"/>`)
 	iconFile         = svg(`<path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/>`)
+	iconImage        = svg(`<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4.5 17 4.8-4.8a2 2 0 0 1 2.8 0l2 2 1.9-1.9a2 2 0 0 1 2.8 0l2.7 2.7"/>`)
 	iconCheck        = svg(`<path d="m5 12.5 4.5 4.5L19 7.5"/>`)
 	iconAlert        = svg(`<path d="M12 4 3 20h18z"/><path d="M12 10v4M12 17.5v.1"/>`)
 	iconSpark        = svg(`<path d="M12 3.5 13.8 9l5.5 1.8-5.5 1.8L12 18l-1.8-5.4L4.7 10.8 10.2 9z"/>`)
+	iconSlash        = svg(`<path d="M17 4 7 20"/>`)
 	iconGlobe        = svg(`<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.2 2.2 3.3 5 3.3 8S14.2 17.8 12 20c-2.2-2.2-3.3-5-3.3-8S9.8 6.2 12 4z"/>`)
 	iconSettings     = svg(`<path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.07a1.99 1.99 0 0 1-2.82 2.82l-.07-.06a1.65 1.65 0 0 0-1.82.33 1.65 1.65 0 0 0-.67 1.61v.17a2 2 0 0 1-4 0v-.17a1.65 1.65 0 0 0-.67-1.61 1.65 1.65 0 0 0-1.82-.33l-.07.06a1.99 1.99 0 0 1-2.82-2.82l.06-.07a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.61-.67h-.17a2 2 0 0 1 0-4h.17a1.65 1.65 0 0 0 1.61-.67c.39-.49.5-1.12.33-1.82l-.06-.07a1.99 1.99 0 0 1 2.82-2.82l.07.06a1.65 1.65 0 0 0 1.82.33h.17c.49.39 1.12.5 1.61.67a1.65 1.65 0 0 0 .67-1.61v-.17a2 2 0 0 1 4 0v.17c0 .7.18 1.32.67 1.61.49.28 1.12.18 1.61-.67h.17a2 2 0 0 1 2.82 2.82l-.06.07a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.61.67h.17a2 2 0 0 1 0 4h-.17a1.65 1.65 0 0 0-1.61.67z"/>`)
 	iconArrowLeft    = svg(`<path d="M19 12H5M12 19l-7-7 7-7"/>`)
@@ -55,7 +57,10 @@ var (
 	iconServer       = svg(`<rect x="4" y="3" width="16" height="6" rx="2"/><rect x="4" y="15" width="16" height="6" rx="2"/><circle cx="8" cy="6" r="1"/><circle cx="8" cy="18" r="1"/>`)
 	iconRefresh      = svg(`<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v9h-9"/>`)
 	iconList         = svg(`<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>`)
+	iconBranch       = svg(`<circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M6 8v8M18 8v1a3 3 0 0 1-3 3H9"/>`)
 	iconDoc          = svg(`<path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/>`)
+	iconMore         = svg(`<circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/>`)
+	iconPin          = svg(`<path d="M9 3.5h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 13.5v7"/>`)
 )
 
 // mothxLogoView shows the official MothX mark, with the drawn icon as a

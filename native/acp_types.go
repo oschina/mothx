@@ -46,11 +46,18 @@ type configOption struct {
 }
 
 type sessionResult struct {
-	SessionID     string            `json:"sessionId"`
-	ParentSession string            `json:"parentSessionId,omitempty"`
-	Modes         *sessionModeState `json:"modes,omitempty"`
-	ConfigOptions []configOption    `json:"configOptions,omitempty"`
-	Execution     *executionState   `json:"execution,omitempty"`
+	SessionID     string                `json:"sessionId"`
+	ParentSession string                `json:"parentSessionId,omitempty"`
+	Modes         *sessionModeState     `json:"modes,omitempty"`
+	ConfigOptions []configOption        `json:"configOptions,omitempty"`
+	Execution     *executionState       `json:"execution,omitempty"`
+	History       *transcriptPageResult `json:"history,omitempty"`
+}
+
+type transcriptPageResult struct {
+	SessionID  string          `json:"sessionId"`
+	Updates    []sessionUpdate `json:"updates"`
+	NextCursor string          `json:"nextCursor,omitempty"`
 }
 
 type executionState struct {
@@ -157,8 +164,9 @@ type planEntry struct {
 }
 
 type command struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	Meta        map[string]json.RawMessage `json:"_meta,omitempty"`
 }
 
 type sessionUpdateNotification struct {
@@ -175,7 +183,10 @@ type sessionEvent struct {
 	RunID      string         `json:"runId,omitempty"`
 	JobID      string         `json:"jobId,omitempty"`
 	RequestID  string         `json:"requestId,omitempty"`
+	Kind       string         `json:"kind,omitempty"`
+	Deadline   string         `json:"deadline,omitempty"`
 	RetryAfter *int           `json:"retryAfterMs,omitempty"`
+	Remaining  *int           `json:"remainingMs,omitempty"`
 	Attempt    *int           `json:"attempt,omitempty"`
 	ErrorInfo  map[string]any `json:"errorInfo,omitempty"`
 }
@@ -214,6 +225,7 @@ type questionParams struct {
 	Multi       bool            `json:"multi,omitempty"`
 	Title       string          `json:"title,omitempty"`
 	Placeholder string          `json:"placeholder,omitempty"`
+	TimeoutMs   int             `json:"timeoutMs,omitempty"`
 }
 
 type elicitationParams struct {

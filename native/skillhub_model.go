@@ -59,6 +59,17 @@ type skillHubMarketInfo struct {
 	SiteURL string `json:"siteUrl"`
 }
 
+type skillHubCategory struct {
+	Key      string             `json:"key"`
+	Name     string             `json:"name"`
+	NameEn   string             `json:"nameEn,omitempty"`
+	Children []skillHubCategory `json:"children,omitempty"`
+}
+
+type skillHubCategoriesView struct {
+	Categories []skillHubCategory `json:"categories"`
+}
+
 type skillHubTarget struct {
 	Path  string `json:"path"`
 	Scope string `json:"scope"`
@@ -207,6 +218,12 @@ type skillHubPanelState struct {
 
 	// Search projection.
 	Query             string
+	Category          string
+	Categories        []skillHubCategory
+	CategoriesLoaded  bool
+	CategoryLoading   bool
+	CategoryErr       string
+	Official          bool
 	SearchBusy        bool
 	SearchErr         string
 	Results           []skillHubSkill
@@ -240,8 +257,9 @@ type skillHubPanelState struct {
 	// Independent sequences guard configuration and catalogue responses. A
 	// config save cannot invalidate an in-flight catalogue read, while leaving
 	// the tab still invalidates both.
-	ConfigSeq  int64
-	CatalogSeq int64
+	ConfigSeq   int64
+	CatalogSeq  int64
+	CategorySeq int64
 }
 
 func newSkillHubPanelState() skillHubPanelState {
@@ -269,13 +287,13 @@ func (a *nativeApp) skillHubCapable() bool {
 }
 
 func (a *nativeApp) skillHubConfigCurrent(seq, reloadSeq int64) bool {
-	return a.settingsOpen && a.settingsTab == "skillhub" &&
+	return a.panelVisible("skills", "skillhub") &&
 		seq == atomic.LoadInt64(&a.skillhub.ConfigSeq) &&
 		reloadSeq == atomic.LoadInt64(&a.reloadSeq)
 }
 
 func (a *nativeApp) skillHubCatalogCurrent(seq, reloadSeq int64) bool {
-	return a.settingsOpen && a.settingsTab == "skillhub" &&
+	return a.panelVisible("skills", "skillhub") &&
 		seq == atomic.LoadInt64(&a.skillhub.CatalogSeq) &&
 		reloadSeq == atomic.LoadInt64(&a.reloadSeq)
 }
@@ -312,6 +330,13 @@ func (a *nativeApp) invalidateSkillHubPanel() {
 	s.TargetPath = ""
 	s.TargetScope = ""
 	s.Query = ""
+	s.Category = ""
+	s.Categories = nil
+	s.CategoriesLoaded = false
+	s.CategoryLoading = false
+	s.CategoryErr = ""
+	s.Official = false
+	atomic.AddInt64(&s.CategorySeq, 1)
 	s.SearchBusy = false
 	s.SearchErr = ""
 	s.Results = nil
@@ -343,7 +368,7 @@ func (a *nativeApp) invalidateSkillHubPanel() {
 // only manageSkillHub still gets the config editor, and one that advertises
 // only manageSkillHubCatalog still gets the browser.
 func (a *nativeApp) startSkillHubPanelLoad() {
-	if !a.settingsOpen || a.settingsTab != "skillhub" {
+	if !a.panelVisible("skills", "skillhub") {
 		return
 	}
 	s := &a.skillhub
@@ -375,7 +400,7 @@ func (a *nativeApp) startSkillHubPanelLoad() {
 }
 
 func (a *nativeApp) startSkillHubConfigLoad() {
-	if !a.settingsOpen || a.settingsTab != "skillhub" || !a.skillHubConfigCapable() {
+	if !a.panelVisible("skills", "skillhub") || !a.skillHubConfigCapable() {
 		return
 	}
 	s := &a.skillhub
@@ -482,24 +507,24 @@ func skillHubMarketIDs(markets []skillHubMarketDraft) []string {
 func buildSkillHubConfigPatch(defaultMarket, defaultScope, officialHandles string, markets []skillHubMarketDraft) (map[string]any, error) {
 	defaultMarket = strings.TrimSpace(defaultMarket)
 	if defaultMarket == "" {
-		return nil, fmt.Errorf("默认市场不能为空")
+		return nil, localizedError("默认市场不能为空")
 	}
 	defaultScope = strings.TrimSpace(defaultScope)
 	if defaultScope != "project" && defaultScope != "global" {
-		return nil, fmt.Errorf("默认安装范围必须是 project 或 global")
+		return nil, localizedError("默认安装范围必须是 project 或 global")
 	}
 	if len(markets) == 0 {
-		return nil, fmt.Errorf("至少需要保留一个市场")
+		return nil, localizedError("至少需要保留一个市场")
 	}
 	seen := make(map[string]bool, len(markets))
 	payload := make([]map[string]any, 0, len(markets))
 	for index, market := range markets {
 		id := strings.TrimSpace(market.ID)
 		if id == "" {
-			return nil, fmt.Errorf("第 %d 个市场缺少 ID", index+1)
+			return nil, localizedErrorf("第 %d 个市场缺少 ID", index+1)
 		}
 		if seen[id] {
-			return nil, fmt.Errorf("市场 ID %q 重复", id)
+			return nil, localizedErrorf("市场 ID %q 重复", id)
 		}
 		seen[id] = true
 		entry := map[string]any{
@@ -511,7 +536,7 @@ func buildSkillHubConfigPatch(defaultMarket, defaultScope, officialHandles strin
 		}
 		token := strings.TrimSpace(market.Token)
 		if market.ClearToken && token != "" {
-			return nil, fmt.Errorf("市场 %q 不能同时提交新 Token 和清除 Token", id)
+			return nil, localizedErrorf("市场 %q 不能同时提交新 Token 和清除 Token", id)
 		}
 		if market.ClearToken {
 			entry["clearApiToken"] = true
@@ -608,7 +633,7 @@ func (a *nativeApp) confirmSkillHubAddMarket() {
 	}
 	for _, market := range s.Markets {
 		if strings.TrimSpace(market.ID) == id {
-			s.AddMarketErr = fmt.Sprintf("市场 ID %q 已存在", id)
+			s.AddMarketErr = Tf("市场 ID %q 已存在", id)
 			return
 		}
 	}
@@ -627,7 +652,7 @@ func (a *nativeApp) removeSkillHubMarket(index int) {
 }
 
 func (a *nativeApp) startSkillHubCatalogLoad() {
-	if !a.settingsOpen || a.settingsTab != "skillhub" || !a.skillHubCatalogCapable() {
+	if !a.panelVisible("skills", "skillhub") || !a.skillHubCatalogCapable() {
 		return
 	}
 	s := &a.skillhub
@@ -655,7 +680,7 @@ func skillHubCall(client *acpClient, method string, params map[string]any, targe
 		return err
 	}
 	if err := json.Unmarshal(raw, target); err != nil {
-		return fmt.Errorf("%s 响应无效：%w", strings.TrimPrefix(method, "mothx/manage/skillhub/"), err)
+		return localizedErrorf("%s 响应无效：%w", strings.TrimPrefix(method, "mothx/manage/skillhub/"), err)
 	}
 	return nil
 }
@@ -745,6 +770,9 @@ func (a *nativeApp) applySkillHubCatalogViews(sessionID string, markets *skillHu
 	s.CatalogLoaded = true
 	s.CatalogLoading = false
 	s.CatalogErr = ""
+	if !s.CategoriesLoaded {
+		a.loadSkillHubCategories()
+	}
 }
 
 // skillHubChooseMarket prefers the current selection, then the user's saved
@@ -776,7 +804,7 @@ func skillHubTargetLabels(targets []skillHubTarget) []string {
 	for _, target := range targets {
 		label := strings.TrimSpace(target.Label)
 		if label == "" {
-			label = "技能目录"
+			label = T("技能目录")
 		}
 		labels = append(labels, fmt.Sprintf("%s · %s · %s", label, target.Scope, target.Path))
 	}
@@ -822,6 +850,13 @@ func skillHubChooseTarget(currentLabel, scope string, targets []skillHubTarget) 
 }
 
 func skillHubOnMarketChanged(s *skillHubPanelState) {
+	atomic.AddInt64(&s.CategorySeq, 1)
+	s.Category = ""
+	s.Categories = nil
+	s.CategoriesLoaded = false
+	s.CategoryLoading = false
+	s.CategoryErr = ""
+	s.Official = false
 	s.Results = []skillHubSkill{}
 	s.ResultsLoaded = false
 	s.ResultsQuery = ""
@@ -856,13 +891,24 @@ func skillHubSearchSort(market string) string {
 	return "downloads"
 }
 
-func buildSkillHubSearchRequest(sessionID, market, query string) map[string]any {
+func buildSkillHubSearchRequest(sessionID, market, query, category string) map[string]any {
 	return map[string]any{
 		"sessionId": strings.TrimSpace(sessionID),
 		"market":    strings.TrimSpace(market),
 		"query":     strings.TrimSpace(query),
+		"category":  strings.TrimSpace(category),
 		"sort":      skillHubSearchSort(market),
 		"order":     "desc",
+		"page":      1,
+		"limit":     20,
+	}
+}
+
+func buildSkillHubOfficialRequest(sessionID, market, query string) map[string]any {
+	return map[string]any{
+		"sessionId": strings.TrimSpace(sessionID),
+		"market":    strings.TrimSpace(market),
+		"query":     strings.TrimSpace(query),
 		"page":      1,
 		"limit":     20,
 	}
@@ -911,7 +957,7 @@ func skillHubTitle(skill skillHubSkill) string {
 			return value
 		}
 	}
-	return "未命名技能"
+	return T("未命名技能")
 }
 
 func skillHubInstalledName(skill skillHubSkill) string {
@@ -1059,6 +1105,73 @@ func (a *nativeApp) skillHubBrowseBusy() bool {
 	return s.CatalogLoading || s.SearchBusy || s.ActionBusy != "" || s.DetailBusy
 }
 
+func skillHubCategoryName(category skillHubCategory) string {
+	for _, value := range []string{category.Name, category.NameEn, category.Key} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return T("未命名分类")
+}
+
+func skillHubFlattenCategories(categories []skillHubCategory) []skillHubCategory {
+	out := make([]skillHubCategory, 0, len(categories))
+	for _, category := range categories {
+		out = append(out, category)
+		out = append(out, skillHubFlattenCategories(category.Children)...)
+	}
+	return out
+}
+
+// loadSkillHubCategories projects the selected market's category tree. It is
+// optional: a market without category support leaves the selector hidden.
+func (a *nativeApp) loadSkillHubCategories() {
+	s := &a.skillhub
+	if !a.skillHubCatalogCapable() || s.CategoryLoading || s.SessionID == "" {
+		return
+	}
+	if strings.TrimSpace(s.SelectedMarket) == "" {
+		return
+	}
+	client := a.acp
+	if client == nil {
+		s.CategoriesLoaded = true
+		return
+	}
+	seq := atomic.AddInt64(&s.CategorySeq, 1)
+	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
+	sessionID := s.SessionID
+	market := s.SelectedMarket
+	s.CategoryLoading = true
+	s.CategoryErr = ""
+	go func() {
+		raw, err := client.call("mothx/manage/skillhub/categories", map[string]any{
+			"sessionId": sessionID,
+			"market":    market,
+		})
+		a.dispatch(func() {
+			s := &a.skillhub
+			if seq != atomic.LoadInt64(&s.CategorySeq) || startReloadSeq != atomic.LoadInt64(&a.reloadSeq) ||
+				a.currentSession != sessionID || s.SelectedMarket != market {
+				return
+			}
+			s.CategoryLoading = false
+			s.CategoriesLoaded = true
+			if err != nil {
+				s.CategoryErr = "读取技能分类失败：" + err.Error()
+				return
+			}
+			var view skillHubCategoriesView
+			if err := json.Unmarshal(raw, &view); err != nil {
+				s.CategoryErr = "技能分类响应无效：" + err.Error()
+				return
+			}
+			s.Categories = view.Categories
+			s.CategoryErr = ""
+		})
+	}()
+}
+
 // searchSkillHub searches the selected market. An empty query is a valid
 // browse request and uses the market's download ordering.
 func (a *nativeApp) searchSkillHub() {
@@ -1092,8 +1205,14 @@ func (a *nativeApp) searchSkillHub() {
 	s.SearchErr = ""
 	s.CatalogStatus = ""
 	s.CatalogStatusIsError = false
+	method := "mothx/manage/skillhub/search"
+	request := buildSkillHubSearchRequest(sessionID, market, query, s.Category)
+	if s.Official {
+		method = "mothx/manage/skillhub/official"
+		request = buildSkillHubOfficialRequest(sessionID, market, query)
+	}
 	go func() {
-		raw, err := client.call("mothx/manage/skillhub/search", buildSkillHubSearchRequest(sessionID, market, query))
+		raw, err := client.call(method, request)
 		a.dispatch(func() {
 			if !a.skillHubCatalogCurrent(seq, startReloadSeq) {
 				return
@@ -1237,7 +1356,7 @@ func (a *nativeApp) installSkillHubWithOverwrite(market, id, version string, ove
 	targetPath := s.TargetPath
 	activate := s.ActivateOnInstall
 	s.ActionBusy = "install:" + id
-	s.CatalogStatus = "正在安装技能 " + id + "…"
+	s.CatalogStatus = Tf("正在安装技能 %s…", id)
 	s.CatalogStatusIsError = false
 	go func() {
 		raw, err := client.call("mothx/manage/skillhub/install", buildSkillHubInstallRequest(
@@ -1268,19 +1387,13 @@ func (a *nativeApp) installSkillHubWithOverwrite(market, id, version string, ove
 			if name == "" {
 				name = id
 			}
-			if response.Install.AlreadyInstalled {
-				s.CatalogStatus = fmt.Sprintf("技能 %s 已是最新版本", name)
-			} else if response.Install.Installed {
-				s.CatalogStatus = fmt.Sprintf("技能 %s 已安装", name)
-			} else {
-				s.CatalogStatus = fmt.Sprintf("技能 %s 安装完成", name)
-			}
-			if response.Activated {
-				s.CatalogStatus += "，并已在当前会话激活"
-			}
-			if len(response.Install.Warnings) > 0 {
-				s.CatalogStatus += fmt.Sprintf("；%d 条警告", len(response.Install.Warnings))
-			}
+			s.CatalogStatus = skillHubInstallStatus(
+				name,
+				response.Install.AlreadyInstalled,
+				response.Install.Installed,
+				response.Activated,
+				len(response.Install.Warnings),
+			)
 			s.CatalogStatusIsError = false
 		})
 	}()
@@ -1312,7 +1425,7 @@ func (a *nativeApp) activateSkillHub(market, id, name string) {
 	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 	sessionID := s.SessionID
 	s.ActionBusy = "activate:" + name
-	s.CatalogStatus = "正在激活技能 " + name + "…"
+	s.CatalogStatus = Tf("正在激活技能 %s…", name)
 	s.CatalogStatusIsError = false
 	go func() {
 		raw, err := client.call("mothx/manage/skillhub/activate", buildSkillHubActivateRequest(sessionID, name))
@@ -1334,7 +1447,7 @@ func (a *nativeApp) activateSkillHub(market, id, name string) {
 				return
 			}
 			a.skillHubApplySession(response.Session)
-			s.CatalogStatus = fmt.Sprintf("技能 %s 已在当前会话激活", name)
+			s.CatalogStatus = Tf("技能 %s 已在当前会话激活", name)
 			s.CatalogStatusIsError = false
 		})
 	}()
@@ -1404,7 +1517,7 @@ func (a *nativeApp) confirmUninstallSkillHub() {
 	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 	sessionID := s.SessionID
 	s.ActionBusy = "uninstall:" + id
-	s.CatalogStatus = "正在卸载技能 " + name + "…"
+	s.CatalogStatus = Tf("正在卸载技能 %s…", name)
 	s.CatalogStatusIsError = false
 	s.UninstallOpen = false
 	go func() {
@@ -1428,8 +1541,29 @@ func (a *nativeApp) confirmUninstallSkillHub() {
 			}
 			a.skillHubApplySession(response.Session)
 			a.skillHubRemoveInstalled(market, id)
-			s.CatalogStatus = fmt.Sprintf("技能 %s 已卸载", name)
+			s.CatalogStatus = Tf("技能 %s 已卸载", name)
 			s.CatalogStatusIsError = false
 		})
 	}()
+}
+
+// skillHubInstallStatus is the shared post-install status label. It keeps every
+// dynamic fragment translatable instead of concatenating Chinese punctuation.
+func skillHubInstallStatus(name string, alreadyInstalled, installed, activated bool, warnings int) string {
+	var status string
+	switch {
+	case alreadyInstalled:
+		status = Tf("技能 %s 已是最新版本", name)
+	case installed:
+		status = Tf("技能 %s 已安装", name)
+	default:
+		status = Tf("技能 %s 安装完成", name)
+	}
+	if activated {
+		status += T("，并已在当前会话激活")
+	}
+	if warnings > 0 {
+		status += Tf("；%d 条警告", warnings)
+	}
+	return status
 }

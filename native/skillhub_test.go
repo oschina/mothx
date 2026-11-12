@@ -283,12 +283,12 @@ func TestSkillHubSearchDetailDecodeAndRequestBuilders(t *testing.T) {
 		t.Fatalf("detail = %+v", detail)
 	}
 
-	search := buildSkillHubSearchRequest(" s1 ", " skillhub.cn ", " pdf ")
+	search := buildSkillHubSearchRequest(" s1 ", " skillhub.cn ", " pdf ", " docs ")
 	if search["sessionId"] != "s1" || search["market"] != "skillhub.cn" || search["query"] != "pdf" ||
 		search["sort"] != "downloads" || search["order"] != "desc" || search["limit"] != 20 {
 		t.Fatalf("search request = %#v", search)
 	}
-	if got := buildSkillHubSearchRequest("s1", "clawhub.ai", "")["sort"]; got != "" {
+	if got := buildSkillHubSearchRequest("s1", "clawhub.ai", "", "")["sort"]; got != "" {
 		t.Fatalf("clawhub sort = %#v, want empty", got)
 	}
 	detailRequest := buildSkillHubDetailRequest("s1", "skillhub.cn", " pdf ")
@@ -555,5 +555,24 @@ func TestSkillHubMarkInstalledAndRemoveInstalled(t *testing.T) {
 	a.skillHubRemoveInstalled("skillhub.cn", "pdf")
 	if len(a.skillhub.Installed) != 0 || a.skillhub.Results[0].Installed != nil || a.skillhub.Detail.Installed != nil {
 		t.Fatalf("uninstall did not clear projections: %+v", a.skillhub)
+	}
+}
+
+func TestSkillHubCategoriesAndOfficialProjection(t *testing.T) {
+	request := buildSkillHubSearchRequest("s1", "skillhub.cn", "pdf", "docs")
+	if request["category"] != "docs" || request["sort"] != "downloads" {
+		t.Fatalf("category search request = %#v", request)
+	}
+	official := buildSkillHubOfficialRequest("s1", "skillhub.cn", "pdf")
+	if official["query"] != "pdf" || official["sessionId"] != "s1" {
+		t.Fatalf("official request = %#v", official)
+	}
+	categories := []skillHubCategory{
+		{Key: "docs", Name: "文档", Children: []skillHubCategory{{Key: "api", NameEn: "API"}}},
+		{Key: "dev", Name: "开发"},
+	}
+	flat := skillHubFlattenCategories(categories)
+	if len(flat) != 3 || flat[1].Key != "api" || skillHubCategoryName(flat[1]) != "API" {
+		t.Fatalf("flat categories = %+v", flat)
 	}
 }

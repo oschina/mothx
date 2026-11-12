@@ -14,7 +14,7 @@ import (
 func (a *nativeApp) settingsKnowledgePane(c *ui.Context, p palette) {
 	if !a.knowledgeCapable() {
 		a.settingsCard(c, p, "知识库", "当前运行时未公开知识库管理能力。", func() {
-			ui.Text(c, "需要 ACP 能力 manageKnowledgeBases；当前版本不会显示或调用占位表单。").
+			ui.Text(c, T("需要 ACP 能力 manageKnowledgeBases；当前版本不会显示或调用占位表单。")).
 				FontSize(11).TextColor(p.t.TextMuted).LineHeight(1.45)
 		})
 		return
@@ -26,7 +26,7 @@ func (a *nativeApp) settingsKnowledgePane(c *ui.Context, p palette) {
 	if k.Loading && !k.Loaded {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Icon(c, iconRefresh).FontSize(13).TextColor(p.t.TextMuted)
-			ui.Text(c, "正在读取知识库配置与索引状态…").FontSize(12).TextColor(p.t.TextMuted)
+			ui.Text(c, T("正在读取知识库配置与索引状态…")).FontSize(12).TextColor(p.t.TextMuted)
 		})
 		return
 	}
@@ -40,13 +40,13 @@ func (a *nativeApp) settingsKnowledgePane(c *ui.Context, p palette) {
 		a.knowledgeStatusBanner(c, p)
 	}
 	if k.Loading && k.Loaded {
-		ui.Text(c, "正在刷新知识库投影…").FontSize(10.5).TextColor(p.t.TextMuted)
+		ui.Text(c, T("正在刷新知识库投影…")).FontSize(10.5).TextColor(p.t.TextMuted)
 	}
 
 	if len(k.Views) == 0 && !k.Creating {
 		ui.Column(c).Padding(16).Radius(10).Border(1, p.t.Border).Gap(4).Children(func() {
-			ui.Text(c, "还没有知识库").FontSize(12).FontWeight(600).TextColor(p.t.Text)
-			ui.Text(c, "创建后可立即扫描，并使用本地索引预览查询。").FontSize(10.5).TextColor(p.t.TextMuted)
+			ui.Text(c, T("还没有知识库")).FontSize(12).FontWeight(600).TextColor(p.t.Text)
+			ui.Text(c, T("创建后可立即扫描，并使用本地索引预览查询。")).FontSize(10.5).TextColor(p.t.TextMuted)
 		})
 	}
 	for index := range k.Views {
@@ -63,12 +63,12 @@ func (a *nativeApp) knowledgePaneHeader(c *ui.Context, p palette) {
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
 		ui.Icon(c, iconBook).FontSize(18).TextColor(p.t.Accent)
 		ui.Column(c).Gap(2).Grow(1).Children(func() {
-			ui.Text(c, "目录知识库").FontSize(13).FontWeight(650).TextColor(p.t.Text)
-			ui.Text(c, "将本地目录建立为可重建的图谱索引。资料只通过 Runtime 与 ACP 管理，不会被 Native 直接读取。").
+			ui.Text(c, T("目录知识库")).FontSize(13).FontWeight(650).TextColor(p.t.Text)
+			ui.Text(c, T("将本地目录建立为可重建的图谱索引。资料只通过 Runtime 与 ACP 管理，不会被 Native 直接读取。")).
 				FontSize(10.5).TextColor(p.t.TextMuted).LineHeight(1.4)
 		})
-		add := ui.PrimaryButton(c.Key("knowledge-add"), "新建知识库")
-		add.Label("新建知识库").Tooltip("创建目录知识库")
+		add := ui.PrimaryButton(c.Key("knowledge-add"), T("新建知识库"))
+		add.Label(T("新建知识库")).Tooltip(T("创建目录知识库"))
 		add.Disabled(!k.Loaded || k.Loading || k.Creating || k.Defaults == nil)
 		if add.Clicked() && k.Loaded && !k.Loading && !k.Creating && k.Defaults != nil {
 			a.openKnowledgeNew()
@@ -81,11 +81,11 @@ func (a *nativeApp) knowledgeErrorCard(c *ui.Context, p palette, message string)
 		Border(1, ui.RGBA(255, 107, 107, 0.28)).Gap(8).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Icon(c, iconAlert).FontSize(15).TextColor(p.t.Danger)
-			ui.Text(c, "知识库管理不可用").FontSize(12).FontWeight(650).TextColor(p.t.Danger)
+			ui.Text(c, T("知识库管理不可用")).FontSize(12).FontWeight(650).TextColor(p.t.Danger)
 		})
-		ui.Text(c, message).FontSize(11).TextColor(p.t.TextMuted).Selectable()
+		ui.Text(c, T(message)).FontSize(11).TextColor(p.t.TextMuted).Selectable()
 		if a.knowledgeCapable() {
-			if ui.Button(c.Key("knowledge-retry"), "重试").Label("重试加载知识库").Clicked() {
+			if ui.Button(c.Key("knowledge-retry"), T("重试")).Label(T("重试加载知识库")).Clicked() {
 				a.knowledge.Loaded = false
 				a.startKnowledgePanelLoad()
 			}
@@ -108,7 +108,7 @@ func (a *nativeApp) knowledgeStatusBanner(c *ui.Context, p palette) {
 		} else if knowledgePanelBusy(k) {
 			statusPill(c, p, "running")
 		}
-		ui.Text(c, k.Status).FontSize(11).TextColor(color).Grow(1)
+		ui.Text(c, T(k.Status)).FontSize(11).TextColor(color).Grow(1)
 	})
 }
 
@@ -151,7 +151,7 @@ func (a *nativeApp) knowledgeBaseCard(c *ui.Context, p palette, view *knowledgeB
 			ui.Icon(c, iconBook).FontSize(16).TextColor(p.t.Accent)
 			ui.Column(c).Gap(2).Grow(1).Children(func() {
 				ui.Row(c).AlignItems(ui.Center).Gap(5).Children(func() {
-					ui.Text(c, title).FontSize(13).FontWeight(650).TextColor(p.t.Text).SingleLine()
+					ui.Text(c, T(title)).FontSize(13).FontWeight(650).TextColor(p.t.Text).SingleLine()
 					if creating {
 						badge(c, p, "新建")
 					}
@@ -162,7 +162,7 @@ func (a *nativeApp) knowledgeBaseCard(c *ui.Context, p palette, view *knowledgeB
 						badge(c, p, "索引中")
 					}
 				})
-				ui.Text(c, desc).FontSize(10.5).TextColor(p.t.TextMuted).LineHeight(1.4)
+				ui.Text(c, T(desc)).FontSize(10.5).TextColor(p.t.TextMuted).LineHeight(1.4)
 			})
 		})
 
@@ -175,7 +175,7 @@ func (a *nativeApp) knowledgeBaseCard(c *ui.Context, p palette, view *knowledgeB
 		a.knowledgeTextInput(c, p, knowledgeFieldKey(key, "thinking"), "思考等级（可选）", "", &draft.ThinkingLevel)
 		a.knowledgeTextInput(c, p, knowledgeFieldKey(key, "schedule"), "扫描周期",
 			"manual / hourly / daily / @every 6h / 5 段 cron", &draft.Schedule)
-		ui.Checkbox(c.Key(knowledgeFieldKey(key, "enabled")), &draft.Enabled, "启用知识库").FontSize(11.5)
+		ui.Checkbox(c.Key(knowledgeFieldKey(key, "enabled")), &draft.Enabled, T("启用知识库")).FontSize(11.5)
 
 		if view != nil && view.Snapshot != nil {
 			ui.Text(c, knowledgeStatsText(view.Snapshot)).FontSize(11).TextColor(p.t.TextMuted)
@@ -195,8 +195,8 @@ func (a *nativeApp) knowledgeBaseCard(c *ui.Context, p palette, view *knowledgeB
 			if creating {
 				saveLabel = "创建知识库"
 			}
-			save := ui.PrimaryButton(c.Key(knowledgeFieldKey(key, "save")), saveLabel)
-			save.Label(saveLabel)
+			save := ui.PrimaryButton(c.Key(knowledgeFieldKey(key, "save")), T(saveLabel))
+			save.Label(T(saveLabel))
 			save.Disabled(busy)
 			if save.Clicked() && !busy {
 				id := ""
@@ -206,27 +206,27 @@ func (a *nativeApp) knowledgeBaseCard(c *ui.Context, p palette, view *knowledgeB
 				a.saveKnowledgeBase(id)
 			}
 			if creating {
-				cancel := ui.Button(c.Key(knowledgeFieldKey(key, "cancel")), "取消")
-				cancel.Label("取消新建知识库")
+				cancel := ui.Button(c.Key(knowledgeFieldKey(key, "cancel")), T("取消"))
+				cancel.Label(T("取消新建知识库"))
 				if cancel.Clicked() {
 					a.cancelKnowledgeNew()
 				}
 				return
 			}
-			refresh := ui.Button(c.Key(knowledgeFieldKey(key, "refresh")), "刷新")
-			refresh.Label("刷新知识库状态")
+			refresh := ui.Button(c.Key(knowledgeFieldKey(key, "refresh")), T("刷新"))
+			refresh.Label(T("刷新知识库状态"))
 			refresh.Disabled(busy)
 			if refresh.Clicked() && !busy && view != nil {
 				a.refreshKnowledgeBase(view.KnowledgeBase.ID)
 			}
-			scan := ui.Button(c.Key(knowledgeFieldKey(key, "scan")), "立即扫描")
-			scan.Label("立即扫描知识库")
+			scan := ui.Button(c.Key(knowledgeFieldKey(key, "scan")), T("立即扫描"))
+			scan.Label(T("立即扫描知识库"))
 			scan.Disabled(busy || !draft.Enabled)
 			if scan.Clicked() && !busy && draft.Enabled && view != nil {
 				a.scanKnowledgeBase(view.KnowledgeBase.ID)
 			}
-			remove := ui.Button(c.Key(knowledgeFieldKey(key, "delete")), "删除")
-			remove.Label("删除知识库配置和索引")
+			remove := ui.Button(c.Key(knowledgeFieldKey(key, "delete")), T("删除"))
+			remove.Label(T("删除知识库配置和索引"))
 			remove.Background(p.errorBg).Border(1, p.t.Danger)
 			remove.Disabled(busy)
 			if remove.Clicked() && !busy && view != nil {
@@ -238,12 +238,12 @@ func (a *nativeApp) knowledgeBaseCard(c *ui.Context, p palette, view *knowledgeB
 
 func (a *nativeApp) knowledgeRootField(c *ui.Context, p palette, key string, draft *knowledgeBaseDraft) {
 	ui.Column(c).Gap(3).Children(func() {
-		ui.Text(c, "知识源目录").FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+		ui.Text(c, T("知识源目录")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.TextInput(c.Key(knowledgeFieldKey(key, "root")), &draft.RootDir).FontSize(12).Height(32).Padding(0, 8).
-				Placeholder("选择本地目录…").Background(p.t.Background).Radius(8).Border(1, p.t.Border).Grow(1)
-			choose := ui.Button(c.Key(knowledgeFieldKey(key, "choose-root")), "选择目录")
-			choose.Label("选择知识源目录")
+				Placeholder(T("选择本地目录…")).Background(p.t.Background).Radius(8).Border(1, p.t.Border).Grow(1)
+			choose := ui.Button(c.Key(knowledgeFieldKey(key, "choose-root")), T("选择目录"))
+			choose.Label(T("选择知识源目录"))
 			if choose.Clicked() {
 				a.knowledgeChooseRoot(key)
 			}
@@ -258,8 +258,8 @@ func (a *nativeApp) knowledgeProviderField(c *ui.Context, p palette, key string,
 	}
 	if len(options) == 0 {
 		ui.Column(c).Gap(3).Children(func() {
-			ui.Text(c, "供应商").FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
-			ui.Text(c, "没有可用的供应商目录").FontSize(11.5).TextColor(p.t.TextMuted)
+			ui.Text(c, T("供应商")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+			ui.Text(c, T("没有可用的供应商目录")).FontSize(11.5).TextColor(p.t.TextMuted)
 		})
 		return
 	}
@@ -274,8 +274,8 @@ func (a *nativeApp) knowledgeModelField(c *ui.Context, p palette, key string, dr
 	choices := knowledgeModelChoices(models, draft.Provider)
 	if len(choices) == 0 {
 		ui.Column(c).Gap(3).Children(func() {
-			ui.Text(c, "模型").FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
-			ui.Text(c, "没有可用模型").FontSize(11.5).TextColor(p.t.TextMuted)
+			ui.Text(c, T("模型")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+			ui.Text(c, T("没有可用模型")).FontSize(11.5).TextColor(p.t.TextMuted)
 		})
 		draft.Model = ""
 		return
@@ -300,23 +300,25 @@ func (a *nativeApp) knowledgeScheduleStatus(c *ui.Context, p palette, id, key st
 		Border(1, p.t.Border).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(7).Children(func() {
 			ui.Icon(c, iconClock).FontSize(13).TextColor(p.t.TextMuted)
-			ui.Text(c, "扫描计划").FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+			ui.Text(c, T("扫描计划")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
 		})
 		ui.Text(c, knowledgeScheduleText(schedule)).FontSize(11).TextColor(p.t.Text)
 		if schedule.LastStatus != "" {
-			ui.Text(c, "上次结果："+schedule.LastStatus).FontSize(10.5).TextColor(p.t.TextMuted)
+			ui.Text(c, Tf("上次结果：%s", T(schedule.LastStatus))).FontSize(10.5).TextColor(p.t.TextMuted)
 		}
 		if !schedule.RootAvailable {
-			ui.Text(c, "知识源目录不可用，已停止触发；恢复目录后请手动重扫。").
+			ui.Text(c, T("知识源目录不可用，已停止触发；恢复目录后请手动重扫。")).
 				FontSize(10.5).TextColor(p.t.Danger).LineHeight(1.35)
 		}
 		ui.Row(c).Justify(ui.End).Children(func() {
 			label := "恢复"
+			action := "恢复知识库扫描计划"
 			if schedule.Enabled {
 				label = "暂停"
+				action = "暂停知识库扫描计划"
 			}
-			btn := ui.Button(c.Key(knowledgeFieldKey(key, "schedule-toggle")), label)
-			btn.Label(label + "知识库扫描计划")
+			btn := ui.Button(c.Key(knowledgeFieldKey(key, "schedule-toggle")), T(label))
+			btn.Label(T(action))
 			btn.Disabled(busy)
 			if btn.Clicked() && !busy {
 				a.toggleKnowledgeSchedule(id)
@@ -346,19 +348,19 @@ func (a *nativeApp) knowledgeMCPCard(c *ui.Context, p palette, id, key string, b
 	}
 	ui.Column(c).Padding(10).Radius(10).Background(p.t.Background).
 		Border(1, p.t.Border).Gap(6).Children(func() {
-		ui.Text(c, "MCP 快速接入").FontSize(12).FontWeight(650).TextColor(p.t.Text)
-		ui.Text(c, "一键添加标准 MCP 工具，让新会话可搜索此知识库。无需填写命令或参数。").
+		ui.Text(c, T("MCP 快速接入")).FontSize(12).FontWeight(650).TextColor(p.t.Text)
+		ui.Text(c, T("一键添加标准 MCP 工具，让新会话可搜索此知识库。无需填写命令或参数。")).
 			FontSize(10.5).TextColor(p.t.TextMuted).LineHeight(1.4)
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "MCP 状态："+status).FontSize(11).TextColor(p.t.TextMuted).Grow(1)
-			btn := ui.Button(c.Key(knowledgeFieldKey(key, "mcp")), action)
-			btn.Label(action)
+			ui.Text(c, T("MCP 状态：")+T(status)).FontSize(11).TextColor(p.t.TextMuted).Grow(1)
+			btn := ui.Button(c.Key(knowledgeFieldKey(key, "mcp")), T(action))
+			btn.Label(T(action))
 			btn.Disabled(busy)
 			if btn.Clicked() && !busy {
 				a.applyKnowledgeMCP(id)
 			}
 		})
-		ui.Text(c, "此操作仅对新创建或重新加载的 ACP 会话生效；更改后需新建或重载会话。").
+		ui.Text(c, T("此操作仅对新创建或重新加载的 ACP 会话生效；更改后需新建或重载会话。")).
 			FontSize(10).TextColor(p.t.TextMuted).LineHeight(1.35)
 	})
 }
@@ -383,16 +385,16 @@ func (a *nativeApp) knowledgeInsightsPanel(c *ui.Context, p palette, id, key str
 		labels := make([]string, 0, 2)
 		if a.knowledgeRunsCapable() {
 			tabKinds = append(tabKinds, "runs")
-			labels = append(labels, "索引历史")
+			labels = append(labels, T("索引历史"))
 		}
 		if a.knowledgeSourcesCapable() {
 			tabKinds = append(tabKinds, "sources")
-			labels = append(labels, "来源浏览")
+			labels = append(labels, T("来源浏览"))
 		}
 
 		ui.Row(c).AlignItems(ui.Center).Justify(ui.End).Children(func() {
-			clear := ui.Button(c.Key(knowledgeFieldKey(key, "clear")), "清除索引")
-			clear.Label("清除知识库索引")
+			clear := ui.Button(c.Key(knowledgeFieldKey(key, "clear")), T("清除索引"))
+			clear.Label(T("清除知识库索引"))
 			clear.Disabled(busy)
 			if clear.Clicked() && !busy {
 				a.requestClearKnowledge(id)
@@ -400,7 +402,7 @@ func (a *nativeApp) knowledgeInsightsPanel(c *ui.Context, p palette, id, key str
 		})
 
 		if ins.Err != "" {
-			ui.Text(c, ins.Err).FontSize(10.5).TextColor(p.t.Danger).LineHeight(1.35)
+			ui.Text(c, T(ins.Err)).FontSize(10.5).TextColor(p.t.Danger).LineHeight(1.35)
 		}
 		if len(tabKinds) > 0 {
 			if ins.Tab >= len(tabKinds) || ins.Tab < 0 {
@@ -422,7 +424,7 @@ func (a *nativeApp) knowledgeInsightsPanel(c *ui.Context, p palette, id, key str
 
 func (a *nativeApp) knowledgeRunsTab(c *ui.Context, p palette, id, key string, ins *knowledgeInsightsState) {
 	if len(ins.Runs) == 0 {
-		ui.Text(c, "暂无索引运行记录").FontSize(11).TextColor(p.t.TextMuted)
+		ui.Text(c, T("暂无索引运行记录")).FontSize(11).TextColor(p.t.TextMuted)
 		return
 	}
 	for index, run := range ins.Runs {
@@ -430,13 +432,13 @@ func (a *nativeApp) knowledgeRunsTab(c *ui.Context, p palette, id, key string, i
 		last := index == len(ins.Runs)-1
 		ui.Column(c).Gap(2).Padding(2, 0, 7, 0).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
-				ui.Text(c, run.Status).FontSize(12).FontWeight(600).TextColor(p.t.Text)
+				ui.Text(c, T(run.Status)).FontSize(12).FontWeight(600).TextColor(p.t.Text)
 				if run.Active {
 					badge(c, p, "当前活动")
 				}
 				ui.Box(c).Grow(1)
-				detail := ui.Button(c.Key("knowledge:"+key+":run-detail:"+run.RunID), "详情")
-				detail.Label("查看索引运行详情")
+				detail := ui.Button(c.Key("knowledge:"+key+":run-detail:"+run.RunID), T("详情"))
+				detail.Label(T("查看索引运行详情"))
 				detail.Disabled(ins.RunDetailBusy)
 				if detail.Clicked() && !ins.RunDetailBusy {
 					a.loadKnowledgeRunDetail(id, run.RunID)
@@ -451,20 +453,20 @@ func (a *nativeApp) knowledgeRunsTab(c *ui.Context, p palette, id, key string, i
 			}
 			ui.Text(c, knowledgeRunStatsText(run)).FontSize(10.5).TextColor(p.t.TextMuted)
 			if run.ErrorSummary != "" {
-				ui.Text(c, "失败诊断："+run.ErrorSummary).FontSize(10.5).TextColor(p.t.Danger).LineHeight(1.35)
+				ui.Text(c, T("失败诊断：")+run.ErrorSummary).FontSize(10.5).TextColor(p.t.Danger).LineHeight(1.35)
 			}
 			if ins.RunDetailBusy && ins.RunDetailID == run.RunID {
-				ui.Text(c, "正在读取运行详情…").FontSize(10).TextColor(p.t.TextMuted)
+				ui.Text(c, T("正在读取运行详情…")).FontSize(10).TextColor(p.t.TextMuted)
 			} else if ins.RunDetailErr != "" && ins.RunDetailID == run.RunID {
-				ui.Text(c, ins.RunDetailErr).FontSize(10).TextColor(p.t.Danger).LineHeight(1.35)
+				ui.Text(c, T(ins.RunDetailErr)).FontSize(10).TextColor(p.t.Danger).LineHeight(1.35)
 			} else if ins.RunDetail != nil && ins.RunDetail.RunID == run.RunID {
-				detailText := "运行 " + ins.RunDetail.RunID
+				detailText := T("运行 ") + ins.RunDetail.RunID
 				if ins.RunDetail.SnapshotID != "" {
-					detailText += " · 快照 " + ins.RunDetail.SnapshotID
+					detailText += T(" · 快照 ") + ins.RunDetail.SnapshotID
 				}
 				ui.Text(c, detailText).FontSize(10).TextColor(p.t.TextMuted).Selectable()
 				if ins.RunDetail.ErrorCode != "" {
-					ui.Text(c, "错误码："+ins.RunDetail.ErrorCode).FontSize(10).TextColor(p.t.Danger)
+					ui.Text(c, T("错误码：")+ins.RunDetail.ErrorCode).FontSize(10).TextColor(p.t.Danger)
 				}
 			}
 			if !last {
@@ -476,7 +478,7 @@ func (a *nativeApp) knowledgeRunsTab(c *ui.Context, p palette, id, key string, i
 
 func (a *nativeApp) knowledgeSourcesTab(c *ui.Context, p palette, ins *knowledgeInsightsState) {
 	if len(ins.Sources) == 0 {
-		ui.Text(c, "当前快照暂无来源文件").FontSize(11).TextColor(p.t.TextMuted)
+		ui.Text(c, T("当前快照暂无来源文件")).FontSize(11).TextColor(p.t.TextMuted)
 		return
 	}
 	for index, source := range ins.Sources {
@@ -508,14 +510,14 @@ func (a *nativeApp) knowledgeQueryPreview(c *ui.Context, p palette, id, key stri
 		return
 	}
 	ui.Column(c).Gap(6).Padding(2, 0, 0, 0).Children(func() {
-		ui.Text(c, "查询预览（仅调试）").FontSize(11).FontWeight(650).TextColor(p.t.Text)
-		ui.Text(c, "返回有界图谱证据，不会注入主会话上下文。").FontSize(10).TextColor(p.t.TextMuted)
+		ui.Text(c, T("查询预览（仅调试）")).FontSize(11).FontWeight(650).TextColor(p.t.Text)
+		ui.Text(c, T("返回有界图谱证据，不会注入主会话上下文。")).FontSize(10).TextColor(p.t.TextMuted)
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.TextInput(c.Key(knowledgeFieldKey(key, "query")), &ins.Query).FontSize(12).Height(32).
-				Padding(0, 8).Placeholder("输入关键词…").
+				Padding(0, 8).Placeholder(T("输入关键词…")).
 				Background(p.t.Surface).Radius(8).Border(1, p.t.Border).Grow(1)
-			btn := ui.Button(c.Key(knowledgeFieldKey(key, "query-run")), "查询")
-			btn.Label("预览查询知识库")
+			btn := ui.Button(c.Key(knowledgeFieldKey(key, "query-run")), T("查询"))
+			btn.Label(T("预览查询知识库"))
 			btn.Disabled(ins.QueryBusy)
 			if btn.Clicked() && !ins.QueryBusy {
 				a.runKnowledgeQuery(id)
@@ -524,11 +526,11 @@ func (a *nativeApp) knowledgeQueryPreview(c *ui.Context, p palette, id, key stri
 		if ins.QueryBusy {
 			ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
 				statusPill(c, p, "running")
-				ui.Text(c, "正在查询活动快照…").FontSize(10.5).TextColor(p.t.TextMuted)
+				ui.Text(c, T("正在查询活动快照…")).FontSize(10.5).TextColor(p.t.TextMuted)
 			})
 		}
 		if ins.QueryErr != "" {
-			ui.Text(c, ins.QueryErr).FontSize(10.5).TextColor(p.t.Danger).LineHeight(1.35)
+			ui.Text(c, T(ins.QueryErr)).FontSize(10.5).TextColor(p.t.Danger).LineHeight(1.35)
 		}
 		if ins.QueryResult != nil {
 			a.knowledgeQueryResult(c, p, ins.QueryResult)
@@ -538,13 +540,13 @@ func (a *nativeApp) knowledgeQueryPreview(c *ui.Context, p palette, id, key stri
 
 func (a *nativeApp) knowledgeQueryResult(c *ui.Context, p palette, result *knowledgeGraphQuery) {
 	ui.Column(c).Gap(3).Children(func() {
-		summary := fmt.Sprintf("返回 %d 个分块 · %d 个节点", len(result.Chunks), len(result.Nodes))
+		summary := Tf("返回 %d 个分块 · %d 个节点", len(result.Chunks), len(result.Nodes))
 		if result.Truncated {
-			summary += " · 结果已截断"
+			summary += T(" · 结果已截断")
 		}
 		ui.Text(c, summary).FontSize(10.5).TextColor(p.t.TextMuted)
 		if len(result.Chunks) == 0 {
-			ui.Text(c, "没有匹配的证据").FontSize(10.5).TextColor(p.t.TextMuted)
+			ui.Text(c, T("没有匹配的证据")).FontSize(10.5).TextColor(p.t.TextMuted)
 			return
 		}
 		limit := len(result.Chunks)
@@ -568,7 +570,7 @@ func (a *nativeApp) knowledgeQueryResult(c *ui.Context, p palette, result *knowl
 
 func (a *nativeApp) knowledgeTextInput(c *ui.Context, p palette, key, label, placeholder string, value *string) {
 	ui.Column(c).Gap(3).Children(func() {
-		ui.Text(c, label).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+		ui.Text(c, T(label)).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
 		input := ui.TextInput(c.Key(key), value).FontSize(12).Height(32).Padding(0, 8).
 			Background(p.t.Background).Radius(8).Border(1, p.t.Border)
 		if placeholder != "" {
@@ -579,9 +581,9 @@ func (a *nativeApp) knowledgeTextInput(c *ui.Context, p palette, key, label, pla
 
 func (a *nativeApp) knowledgeSelect(c *ui.Context, p palette, key, label string, options []string, value *string) {
 	ui.Column(c).Gap(3).Children(func() {
-		ui.Text(c, label).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+		ui.Text(c, T(label)).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
 		ui.Select(c.Key(key), value, options).FontSize(12).Height(32).Padding(0, 8).
-			Background(p.t.Background).Radius(8).Border(1, p.t.Border).Label(label)
+			Background(p.t.Background).Radius(8).Border(1, p.t.Border).Label(T(label))
 	})
 }
 
@@ -592,7 +594,7 @@ func knowledgeFieldKey(draftKey, field string) string {
 // settingsKnowledgeDialogs renders Native delete/clear confirmations above the
 // settings page. Neither action deletes the source directory.
 func (a *nativeApp) settingsKnowledgeDialogs(c *ui.Context, p palette) {
-	if !a.settingsOpen {
+	if !a.settingsOpen && a.page != "library" {
 		return
 	}
 	panel := &a.knowledge
@@ -613,24 +615,24 @@ func (a *nativeApp) knowledgeDeleteDialog(c *ui.Context, p palette) {
 		dialog.Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 				ui.Icon(c, iconAlert).FontSize(16).TextColor(p.t.Danger)
-				ui.Text(c, "删除知识库？").FontSize(14).FontWeight(650).TextColor(p.t.Text).Grow(1)
+				ui.Text(c, T("删除知识库？")).FontSize(14).FontWeight(650).TextColor(p.t.Text).Grow(1)
 			})
-			ui.Text(c, fmt.Sprintf("将删除「%s」的配置、索引和扫描计划。", panel.PendingDeleteName)).
+			ui.Text(c, Tf("将删除「%s」的配置、索引和扫描计划。", panel.PendingDeleteName)).
 				FontSize(11.5).TextColor(p.t.Text).LineHeight(1.4)
 			if panel.PendingDeleteRoot != "" {
-				ui.Text(c, "知识源目录："+panel.PendingDeleteRoot).FontSize(10.5).
+				ui.Text(c, T("知识源目录：")+panel.PendingDeleteRoot).FontSize(10.5).
 					TextColor(p.t.TextMuted).Selectable()
 			}
-			ui.Text(c, "知识源目录及其中的文件不会被删除。").
+			ui.Text(c, T("知识源目录及其中的文件不会被删除。")).
 				FontSize(11.5).TextColor(p.t.TextMuted).LineHeight(1.4)
 			ui.Row(c).AlignItems(ui.Center).Justify(ui.End).Gap(8).Children(func() {
-				cancel := ui.Button(c.Key("knowledge-delete-cancel"), "取消")
-				cancel.Label("取消删除知识库")
+				cancel := ui.Button(c.Key("knowledge-delete-cancel"), T("取消"))
+				cancel.Label(T("取消删除知识库"))
 				if cancel.Clicked() {
 					a.cancelDeleteKnowledgeBase()
 				}
-				confirm := ui.Button(c.Key("knowledge-delete-confirm"), "确认删除")
-				confirm.Label("确认删除知识库")
+				confirm := ui.Button(c.Key("knowledge-delete-confirm"), T("确认删除"))
+				confirm.Label(T("确认删除知识库"))
 				confirm.Background(p.errorBg).Border(1, p.t.Danger)
 				if confirm.Clicked() {
 					a.confirmDeleteKnowledgeBase()
@@ -652,20 +654,20 @@ func (a *nativeApp) knowledgeClearDialog(c *ui.Context, p palette) {
 		dialog.Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 				ui.Icon(c, iconAlert).FontSize(16).TextColor(p.t.Warning)
-				ui.Text(c, "清除知识库索引？").FontSize(14).FontWeight(650).TextColor(p.t.Text).Grow(1)
+				ui.Text(c, T("清除知识库索引？")).FontSize(14).FontWeight(650).TextColor(p.t.Text).Grow(1)
 			})
-			ui.Text(c, fmt.Sprintf("将清除「%s」的活动索引快照。", panel.PendingClearName)).
+			ui.Text(c, Tf("将清除「%s」的活动索引快照。", panel.PendingClearName)).
 				FontSize(11.5).TextColor(p.t.Text).LineHeight(1.4)
-			ui.Text(c, "配置与知识源目录会保留；重新扫描前无法查询该知识库。").
+			ui.Text(c, T("配置与知识源目录会保留；重新扫描前无法查询该知识库。")).
 				FontSize(11.5).TextColor(p.t.TextMuted).LineHeight(1.4)
 			ui.Row(c).AlignItems(ui.Center).Justify(ui.End).Gap(8).Children(func() {
-				cancel := ui.Button(c.Key("knowledge-clear-cancel"), "取消")
-				cancel.Label("取消清除知识库索引")
+				cancel := ui.Button(c.Key("knowledge-clear-cancel"), T("取消"))
+				cancel.Label(T("取消清除知识库索引"))
 				if cancel.Clicked() {
 					a.cancelClearKnowledge()
 				}
-				confirm := ui.Button(c.Key("knowledge-clear-confirm"), "确认清除")
-				confirm.Label("确认清除知识库索引")
+				confirm := ui.Button(c.Key("knowledge-clear-confirm"), T("确认清除"))
+				confirm.Label(T("确认清除知识库索引"))
 				confirm.Background(p.warnBg).Border(1, p.t.Warning)
 				if confirm.Clicked() {
 					a.confirmClearKnowledge()

@@ -192,3 +192,39 @@ func TestSkillsPanelSequenceGuardsAndInvalidation(t *testing.T) {
 		t.Fatalf("closing settings must invalidate skills state: %+v", c.skills)
 	}
 }
+
+func TestCommandKindProjectsACPKindMetadata(t *testing.T) {
+	var skill command
+	if err := json.Unmarshal([]byte(`{"name":"review","_meta":{"mothx.dev":{"kind":"skill"}}}`), &skill); err != nil {
+		t.Fatal(err)
+	}
+	if got := commandKind(skill); got != "skill" {
+		t.Fatalf("skill command kind = %q, want skill", got)
+	}
+	if got := commandKind(command{Name: "help"}); got != "command" {
+		t.Fatalf("metadata-free command kind = %q, want command", got)
+	}
+	var unknown command
+	if err := json.Unmarshal([]byte(`{"name":"x","_meta":{"mothx.dev":{"kind":"weird"}}}`), &unknown); err != nil {
+		t.Fatal(err)
+	}
+	if got := commandKind(unknown); got != "weird" {
+		t.Fatalf("explicit kind must pass through: %q", got)
+	}
+}
+
+func TestSkillsPageRendersSkillAndCommandCards(t *testing.T) {
+	a := testApp()
+	a.themeSet = true
+	a.page = "skills"
+	a.commands = []command{
+		{Name: "review", Description: "Review the change", Meta: map[string]json.RawMessage{"mothx.dev": json.RawMessage(`{"kind":"skill"}`)}},
+		{Name: "help", Description: "Show help"},
+	}
+	tt := ui.NewTester(a.view, 1180, 900)
+	for _, want := range []string{"指令卡片", "review", "Review the change", "help", "Show help"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("skills page missing %q: %q", want, tt.Texts())
+		}
+	}
+}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -334,9 +333,9 @@ func expertCanEdit(item expertSummary, scope string) bool {
 func expertTypeLabel(kind string) string {
 	switch kind {
 	case expertTypeTeam:
-		return "团队"
+		return T("团队")
 	case expertTypeAgent:
-		return "单 Agent"
+		return T("单 Agent")
 	default:
 		return kind
 	}
@@ -619,7 +618,7 @@ func (a *nativeApp) openExpertEditor(name string) {
 	cwd := a.expertsRequestCwd()
 	params := buildExpertGetRequest(scope, cwd, name)
 	e.LoadingBundle = true
-	e.Status = "正在读取团队 " + name + "…"
+	e.Status = Tf("正在读取团队 %s…", name)
 	e.StatusIsError = false
 	go func() {
 		raw, err := client.call("mothx/manage/experts/get", params)
@@ -660,14 +659,14 @@ func (a *nativeApp) openExpertEditor(name string) {
 // ManagedBundle shape accepted by experts/create and experts/update.
 func expertDraftBundle(draft *expertDraft) (map[string]any, error) {
 	if draft == nil {
-		return nil, fmt.Errorf("团队草稿不存在")
+		return nil, localizedError("团队草稿不存在")
 	}
 	name := strings.TrimSpace(draft.Name)
 	if name == "" {
-		return nil, fmt.Errorf("团队标识不能为空")
+		return nil, localizedError("团队标识不能为空")
 	}
 	if name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
-		return nil, fmt.Errorf("团队标识不能包含路径分隔符")
+		return nil, localizedError("团队标识不能包含路径分隔符")
 	}
 
 	kind := strings.TrimSpace(draft.Kind)
@@ -675,7 +674,7 @@ func expertDraftBundle(draft *expertDraft) (map[string]any, error) {
 		kind = expertTypeAgent
 	}
 	if kind != expertTypeAgent && kind != expertTypeTeam {
-		return nil, fmt.Errorf("团队类型必须是 agent 或 team")
+		return nil, localizedError("团队类型必须是 agent 或 team")
 	}
 
 	members := make([]map[string]any, 0, len(draft.Members))
@@ -686,7 +685,7 @@ func expertDraftBundle(draft *expertDraft) (map[string]any, error) {
 			continue
 		}
 		if seenMembers[id] {
-			return nil, fmt.Errorf("该成员 ID %q 已存在", id)
+			return nil, localizedErrorf("该成员 ID %q 已存在", id)
 		}
 		seenMembers[id] = true
 		role := strings.TrimSpace(member.Role)
@@ -694,7 +693,7 @@ func expertDraftBundle(draft *expertDraft) (map[string]any, error) {
 			role = expertRoleMember
 		}
 		if role != expertRoleLead && role != expertRoleMember {
-			return nil, fmt.Errorf("成员 %s 的角色无效", id)
+			return nil, localizedErrorf("成员 %s 的角色无效", id)
 		}
 		entry := map[string]any{
 			"id":   id,
@@ -717,7 +716,7 @@ func expertDraftBundle(draft *expertDraft) (map[string]any, error) {
 		members = append(members, entry)
 	}
 	if len(members) == 0 {
-		return nil, fmt.Errorf("至少需要一个成员")
+		return nil, localizedError("至少需要一个成员")
 	}
 
 	agents := make(map[string]any, len(draft.Agents))
@@ -728,19 +727,19 @@ func expertDraftBundle(draft *expertDraft) (map[string]any, error) {
 			continue
 		}
 		if id == "." || id == ".." || strings.ContainsAny(id, `/\`) {
-			return nil, fmt.Errorf("Agent ID %q 无效", id)
+			return nil, localizedErrorf("Agent ID %q 无效", id)
 		}
 		if seenAgents[id] {
-			return nil, fmt.Errorf("该 Agent ID %q 已存在", id)
+			return nil, localizedErrorf("该 Agent ID %q 已存在", id)
 		}
 		seenAgents[id] = true
 		if strings.TrimSpace(agent.Source) == "" {
-			return nil, fmt.Errorf("Agent %s 的源文件不能为空", id)
+			return nil, localizedErrorf("Agent %s 的源文件不能为空", id)
 		}
 		agents[id] = agent.Source
 	}
 	if len(agents) == 0 {
-		return nil, fmt.Errorf("至少需要一个 Agent 源文件")
+		return nil, localizedError("至少需要一个 Agent 源文件")
 	}
 
 	lead := ""
@@ -762,7 +761,7 @@ func expertDraftBundle(draft *expertDraft) (map[string]any, error) {
 			}
 		}
 		if !hasLead {
-			return nil, fmt.Errorf("team 类型需要一个 role=lead 的成员")
+			return nil, localizedError("team 类型需要一个 role=lead 的成员")
 		}
 	}
 
@@ -772,10 +771,10 @@ func expertDraftBundle(draft *expertDraft) (map[string]any, error) {
 	}
 	if kind == expertTypeAgent {
 		if agentName == "" {
-			return nil, fmt.Errorf("主 Agent 标识不能为空")
+			return nil, localizedError("主 Agent 标识不能为空")
 		}
 		if _, ok := agents[agentName]; !ok {
-			return nil, fmt.Errorf("主 Agent 标识 %q 缺少对应的 Agent 源文件", agentName)
+			return nil, localizedErrorf("主 Agent 标识 %q 缺少对应的 Agent 源文件", agentName)
 		}
 	}
 
@@ -819,7 +818,7 @@ func expertDraftBundle(draft *expertDraft) (map[string]any, error) {
 			memberAgents = append(memberAgents, id)
 		}
 		if _, ok := agents[lead]; !ok {
-			return nil, fmt.Errorf("lead 成员 %q 缺少对应的 Agent 源文件", lead)
+			return nil, localizedErrorf("lead 成员 %q 缺少对应的 Agent 源文件", lead)
 		}
 		manifest["teamInfo"] = map[string]any{
 			"leadAgent":    lead,
@@ -990,7 +989,7 @@ func (a *nativeApp) confirmDeleteExpert() {
 	seq := atomic.AddInt64(&e.Seq, 1)
 	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 	e.Deleting = true
-	e.Status = "正在删除团队 " + name + "…"
+	e.Status = Tf("正在删除团队 %s…", name)
 	e.StatusIsError = false
 	params := buildExpertDeleteRequest(e.Scope, a.expertsRequestCwd(), name)
 	listParams := buildExpertsListRequest(e.Scope, a.expertsRequestCwd())
@@ -1028,7 +1027,7 @@ func (a *nativeApp) confirmDeleteExpert() {
 			if listView != nil {
 				a.applyExpertsListView(listView)
 			}
-			e.Status = fmt.Sprintf("团队 %s 已删除", name)
+			e.Status = Tf("团队 %s 已删除", name)
 			e.StatusIsError = false
 			if listErr != "" {
 				e.Status += "；" + listErr
@@ -1053,7 +1052,7 @@ func (a *nativeApp) addExpertMember() {
 	}
 	for _, member := range e.Draft.Members {
 		if strings.TrimSpace(member.ID) == id {
-			e.Status = fmt.Sprintf("成员 ID %q 已存在。", id)
+			e.Status = Tf("成员 ID %q 已存在。", id)
 			e.StatusIsError = true
 			return
 		}
@@ -1087,7 +1086,7 @@ func (a *nativeApp) addExpertAgent() {
 	}
 	for _, agent := range e.Draft.Agents {
 		if strings.TrimSpace(agent.ID) == id {
-			e.Status = fmt.Sprintf("Agent ID %q 已存在。", id)
+			e.Status = Tf("Agent ID %q 已存在。", id)
 			e.StatusIsError = true
 			return
 		}

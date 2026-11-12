@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -52,6 +51,23 @@ func newSkillsPanelState() skillsPanelState {
 
 func skillEnabled(skill skillView) bool {
 	return skill.Enabled == nil || *skill.Enabled
+}
+
+// commandKind reads the additive ACP command kind metadata. Commands without
+// metadata, or with an unknown kind, stay plain commands; only the Runtime's
+// explicit "skill" marker changes the card semantics.
+func commandKind(command command) string {
+	if raw, ok := command.Meta["mothx.dev"]; ok {
+		var meta struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal(raw, &meta) == nil {
+			if kind := strings.TrimSpace(meta.Kind); kind != "" {
+				return kind
+			}
+		}
+	}
+	return "command"
 }
 
 func skillName(skill skillView) string {
@@ -107,7 +123,7 @@ func (a *nativeApp) skillsCapable() bool {
 }
 
 func (a *nativeApp) skillsPanelCurrent(seq, reloadSeq int64) bool {
-	return a.settingsOpen && a.settingsTab == "skills" &&
+	return a.panelVisible("skills", "skills") &&
 		seq == atomic.LoadInt64(&a.skills.Seq) &&
 		reloadSeq == atomic.LoadInt64(&a.reloadSeq)
 }
@@ -130,7 +146,7 @@ func (a *nativeApp) invalidateSkillsPanel() {
 // startSkillsPanelLoad starts one capability-gated skills load for the
 // selected workspace. It is called from the UI thread on tab entry.
 func (a *nativeApp) startSkillsPanelLoad() {
-	if !a.settingsOpen || a.settingsTab != "skills" {
+	if !a.panelVisible("skills", "skills") {
 		return
 	}
 	s := &a.skills
@@ -249,14 +265,14 @@ func (a *nativeApp) toggleSkill(index int) {
 	}
 
 	target := !skillEnabled(skill)
-	action := "启用"
-	if !target {
-		action = "停用"
-	}
 	seq := atomic.AddInt64(&s.Seq, 1)
 	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 	s.Toggling = name
-	s.Status = fmt.Sprintf("正在%s技能 %s…", action, name)
+	if target {
+		s.Status = Tf("正在启用技能 %s…", name)
+	} else {
+		s.Status = Tf("正在停用技能 %s…", name)
+	}
 	s.StatusIsError = false
 	go func() {
 		_, setErr := client.call("mothx/manage/skills/set", buildSkillSetRequest(cwd, name, target))
@@ -293,9 +309,9 @@ func (a *nativeApp) toggleSkill(index int) {
 			}
 			switch {
 			case target:
-				s.Status = fmt.Sprintf("技能 %s 已启用", name)
+				s.Status = Tf("技能 %s 已启用", name)
 			default:
-				s.Status = fmt.Sprintf("技能 %s 已停用", name)
+				s.Status = Tf("技能 %s 已停用", name)
 			}
 			s.StatusIsError = false
 			if listErr != nil {
@@ -318,4 +334,13 @@ func (a *nativeApp) applySkillToggleLocally(name string, enabled bool) {
 		s.Skills[index].Enabled = &value
 		return
 	}
+}
+
+// skillToggleStatus is the shared in-flight label for a skill toggle; it keeps
+// the dynamic status translatable regardless of when the locale was set.
+func skillToggleStatus(name string, target bool) string {
+	if target {
+		return Tf("正在启用技能 %s…", name)
+	}
+	return Tf("正在停用技能 %s…", name)
 }

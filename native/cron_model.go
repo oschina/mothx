@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -137,7 +136,7 @@ func cronJobDisplayName(job cronJobView) string {
 	if id := strings.TrimSpace(job.ID); id != "" {
 		return id
 	}
-	return "未命名任务"
+	return T("未命名任务")
 }
 
 // cronJobScheduleLabel renders an empty or @once schedule as a one-shot job,
@@ -145,7 +144,7 @@ func cronJobDisplayName(job cronJobView) string {
 func cronJobScheduleLabel(job cronJobView) string {
 	schedule := strings.TrimSpace(job.Schedule)
 	if job.OneShot || schedule == "" || strings.EqualFold(schedule, "@once") {
-		return "单次"
+		return T("单次")
 	}
 	return schedule
 }
@@ -153,11 +152,11 @@ func cronJobScheduleLabel(job cronJobView) string {
 func cronRunStatusLabel(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "success", "completed":
-		return "成功"
+		return T("成功")
 	case "failed", "failure", "error":
-		return "失败"
+		return T("失败")
 	case "running":
-		return "运行中"
+		return T("运行中")
 	case "":
 		return ""
 	default:
@@ -203,27 +202,27 @@ func cronNextRunLabel(value string) string {
 // cronJobMeta projects the run metadata shown in each job row. Timestamps are
 // display-only; the Runtime list response remains authoritative.
 func cronJobMeta(job cronJobView) string {
-	parts := []string{"计划:" + cronJobScheduleLabel(job)}
+	parts := []string{Tf("计划:%s", cronJobScheduleLabel(job))}
 	if mode := strings.TrimSpace(job.Mode); mode != "" {
-		parts = append(parts, "模式:"+mode)
+		parts = append(parts, Tf("模式:%s", mode))
 	}
 	if workDir := strings.TrimSpace(job.WorkDir); workDir != "" {
-		parts = append(parts, "工作区:"+workDir)
+		parts = append(parts, Tf("工作区:%s", workDir))
 	}
 	if job.LastRun != "" {
-		last := "上次运行:" + cronLastRunLabel(job.LastRun)
+		last := Tf("上次运行:%s", cronLastRunLabel(job.LastRun))
 		if status := cronRunStatusLabel(job.LastStatus); status != "" {
 			last += " · " + status
 		}
 		parts = append(parts, last)
 	} else if status := cronRunStatusLabel(job.LastStatus); status != "" {
-		parts = append(parts, "状态:"+status)
+		parts = append(parts, Tf("状态:%s", status))
 	}
 	if job.NextRun != "" {
-		parts = append(parts, "下次运行:"+cronNextRunLabel(job.NextRun))
+		parts = append(parts, Tf("下次运行:%s", cronNextRunLabel(job.NextRun)))
 	}
 	if job.RunCount > 0 {
-		parts = append(parts, fmt.Sprintf("运行次数:%d", job.RunCount))
+		parts = append(parts, Tf("运行次数:%d", job.RunCount))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -236,9 +235,9 @@ func cronCompletionStatus(ev sessionEvent) (string, bool) {
 		name = "定时任务"
 	}
 	if strings.EqualFold(strings.TrimSpace(ev.Status), "failed") {
-		return fmt.Sprintf("定时任务 %s 运行失败", name), true
+		return Tf("定时任务 %s 运行失败", name), true
 	}
-	return fmt.Sprintf("定时任务 %s 运行完成", name), false
+	return Tf("定时任务 %s 运行完成", name), false
 }
 
 func cronNormalizedMode(value string) string {
@@ -254,20 +253,20 @@ func cronNormalizedMode(value string) string {
 // handler runs the shared cron normalization and returns cron_schedule_invalid.
 func validateCronDraft(draft *cronJobDraft) error {
 	if draft == nil {
-		return fmt.Errorf("定时任务草稿不存在")
+		return localizedError("定时任务草稿不存在")
 	}
 	if strings.TrimSpace(draft.Name) == "" {
-		return fmt.Errorf("任务名称不能为空")
+		return localizedError("任务名称不能为空")
 	}
 	if strings.TrimSpace(draft.Schedule) == "" {
-		return fmt.Errorf("Cron 表达式不能为空；单次任务请填写 @once")
+		return localizedError("Cron 表达式不能为空；单次任务请填写 @once")
 	}
 	if strings.TrimSpace(draft.Prompt) == "" {
-		return fmt.Errorf("任务提示词不能为空")
+		return localizedError("任务提示词不能为空")
 	}
 	mode := cronNormalizedMode(draft.Mode)
 	if mode != "agent" && mode != "yolo" {
-		return fmt.Errorf("任务模式必须是 agent 或 yolo")
+		return localizedError("任务模式必须是 agent 或 yolo")
 	}
 	return nil
 }
@@ -291,11 +290,11 @@ func buildCronCreateRequest(draft *cronJobDraft) (map[string]any, error) {
 
 func buildCronUpdateRequest(draft *cronJobDraft) (map[string]any, error) {
 	if draft == nil {
-		return nil, fmt.Errorf("定时任务草稿不存在")
+		return nil, localizedError("定时任务草稿不存在")
 	}
 	id := strings.TrimSpace(draft.ID)
 	if id == "" {
-		return nil, fmt.Errorf("要更新的定时任务 ID 不能为空")
+		return nil, localizedError("要更新的定时任务 ID 不能为空")
 	}
 	if err := validateCronDraft(draft); err != nil {
 		return nil, err
@@ -308,7 +307,7 @@ func buildCronUpdateRequest(draft *cronJobDraft) (map[string]any, error) {
 func buildCronToggleRequest(id string, enabled bool) (map[string]any, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return nil, fmt.Errorf("要切换的定时任务 ID 不能为空")
+		return nil, localizedError("要切换的定时任务 ID 不能为空")
 	}
 	return map[string]any{"id": id, "enabled": enabled}, nil
 }
@@ -316,7 +315,7 @@ func buildCronToggleRequest(id string, enabled bool) (map[string]any, error) {
 func buildCronRemoveRequest(id string) (map[string]any, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return nil, fmt.Errorf("要删除的定时任务 ID 不能为空")
+		return nil, localizedError("要删除的定时任务 ID 不能为空")
 	}
 	return map[string]any{"id": id}, nil
 }
@@ -324,7 +323,7 @@ func buildCronRemoveRequest(id string) (map[string]any, error) {
 func buildCronRunRequest(id string) (map[string]any, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return nil, fmt.Errorf("要运行的定时任务 ID 不能为空")
+		return nil, localizedError("要运行的定时任务 ID 不能为空")
 	}
 	return map[string]any{"id": id}, nil
 }
@@ -339,7 +338,7 @@ func (a *nativeApp) cronBusy() bool {
 }
 
 func (a *nativeApp) cronPanelCurrent(seq, reloadSeq int64) bool {
-	return a.settingsOpen && a.settingsTab == "cron" &&
+	return a.panelVisible("automation", "cron") &&
 		seq == atomic.LoadInt64(&a.cron.Seq) &&
 		reloadSeq == atomic.LoadInt64(&a.reloadSeq)
 }
@@ -373,7 +372,7 @@ func (a *nativeApp) invalidateCronPanel() {
 // startCronPanelLoad starts one capability-gated cron list load. It is called
 // from the UI thread on tab entry.
 func (a *nativeApp) startCronPanelLoad() {
-	if !a.settingsOpen || a.settingsTab != "cron" {
+	if !a.panelVisible("automation", "cron") {
 		return
 	}
 	c := &a.cron
@@ -397,7 +396,7 @@ func (a *nativeApp) startCronPanelLoad() {
 // startCronPanelRefresh reloads the list without clearing the visible rows.
 // It is used by run completion events and manual refresh.
 func (a *nativeApp) startCronPanelRefresh() {
-	if !a.settingsOpen || a.settingsTab != "cron" || !a.cronCapable() {
+	if !a.panelVisible("automation", "cron") || !a.cronCapable() {
 		return
 	}
 	c := &a.cron
@@ -607,9 +606,9 @@ func (a *nativeApp) saveCronDraft() {
 			c.Draft = cronEmptyDraft()
 			c.DialogErr = ""
 			if editing {
-				c.Status = fmt.Sprintf("定时任务 %q 已更新", name)
+				c.Status = Tf("定时任务 %q 已更新", name)
 			} else {
-				c.Status = fmt.Sprintf("定时任务 %q 已创建", name)
+				c.Status = Tf("定时任务 %q 已创建", name)
 			}
 			c.StatusIsError = false
 			a.flushCronRefreshPending()
@@ -647,14 +646,10 @@ func (a *nativeApp) toggleCronJob(index int) {
 		return
 	}
 	name := cronJobDisplayName(job)
-	action := "暂停"
-	if !job.Enabled {
-		action = "恢复"
-	}
 	seq := atomic.AddInt64(&c.Seq, 1)
 	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 	c.TogglingID = id
-	c.Status = fmt.Sprintf("正在%s定时任务 %q…", action, name)
+	c.Status = cronToggleStatus(name, job.Enabled)
 	c.StatusIsError = false
 	go func() {
 		raw, err := client.call("mothx/manage/cron/update", request)
@@ -679,9 +674,9 @@ func (a *nativeApp) toggleCronJob(index int) {
 			}
 			a.applyCronSavedJob(result.Job)
 			if result.Job.Enabled {
-				c.Status = fmt.Sprintf("定时任务 %q 已恢复", name)
+				c.Status = Tf("定时任务 %q 已恢复", name)
 			} else {
-				c.Status = fmt.Sprintf("定时任务 %q 已暂停", name)
+				c.Status = Tf("定时任务 %q 已暂停", name)
 			}
 			c.StatusIsError = false
 			a.flushCronRefreshPending()
@@ -722,7 +717,7 @@ func (a *nativeApp) runCronJob(index int) {
 	seq := atomic.AddInt64(&c.Seq, 1)
 	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 	c.RunningJobID = id
-	c.Status = fmt.Sprintf("正在触发定时任务 %q…", name)
+	c.Status = Tf("正在触发定时任务 %q…", name)
 	c.StatusIsError = false
 	go func() {
 		raw, err := client.call("mothx/manage/cron/run", request)
@@ -745,7 +740,7 @@ func (a *nativeApp) runCronJob(index int) {
 				a.flushCronRefreshPending()
 				return
 			}
-			c.Status = fmt.Sprintf("已触发定时任务 %q；完成后列表会自动刷新", name)
+			c.Status = Tf("已触发定时任务 %q；完成后列表会自动刷新", name)
 			c.StatusIsError = false
 			a.flushCronRefreshPending()
 		})
@@ -831,7 +826,7 @@ func (a *nativeApp) confirmDeleteCron() {
 				return
 			}
 			a.removeCronJobByID(id)
-			c.Status = fmt.Sprintf("定时任务 %q 已删除", name)
+			c.Status = Tf("定时任务 %q 已删除", name)
 			c.StatusIsError = false
 			a.flushCronRefreshPending()
 		})
@@ -842,7 +837,7 @@ func (a *nativeApp) confirmDeleteCron() {
 // panel. It refreshes run metadata without letting the event race an in-flight
 // mutation; a pending refresh is flushed after that mutation completes.
 func (a *nativeApp) handleCronCompletedEvent(ev sessionEvent) {
-	if !a.settingsOpen || a.settingsTab != "cron" || !a.cronCapable() {
+	if !a.panelVisible("automation", "cron") || !a.cronCapable() {
 		return
 	}
 	message, isError := cronCompletionStatus(ev)
@@ -866,4 +861,12 @@ func (a *nativeApp) flushCronRefreshPending() {
 	}
 	c.RefreshPending = false
 	a.startCronPanelRefresh()
+}
+
+// cronToggleStatus is the shared in-flight label for a cron pause/resume.
+func cronToggleStatus(name string, enabled bool) string {
+	if enabled {
+		return Tf("正在暂停定时任务 %q…", name)
+	}
+	return Tf("正在恢复定时任务 %q…", name)
 }

@@ -12,7 +12,7 @@ import (
 func (a *nativeApp) settingsServePane(c *ui.Context, p palette) {
 	if !a.serveCapable() {
 		a.settingsCard(c, p, "Serve 配置", "当前运行时未公开 Serve 配置管理能力。", func() {
-			ui.Text(c, "需要 ACP 能力 manageServeConfig；当前版本不会显示或调用占位表单。").
+			ui.Text(c, T("需要 ACP 能力 manageServeConfig；当前版本不会显示或调用占位表单。")).
 				FontSize(11).TextColor(p.t.TextMuted).LineHeight(1.45)
 		})
 		return
@@ -22,7 +22,7 @@ func (a *nativeApp) settingsServePane(c *ui.Context, p palette) {
 	if panel.Loading && !panel.Loaded {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Icon(c, iconRefresh).FontSize(13).TextColor(p.t.TextMuted)
-			ui.Text(c, "正在读取 Serve 配置…").FontSize(12).TextColor(p.t.TextMuted)
+			ui.Text(c, T("正在读取 Serve 配置…")).FontSize(12).TextColor(p.t.TextMuted)
 		})
 		return
 	}
@@ -37,10 +37,10 @@ func (a *nativeApp) settingsServePane(c *ui.Context, p palette) {
 		a.serveStatusBanner(c, p)
 	}
 	if panel.Loading && panel.Loaded {
-		ui.Text(c, "正在刷新 Serve 配置…").FontSize(10.5).TextColor(p.t.TextMuted)
+		ui.Text(c, T("正在刷新 Serve 配置…")).FontSize(10.5).TextColor(p.t.TextMuted)
 	}
 
-	ui.Text(c, "这些设置仅保存到全局 serve.json，供以后启动 mothx serve 使用；不会重启或改变当前 ACP Desktop Runtime。").
+	ui.Text(c, T("这些设置仅保存到全局 serve.json，供以后启动 mothx serve 使用；不会重启或改变当前 ACP Desktop Runtime。")).
 		FontSize(10.5).TextColor(p.t.TextMuted).LineHeight(1.4)
 
 	busy := panel.Loading || panel.Saving
@@ -134,11 +134,11 @@ func (a *nativeApp) settingsServePane(c *ui.Context, p palette) {
 
 func (a *nativeApp) serveTextInput(c *ui.Context, p palette, key, label, placeholder string, value *string, disabled bool) {
 	ui.Column(c).Gap(3).Children(func() {
-		ui.Text(c, label).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+		ui.Text(c, T(label)).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
 		input := ui.TextInput(c.Key(key), value).FontSize(12).Height(32).Padding(0, 8).
-			Background(p.t.Background).Radius(8).Border(1, p.t.Border).Label(label)
+			Background(p.t.Background).Radius(8).Border(1, p.t.Border).Label(T(label))
 		if placeholder != "" {
-			input.Placeholder(placeholder)
+			input.Placeholder(T(placeholder))
 		}
 		input.Disabled(disabled)
 	})
@@ -146,15 +146,15 @@ func (a *nativeApp) serveTextInput(c *ui.Context, p palette, key, label, placeho
 
 func (a *nativeApp) serveSelect(c *ui.Context, p palette, key, label string, options []string, value *string, disabled bool) {
 	ui.Column(c).Gap(3).Children(func() {
-		ui.Text(c, label).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+		ui.Text(c, T(label)).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
 		selectEl := ui.Select(c.Key(key), value, options).FontSize(12).Height(32).Padding(0, 8).
-			Background(p.t.Background).Radius(8).Border(1, p.t.Border).Label(label)
+			Background(p.t.Background).Radius(8).Border(1, p.t.Border).Label(T(label))
 		selectEl.Disabled(disabled)
 	})
 }
 
 func (a *nativeApp) serveCheckbox(c *ui.Context, p palette, key, label string, value *bool, disabled bool) {
-	box := ui.Checkbox(c.Key(key), value, label).FontSize(11.5)
+	box := ui.Checkbox(c.Key(key), value, T(label)).FontSize(11.5)
 	box.Disabled(disabled)
 }
 
@@ -162,17 +162,17 @@ func (a *nativeApp) serveSaveRow(c *ui.Context, p palette, busy bool) {
 	ui.Row(c).AlignItems(ui.Center).Justify(ui.End).Gap(8).Children(func() {
 		if a.serve.Saving {
 			statusPill(c, p, "running")
-			ui.Text(c, "保存中…").FontSize(10.5).TextColor(p.t.TextMuted)
+			ui.Text(c, T("保存中…")).FontSize(10.5).TextColor(p.t.TextMuted)
 		}
-		reload := ui.Button(c.Key("serve-reload"), "重新加载")
-		reload.Label("重新加载 Serve 配置")
+		reload := ui.Button(c.Key("serve-reload"), T("重新加载"))
+		reload.Label(T("重新加载 Serve 配置"))
 		reload.Disabled(busy)
 		if reload.Clicked() && !busy {
 			a.serve.Loaded = false
 			a.startServePanelLoad()
 		}
-		save := ui.PrimaryButton(c.Key("serve-save"), "保存 Serve 配置")
-		save.Label("保存 Serve 配置").Tooltip("通过 mothx/manage/serve/patch 写入全局 serve.json")
+		save := ui.PrimaryButton(c.Key("serve-save"), T("保存 Serve 配置"))
+		save.Label(T("保存 Serve 配置")).Tooltip(T("通过 mothx/manage/serve/patch 写入全局 serve.json"))
 		save.Disabled(busy || !a.serve.Loaded)
 		if save.Clicked() && !busy && a.serve.Loaded {
 			a.saveServeSettings()
@@ -185,11 +185,11 @@ func (a *nativeApp) serveErrorCard(c *ui.Context, p palette, message string) {
 		Border(1, ui.RGBA(255, 107, 107, 0.28)).Gap(8).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Icon(c, iconAlert).FontSize(15).TextColor(p.t.Danger)
-			ui.Text(c, "Serve 配置不可用").FontSize(12).FontWeight(650).TextColor(p.t.Danger)
+			ui.Text(c, T("Serve 配置不可用")).FontSize(12).FontWeight(650).TextColor(p.t.Danger)
 		})
-		ui.Text(c, message).FontSize(11).TextColor(p.t.TextMuted).Selectable()
+		ui.Text(c, T(message)).FontSize(11).TextColor(p.t.TextMuted).Selectable()
 		if a.serveCapable() {
-			if ui.Button(c.Key("serve-retry"), "重试").Label("重试加载 Serve 配置").Clicked() {
+			if ui.Button(c.Key("serve-retry"), T("重试")).Label(T("重试加载 Serve 配置")).Clicked() {
 				a.serve.Loaded = false
 				a.startServePanelLoad()
 			}
@@ -212,6 +212,6 @@ func (a *nativeApp) serveStatusBanner(c *ui.Context, p palette) {
 		} else if panel.Saving {
 			statusPill(c, p, "running")
 		}
-		ui.Text(c, panel.Status).FontSize(11).TextColor(color).Grow(1)
+		ui.Text(c, T(panel.Status)).FontSize(11).TextColor(color).Grow(1)
 	})
 }

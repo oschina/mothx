@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync/atomic"
 )
@@ -64,7 +63,7 @@ func memoryContentValid(content string) bool {
 func validateMemoryContent(content string) error {
 	size := memoryContentBytes(content)
 	if size > memoryMaxBytes {
-		return fmt.Errorf("记忆内容为 %d 字节，超过 1 MB（%d 字节）上限", size, memoryMaxBytes)
+		return localizedErrorf("记忆内容为 %d 字节，超过 1 MB（%d 字节）上限", size, memoryMaxBytes)
 	}
 	return nil
 }
@@ -226,7 +225,7 @@ func (a *nativeApp) saveMemoryContent() {
 	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 	content := m.Content
 	m.Saving = true
-	m.Status = fmt.Sprintf("正在保存记忆（%d 字节）…", memoryContentBytes(content))
+	m.Status = Tf("正在保存记忆（%d 字节）…", memoryContentBytes(content))
 	m.StatusIsError = false
 	go func() {
 		raw, err := client.call("mothx/manage/memory/put", buildMemoryPutRequest(content))
@@ -248,7 +247,7 @@ func (a *nativeApp) saveMemoryContent() {
 				return
 			}
 			a.applyMemoryPutView(&view, content)
-			m.Status = fmt.Sprintf("记忆已保存（%d 字节）", m.Size)
+			m.Status = Tf("记忆已保存（%d 字节）", m.Size)
 			m.StatusIsError = false
 		})
 	}()

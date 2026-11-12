@@ -14,7 +14,7 @@ import (
 func (a *nativeApp) settingsSkillsPane(c *ui.Context, p palette) {
 	if !a.skillsCapable() {
 		a.settingsCard(c, p, "技能", "当前运行时未公开技能管理能力。", func() {
-			ui.Text(c, "需要 ACP 能力 manageSkills；当前版本不会显示或调用占位表单。").
+			ui.Text(c, T("需要 ACP 能力 manageSkills；当前版本不会显示或调用占位表单。")).
 				FontSize(11).TextColor(p.t.TextMuted).LineHeight(1.45)
 		})
 		return
@@ -24,7 +24,7 @@ func (a *nativeApp) settingsSkillsPane(c *ui.Context, p palette) {
 	if panel.Loading && !panel.Loaded {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Icon(c, iconRefresh).FontSize(13).TextColor(p.t.TextMuted)
-			ui.Text(c, "正在读取技能列表…").FontSize(12).TextColor(p.t.TextMuted)
+			ui.Text(c, T("正在读取技能列表…")).FontSize(12).TextColor(p.t.TextMuted)
 		})
 		return
 	}
@@ -39,22 +39,22 @@ func (a *nativeApp) settingsSkillsPane(c *ui.Context, p palette) {
 		a.skillsStatusBanner(c, p)
 	}
 	if panel.Loading && panel.Loaded {
-		ui.Text(c, "正在刷新技能列表…").FontSize(10.5).TextColor(p.t.TextMuted)
+		ui.Text(c, T("正在刷新技能列表…")).FontSize(10.5).TextColor(p.t.TextMuted)
 	}
 
 	desc := "技能由 Runtime 从内置、全局与当前工作区目录发现；开关写入全局禁用列表并即时生效。"
 	if panel.Cwd != "" {
-		desc = "工作区 " + panel.Cwd + "；" + desc
+		desc = T("工作区 ") + panel.Cwd + " · " + T(desc)
 	}
 	a.settingsCard(c, p, "技能", desc, func() {
 		ui.Column(c).Gap(8).Children(func() {
 			if panel.Cwd != "" {
-				ui.Text(c, "发现目录："+panel.Cwd).FontSize(10).TextColor(p.t.TextMuted).Selectable()
+				ui.Text(c, T("发现目录：")+panel.Cwd).FontSize(10).TextColor(p.t.TextMuted).Selectable()
 			}
 			if len(panel.Skills) == 0 {
 				ui.Column(c).Padding(14).Radius(9).Border(1, p.t.Border).Gap(4).Children(func() {
-					ui.Text(c, "当前工作区没有可用技能").FontSize(12).FontWeight(600).TextColor(p.t.Text)
-					ui.Text(c, "在项目的 .skills 目录或全局技能目录中添加 SKILL.md 后重试。").
+					ui.Text(c, T("当前工作区没有可用技能")).FontSize(12).FontWeight(600).TextColor(p.t.Text)
+					ui.Text(c, T("在项目的 .skills 目录或全局技能目录中添加 SKILL.md 后重试。")).
 						FontSize(10.5).TextColor(p.t.TextMuted)
 				})
 			} else {
@@ -66,10 +66,10 @@ func (a *nativeApp) settingsSkillsPane(c *ui.Context, p palette) {
 				})
 			}
 			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-				ui.Text(c, fmt.Sprintf("共 %d 个技能", len(panel.Skills))).
+				ui.Text(c, Tf("共 %d 个技能", len(panel.Skills))).
 					FontSize(10).TextColor(p.t.TextMuted).Grow(1)
-				refresh := ui.Button(c.Key("skills-refresh"), "刷新")
-				refresh.Label("刷新技能列表")
+				refresh := ui.Button(c.Key("skills-refresh"), T("刷新"))
+				refresh.Label(T("刷新技能列表"))
 				refresh.Disabled(panel.Loading || panel.Toggling != "")
 				if refresh.Clicked() && !panel.Loading && panel.Toggling == "" {
 					panel.Loaded = false
@@ -85,11 +85,11 @@ func (a *nativeApp) skillsErrorCard(c *ui.Context, p palette, message string) {
 		Border(1, ui.RGBA(255, 107, 107, 0.28)).Gap(8).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Icon(c, iconAlert).FontSize(15).TextColor(p.t.Danger)
-			ui.Text(c, "技能管理不可用").FontSize(12).FontWeight(650).TextColor(p.t.Danger)
+			ui.Text(c, T("技能管理不可用")).FontSize(12).FontWeight(650).TextColor(p.t.Danger)
 		})
-		ui.Text(c, message).FontSize(11).TextColor(p.t.TextMuted).Selectable()
+		ui.Text(c, T(message)).FontSize(11).TextColor(p.t.TextMuted).Selectable()
 		if a.skillsCapable() {
-			if ui.Button(c.Key("skills-retry"), "重试").Label("重试加载技能列表").Clicked() {
+			if ui.Button(c.Key("skills-retry"), T("重试")).Label(T("重试加载技能列表")).Clicked() {
 				a.skills.Loaded = false
 				a.startSkillsPanelLoad()
 			}
@@ -112,7 +112,7 @@ func (a *nativeApp) skillsStatusBanner(c *ui.Context, p palette) {
 		} else if panel.Toggling != "" {
 			statusPill(c, p, "running")
 		}
-		ui.Text(c, panel.Status).FontSize(11).TextColor(color).Grow(1)
+		ui.Text(c, T(panel.Status)).FontSize(11).TextColor(color).Grow(1)
 	})
 }
 
@@ -151,7 +151,7 @@ func (a *nativeApp) skillsRow(c *ui.Context, p palette, index int) {
 				})
 				description := skillDescription(skill)
 				if description == "" {
-					description = "无描述"
+					description = T("无描述")
 				}
 				ui.Text(c, description).FontSize(9.5).TextColor(p.t.TextMuted).SingleLine()
 			})
@@ -163,9 +163,9 @@ func (a *nativeApp) skillsRow(c *ui.Context, p palette, index int) {
 				label = "启用"
 				hint = "点击停用技能 "
 			}
-			toggle := ui.Button(c.Key(fmt.Sprintf("skill-toggle:%d", index)), label)
-			toggle.Label(hint + skill.Name)
-			toggle.Tooltip(hint + skill.Name)
+			toggle := ui.Button(c.Key(fmt.Sprintf("skill-toggle:%d", index)), T(label))
+			toggle.Label(T(hint) + skill.Name)
+			toggle.Tooltip(T(hint) + skill.Name)
 			toggle.Disabled(busy)
 			if toggle.Clicked() && !busy {
 				a.toggleSkill(index)

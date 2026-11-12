@@ -17,7 +17,7 @@ import (
 func (a *nativeApp) settingsACPWorkersPane(c *ui.Context, p palette) {
 	if !a.acpWorkersCapable() {
 		a.settingsCard(c, p, "ACP 工作器", "当前运行时未公开 ACP 工作器配置管理能力。", func() {
-			ui.Text(c, "需要 ACP 能力 manageACPProfiles；当前版本不会显示或调用占位表单。").
+			ui.Text(c, T("需要 ACP 能力 manageACPProfiles；当前版本不会显示或调用占位表单。")).
 				FontSize(11).TextColor(p.t.TextMuted).LineHeight(1.45)
 		})
 		return
@@ -27,7 +27,7 @@ func (a *nativeApp) settingsACPWorkersPane(c *ui.Context, p palette) {
 	if panel.Loading && !panel.Loaded {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Icon(c, iconRefresh).FontSize(13).TextColor(p.t.TextMuted)
-			ui.Text(c, "正在读取 ACP 工作器配置…").FontSize(12).TextColor(p.t.TextMuted)
+			ui.Text(c, T("正在读取 ACP 工作器配置…")).FontSize(12).TextColor(p.t.TextMuted)
 		})
 		return
 	}
@@ -42,17 +42,17 @@ func (a *nativeApp) settingsACPWorkersPane(c *ui.Context, p palette) {
 		a.acpWorkersStatusBanner(c, p)
 	}
 	if panel.Loading && panel.Loaded {
-		ui.Text(c, "正在刷新 ACP 工作器配置…").FontSize(10.5).TextColor(p.t.TextMuted)
+		ui.Text(c, T("正在刷新 ACP 工作器配置…")).FontSize(10.5).TextColor(p.t.TextMuted)
 	}
 
-	ui.Text(c, "只编辑外部 ACP Agent 的默认模型、驱动、MCP 桥接与能力收紧；argv、URL、环境变量与信任标记仍由 settings.json 管理。").
+	ui.Text(c, T("只编辑外部 ACP Agent 的默认模型、驱动、MCP 桥接与能力收紧；argv、URL、环境变量与信任标记仍由 settings.json 管理。")).
 		FontSize(10.5).TextColor(p.t.TextMuted).LineHeight(1.4)
 
 	if len(panel.Profiles) == 0 {
 		a.settingsCard(c, p, "ACP 工作器", "尚未配置外部 ACP 工作器。", func() {
 			ui.Column(c).Padding(14).Radius(9).Border(1, p.t.Border).Gap(4).Children(func() {
-				ui.Text(c, "没有可编辑的 ACP 工作器").FontSize(12).FontWeight(600).TextColor(p.t.Text)
-				ui.Text(c, "请在 settings.json 中新增 ACP Agent profile 后重新打开此面板。").
+				ui.Text(c, T("没有可编辑的 ACP 工作器")).FontSize(12).FontWeight(600).TextColor(p.t.Text)
+				ui.Text(c, T("请在 settings.json 中新增 ACP Agent profile 后重新打开此面板。")).
 					FontSize(10.5).TextColor(p.t.TextMuted).LineHeight(1.4)
 			})
 		})
@@ -110,7 +110,7 @@ func (a *nativeApp) acpWorkerProfileRow(c *ui.Context, p palette, profile acpWor
 					}
 				})
 				if profile.InvalidReason != "" {
-					ui.Text(c, "配置无效："+profile.InvalidReason).FontSize(9.5).
+					ui.Text(c, T("配置无效：")+profile.InvalidReason).FontSize(9.5).
 						TextColor(p.t.Danger).SingleLine()
 				}
 			})
@@ -123,16 +123,16 @@ func (a *nativeApp) acpWorkerProfileRow(c *ui.Context, p palette, profile acpWor
 			a.acpWorkerField(c, p, "acp-worker-model:"+profile.ID, "默认模型", "", &draft.Model, 150, busy)
 			a.acpWorkerField(c, p, "acp-worker-driver:"+profile.ID, "驱动", "generic-acp", &draft.Driver, 140, busy)
 			ui.Column(c).Gap(3).Children(func() {
-				ui.Text(c, "MCP 桥接").FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+				ui.Text(c, T("MCP 桥接")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
 				selectEl := ui.Select(c.Key("acp-worker-bridge:"+profile.ID), &draft.MCPBridge, acpWorkerMCPBridges).
 					FontSize(11.5).Height(32).Padding(0, 8).
 					Background(p.t.Background).Radius(8).Border(1, p.t.Border).
-					Label("MCP 桥接模式")
+					Label(T("MCP 桥接模式"))
 				selectEl.Disabled(busy)
 			})
-			save := ui.PrimaryButton(c.Key("acp-worker-save:"+profile.ID), "保存")
-			save.Label("保存 ACP 工作器 " + profile.ID)
-			save.Tooltip("仅提交模型、驱动、MCP 桥接与能力收紧")
+			save := ui.PrimaryButton(c.Key("acp-worker-save:"+profile.ID), T("保存"))
+			save.Label(T("保存 ACP 工作器 ") + profile.ID)
+			save.Tooltip(T("仅提交模型、驱动、MCP 桥接与能力收紧"))
 			save.Disabled(busy || panel.Loading)
 			if save.Clicked() && !busy && !panel.Loading {
 				a.saveACPWorkerProfile(profile.ID)
@@ -141,7 +141,7 @@ func (a *nativeApp) acpWorkerProfileRow(c *ui.Context, p palette, profile acpWor
 
 		if len(panel.CapabilityNames) > 0 {
 			ui.Column(c).Gap(5).Children(func() {
-				ui.Text(c, "收紧能力（勾选后禁用该能力）").FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+				ui.Text(c, T("收紧能力（勾选后禁用该能力）")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
 				for start := 0; start < len(panel.CapabilityNames); start += 4 {
 					end := start + 4
 					if end > len(panel.CapabilityNames) {
@@ -168,7 +168,7 @@ func (a *nativeApp) acpWorkerProfileRow(c *ui.Context, p palette, profile acpWor
 
 func (a *nativeApp) acpWorkerField(c *ui.Context, p palette, key, label, placeholder string, value *string, width float32, disabled bool) {
 	ui.Column(c).Gap(3).Children(func() {
-		ui.Text(c, label).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+		ui.Text(c, T(label)).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
 		input := ui.TextInput(c.Key(key), value).FontSize(11.5).Height(32).Padding(0, 8).
 			Width(width).Background(p.t.Background).Radius(8).Border(1, p.t.Border).Label(label)
 		if placeholder != "" {
@@ -183,11 +183,11 @@ func (a *nativeApp) acpWorkersErrorCard(c *ui.Context, p palette, message string
 		Border(1, ui.RGBA(255, 107, 107, 0.28)).Gap(8).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Icon(c, iconAlert).FontSize(15).TextColor(p.t.Danger)
-			ui.Text(c, "ACP 工作器管理不可用").FontSize(12).FontWeight(650).TextColor(p.t.Danger)
+			ui.Text(c, T("ACP 工作器管理不可用")).FontSize(12).FontWeight(650).TextColor(p.t.Danger)
 		})
-		ui.Text(c, message).FontSize(11).TextColor(p.t.TextMuted).Selectable()
+		ui.Text(c, T(message)).FontSize(11).TextColor(p.t.TextMuted).Selectable()
 		if a.acpWorkersCapable() {
-			if ui.Button(c.Key("acp-workers-retry"), "重试").Label("重试加载 ACP 工作器").Clicked() {
+			if ui.Button(c.Key("acp-workers-retry"), T("重试")).Label(T("重试加载 ACP 工作器")).Clicked() {
 				a.acpWorkers.Loaded = false
 				a.startACPWorkersPanelLoad()
 			}
@@ -210,6 +210,6 @@ func (a *nativeApp) acpWorkersStatusBanner(c *ui.Context, p palette) {
 		} else if panel.SavingID != "" {
 			statusPill(c, p, "running")
 		}
-		ui.Text(c, panel.Status).FontSize(11).TextColor(color).Grow(1)
+		ui.Text(c, T(panel.Status)).FontSize(11).TextColor(color).Grow(1)
 	})
 }

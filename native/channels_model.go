@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync/atomic"
 )
@@ -82,6 +81,16 @@ type channelsPanelState struct {
 	// in-flight get/patch response, which is how tab exits, settings close,
 	// and reconnects prevent stale state from landing.
 	Seq int64
+
+	// Delivery failures are a separate additive projection
+	// (mothx/manage/deliveries/*) shown on the same panel. They are never part
+	// of channels config and use their own in-flight guard.
+	Deliveries        []deliveryFailureView
+	DeliveriesLoaded  bool
+	DeliveriesLoading bool
+	DeliveriesErr     string
+	RetryingDelivery  string
+	DeliveriesSeq     int64
 }
 
 func newChannelsPanelState() channelsPanelState {
@@ -124,6 +133,12 @@ func (a *nativeApp) invalidateChannelsPanel() {
 	c.Err = ""
 	c.Status = ""
 	c.StatusIsError = false
+	atomic.AddInt64(&c.DeliveriesSeq, 1)
+	c.Deliveries = nil
+	c.DeliveriesLoaded = false
+	c.DeliveriesLoading = false
+	c.DeliveriesErr = ""
+	c.RetryingDelivery = ""
 }
 
 // startChannelsPanelLoad starts one capability-gated channels read. It is
@@ -179,6 +194,7 @@ func (a *nativeApp) loadChannelsPanel(seq, startReloadSeq int64) {
 			return
 		}
 		a.applyChannelsView(&view)
+		a.startChannelDeliveriesLoad()
 	})
 }
 
@@ -231,11 +247,11 @@ func buildChannelsArtifactRequest(artifact bool) map[string]any {
 // toggle is off, so credPath and clearCredPath can never be sent together.
 func buildChannelsWechatRequest(panel *channelsPanelState) (map[string]any, error) {
 	if panel == nil {
-		return nil, fmt.Errorf("通道配置不存在")
+		return nil, localizedError("通道配置不存在")
 	}
 	workDir := strings.TrimSpace(panel.WechatWorkDir)
 	if !channelsWorkDirValid(workDir) {
-		return nil, fmt.Errorf("工作目录不能为空")
+		return nil, localizedError("工作目录不能为空")
 	}
 	wechat := map[string]any{
 		"enabled":    panel.WechatEnabled,
@@ -254,11 +270,11 @@ func buildChannelsWechatRequest(panel *channelsPanelState) (map[string]any, erro
 // Set and clear fields are mutually exclusive for both app id and app secret.
 func buildChannelsFeishuRequest(panel *channelsPanelState) (map[string]any, error) {
 	if panel == nil {
-		return nil, fmt.Errorf("通道配置不存在")
+		return nil, localizedError("通道配置不存在")
 	}
 	workDir := strings.TrimSpace(panel.FeishuWorkDir)
 	if !channelsWorkDirValid(workDir) {
-		return nil, fmt.Errorf("工作目录不能为空")
+		return nil, localizedError("工作目录不能为空")
 	}
 	feishu := map[string]any{
 		"enabled": panel.FeishuEnabled,
@@ -324,7 +340,7 @@ func (a *nativeApp) saveChannelsSection(section string) {
 	seq := atomic.AddInt64(&c.Seq, 1)
 	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 	c.Saving = section
-	c.Status = "正在保存 " + label + "…"
+	c.Status = Tf("正在保存 %s…", T(label))
 	c.StatusIsError = false
 	go func() {
 		raw, err := client.call("mothx/manage/channels/patch", request)
@@ -335,7 +351,7 @@ func (a *nativeApp) saveChannelsSection(section string) {
 			c := &a.channels
 			c.Saving = ""
 			if err != nil {
-				c.Status = "保存 " + label + "失败：" + err.Error()
+				c.Status = Tf("保存 %s失败：%s", T(label), err.Error())
 				c.StatusIsError = true
 				return
 			}

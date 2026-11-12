@@ -408,7 +408,7 @@ func parseProviderOptionalInt(value string) (int, bool, error) {
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
-		return 0, false, fmt.Errorf("必须是整数")
+		return 0, false, localizedError("必须是整数")
 	}
 	return parsed, true, nil
 }
@@ -417,52 +417,52 @@ func parseProviderOptionalInt(value string) (int, bool, error) {
 // a malformed editor never reaches ACP.
 func validateProviderDraft(draft *providerDraft, catalog *providerCatalogView, originalID string) error {
 	if draft == nil {
-		return fmt.Errorf("供应商草稿不存在")
+		return localizedError("供应商草稿不存在")
 	}
 	id := strings.TrimSpace(draft.ID)
 	if id == "" {
-		return fmt.Errorf("供应商 ID 不能为空")
+		return localizedError("供应商 ID 不能为空")
 	}
 	if strings.Contains(id, "/") {
-		return fmt.Errorf("供应商 ID 不能包含 /")
+		return localizedError("供应商 ID 不能包含 /")
 	}
 	if catalog != nil {
 		for _, config := range catalog.ProviderConfigs {
 			if config.ID == id && config.ID != originalID {
-				return fmt.Errorf("供应商 ID %q 已存在", id)
+				return localizedErrorf("供应商 ID %q 已存在", id)
 			}
 		}
 	}
 	if originalID != "" && originalID != id {
 		original := providerConfigByID(catalog, originalID)
 		if original == nil || !original.GlobalOverride {
-			return fmt.Errorf("该供应商不支持重命名，请先保存其全局覆盖配置")
+			return localizedError("该供应商不支持重命名，请先保存其全局覆盖配置")
 		}
 	}
 	if value, present, err := parseProviderOptionalInt(draft.MaxImagesPerRequest); err != nil {
-		return fmt.Errorf("每次请求最大图片数必须是整数")
+		return localizedError("每次请求最大图片数必须是整数")
 	} else if present && value < -1 {
-		return fmt.Errorf("每次请求最大图片数不能小于 -1")
+		return localizedError("每次请求最大图片数不能小于 -1")
 	}
 	seen := make(map[string]bool)
 	for _, model := range draft.Models {
 		modelID := strings.TrimSpace(model.ID)
 		if modelID == "" {
-			return fmt.Errorf("模型 ID 不能为空")
+			return localizedError("模型 ID 不能为空")
 		}
 		if seen[modelID] {
-			return fmt.Errorf("模型 ID %q 重复", modelID)
+			return localizedErrorf("模型 ID %q 重复", modelID)
 		}
 		seen[modelID] = true
 		if value, present, err := parseProviderOptionalInt(model.ContextWindow); err != nil {
-			return fmt.Errorf("模型 %s 的上下文窗口必须是整数", modelID)
+			return localizedErrorf("模型 %s 的上下文窗口必须是整数", modelID)
 		} else if present && value < 0 {
-			return fmt.Errorf("模型 %s 的上下文窗口不能为负数", modelID)
+			return localizedErrorf("模型 %s 的上下文窗口不能为负数", modelID)
 		}
 		if value, present, err := parseProviderOptionalInt(model.MaxTokens); err != nil {
-			return fmt.Errorf("模型 %s 的最大 Tokens 必须是整数", modelID)
+			return localizedErrorf("模型 %s 的最大 Tokens 必须是整数", modelID)
 		} else if present && value < 0 {
-			return fmt.Errorf("模型 %s 的最大 Tokens 不能为负数", modelID)
+			return localizedErrorf("模型 %s 的最大 Tokens 不能为负数", modelID)
 		}
 	}
 	return nil
@@ -473,19 +473,19 @@ func providerModelsPayload(draft *providerDraft) ([]map[string]any, error) {
 	for _, model := range draft.Models {
 		id := strings.TrimSpace(model.ID)
 		if id == "" {
-			return nil, fmt.Errorf("模型 ID 不能为空")
+			return nil, localizedError("模型 ID 不能为空")
 		}
 		entry := map[string]any{"id": id, "reasoning": model.Reasoning}
 		if name := strings.TrimSpace(model.Name); name != "" {
 			entry["name"] = name
 		}
 		if value, present, err := parseProviderOptionalInt(model.ContextWindow); err != nil {
-			return nil, fmt.Errorf("模型 %s 的上下文窗口必须是整数", id)
+			return nil, localizedErrorf("模型 %s 的上下文窗口必须是整数", id)
 		} else if present {
 			entry["contextWindow"] = value
 		}
 		if value, present, err := parseProviderOptionalInt(model.MaxTokens); err != nil {
-			return nil, fmt.Errorf("模型 %s 的最大 Tokens 必须是整数", id)
+			return nil, localizedErrorf("模型 %s 的最大 Tokens 必须是整数", id)
 		} else if present {
 			entry["maxTokens"] = value
 		}
@@ -519,10 +519,10 @@ func buildProviderSaveRequest(draft *providerDraft, secret providerSecretDraft, 
 		"models":         models,
 	}
 	if value, _, err := parseProviderOptionalInt(draft.MaxImagesPerRequest); err != nil {
-		return nil, fmt.Errorf("每次请求最大图片数必须是整数")
+		return nil, localizedError("每次请求最大图片数必须是整数")
 	} else {
 		if value < -1 {
-			return nil, fmt.Errorf("每次请求最大图片数不能小于 -1")
+			return nil, localizedError("每次请求最大图片数不能小于 -1")
 		}
 		// Send zero explicitly when the field is blank: the server preserves an
 		// omitted provider-level field, so omission would make clearing impossible.
@@ -549,10 +549,10 @@ func buildProviderDefaultsPatch(provider, model, thinking string) (map[string]an
 	model = strings.TrimSpace(model)
 	thinking = strings.TrimSpace(thinking)
 	if provider == "" {
-		return nil, fmt.Errorf("请选择默认供应商")
+		return nil, localizedError("请选择默认供应商")
 	}
 	if model == "" {
-		return nil, fmt.Errorf("请选择默认模型")
+		return nil, localizedError("请选择默认模型")
 	}
 	if thinking == "" {
 		thinking = providerDefaultThinking
@@ -565,7 +565,7 @@ func buildProviderDefaultsPatch(provider, model, thinking string) (map[string]an
 		}
 	}
 	if !allowed {
-		return nil, fmt.Errorf("思考级别 %q 无效", thinking)
+		return nil, localizedErrorf("思考级别 %q 无效", thinking)
 	}
 	return map[string]any{
 		"defaultProvider": provider,
@@ -1092,7 +1092,7 @@ func (a *nativeApp) testProviderDraft() {
 				return
 			}
 			if result.OK {
-				p.Status = "连接测试成功（" + strconv.FormatInt(result.LatencyMS, 10) + " ms）"
+				p.Status = Tf("连接测试成功（%s ms）", strconv.FormatInt(result.LatencyMS, 10))
 				p.StatusIsError = false
 				return
 			}
@@ -1307,7 +1307,7 @@ func (a *nativeApp) addDiscoveredModels() {
 		existing[candidate.ID] = true
 		added++
 	}
-	p.Status = fmt.Sprintf("已添加 %d 个模型", added)
+	p.Status = Tf("已添加 %d 个模型", added)
 	p.StatusIsError = false
 	a.closeDiscoverDialog()
 }
@@ -1391,7 +1391,7 @@ func (a *nativeApp) testProviderByName(name string) {
 	seq := atomic.AddInt64(&p.Seq, 1)
 	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 	p.Testing = true
-	p.Status = "正在测试 " + name + " 的连接…"
+	p.Status = Tf("正在测试 %s 的连接…", name)
 	p.StatusIsError = false
 	go func() {
 		raw, err := client.call("mothx/manage/providers/test", params)
@@ -1413,7 +1413,7 @@ func (a *nativeApp) testProviderByName(name string) {
 				return
 			}
 			if result.OK {
-				p.Status = "连接测试成功（" + strconv.FormatInt(result.LatencyMS, 10) + " ms）"
+				p.Status = Tf("连接测试成功（%s ms）", strconv.FormatInt(result.LatencyMS, 10))
 				p.StatusIsError = false
 				return
 			}

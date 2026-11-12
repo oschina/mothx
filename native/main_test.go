@@ -11,6 +11,7 @@ import (
 )
 
 func testApp() *nativeApp {
+	setLocale("zh")
 	a := newNativeApp()
 	a.conn = connReady
 	a.win = nil
@@ -124,21 +125,31 @@ func TestToolCallMergesUpdates(t *testing.T) {
 	}
 }
 
-func TestGroupsPutCurrentWorkspaceFirst(t *testing.T) {
+func TestSidebarTaskTreeGroupsProjectsRecentAndUngrouped(t *testing.T) {
 	a := testApp()
-	a.workspace = "/work/current"
 	a.sessions = []listedSession{
 		{SessionID: "1", Cwd: "/work/old", Title: "Old", UpdatedAt: "2026-11-09T10:00:00Z"},
 		{SessionID: "2", Cwd: "/work/current", Title: "Current", UpdatedAt: "2026-11-01T10:00:00Z"},
+		{SessionID: "3", Cwd: "/work/old", Title: "Grouped", UpdatedAt: "2026-11-10T10:00:00Z", Meta: sessionMeta{ProjectID: "p1"}},
 	}
-	groups := a.groups()
-	if len(groups) < 2 || groups[0].Cwd != "/work/current" {
-		t.Fatalf("groups = %+v", groups)
+	a.projects = []projectView{{ID: "p1", Name: "MothX"}}
+	tree := a.taskTree()
+	if len(tree.Projects) != 1 || len(tree.Projects[0].Sessions) != 1 || tree.Projects[0].Sessions[0].SessionID != "3" {
+		t.Fatalf("project tree = %+v", tree.Projects)
 	}
-	a.search = "old"
-	groups = a.groups()
-	if len(groups) != 1 || groups[0].Cwd != "/work/old" {
-		t.Fatalf("filtered groups = %+v", groups)
+	if len(tree.Recent) != 3 || tree.Recent[0].SessionID != "3" {
+		t.Fatalf("recent tree = %+v", tree.Recent)
+	}
+	if len(tree.Ungrouped) != 2 {
+		t.Fatalf("ungrouped tree = %+v", tree.Ungrouped)
+	}
+	a.search = "grouped"
+	tree = a.taskTree()
+	if len(tree.Projects) != 1 || len(tree.Projects[0].Sessions) != 1 {
+		t.Fatalf("filtered project tree = %+v", tree.Projects)
+	}
+	if len(tree.Ungrouped) != 0 {
+		t.Fatalf("filtered ungrouped tree = %+v", tree.Ungrouped)
 	}
 }
 
@@ -202,19 +213,25 @@ func TestFileURIEscapesReservedPathCharacters(t *testing.T) {
 	}
 }
 
-func TestNewChatInKeepsActiveWorkspaceWhileRunning(t *testing.T) {
+func TestNewChatInCanDetachWhileAnotherSessionRuns(t *testing.T) {
 	a := testApp()
+	a.currentSession = "s1"
+	a.messageIndex = make(map[string]*chatMessage)
+	a.sessionStates = make(map[string]sessionSnapshot)
 	a.workspace = "/work/active"
 	a.draftCwd = "/work/active"
 	a.running = true
 
 	a.newChatIn("/work/other")
 
-	if a.workspace != "/work/active" || a.draftCwd != "/work/active" {
-		t.Fatalf("workspace changed while run was active: workspace=%q draft=%q", a.workspace, a.draftCwd)
+	if a.currentSession != "" || a.running {
+		t.Fatalf("new chat did not detach: session=%q running=%v", a.currentSession, a.running)
 	}
-	if a.status != "请先停止当前运行" {
-		t.Fatalf("status = %q", a.status)
+	if a.workspace != "/work/other" || a.draftCwd != "/work/other" {
+		t.Fatalf("new chat workspace = %q draft = %q", a.workspace, a.draftCwd)
+	}
+	if state, ok := a.sessionStates["s1"]; !ok || !state.Running {
+		t.Fatalf("previous session was not preserved: %+v", state)
 	}
 }
 
@@ -487,5 +504,124 @@ func TestSettingsAndHistoryViewsAreMutuallyExclusive(t *testing.T) {
 	a.historyOpen = true
 	if a.settingsOpen && a.historyOpen {
 		t.Fatal("settings and history must not be active together")
+	}
+}
+
+func TestToolUpdateKeepsInputDiffAndLocations(t *testing.T) {
+	a := testApp()
+	a.currentSession = "s1"
+	a.applyUpdate(sessionUpdateNotification{
+		SessionID: "s1",
+		Update: sessionUpdate{
+			SessionUpdate: "tool_call",
+			ToolCallID:    "t1",
+			Title:         "edit",
+			Kind:          "edit",
+			Status:        "completed",
+			RawInput:      map[string]any{"path": "main.go", "command": "go test"},
+			Locations:     []toolLocation{{Path: "main.go"}, {Path: "view.go"}},
+			Content:       json.RawMessage(`[{"type":"diff","path":"main.go","oldText":"old line","newText":"new line"}]`),
+		},
+	})
+	if len(a.messages) != 1 {
+		t.Fatalf("messages = %d", len(a.messages))
+	}
+	m := a.messages[0]
+	if m.ToolInput["command"] != "go test" {
+		t.Fatalf("tool input = %#v", m.ToolInput)
+	}
+	if len(m.ToolDiffs) != 1 || m.ToolDiffs[0].OldText != "old line" || m.ToolDiffs[0].NewText != "new line" {
+		t.Fatalf("tool diffs = %#v", m.ToolDiffs)
+	}
+	if len(m.ToolLocations) != 2 || m.ToolLocations[1] != "view.go" {
+		t.Fatalf("tool locations = %#v", m.ToolLocations)
+	}
+	if text := toolDiffText(m.ToolDiffs[0]); !strings.Contains(text, "- old line") || !strings.Contains(text, "+ new line") {
+		t.Fatalf("diff text = %q", text)
+	}
+}
+
+func TestDecisionDeadlineUpdatesInlineCard(t *testing.T) {
+	a := testApp()
+	a.currentSession = "s1"
+	d := &decision{ID: json.RawMessage(`"req-1"`), Kind: "permission", Title: "bash", RawInput: map[string]any{"command": "go test"}}
+	a.appendMessage(&chatMessage{ID: "decision:req-1", Kind: messageDecision, Decision: d})
+	remaining := 1500
+	a.applyDecisionDeadline(sessionEvent{
+		Event:     "decision_deadline",
+		RequestID: "req-1",
+		Kind:      "approval",
+		Remaining: &remaining,
+	})
+	if d.Deadline.IsZero() {
+		t.Fatal("deadline was not projected")
+	}
+	if label := decisionDeadlineLabel(d.Deadline); label == "" {
+		t.Fatal("deadline label is empty")
+	}
+	// Numeric JSON-RPC ids must not be mistaken for strings.
+	if got := decisionIDString(json.RawMessage(`42`)); got != "42" {
+		t.Fatalf("numeric id = %q", got)
+	}
+}
+
+func TestDecisionCardRendersInlineAndResolves(t *testing.T) {
+	a := testApp()
+	a.dark = true
+	a.themeSet = true
+	a.currentSession = "s1"
+	d := &decision{
+		ID:      json.RawMessage(`"req-2"`),
+		Kind:    "question",
+		Session: "s1",
+		Title:   "继续吗",
+		Prompt:  "请确认是否继续",
+		Options: []decisionOption{{ID: "yes", Label: "继续"}, {ID: "no", Label: "停止"}},
+	}
+	a.appendMessage(&chatMessage{ID: "decision:req-2", Kind: messageDecision, Decision: d})
+	tt := ui.NewTester(a.view, 1180, 900)
+	for _, want := range []string{"继续吗", "请确认是否继续", "继续", "停止"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("decision card missing %q: %q", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("继续"); err != nil {
+		t.Fatalf("click question option: %v", err)
+	}
+	if !d.Resolved || d.ResolvedValue == "" {
+		t.Fatalf("decision not resolved: %+v", d)
+	}
+	if !textPresent(tt, d.ResolvedValue) {
+		t.Fatalf("resolved label missing: %q", tt.Texts())
+	}
+}
+
+func TestUsageLabelProjectsContextAndCost(t *testing.T) {
+	a := testApp()
+	if got := a.usageLabel(); got != "" {
+		t.Fatalf("empty usage label = %q", got)
+	}
+	a.usageUsed = 2500
+	a.usageSize = 10000
+	a.usageCost = 0.0123
+	a.usageCurrency = "USD"
+	want := "2500 / 10000 (25%) · $0.0123"
+	if got := a.usageLabel(); got != want {
+		t.Fatalf("usage label = %q, want %q", got, want)
+	}
+}
+
+func TestPathWithinDirectoryKeepsAttachmentBoundary(t *testing.T) {
+	root := t.TempDir()
+	inside := filepath.Join(root, "notes.txt")
+	outside := filepath.Join(filepath.Dir(root), "outside.txt")
+	if !pathWithinDirectory(root, inside) {
+		t.Fatal("file inside the workspace must stay a resource_link")
+	}
+	if pathWithinDirectory(root, outside) {
+		t.Fatal("file outside the workspace must be embedded")
+	}
+	if pathWithinDirectory("", outside) {
+		t.Fatal("empty workspace must embed")
 	}
 }

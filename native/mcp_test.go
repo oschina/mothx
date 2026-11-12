@@ -396,3 +396,21 @@ func TestMCPPanelSequenceGuardsAndInvalidation(t *testing.T) {
 		t.Fatalf("closing settings must invalidate MCP state: %+v", c.mcp)
 	}
 }
+
+func TestMCPScopeParamsBindProjectsToTheOpenSession(t *testing.T) {
+	a := testApp()
+	a.mcp.Scope = mcpScopeGlobal
+	params, err := a.mcpScopeParams()
+	if err != nil || params["scope"] != mcpScopeGlobal {
+		t.Fatalf("global scope params = %#v err=%v", params, err)
+	}
+	a.mcp.Scope = mcpScopeProject
+	if _, err := a.mcpScopeParams(); err == nil {
+		t.Fatal("project scope without a session must fail closed")
+	}
+	a.currentSession = "s1"
+	params, err = a.mcpScopeParams()
+	if err != nil || params["scope"] != mcpScopeProject || params["sessionId"] != "s1" {
+		t.Fatalf("project scope params = %#v err=%v", params, err)
+	}
+}

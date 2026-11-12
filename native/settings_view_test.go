@@ -169,13 +169,23 @@ func TestSettingsCategoryChangeSelectsFirstVisibleSection(t *testing.T) {
 func TestSettingsManagedPaneNamesServiceWithoutLoading(t *testing.T) {
 	a := testApp()
 	a.themeSet = true
-	a.setFeatures(map[string]bool{"manageStats": true})
-	a.settingsOpen = true
-	a.settingsCategory = "system"
-	a.settingsTab = "stats"
+	a.dark = true
+	a.setFeatures(map[string]bool{"manageFuturePanel": true})
 
-	tt := ui.NewTester(a.view, 860, 760)
-	for _, want := range []string{"mothx/manage/stats", "ACP-backed", "不会调用该服务"} {
+	// The managed placeholder is the fallback for a capability-gated section
+	// whose panel has not been migrated yet. Every shipped section now has a
+	// real pane, so exercise the fallback directly with a synthetic section.
+	render := func(c *ui.Context) {
+		p := a.applyTheme(c)
+		ui.Column(c).Children(func() {
+			a.settingsManagedPane(c, p, settingsSection{
+				ID: "futurePanel", Label: "未来面板", Description: "尚未迁移的面板",
+				Icon: iconDoc, Feature: "manageFuturePanel",
+			})
+		})
+	}
+	tt := ui.NewTester(render, 860, 760)
+	for _, want := range []string{"该设置项由 ACP-backed 服务管理", "mothx/manage/futurePanel", "不会调用该服务"} {
 		if !textPresent(tt, want) {
 			t.Fatalf("managed pane missing %q; texts = %q", want, tt.Texts())
 		}
@@ -194,7 +204,7 @@ func TestSettingsAppearancePageSelectsTheme(t *testing.T) {
 	a.settingsTab = "appearance"
 
 	tt := ui.NewTester(a.view, 860, 760)
-	for _, want := range []string{"主题", "选择 Native 界面的配色方案", "深色", "浅色"} {
+	for _, want := range []string{"主题", "跟随系统或固定深色/浅色", "跟随系统", "深色", "浅色"} {
 		if !textPresent(tt, want) {
 			t.Fatalf("appearance page missing %q; texts = %q", want, tt.Texts())
 		}
@@ -222,7 +232,7 @@ func TestSettingsRuntimePageShowsLaunchTimeSelection(t *testing.T) {
 	a.settingsTab = "runtime"
 
 	tt := ui.NewTester(a.view, 860, 760)
-	for _, want := range []string{"当前解析的运行时", "解析来源", "MOTHX_BIN", abs, "启动时确定"} {
+	for _, want := range []string{"当前解析的运行时", "解析来源", "MOTHX_BIN", abs, "选择 mothx 二进制"} {
 		if !textPresent(tt, want) {
 			t.Fatalf("runtime page missing %q; texts = %q", want, tt.Texts())
 		}
@@ -302,5 +312,94 @@ func TestSidebarNewChatLeavesSettingsPage(t *testing.T) {
 	}
 	if a.settingsOpen {
 		t.Fatal("sidebar new chat did not return to the chat workspace")
+	}
+}
+
+func TestEnglishSettingsPagesRenderTranslatedState(t *testing.T) {
+	setLocale("en")
+	t.Cleanup(func() { setLocale("zh") })
+	a := testApp()
+	setLocale("en")
+	a.themeSet = true
+	a.settingsOpen = true
+	a.setFeatures(map[string]bool{
+		"manageApplicationSettings": true,
+		"manageProviders":           true,
+		"manageKnowledgeBases":      true,
+		"manageSkills":              true,
+		"manageSkillHub":            true,
+		"manageExperts":             true,
+		"manageACPProfiles":         true,
+		"manageEnv":                 true,
+		"manageChannels":            true,
+		"manageMcp":                 true,
+		"manageMemory":              true,
+		"manageCron":                true,
+		"manageServeConfig":         true,
+		"manageStats":               true,
+	})
+	a.settingsCategory = "appearance"
+	a.settingsTab = "appearance"
+	tt := ui.NewTester(a.view, 1180, 900)
+	for _, want := range []string{"Appearance", "Theme", "System", "Dark", "Light", "Home Logo"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("english appearance missing %q: %q", want, tt.Texts())
+		}
+	}
+	a.settingsCategory = "system"
+	a.settingsTab = "runtime"
+	tt.Frame()
+	for _, want := range []string{"Resolved runtime", "Resolution source", "Main-process diagnostics", "Run diagnostics"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("english runtime missing %q: %q", want, tt.Texts())
+		}
+	}
+	a.settingsTab = "about"
+	tt.Frame()
+	for _, want := range []string{"About MothX Native", "Runtime binary", "Platform"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("english about missing %q: %q", want, tt.Texts())
+		}
+	}
+	// Section and category labels are part of the persistent settings rail, so
+	// they must stay translated on every page, not only in the initial shell.
+	a.settingsCategory = "agent"
+	a.settingsTab = "application"
+	tt.Frame()
+	for _, want := range []string{"Agent", "Application", "Provider", "Knowledge bases", "Skills", "SkillHub", "Expert teams", "ACP workers"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("english agent settings missing %q: %q", want, tt.Texts())
+		}
+	}
+	a.settingsCategory = "integrations"
+	a.settingsTab = "channels"
+	tt.Frame()
+	for _, want := range []string{"Integrations", "Channels", "MCP", "Memory", "Channel artifacts", "Save artifact settings"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("english integration settings missing %q: %q", want, tt.Texts())
+		}
+	}
+	a.settingsCategory = "automation"
+	a.settingsTab = "cron"
+	tt.Frame()
+	for _, want := range []string{"Automation", "Scheduled tasks"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("english automation settings missing %q: %q", want, tt.Texts())
+		}
+	}
+	a.settingsCategory = "system"
+	a.settingsTab = "stats"
+	tt.Frame()
+	for _, want := range []string{"System", "Services", "Runtime", "Statistics", "About", "Usage statistics"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("english system settings missing %q: %q", want, tt.Texts())
+		}
+	}
+	a.settingsTab = "runtime"
+	tt.Frame()
+	for _, want := range []string{"Restart connection", "Status"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("english runtime actions missing %q: %q", want, tt.Texts())
+		}
 	}
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync/atomic"
 )
@@ -289,7 +288,7 @@ func (a *nativeApp) toggleACPWorkerCapability(id, name string) {
 func buildACPWorkerPatchRequest(profile acpWorkerProfileView, draft acpWorkerDraft) (map[string]any, error) {
 	id := strings.TrimSpace(profile.ID)
 	if id == "" {
-		return nil, fmt.Errorf("ACP 工作器 ID 不能为空")
+		return nil, localizedError("ACP 工作器 ID 不能为空")
 	}
 	bridge := strings.TrimSpace(draft.MCPBridge)
 	if bridge == "" {
@@ -303,7 +302,7 @@ func buildACPWorkerPatchRequest(profile acpWorkerProfileView, draft acpWorkerDra
 		}
 	}
 	if !allowed {
-		return nil, fmt.Errorf("MCP 桥接模式必须是 auto 或 off")
+		return nil, localizedError("MCP 桥接模式必须是 auto 或 off")
 	}
 	overrides := make(map[string]bool, len(draft.Overrides))
 	for name, tightened := range draft.Overrides {

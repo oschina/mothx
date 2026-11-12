@@ -317,7 +317,7 @@ func (a *nativeApp) knowledgeMCPCapable() bool {
 }
 
 func (a *nativeApp) knowledgePanelCurrent(seq, reloadSeq int64) bool {
-	return a.settingsOpen && a.settingsTab == "knowledge" &&
+	return a.panelVisible("library", "knowledge") &&
 		seq == atomic.LoadInt64(&a.knowledge.Seq) &&
 		reloadSeq == atomic.LoadInt64(&a.reloadSeq)
 }
@@ -354,7 +354,7 @@ func (a *nativeApp) invalidateKnowledgePanel() {
 // startKnowledgePanelLoad starts one capability-gated load. It is called from
 // the UI thread on tab entry.
 func (a *nativeApp) startKnowledgePanelLoad() {
-	if !a.settingsOpen || a.settingsTab != "knowledge" {
+	if !a.panelVisible("library", "knowledge") {
 		return
 	}
 	k := &a.knowledge
@@ -846,21 +846,21 @@ func knowledgeDraftPayload(draft *knowledgeBaseDraft) map[string]any {
 
 func validateKnowledgeDraft(draft *knowledgeBaseDraft) error {
 	if draft == nil {
-		return fmt.Errorf("知识库草稿不存在")
+		return localizedError("知识库草稿不存在")
 	}
 	if strings.TrimSpace(draft.Name) == "" {
-		return fmt.Errorf("知识库名称不能为空")
+		return localizedError("知识库名称不能为空")
 	}
 	if strings.TrimSpace(draft.RootDir) == "" {
-		return fmt.Errorf("知识源目录不能为空")
+		return localizedError("知识源目录不能为空")
 	}
 	provider := strings.TrimSpace(draft.Provider)
 	model := strings.TrimSpace(draft.Model)
 	if provider != "" && model == "" {
-		return fmt.Errorf("选择供应商后必须选择模型")
+		return localizedError("选择供应商后必须选择模型")
 	}
 	if provider == "" && model != "" {
-		return fmt.Errorf("选择模型前必须先选择供应商")
+		return localizedError("选择模型前必须先选择供应商")
 	}
 	return nil
 }
@@ -1212,7 +1212,7 @@ func (a *nativeApp) confirmDeleteKnowledgeBase() {
 				return
 			}
 			a.removeKnowledgeView(id)
-			k.Status = fmt.Sprintf("已删除知识库「%s」的配置和索引；知识源目录保持不变。", name)
+			k.Status = Tf("已删除知识库「%s」的配置和索引；知识源目录保持不变。", name)
 			k.StatusIsError = false
 			a.startKnowledgePanelLoad()
 		})
@@ -1588,12 +1588,12 @@ func (a *nativeApp) pollKnowledgeIndexes(client *acpClient, ids []string, seq, s
 func knowledgeStatusText(view knowledgeBaseView) string {
 	base := view.KnowledgeBase
 	if !base.Enabled {
-		return "已停用"
+		return T("已停用")
 	}
 	if view.Indexing != nil && view.Indexing.Running {
-		label := "索引中"
+		label := T("索引中")
 		if phase := strings.TrimSpace(view.Indexing.Phase); phase != "" {
-			label += "：" + phase
+			label = Tf("索引中：%s", phase)
 		}
 		if view.Indexing.FilesTotal > 0 {
 			label += fmt.Sprintf(" · %d/%d", view.Indexing.FilesDone, view.Indexing.FilesTotal)
@@ -1601,41 +1601,41 @@ func knowledgeStatusText(view knowledgeBaseView) string {
 		return label
 	}
 	if view.Snapshot == nil {
-		return "尚未建立可用索引"
+		return T("尚未建立可用索引")
 	}
 	status := strings.TrimSpace(view.Status)
 	if status == "" {
 		status = strings.TrimSpace(view.Snapshot.Status)
 	}
 	if status == "" {
-		return "尚未建立可用索引"
+		return T("尚未建立可用索引")
 	}
-	return "索引状态：" + status
+	return Tf("索引状态：%s", status)
 }
 
 func knowledgeStatsText(snapshot *knowledgeSnapshot) string {
 	if snapshot == nil {
 		return ""
 	}
-	return fmt.Sprintf("文件 %d · 分块 %d · 节点 %d · 关系 %d",
+	return Tf("文件 %d · 分块 %d · 节点 %d · 关系 %d",
 		snapshot.FileCount, snapshot.ChunkCount, snapshot.NodeCount, snapshot.EdgeCount)
 }
 
 func knowledgeRunStatsText(run knowledgeIndexRunView) string {
-	return fmt.Sprintf("文件 %d · 分块 %d · 节点 %d · 关系 %d",
+	return Tf("文件 %d · 分块 %d · 节点 %d · 关系 %d",
 		run.FileCount, run.ChunkCount, run.NodeCount, run.EdgeCount)
 }
 
 func knowledgeScheduleText(schedule knowledgeScheduleView) string {
 	if schedule.Schedule == "" {
-		return "仅手动扫描"
+		return T("仅手动扫描")
 	}
 	if schedule.Configured && schedule.NextRun != "" {
 		if next := knowledgeFormatDate(schedule.NextRun); next != "" {
-			return "下次运行：" + next
+			return T("下次运行：") + next
 		}
 	}
-	return "仅手动扫描"
+	return T("仅手动扫描")
 }
 
 func knowledgeFormatDate(value string) string {
@@ -1671,7 +1671,7 @@ func knowledgeFormatSize(bytes int64) string {
 }
 
 func knowledgeSourceMeta(source knowledgeSourceView) string {
-	return fmt.Sprintf("%s · %s · %d 个分块", source.Status, knowledgeFormatSize(source.ByteSize), source.ChunkCount)
+	return Tf("%s · %s · %d 个分块", T(source.Status), knowledgeFormatSize(source.ByteSize), source.ChunkCount)
 }
 
 func knowledgeTruncate(text string, limit int) string {
@@ -1695,7 +1695,7 @@ func (a *nativeApp) knowledgeChooseRoot(key string) {
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:            win,
-			Title:             "选择知识源目录",
+			Title:             T("选择知识源目录"),
 			Directory:         true,
 			CreateDirectories: true,
 		})
