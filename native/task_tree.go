@@ -274,6 +274,18 @@ func (a *nativeApp) sessionStatusKind(session listedSession) string {
 	if session.SessionID == a.currentSession && a.running {
 		return "working"
 	}
+	if exec := session.Meta.Execution; exec != nil {
+		switch strings.ToLower(strings.TrimSpace(exec.State)) {
+		case "local", "external", "detached_remote":
+			return "working"
+		case "reserved", "orphaned", "inconsistent":
+			return "pending"
+		case "recovery_failed":
+			return "failed"
+		case "unknown":
+			return "pending"
+		}
+	}
 	last := session.Meta.LastRun
 	if last == nil {
 		return "idle"

@@ -28,7 +28,6 @@ const (
 )
 
 const (
-	nativeVersion       = "0.1.0"
 	nativeChineseSlogan = "MothX用中国词元赋能你的任何工作"
 )
 
@@ -64,6 +63,7 @@ type nativeApp struct {
 	projectsSeq    int64
 
 	currentSession string
+	runtimeVersion string
 	loadingSession string
 	currentTitle   string
 	workspace      string
@@ -77,9 +77,12 @@ type nativeApp struct {
 	transcriptNextCursor string
 	transcriptLoading    bool
 	transcriptSeq        int64
-	localMessageSeq      int
-	list                 ui.ListState
-	md                   markdown.Options
+	// replayingHistory suppresses wall-clock reasoning timing while canonical
+	// history is replayed through the live reducer.
+	replayingHistory bool
+	localMessageSeq  int
+	list             ui.ListState
+	md               markdown.Options
 
 	running            bool
 	creatingSession    bool
@@ -338,7 +341,7 @@ func (a *nativeApp) connect() {
 		"clientInfo": map[string]any{
 			"name":    "mothx-native",
 			"title":   "MothX Native",
-			"version": nativeVersion,
+			"version": nativeBuildVersion,
 		},
 		"_meta": map[string]any{"mothx": map[string]any{"surface": "native"}},
 	})
@@ -360,6 +363,9 @@ func (a *nativeApp) connect() {
 		if seq != atomic.LoadInt64(&a.reloadSeq) {
 			return
 		}
+		if version := strings.TrimSpace(init.AgentInfo.Version); version != "" {
+			a.runtimeVersion = version
+		}
 		a.setConn(connReady, "")
 		a.setFeatures(features)
 	})
@@ -367,8 +373,11 @@ func (a *nativeApp) connect() {
 		client.close()
 		return
 	}
-	a.refreshDraftConfig(client, a.cwd, features)
-	a.refreshSessions(client, a.cwd, features)
+	// None of these projections is required for the handshake itself. Start
+	// them together so the first list page does not wait behind draft config,
+	// and let the session catalog render as soon as its own response arrives.
+	go a.refreshDraftConfig(client, a.cwd, features)
+	go a.refreshSessions(client, a.cwd, features)
 	go a.refreshModelCatalog(client, features)
 }
 
@@ -484,7 +493,7 @@ func (a *nativeApp) refreshSessions(client *acpClient, cwd string, features map[
 	var raw json.RawMessage
 	var err error
 	if features["sessionListAll"] || len(features) == 0 {
-		raw, err = client.call("mothx/session/listAll", map[string]any{"scope": "all"})
+		raw, err = client.call("mothx/session/listAll", map[string]any{"scope": "all", "limit": sidebarSessionPageSize})
 	}
 	if err != nil || len(raw) == 0 {
 		raw, err = client.call("session/list", map[string]any{"cwd": cwd})

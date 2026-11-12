@@ -253,7 +253,7 @@ func TestSettingsAboutPageShowsVersionConnectionAndFeatureCount(t *testing.T) {
 	a.settingsTab = "about"
 
 	tt := ui.NewTester(a.view, 860, 760)
-	for _, want := range []string{nativeVersion, "已连接", "可用能力数"} {
+	for _, want := range []string{a.version(), "已连接", "可用能力数"} {
 		if !textPresent(tt, want) {
 			t.Fatalf("about page missing %q; texts = %q", want, tt.Texts())
 		}

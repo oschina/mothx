@@ -702,6 +702,103 @@ func TestListAllSessionsFiltersProjectSearchBeforePagination(t *testing.T) {
 	}
 }
 
+func TestListAllSessionsEventStoreQueryUsesDisplayProjection(t *testing.T) {
+	dir := t.TempDir()
+	cwd := t.TempDir()
+	mgr := session.New(cwd, dir)
+	if err := mgr.InitWithID("event-store-query"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.MigrateToEventStore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.AppendMessage(provider.NewUserMessage("preview from event store")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.AppendSessionTitle("Needle event title", "manual"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	s := testSessionServer(cwd, dir, &out)
+	s.handleListAllSessions(rpcRequest{ID: json.RawMessage("1"), Params: json.RawMessage(`{"query":"needle event title"}`)})
+	result := jsonLines(t, &out)[0]["result"].(map[string]any)
+	items := result["sessions"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["sessionId"] != "event-store-query" {
+		t.Fatalf("event-store title search = %#v, want only event-store-query", items)
+	}
+
+	out.Reset()
+	s.handleListAllSessions(rpcRequest{ID: json.RawMessage("2"), Params: json.RawMessage(`{"query":"preview from event store"}`)})
+	result = jsonLines(t, &out)[0]["result"].(map[string]any)
+	items = result["sessions"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["sessionId"] != "event-store-query" {
+		t.Fatalf("event-store preview search = %#v, want only event-store-query", items)
+	}
+}
+
+func TestListAllSessionsQueryPaginatesBeforeDetailExpansion(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < sessionListPageSize+2; i++ {
+		id := fmt.Sprintf("paged-query-%03d", i)
+		newTestSession(t, t.TempDir(), dir, id, 1)
+		mgr, err := session.OpenByIDExact(dir, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mgr.AppendSessionTitle("Needle page title", "manual"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var out bytes.Buffer
+	s := testSessionServer(t.TempDir(), dir, &out)
+	s.handleListAllSessions(rpcRequest{ID: json.RawMessage("1"), Params: json.RawMessage(`{"query":"needle page title"}`)})
+	first := jsonLines(t, &out)[0]["result"].(map[string]any)
+	items := first["sessions"].([]any)
+	if len(items) != sessionListPageSize {
+		t.Fatalf("first query page = %d sessions, want %d", len(items), sessionListPageSize)
+	}
+	cursor, _ := first["nextCursor"].(string)
+	if cursor == "" {
+		t.Fatal("query page missing nextCursor")
+	}
+
+	out.Reset()
+	s.handleListAllSessions(rpcRequest{ID: json.RawMessage("2"), Params: json.RawMessage(fmt.Sprintf(`{"query":"needle page title","cursor":%q}`, cursor))})
+	second := jsonLines(t, &out)[0]["result"].(map[string]any)
+	if got := len(second["sessions"].([]any)); got != 2 {
+		t.Fatalf("second query page = %d sessions, want 2", got)
+	}
+	if second["nextCursor"] != nil {
+		t.Fatalf("second query page cursor = %#v, want nil", second["nextCursor"])
+	}
+}
+
+func TestListAllSessionsHonorsClientLimit(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 12; i++ {
+		newTestSession(t, t.TempDir(), dir, fmt.Sprintf("limited-%03d", i), 0)
+	}
+	var out bytes.Buffer
+	s := &server{settings: &config.Settings{SessionDir: dir}, w: &out}
+	s.handleListAllSessions(rpcRequest{ID: json.RawMessage("1"), Params: json.RawMessage(`{"limit":5}`)})
+	first := jsonLines(t, &out)[0]["result"].(map[string]any)
+	if got := len(first["sessions"].([]any)); got != 5 {
+		t.Fatalf("limited first page = %d sessions, want 5", got)
+	}
+	cursor, _ := first["nextCursor"].(string)
+	if cursor == "" {
+		t.Fatal("limited first page missing nextCursor")
+	}
+	out.Reset()
+	s.handleListAllSessions(rpcRequest{ID: json.RawMessage("2"), Params: json.RawMessage(fmt.Sprintf(`{"limit":5,"cursor":%q}`, cursor))})
+	second := jsonLines(t, &out)[0]["result"].(map[string]any)
+	if got := len(second["sessions"].([]any)); got != 5 {
+		t.Fatalf("limited second page = %d sessions, want 5", got)
+	}
+}
+
 func TestSetSessionWorkDirPersistsTarget(t *testing.T) {
 	dir := t.TempDir()
 	oldCwd := t.TempDir()

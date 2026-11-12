@@ -24,7 +24,7 @@ func (a *nativeApp) statusBar(c *ui.Context, p palette) {
 			ui.Box(c).Size(6, 6).Radius(3).Background(dot)
 			ui.Text(c, a.connectionLabel()).FontSize(9.5).TextColor(p.t.TextMuted)
 		})
-		ui.Textf(c, "MothX Native v%s · ACP", nativeVersion).FontSize(9.5).TextColor(p.t.TextMuted)
+		ui.Textf(c, "MothX Native v%s · ACP", a.version()).FontSize(9.5).TextColor(p.t.TextMuted)
 		ui.Spacer(c)
 		if a.usageUsed > 0 {
 			label := fmt.Sprintf("ctx %s", humanCount(a.usageUsed))

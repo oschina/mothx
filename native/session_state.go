@@ -193,6 +193,11 @@ func (a *nativeApp) setSessionRunLocal(sessionID, status string, active bool) {
 			}
 			sessions[i].Meta.LastRun.Active = active
 			sessions[i].Meta.LastRun.Status = status
+			if !active {
+				// A terminal run_status invalidates the full ownership snapshot;
+				// the next list refresh restores any still-busy transition state.
+				sessions[i].Meta.Execution = nil
+			}
 		}
 	}
 	update(a.sessions)

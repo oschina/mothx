@@ -311,10 +311,10 @@ desktop-dist-dev-linux:
 	cd desktop && npm run dist:dev:linux
 
 native-build:
-	$(MAKE) -C native build
+	$(MAKE) -C native build VERSION=$(VERSION)
 
 native-dev:
-	$(MAKE) -C native dev
+	$(MAKE) -C native dev VERSION=$(VERSION)
 
 native-test:
 	$(MAKE) -C native test
@@ -326,16 +326,16 @@ native-fmt:
 	$(MAKE) -C native fmt
 
 native-dist:
-	$(MAKE) -C native dist
+	$(MAKE) -C native dist VERSION=$(VERSION)
 
 native-dist-linux:
-	$(MAKE) -C native dist-linux
+	$(MAKE) -C native dist-linux VERSION=$(VERSION)
 
 native-dist-darwin:
-	$(MAKE) -C native dist-darwin
+	$(MAKE) -C native dist-darwin VERSION=$(VERSION)
 
 native-dist-windows:
-	$(MAKE) -C native dist-windows
+	$(MAKE) -C native dist-windows VERSION=$(VERSION)
 
 native-clean:
 	$(MAKE) -C native clean

@@ -126,6 +126,15 @@ func (m *Manager) MigrateToEventStoreOutcome(ctx context.Context) (MigrationOutc
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	m.mu.RLock()
+	partial := m.partial
+	m.mu.RUnlock()
+	if partial {
+		// A tail-open Manager deliberately does not hold canonical replay state.
+		// Attach must not converge, index, or retire content from a partial view;
+		// the first prompt Reloads fully and then runs this migration.
+		return MigrationNotNeeded, nil
+	}
 	m.mu.Lock()
 	subAgent := m.subAgent
 	convergedOnOpen := m.eventStoreConverged

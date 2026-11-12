@@ -38,6 +38,8 @@ var (
 	iconStop         = svg(`<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/>`)
 	iconPaperclip    = svg(`<path d="m20 11-8.5 8.5a5 5 0 0 1-7-7L13 4a3.4 3.4 0 0 1 4.8 4.8l-8.5 8.5a1.8 1.8 0 0 1-2.5-2.5l8-8"/>`)
 	iconX            = svg(`<path d="M6 6l12 12M18 6 6 18"/>`)
+	iconMinimize     = svg(`<path d="M5 12h14"/>`)
+	iconMaximize     = svg(`<rect x="6" y="6" width="12" height="12" rx="1"/>`)
 	iconWrench       = svg(`<path d="M14.5 6.5a4 4 0 0 0-5.2 5.2L4 17l3 3 5.3-5.3a4 4 0 0 0 5.2-5.2l-2.4 2.4-2.9-.6-.6-2.9z"/>`)
 	iconTerminal     = svg(`<path d="m5 7 5 5-5 5M13 17h6"/>`)
 	iconFile         = svg(`<path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/>`)

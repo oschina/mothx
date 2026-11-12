@@ -16,6 +16,9 @@ import (
 const (
 	sessionPageAll       = "all"
 	sessionPageUngrouped = "ungrouped"
+	// The sidebar shows a short first page; each branch then loads more on
+	// demand instead of materializing the whole catalog at startup.
+	sidebarSessionPageSize = 15
 )
 
 type sessionPageStatus struct {
@@ -205,6 +208,7 @@ func (a *nativeApp) loadSessionScopePage(key, scope, projectID, cursor string, a
 		a.setSessionPage(page)
 	})
 	params := buildHistoryListRequest(scope, projectID, "", cursor)
+	params["limit"] = sidebarSessionPageSize
 	raw, err := client.call("mothx/session/listAll", params)
 	a.dispatch(func() {
 		if seq != atomic.LoadInt64(&a.sessionCatalogSeq) || startReloadSeq != atomic.LoadInt64(&a.reloadSeq) {

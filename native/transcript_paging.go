@@ -9,7 +9,7 @@ import (
 // returns a bounded page of canonical session updates and an older cursor;
 // this client only replays them through the same reducer as live updates.
 
-const transcriptPageSize = 40
+const transcriptPageSize = 15
 
 func (a *nativeApp) transcriptPagingEnabled() bool {
 	return a.featureEnabled("sessionHistoryPaging")
@@ -26,15 +26,18 @@ func (a *nativeApp) applyTranscriptPage(sessionID string, page *transcriptPageRe
 		sessionID = a.currentSession
 	}
 	if !prepend {
+		a.replayingHistory = true
 		for _, update := range page.Updates {
 			a.applyUpdate(sessionUpdateNotification{SessionID: sessionID, Update: update})
 		}
+		a.replayingHistory = false
 		a.transcriptNextCursor = page.NextCursor
 		return
 	}
 	temp := &nativeApp{
-		currentSession: sessionID,
-		messageIndex:   make(map[string]*chatMessage),
+		currentSession:   sessionID,
+		messageIndex:     make(map[string]*chatMessage),
+		replayingHistory: true,
 	}
 	for _, update := range page.Updates {
 		temp.applyUpdate(sessionUpdateNotification{SessionID: sessionID, Update: update})
@@ -45,9 +48,15 @@ func (a *nativeApp) applyTranscriptPage(sessionID string, page *transcriptPageRe
 	}
 	older := make([]*chatMessage, 0, len(temp.messages))
 	for _, message := range temp.messages {
-		if !existing[message.ID] {
-			older = append(older, message)
+		if existing[message.ID] {
+			continue
 		}
+		// Older pages are entirely history: a reasoning block that ends the
+		// page has already finished streaming, even without a following event.
+		if message.Kind == messageThought {
+			message.Done = true
+		}
+		older = append(older, message)
 	}
 	if len(older) > 0 {
 		a.messages = append(older, a.messages...)

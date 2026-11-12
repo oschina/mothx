@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -184,6 +186,162 @@ func TestChatViewRendersMessages(t *testing.T) {
 	}
 	if !tt.HasText("你好，这是") {
 		t.Fatalf("assistant markdown missing: %q", tt.Texts())
+	}
+}
+
+func TestNativeWindowOptionsHideSystemTitleBar(t *testing.T) {
+	old := nativeIsMac
+	t.Cleanup(func() { nativeIsMac = old })
+
+	nativeIsMac = true
+	mac := nativeWindowOptions()
+	if mac.TitleBarStyle != mygo.TitleBarHidden {
+		t.Fatalf("macOS title bar style = %q, want hidden", mac.TitleBarStyle)
+	}
+	if mac.HideWindowButtons {
+		t.Fatal("macOS must keep native traffic lights")
+	}
+	if mac.TrafficLightPosition == nil || mac.TrafficLightPosition.X != 12 || mac.TrafficLightPosition.Y != 12 {
+		t.Fatalf("macOS traffic light position = %+v", mac.TrafficLightPosition)
+	}
+
+	nativeIsMac = false
+	other := nativeWindowOptions()
+	if other.TitleBarStyle != mygo.TitleBarHidden {
+		t.Fatalf("non-macOS title bar style = %q, want hidden", other.TitleBarStyle)
+	}
+	if !other.HideWindowButtons {
+		t.Fatal("non-macOS must draw its own window controls")
+	}
+	if other.TitleBarHeight != nativeTitleBarHeightOther {
+		t.Fatalf("non-macOS title bar height = %d, want %d", other.TitleBarHeight, nativeTitleBarHeightOther)
+	}
+}
+
+func TestTitleBarDistinguishesMacAndOtherPlatforms(t *testing.T) {
+	old := nativeIsMac
+	t.Cleanup(func() { nativeIsMac = old })
+
+	nativeIsMac = false
+	a := testApp()
+	a.dark = true
+	tester := ui.NewTester(a.view, 1180, 760)
+	if !tester.HasText("MothX") {
+		t.Fatalf("title bar brand missing: %q", tester.Texts())
+	}
+	if _, ok := tester.Find("最小化"); !ok {
+		t.Fatal("non-macOS title bar must draw a minimize control")
+	}
+	if _, ok := tester.Find("最大化"); !ok {
+		t.Fatal("non-macOS title bar must draw a maximize control")
+	}
+	if _, ok := tester.Find("关闭窗口"); !ok {
+		t.Fatal("non-macOS title bar must draw a close control")
+	}
+
+	nativeIsMac = true
+	a = testApp()
+	a.dark = true
+	tester = ui.NewTester(a.view, 1180, 760)
+	tester.SetTitleBar(ui.TitleBar{Height: nativeTitleBarHeightMac, Left: 78})
+	if !tester.HasText("Make OSCHINA Tokens Harness eXecution") {
+		t.Fatalf("macOS title bar tagline missing: %q", tester.Texts())
+	}
+	if _, ok := tester.Find("关闭窗口"); ok {
+		t.Fatal("macOS must use native traffic lights, not drawn controls")
+	}
+	brand, ok := tester.Find("MothX")
+	if !ok || brand.X < 70 {
+		t.Fatalf("macOS title bar did not clear the traffic lights: %+v (%v)", brand, ok)
+	}
+}
+
+func TestVersionFollowsRuntimeAndStripsTagPrefix(t *testing.T) {
+	a := testApp()
+	if got := a.version(); got != strings.TrimPrefix(nativeBuildVersion, "v") {
+		t.Fatalf("version before connecting = %q, want build version %q", got, nativeBuildVersion)
+	}
+	a.runtimeVersion = "v1.3.108"
+	if got := a.version(); got != "1.3.108" {
+		t.Fatalf("version = %q, want 1.3.108", got)
+	}
+	a.dark = true
+	tt := ui.NewTester(a.view, 1180, 760)
+	if !tt.HasText("v1.3.108") {
+		t.Fatalf("title bar did not follow the runtime version: %q", tt.Texts())
+	}
+}
+
+func TestGlobeButtonTogglesLocale(t *testing.T) {
+	setLocale("zh")
+	t.Cleanup(func() { setLocale("zh") })
+	a := testApp()
+	a.dark = true
+	tester := ui.NewTester(a.view, 1180, 760)
+	if _, ok := tester.Find("切换语言"); !ok {
+		t.Fatalf("language globe missing: %q", tester.Texts())
+	}
+	if err := tester.Click("切换语言"); err != nil {
+		t.Fatalf("click language globe: %v", err)
+	}
+	if currentLocale() != "en" {
+		t.Fatalf("locale after globe click = %q, want en", currentLocale())
+	}
+	if _, ok := tester.Find("Switch language"); !ok {
+		t.Fatalf("globe tooltip did not follow the locale: %q", tester.Texts())
+	}
+}
+
+func TestLocalePreferenceRoundTrip(t *testing.T) {
+	setLocale("zh")
+	t.Cleanup(func() { setLocale("zh") })
+	a := testApp()
+	a.prefsPath = filepath.Join(t.TempDir(), nativePreferencesFile)
+	setLocale("en")
+	a.saveNativePreferences()
+	prefs, ok := loadNativePreferences(a.prefsPath)
+	if !ok || prefs.Locale != "en" {
+		t.Fatalf("saved locale preference = %+v", prefs)
+	}
+	setLocale("zh")
+	restored := testApp()
+	restored.prefsPath = a.prefsPath
+	restored.applyNativePreferences(prefs)
+	if currentLocale() != "en" {
+		t.Fatalf("restored locale = %q, want en", currentLocale())
+	}
+}
+
+func TestThoughtHeaderShowsElapsedTime(t *testing.T) {
+	a := testApp()
+	a.dark = true
+	a.currentSession = "s1"
+	a.currentTitle = "思考"
+	a.messages = []*chatMessage{
+		{ID: "t", Kind: messageThought, Text: "reasoning", Done: true, Collapsed: true, ThoughtDuration: 12 * time.Second},
+	}
+	a.messageIndex = map[string]*chatMessage{"t": a.messages[0]}
+	tt := ui.NewTester(a.view, 1180, 760)
+	if !tt.HasText("已思考 · 12s") {
+		t.Fatalf("thought header missing elapsed time: %q", tt.Texts())
+	}
+}
+
+func TestFormatThoughtDuration(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{40 * time.Millisecond, "<0.1s"},
+		{450 * time.Millisecond, "0.5s"},
+		{12 * time.Second, "12s"},
+		{time.Minute, "1m"},
+		{65 * time.Second, "1m 05s"},
+	}
+	for _, tc := range cases {
+		if got := formatThoughtDuration(tc.in); got != tc.want {
+			t.Errorf("formatThoughtDuration(%v) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -430,7 +588,7 @@ func TestSettingsLocalPagesAreReal(t *testing.T) {
 
 	a.setSettingsTab("about")
 	tt.Frame()
-	if !tt.HasText("关于 MothX Native") || !tt.HasText(nativeVersion) {
+	if !tt.HasText("关于 MothX Native") || !tt.HasText(a.version()) {
 		t.Fatalf("about page missing version or connection info: %q", tt.Texts())
 	}
 }

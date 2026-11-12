@@ -78,6 +78,12 @@ type Manager struct {
 	// unconverged and a Reload clears both so the reload converges again.
 	eventStoreConverged            bool
 	eventStoreConvergedFingerprint string
+	// partial marks a Manager opened from the EventStore tail for history
+	// display only. Bindings are served from the persisted display projection
+	// and the first write/replay path must call Reload before using transcript
+	// state. A partial Manager never owns canonical replay authority.
+	partial          bool
+	bindingOverrides *SessionBindings
 }
 
 type replayState struct {
@@ -188,6 +194,8 @@ func (m *Manager) reloadLocked(ctx context.Context) error {
 		m.header, m.entries, m.leafID, m.cwd = oldHeader, oldEntries, oldLeaf, oldCwd
 		return err
 	}
+	m.partial = false
+	m.bindingOverrides = nil
 	return nil
 }
 
@@ -949,29 +957,11 @@ func LatestSessionBindings(sessionDir string, sessionIDs []string) (map[string]S
 	for _, sessionID := range eventStoreIDs {
 		if state, ok := loadEventStoreDisplay(sessionDir, sessionID); ok {
 			result[sessionID] = state.Bindings
-			continue
 		}
-		manager, err := OpenByIDExact(sessionDir, sessionID)
-		if err != nil {
-			continue
-		}
-		state := SessionBindings{}
-		if entry, ok := manager.GetLatestModelChange(); ok {
-			state.ModelChange, state.HasModelChange = entry, true
-		}
-		if entry, ok := manager.GetLatestModeChange(); ok {
-			state.ModeChange, state.HasModeChange = entry, true
-		}
-		if entry, ok := manager.GetLatestRouterBinding(); ok {
-			state.RouterBinding, state.HasRouterBinding = entry, true
-		}
-		if entry, ok := manager.GetLatestThinkingLevelChange(); ok {
-			state.ThinkingLevelChange, state.HasThinkingLevelChange = entry, true
-		}
-		if entry, ok := manager.GetLatestAdditionalDirectories(); ok {
-			state.AdditionalDirectories, state.HasAdditionalDirectories = entry, true
-		}
-		result[sessionID] = state
+		// A missing derived row is repaired by the bounded background backfill.
+		// The list path must never open the canonical EventStore just to read
+		// display bindings: that is exactly the page-scoped read this projection
+		// exists to avoid.
 	}
 	return result, nil
 }
@@ -1668,6 +1658,9 @@ func (m *Manager) GetLatestCompaction() (CompactionEntry, bool) {
 func (m *Manager) GetLatestModelChange() (ModelChangeEntry, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.bindingOverrides != nil && m.bindingOverrides.HasModelChange {
+		return m.bindingOverrides.ModelChange, true
+	}
 	for i := len(m.entries) - 1; i >= 0; i-- {
 		if entry, ok := m.entries[i].(ModelChangeEntry); ok {
 			return entry, true
@@ -1680,6 +1673,9 @@ func (m *Manager) GetLatestModelChange() (ModelChangeEntry, bool) {
 func (m *Manager) GetLatestModeChange() (ModeChangeEntry, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.bindingOverrides != nil && m.bindingOverrides.HasModeChange {
+		return m.bindingOverrides.ModeChange, true
+	}
 	for i := len(m.entries) - 1; i >= 0; i-- {
 		if entry, ok := m.entries[i].(ModeChangeEntry); ok {
 			return entry, true
@@ -1692,6 +1688,9 @@ func (m *Manager) GetLatestModeChange() (ModeChangeEntry, bool) {
 func (m *Manager) GetLatestRouterBinding() (RouterBindingEntry, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.bindingOverrides != nil && m.bindingOverrides.HasRouterBinding {
+		return m.bindingOverrides.RouterBinding, true
+	}
 	for i := len(m.entries) - 1; i >= 0; i-- {
 		if entry, ok := m.entries[i].(RouterBindingEntry); ok {
 			return entry, true
@@ -1704,6 +1703,9 @@ func (m *Manager) GetLatestRouterBinding() (RouterBindingEntry, bool) {
 func (m *Manager) GetLatestThinkingLevelChange() (ThinkingLevelChangeEntry, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.bindingOverrides != nil && m.bindingOverrides.HasThinkingLevelChange {
+		return m.bindingOverrides.ThinkingLevelChange, true
+	}
 	for i := len(m.entries) - 1; i >= 0; i-- {
 		if entry, ok := m.entries[i].(ThinkingLevelChangeEntry); ok {
 			return entry, true
@@ -1717,6 +1719,11 @@ func (m *Manager) GetLatestThinkingLevelChange() (ThinkingLevelChangeEntry, bool
 func (m *Manager) GetLatestAdditionalDirectories() (AdditionalDirectoriesEntry, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.bindingOverrides != nil && m.bindingOverrides.HasAdditionalDirectories {
+		entry := m.bindingOverrides.AdditionalDirectories
+		entry.Directories = append([]string(nil), entry.Directories...)
+		return entry, true
+	}
 	for i := len(m.entries) - 1; i >= 0; i-- {
 		if entry, ok := m.entries[i].(AdditionalDirectoriesEntry); ok {
 			entry.Directories = append([]string(nil), entry.Directories...)
@@ -1743,6 +1750,14 @@ func (m *Manager) GetFile() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.file
+}
+
+// Partial reports whether this Manager currently holds only tail history for
+// display. Callers that need canonical replay or an append must Reload first.
+func (m *Manager) Partial() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.partial
 }
 
 // GetSessionDir returns the root directory containing this manager's shared
@@ -2440,20 +2455,75 @@ func (m *Manager) inspectCommittedEventEntries(ctx context.Context, sessionID st
 	// ReadCommittedEventBatches, which would rescan (and re-digest) every
 	// event-store segment a second time on every session open.
 	batches := committedEventBatches(inspection)
-	entries := make([]interface{}, 0)
-	for _, batch := range batches {
-		for _, event := range batch.Events {
+	entries, err := decodeCommittedEventBatches(batches)
+	if err != nil {
+		return committedEventView{}, err
+	}
+	return committedEventView{entries: entries, batches: batches, useEventStore: true}, nil
+}
+
+// decodeCommittedEventBatches decodes independent committed batches in
+// parallel while preserving their canonical order. JSON decoding dominates the
+// open cost for long EventStore sessions; the batch boundary is the natural
+// unit because each batch's events are already ordered and contiguous.
+func decodeCommittedEventBatches(batches []EventBatch) ([]interface{}, error) {
+	if len(batches) == 0 {
+		return nil, nil
+	}
+	decoded := make([][]interface{}, len(batches))
+	errs := make([]error, len(batches))
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 4 {
+		workers = 4
+	}
+	if workers > len(batches) {
+		workers = len(batches)
+	}
+	decodeBatch := func(index int) {
+		batchEntries := make([]interface{}, 0, len(batches[index].Events))
+		for _, event := range batches[index].Events {
 			entry, err := DecodeEventRecord(event)
 			if err != nil {
-				return committedEventView{}, err
+				errs[index] = err
+				return
 			}
 			if _, ok := entry.(Header); ok {
 				continue
 			}
-			entries = append(entries, entry)
+			batchEntries = append(batchEntries, entry)
 		}
+		decoded[index] = batchEntries
 	}
-	return committedEventView{entries: entries, batches: batches, useEventStore: true}, nil
+	if workers <= 1 {
+		for index := range batches {
+			decodeBatch(index)
+		}
+	} else {
+		jobs := make(chan int)
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for worker := 0; worker < workers; worker++ {
+			go func() {
+				defer wg.Done()
+				for index := range jobs {
+					decodeBatch(index)
+				}
+			}()
+		}
+		for index := range batches {
+			jobs <- index
+		}
+		close(jobs)
+		wg.Wait()
+	}
+	entries := make([]interface{}, 0)
+	for index := range batches {
+		if errs[index] != nil {
+			return nil, errs[index]
+		}
+		entries = append(entries, decoded[index]...)
+	}
+	return entries, nil
 }
 
 // sessionChildTables lists every session_id-keyed child table of sessions,
@@ -3266,6 +3336,65 @@ func ListAllDetailed(sessionDir string, opts ...ListOption) ([]SessionDetail, er
 		return nil, err
 	}
 	return buildSessionDetails(sessions, options.skipEventStorePreview)
+}
+
+// ListAllDetailedQueryPage returns one query-filtered catalog page without
+// materializing every candidate's detail. Matching runs on the same cheap
+// fields the ACP global catalog used before: session identity/location, the
+// persisted display projection (title/preview), the project name, and legacy
+// session_info/first-user-message payloads. Only the returned page is expanded
+// through buildSessionDetails; callers fill EventStore previews for that page
+// afterwards.
+//
+// fallback is true when the SQL projection cannot answer the query correctly,
+// currently when an EventStore session still lacks its display projection.
+// Callers must then use the legacy full-detail filter so a missing derived row
+// cannot silently hide a title or preview match.
+func ListAllDetailedQueryPage(sessionDir, query string, limit, offset int, opts ...ListOption) (details []SessionDetail, hasMore bool, fallback bool, err error) {
+	if sessionDir == "" {
+		sessionDir = platform.SessionDir()
+	}
+	var options listOptions
+	for _, fn := range opts {
+		fn(&options)
+	}
+	cwds, err := resolveListCWDs(sessionDir, options)
+	if err != nil {
+		return nil, false, false, err
+	}
+	db, ok, err := openExistingSessionDB(sessionDir)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if !ok {
+		return nil, false, false, nil
+	}
+	unprojected, err := dao.NewSessionDisplayProjectionDAO(db.Bun()).
+		UnprojectedEventStoreSessionIDs(context.Background(), db.Bun(), 1)
+	if err != nil || len(unprojected) > 0 {
+		return nil, false, true, nil
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	records, err := dao.NewSessionDAO(db.Bun()).
+		ListCatalogPage(context.Background(), listSQLFilter(options, cwds), strings.TrimSpace(query), limit+1, offset)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if len(records) > limit {
+		hasMore = true
+		records = records[:limit]
+	}
+	if len(records) == 0 {
+		return nil, hasMore, false, nil
+	}
+	infos := sessionInfosFromRecords(sessionDir, records)
+	details, err = buildSessionDetails(infos, true)
+	if err != nil {
+		return nil, false, false, err
+	}
+	return details, hasMore, false, nil
 }
 
 // FillSessionDetailPreviews loads EventStore preview/title projection for a

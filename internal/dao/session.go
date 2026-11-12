@@ -3,6 +3,7 @@ package dao
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"github.com/uptrace/bun"
 )
@@ -413,6 +414,48 @@ func (d *SessionDAO) List(ctx context.Context, filter SessionListFilter) ([]Sess
 	}
 	if filter.Offset > 0 {
 		q.Offset(filter.Offset)
+	}
+	if err := q.Scan(ctx, &rows); err != nil {
+		return nil, err
+	}
+	return sessionRecordsFromRows(rows), nil
+}
+
+// ListCatalogPage filters and paginates the session catalog by the same
+// cheap fields a list row already projects. It never reads per-session detail
+// (preview, message count, bindings) and never opens an EventStore: callers use
+// it to find one query page first and then materialize details only for that
+// page.
+func (d *SessionDAO) ListCatalogPage(ctx context.Context, filter SessionListFilter, query string, limit, offset int) ([]SessionRecord, error) {
+	var rows []sessionListRow
+	filter.Limit, filter.Offset, filter.Search = 0, 0, ""
+	q := d.db.NewSelect().TableExpr("sessions AS s").ColumnExpr(sessionListColumns)
+	applySessionListFilter(q, filter)
+	if needle := strings.ToLower(strings.TrimSpace(query)); needle != "" {
+		q.Where(`(
+			instr(lower(s.id), ?) > 0
+			OR instr(lower(s.cwd), ?) > 0
+			OR EXISTS (SELECT 1 FROM session_display_projection d
+				WHERE d.session_id = s.id AND (instr(lower(d.title), ?) > 0 OR instr(lower(d.preview), ?) > 0))
+			OR EXISTS (SELECT 1 FROM session_metadata m JOIN projects p ON p.id = m.project_id
+				WHERE m.session_id = s.id AND instr(lower(p.name), ?) > 0)
+			OR EXISTS (SELECT 1 FROM entries e
+				WHERE e.session_id = s.id AND e.type = 'session_info'
+					AND e.seq = (SELECT MAX(e2.seq) FROM entries e2 WHERE e2.session_id = s.id AND e2.type = 'session_info')
+					AND instr(lower(json_extract(e.data, '$.name')), ?) > 0)
+			OR EXISTS (SELECT 1 FROM entries e
+				WHERE e.session_id = s.id AND e.type = 'message'
+					AND e.seq = (SELECT MIN(e2.seq) FROM entries e2 WHERE e2.session_id = s.id AND e2.type = 'message')
+					AND json_extract(e.data, '$.message.role') = 'user'
+					AND instr(lower(e.data), ?) > 0)
+		)`, needle, needle, needle, needle, needle, needle, needle)
+	}
+	q.OrderExpr("last_active_at DESC, s.id ASC")
+	if limit > 0 {
+		q.Limit(limit)
+	}
+	if offset > 0 {
+		q.Offset(offset)
 	}
 	if err := q.Scan(ctx, &rows); err != nil {
 		return nil, err

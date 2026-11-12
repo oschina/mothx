@@ -343,3 +343,74 @@ func TestHistoryProjectIDJSONCompatibility(t *testing.T) {
 		t.Fatalf("string projectId decoded as %q", sessionProjectID(s))
 	}
 }
+
+func TestHistorySessionStatusUsesExecutionSnapshot(t *testing.T) {
+	cases := []struct{ state, want string }{
+		{"reserved", "Session 正被占用"},
+		{"local", "正在此进程执行"},
+		{"external", "正在另一进程执行"},
+		{"detached_remote", "远端任务仍在执行"},
+		{"orphaned", "正在恢复遗留执行"},
+		{"recovery_failed", "遗留执行恢复失败"},
+		{"inconsistent", "正在确认执行状态"},
+		{"unknown", "无法确认执行状态"},
+	}
+	for _, tc := range cases {
+		s := listedSession{Meta: sessionMeta{Execution: &executionState{State: tc.state}}}
+		if got := historySessionStatus(s); got != tc.want {
+			t.Errorf("execution state %q = %q, want %q", tc.state, got, tc.want)
+		}
+	}
+	// The ownership snapshot wins over the durable lastRun status.
+	s := listedSession{Meta: sessionMeta{
+		Execution: &executionState{State: "external"},
+		LastRun:   &sessionLastRun{Active: true, Status: "running"},
+	}}
+	if got := historySessionStatus(s); got != "正在另一进程执行" {
+		t.Fatalf("status = %q, want execution label", got)
+	}
+	// An idle snapshot falls back to the durable lastRun projection.
+	s = listedSession{Meta: sessionMeta{
+		Execution: &executionState{State: "idle"},
+		LastRun:   &sessionLastRun{Status: "completed"},
+	}}
+	if got := historySessionStatus(s); got != "已完成" {
+		t.Fatalf("idle execution status = %q, want lastRun label", got)
+	}
+}
+
+func TestSessionListDecodesExecutionSnapshot(t *testing.T) {
+	const raw = `{"sessions":[{"sessionId":"s1","_meta":{"lastRun":{"active":true,"status":"running"},"execution":{"sessionId":"s1","state":"external","running":true,"busy":true,"canSubmit":false,"canCancelLocal":false,"canCancelRemote":true,"ownerScope":"external"}}}]}`
+	var result sessionListResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	exec := result.Sessions[0].Meta.Execution
+	if exec == nil || exec.State != "external" || !exec.Running || !exec.Busy || !exec.CanCancelRemote {
+		t.Fatalf("execution snapshot = %+v", exec)
+	}
+	if got := historySessionStatus(result.Sessions[0]); got != "正在另一进程执行" {
+		t.Fatalf("history status = %q", got)
+	}
+}
+
+func TestHistoryRowShowsAnotherProcessExecution(t *testing.T) {
+	setLocale("zh")
+	t.Cleanup(func() { setLocale("zh") })
+	a := historyTestApp(t)
+	a.historyPanel.Sessions[1].Meta.Execution = &executionState{State: "external", Running: true, Busy: true}
+	tt := ui.NewTester(a.view, 1180, 900)
+	if !textPresent(tt, "正在另一进程执行") {
+		t.Fatalf("history row missing cross-process status: %q", tt.Texts())
+	}
+	setLocale("en")
+	tt.Frame()
+	if !textPresent(tt, "Running in another process") {
+		t.Fatalf("English history row missing cross-process status: %q", tt.Texts())
+	}
+
+	a.setSessionRunLocal("s2", "completed", false)
+	if a.historyPanel.Sessions[1].Meta.Execution != nil {
+		t.Fatal("terminal runs must clear the stale execution snapshot")
+	}
+}

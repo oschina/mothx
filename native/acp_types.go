@@ -61,13 +61,15 @@ type transcriptPageResult struct {
 }
 
 type executionState struct {
-	SessionID      string `json:"sessionId"`
-	State          string `json:"state"`
-	Running        bool   `json:"running"`
-	Busy           bool   `json:"busy"`
-	CanSubmit      bool   `json:"canSubmit"`
-	CanCancelLocal bool   `json:"canCancelLocal"`
-	Source         string `json:"source"`
+	SessionID       string `json:"sessionId"`
+	State           string `json:"state"`
+	Running         bool   `json:"running"`
+	Busy            bool   `json:"busy"`
+	CanSubmit       bool   `json:"canSubmit"`
+	CanCancelLocal  bool   `json:"canCancelLocal"`
+	CanCancelRemote bool   `json:"canCancelRemote"`
+	OwnerScope      string `json:"ownerScope,omitempty"`
+	Source          string `json:"source"`
 }
 
 type draftConfigResult struct {
@@ -93,6 +95,7 @@ type sessionMeta struct {
 	Pinned       bool            `json:"pinned,omitempty"`
 	ProjectID    any             `json:"projectId,omitempty"`
 	LastRun      *sessionLastRun `json:"lastRun,omitempty"`
+	Execution    *executionState `json:"execution,omitempty"`
 }
 
 type sessionLastRun struct {

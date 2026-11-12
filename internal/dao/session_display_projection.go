@@ -54,9 +54,11 @@ func (d *SessionDisplayProjectionDAO) DeleteSession(ctx context.Context, executo
 	return err
 }
 
-// UnprojectedEventStoreSessionIDs returns EventStore sessions with messages
-// that do not have a display projection yet, newest first. Legacy sessions are
-// excluded: their list rows already come from indexed SQLite queries.
+// UnprojectedEventStoreSessionIDs returns EventStore sessions with list-visible
+// content that do not have a display projection yet, newest first. Legacy
+// sessions are excluded: their list rows already come from indexed SQLite
+// queries. A title-only session still needs the row, because the catalog can
+// match its title even without a message preview.
 func (d *SessionDisplayProjectionDAO) UnprojectedEventStoreSessionIDs(ctx context.Context, executor bun.IDB, limit int) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -67,7 +69,7 @@ func (d *SessionDisplayProjectionDAO) UnprojectedEventStoreSessionIDs(ctx contex
 	err := executor.NewRaw(`SELECT s.id
 		FROM sessions AS s
 		WHERE s.content_store = 'event_store'
-		AND EXISTS (SELECT 1 FROM session_event_projections p WHERE p.session_id = s.id AND p.type = 'message')
+		AND EXISTS (SELECT 1 FROM session_event_projections p WHERE p.session_id = s.id AND p.type IN ('message', 'session_info'))
 		AND NOT EXISTS (SELECT 1 FROM session_display_projection d WHERE d.session_id = s.id)
 		ORDER BY s.timestamp DESC
 		LIMIT ?`, limit).Scan(ctx, &rows)

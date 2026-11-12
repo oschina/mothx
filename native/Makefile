@@ -8,6 +8,8 @@ MYGO ?= $(GO) tool mygo
 OUT ?= build
 BIN ?= $(OUT)/mothx-native
 CGO_ENABLED ?= 0
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
+NATIVE_LDFLAGS ?= -s -w -X main.nativeBuildVersion=$(VERSION)
 export CGO_ENABLED
 
 .DEFAULT_GOAL := help
@@ -35,14 +37,14 @@ help:
 	@echo "or the repository's ../bin/mothx fallback."
 
 dev:
-	$(GO) run .
+	$(GO) run -ldflags "$(NATIVE_LDFLAGS)" .
 
 run: dev
 
 build:
 	@mkdir -p $(OUT)
 	$(GO) build -trimpath -tags mygo_noinspector \
-		-ldflags "-s -w" -o $(BIN) .
+		-ldflags "$(NATIVE_LDFLAGS)" -o $(BIN) .
 
 test:
 	$(GO) test ./...
@@ -61,16 +63,16 @@ tidy:
 	$(GO) mod tidy
 
 dist:
-	$(MYGO) build
+	MYGO_LDFLAGS="-X main.nativeBuildVersion=$(VERSION)" $(MYGO) build
 
 dist-linux:
-	$(MYGO) build -platform linux/amd64
+	MYGO_LDFLAGS="-X main.nativeBuildVersion=$(VERSION)" $(MYGO) build -platform linux/amd64
 
 dist-darwin:
-	$(MYGO) build -platform darwin/universal
+	MYGO_LDFLAGS="-X main.nativeBuildVersion=$(VERSION)" $(MYGO) build -platform darwin/universal
 
 dist-windows:
-	$(MYGO) build -platform windows/amd64
+	MYGO_LDFLAGS="-X main.nativeBuildVersion=$(VERSION)" $(MYGO) build -platform windows/amd64
 
 clean:
 	rm -rf $(OUT)

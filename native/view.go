@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -104,23 +105,26 @@ func (a *nativeApp) applyTheme(c *ui.Context) palette {
 func (a *nativeApp) view(c *ui.Context) {
 	p := a.applyTheme(c)
 	bar := c.TitleBar()
-	ui.Row(c).Fill().Background(p.t.Background).Children(func() {
-		if a.sidebar {
-			a.sidebarView(c, p, bar)
-		}
-		if a.settingsOpen {
-			a.settingsPage(c, p, bar)
-		} else if a.historyOpen {
-			a.historyView(c, p, bar)
-		} else if a.page == "skills" {
-			a.skillsPage(c, p, bar)
-		} else if a.page == "automation" {
-			a.automationPage(c, p, bar)
-		} else if a.page == "library" {
-			a.libraryPage(c, p, bar)
-		} else {
-			a.mainView(c, p, bar)
-		}
+	ui.Column(c).Fill().Background(p.t.Background).Children(func() {
+		a.titleBar(c, p, bar)
+		ui.Row(c).Grow(1).Children(func() {
+			if a.sidebar {
+				a.sidebarView(c, p)
+			}
+			if a.settingsOpen {
+				a.settingsPage(c, p)
+			} else if a.historyOpen {
+				a.historyView(c, p)
+			} else if a.page == "skills" {
+				a.skillsPage(c, p)
+			} else if a.page == "automation" {
+				a.automationPage(c, p)
+			} else if a.page == "library" {
+				a.libraryPage(c, p)
+			} else {
+				a.mainView(c, p)
+			}
+		})
 	})
 	if a.previewOpen {
 		a.artifactPreviewDialog(c, p)
@@ -155,14 +159,95 @@ func (a *nativeApp) view(c *ui.Context) {
 	a.toastView(c, p)
 }
 
-func (a *nativeApp) sidebarView(c *ui.Context, p palette, bar ui.TitleBar) {
+// titleBar draws the window chrome instead of the system title bar. It follows
+// Desktop's projection: macOS keeps its native traffic lights and centers the
+// tagline, while other platforms get app-drawn window controls.
+func (a *nativeApp) titleBar(c *ui.Context, p palette, bar ui.TitleBar) {
+	height := float32(nativeTitleBarHeightOther)
+	left := float32(12)
+	if nativeIsMac {
+		height = nativeTitleBarHeightMac
+		if bar.Height > height {
+			height = bar.Height
+		}
+		left = bar.Left
+		if left < 78 {
+			left = 78
+		}
+	}
+	ui.Row(c).Height(height).Padding(0, 0, 0, left).AlignItems(ui.Center).Gap(8).
+		Background(p.sidebar).BorderWidth(0, 0, 1, 0).BorderColor(p.t.Border).
+		DragWindow().Children(func() {
+		mothxLogoView(c, 20)
+		ui.Text(c, "MothX").FontSize(12.5).FontWeight(600).TextColor(p.t.Text)
+		ui.Box(c).Padding(1, 6).Radius(6).Background(p.hover).Children(func() {
+			ui.Text(c, "v"+a.version()).FontSize(10).TextColor(p.t.TextMuted)
+		})
+		ui.Spacer(c)
+		if nativeIsMac {
+			ui.Row(c).Absolute().Left(0).Right(0).Top(0).Bottom(0).
+				Justify(ui.Center).AlignItems(ui.Center).
+				HitTest(func(x, y float32, r ui.Rect) bool { return false }).Children(func() {
+				ui.Text(c, "Make OSCHINA Tokens Harness eXecution").
+					FontSize(12).LetterSpacing(0.2).TextColor(p.t.TextMuted).SingleLine()
+			})
+			return
+		}
+		ui.Row(c).Height(height).Gap(0).AlignItems(ui.Center).Children(func() {
+			a.windowControlButton(c, p, "titlebar-minimize", iconMinimize, "最小化", height, false, a.minimizeWindow)
+			a.windowControlButton(c, p, "titlebar-maximize", iconMaximize, "最大化", height, false, a.toggleMaximizeWindow)
+			a.windowControlButton(c, p, "titlebar-close", iconX, "关闭窗口", height, true, a.closeWindow)
+		})
+	})
+}
+
+func (a *nativeApp) windowControlButton(c *ui.Context, p palette, key string, icon *ui.SVG, label string, height float32, danger bool, action func()) {
+	b := ui.ButtonBase(c.Key(key)).Width(46).Height(height).Justify(ui.Center).AlignItems(ui.Center)
+	hovered := b.Hovered()
+	if hovered {
+		if danger {
+			b.Background(ui.Hex("#e81123"))
+		} else {
+			b.Background(p.hover)
+		}
+	}
+	b.Children(func() {
+		color := p.t.TextMuted
+		if hovered {
+			color = p.t.Text
+			if danger {
+				color = ui.Hex("#ffffff")
+			}
+		}
+		ui.Icon(c, icon).FontSize(13).TextColor(color)
+	})
+	b.Label(T(label)).Tooltip(T(label))
+	if b.Clicked() {
+		action()
+	}
+}
+
+func (a *nativeApp) minimizeWindow() {
+	if a.win != nil {
+		a.win.Minimize()
+	}
+}
+
+func (a *nativeApp) toggleMaximizeWindow() {
+	if a.win != nil {
+		a.win.ToggleMaximize()
+	}
+}
+
+func (a *nativeApp) closeWindow() {
+	if a.win != nil {
+		a.win.Close()
+	}
+}
+
+func (a *nativeApp) sidebarView(c *ui.Context, p palette) {
 	ui.Column(c).Width(272).FillHeight().Background(p.sidebar).
 		BorderWidth(0, 1, 0, 0).BorderColor(p.t.Border).Children(func() {
-		top := float32(bar.Height)
-		if top < 8 {
-			top = 8
-		}
-		ui.Box(c).Height(top)
 		ui.Column(c).Padding(10, 12, 8, 12).Grow(1).Children(func() {
 			a.brandRow(c, p)
 			a.newChatButton(c, p)
@@ -207,6 +292,15 @@ func (a *nativeApp) toggleTheme() {
 		a.themeMode = "light"
 	}
 	a.themeSet = true
+	a.saveNativePreferences()
+}
+
+func (a *nativeApp) toggleLocale() {
+	if currentLocale() == "en" {
+		setNativeLocale("zh")
+	} else {
+		setNativeLocale("en")
+	}
 	a.saveNativePreferences()
 }
 
@@ -459,10 +553,8 @@ func (a *nativeApp) openPage(page string) {
 	}
 }
 
-func (a *nativeApp) pageHeader(c *ui.Context, p palette, bar ui.TitleBar, title, subtitle string) {
-	right := float32(12 + bar.Right)
-	left := float32(18 + bar.Left)
-	ui.Row(c).Height(52).Padding(0, right, 0, left).AlignItems(ui.Center).Gap(10).
+func (a *nativeApp) pageHeader(c *ui.Context, p palette, title, subtitle string) {
+	ui.Row(c).Height(52).Padding(0, 12, 0, 18).AlignItems(ui.Center).Gap(10).
 		BorderWidth(0, 0, 1, 0).BorderColor(p.t.Border).Children(func() {
 		ui.Column(c).Gap(1).Grow(1).Children(func() {
 			ui.Text(c, T(title)).FontSize(14).FontWeight(650)
@@ -471,9 +563,9 @@ func (a *nativeApp) pageHeader(c *ui.Context, p palette, bar ui.TitleBar, title,
 	})
 }
 
-func (a *nativeApp) skillsPage(c *ui.Context, p palette, bar ui.TitleBar) {
+func (a *nativeApp) skillsPage(c *ui.Context, p palette) {
 	ui.Column(c).Grow(1).FillHeight().Background(p.t.Background).Children(func() {
-		a.pageHeader(c, p, bar, "技能", "可直接注入 Composer 的指令卡片、在线技能市场与本地技能入口")
+		a.pageHeader(c, p, "技能", "可直接注入 Composer 的指令卡片、在线技能市场与本地技能入口")
 		ui.Scroll(c).Grow(1).Children(func() {
 			ui.Column(c).Padding(18, 24, 24, 24).Gap(14).Children(func() {
 				a.skillsPageActions(c, p)
@@ -593,9 +685,9 @@ func (a *nativeApp) pageStat(c *ui.Context, p palette, label, value, hint string
 	})
 }
 
-func (a *nativeApp) automationPage(c *ui.Context, p palette, bar ui.TitleBar) {
+func (a *nativeApp) automationPage(c *ui.Context, p palette) {
 	ui.Column(c).Grow(1).FillHeight().Background(p.t.Background).Children(func() {
-		a.pageHeader(c, p, bar, "自动化", "Runtime 持有的定时任务与最近运行状态")
+		a.pageHeader(c, p, "自动化", "Runtime 持有的定时任务与最近运行状态")
 		ui.Scroll(c).Grow(1).Children(func() {
 			ui.Column(c).Padding(18, 24, 24, 24).Gap(14).Children(func() {
 				enabled := 0
@@ -686,9 +778,9 @@ func (a *nativeApp) automationPageList(c *ui.Context, p palette) {
 	})
 }
 
-func (a *nativeApp) libraryPage(c *ui.Context, p palette, bar ui.TitleBar) {
+func (a *nativeApp) libraryPage(c *ui.Context, p palette) {
 	ui.Column(c).Grow(1).FillHeight().Background(p.t.Background).Children(func() {
-		a.pageHeader(c, p, bar, "资料库", "Runtime 持有的知识库索引与证据状态")
+		a.pageHeader(c, p, "资料库", "Runtime 持有的知识库索引与证据状态")
 		ui.Scroll(c).Grow(1).Children(func() {
 			ui.Column(c).Padding(18, 24, 24, 24).Gap(14).Children(func() {
 				indexed := 0
@@ -821,6 +913,7 @@ func (a *nativeApp) sidebarFooter(c *ui.Context, p palette) {
 			ui.Text(c, "MothX Native").FontSize(11.5).FontWeight(600).SingleLine()
 			ui.Text(c, a.connectionLabel()).FontSize(9.5).TextColor(p.t.TextMuted).SingleLine()
 		})
+		iconButton(c, p, iconGlobe, "切换语言", 14, func() { a.toggleLocale() })
 		iconButton(c, p, a.appearanceIcon(), "切换外观", 14, func() { a.toggleTheme() })
 		dot := p.t.Success
 		switch a.conn {
@@ -833,9 +926,9 @@ func (a *nativeApp) sidebarFooter(c *ui.Context, p palette) {
 	})
 }
 
-func (a *nativeApp) mainView(c *ui.Context, p palette, bar ui.TitleBar) {
+func (a *nativeApp) mainView(c *ui.Context, p palette) {
 	ui.Column(c).Grow(1).FillHeight().Children(func() {
-		a.header(c, p, bar)
+		a.header(c, p)
 		if len(a.messages) == 0 {
 			a.emptyState(c, p)
 		} else {
@@ -846,10 +939,8 @@ func (a *nativeApp) mainView(c *ui.Context, p palette, bar ui.TitleBar) {
 	})
 }
 
-func (a *nativeApp) header(c *ui.Context, p palette, bar ui.TitleBar) {
-	right := float32(12 + bar.Right)
-	left := float32(18 + bar.Left)
-	ui.Row(c).Height(52).Padding(0, right, 0, left).AlignItems(ui.Center).Gap(6).
+func (a *nativeApp) header(c *ui.Context, p palette) {
+	ui.Row(c).Height(52).Padding(0, 12, 0, 18).AlignItems(ui.Center).Gap(6).
 		BorderWidth(0, 0, 1, 0).BorderColor(p.t.Border).Background(p.t.Background).Children(func() {
 		if label := a.currentSessionStatusLabel(); label != "" {
 			statusPill(c, p, label)
@@ -881,6 +972,7 @@ func (a *nativeApp) header(c *ui.Context, p palette, bar ui.TitleBar) {
 				a.sessionMenu(c, p, session, "header")
 			}
 		}
+		iconButton(c, p, iconGlobe, "切换语言", 15, func() { a.toggleLocale() })
 		iconButton(c, p, a.appearanceIcon(), "切换外观", 15, func() { a.toggleTheme() })
 		if a.sidebar {
 			iconButton(c, p, iconPanelLeft, "收起侧栏", 15, func() { a.sidebar = false })
@@ -1169,7 +1261,7 @@ func (a *nativeApp) messageRow(c *ui.Context, p palette, m *chatMessage) {
 		})
 	case messageThought:
 		ui.Column(c).Key(m.ID).WidthPercent(100).MaxWidth(780).Margin(0, ui.Auto).Gap(3).Children(func() {
-			b := ui.ButtonBase(c.Key("thought:"+m.ID)).Padding(1, 0).Radius(6).AlignItems(ui.Center).Gap(5)
+			b := ui.ButtonBase(c.Key("thought:"+m.ID)).Padding(1, 0).Radius(6).AlignItems(ui.Center).Justify(ui.Start).Gap(5)
 			b.Children(func() {
 				if m.Collapsed {
 					ui.Icon(c, iconChevronRight).FontSize(11).TextColor(p.t.TextMuted)
@@ -1179,8 +1271,10 @@ func (a *nativeApp) messageRow(c *ui.Context, p palette, m *chatMessage) {
 				label := T("已思考")
 				if !m.Done {
 					label = T("思考中…")
+				} else if m.ThoughtDuration > 0 {
+					label = fmt.Sprintf("%s · %s", label, formatThoughtDuration(m.ThoughtDuration))
 				}
-				ui.Text(c, T(label)).FontSize(11.5).TextColor(p.t.TextMuted)
+				ui.Text(c, label).FontSize(11.5).TextColor(p.t.TextMuted)
 			})
 			b.Label(T("已思考"))
 			if b.Clicked() {
@@ -1572,6 +1666,18 @@ func statusPill(c *ui.Context, p palette, status string) {
 		label = T("未完成")
 		color = p.t.Warning
 		bg = p.warnBg
+	case "正在另一进程执行", "正在此进程执行", "远端任务仍在执行":
+		color = p.t.Accent
+		bg = p.active
+	case "Session 正被占用", "正在恢复遗留执行", "正在确认执行状态":
+		color = p.t.Warning
+		bg = p.warnBg
+	case "遗留执行恢复失败":
+		color = p.t.Danger
+		bg = p.errorBg
+	case "无法确认执行状态":
+		color = p.t.TextMuted
+		bg = p.chip
 	default:
 		label = T(label)
 	}
@@ -1633,6 +1739,26 @@ func copyButton(c *ui.Context, p palette, text string) {
 	if b.Clicked() {
 		c.Services().WriteClipboard(text)
 	}
+}
+
+// formatThoughtDuration renders reasoning time compactly: 0.4s, 12s, or
+// 1m 05s. It stays language neutral so the header needs no extra translation.
+func formatThoughtDuration(d time.Duration) string {
+	if d < 100*time.Millisecond {
+		return "<0.1s"
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	total := int(d.Round(time.Second) / time.Second)
+	if total < 60 {
+		return fmt.Sprintf("%ds", total)
+	}
+	minutes, seconds := total/60, total%60
+	if seconds == 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%dm %02ds", minutes, seconds)
 }
 
 func humanCount(n int) string {

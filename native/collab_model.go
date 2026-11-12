@@ -636,8 +636,9 @@ func (a *nativeApp) loadSubagentMessages() {
 // child conversation into single text lines.
 func reduceSubagentUpdates(sessionID string, updates []sessionUpdate) []*chatMessage {
 	temp := &nativeApp{
-		currentSession: sessionID,
-		messageIndex:   make(map[string]*chatMessage),
+		currentSession:   sessionID,
+		messageIndex:     make(map[string]*chatMessage),
+		replayingHistory: true,
 	}
 	for _, update := range updates {
 		temp.applyUpdate(sessionUpdateNotification{SessionID: sessionID, Update: update})

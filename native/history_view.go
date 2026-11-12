@@ -12,10 +12,10 @@ import (
 // filters, and the additive session operations. Every row and action is a
 // projection of Runtime-owned state; this view never reads a database or the
 // workspace settings file.
-func (a *nativeApp) historyView(c *ui.Context, p palette, bar ui.TitleBar) {
+func (a *nativeApp) historyView(c *ui.Context, p palette) {
 	panel := &a.historyPanel
-	right := float32(12 + bar.Right)
-	left := float32(18 + bar.Left)
+	right := float32(12)
+	left := float32(18)
 	ui.Column(c).Grow(1).FillHeight().Background(p.t.Background).Children(func() {
 		ui.Row(c).Height(52).Padding(0, right, 0, left).AlignItems(ui.Center).Gap(10).
 			BorderWidth(0, 0, 1, 0).BorderColor(p.t.Border).Children(func() {
@@ -413,7 +413,40 @@ func (a *nativeApp) historyProjectDialog(c *ui.Context, p palette) {
 	}
 }
 
+// executionStatusLabel projects Runtime's cross-process execution state with
+// the same wording WebUI uses, so a row can say that another process owns the
+// run instead of the ambiguous "running".
+func executionStatusLabel(exec *executionState) string {
+	if exec == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(exec.State)) {
+	case "reserved":
+		return "Session 正被占用"
+	case "local":
+		return "正在此进程执行"
+	case "external":
+		return "正在另一进程执行"
+	case "detached_remote":
+		return "远端任务仍在执行"
+	case "orphaned":
+		return "正在恢复遗留执行"
+	case "recovery_failed":
+		return "遗留执行恢复失败"
+	case "inconsistent":
+		return "正在确认执行状态"
+	case "unknown":
+		return "无法确认执行状态"
+	}
+	return ""
+}
+
 func historySessionStatus(s listedSession) string {
+	// The Runtime execution snapshot is authoritative for ownership, while
+	// lastRun remains the durable fallback for older servers and idle rows.
+	if label := executionStatusLabel(s.Meta.Execution); label != "" {
+		return label
+	}
 	if s.Meta.LastRun != nil {
 		if s.Meta.LastRun.Active {
 			return "运行中"

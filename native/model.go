@@ -42,8 +42,11 @@ type chatMessage struct {
 	At   time.Time
 	Done bool
 
-	// Reasoning folds a thought message.
-	Collapsed bool
+	// Reasoning folds a thought message. ThoughtDuration is how long the
+	// reasoning streamed before the run moved on; it stays zero for replayed
+	// history, which has no wall-clock timing.
+	Collapsed       bool
+	ThoughtDuration time.Duration
 
 	// Tool messages.
 	ToolID        string
@@ -192,6 +195,27 @@ func (a *nativeApp) upsertMessage(id string, kind messageKind) *chatMessage {
 	return a.appendMessage(&chatMessage{ID: id, Kind: kind})
 }
 
+// finishOpenThoughts closes reasoning blocks that have stopped streaming.
+// keepID leaves the still-streaming block of that message open; an empty keepID
+// closes every open block. Replayed history has no wall-clock timing, so its
+// blocks close without a duration.
+func (a *nativeApp) finishOpenThoughts(keepID string) {
+	now := time.Now()
+	for i := len(a.messages) - 1; i >= 0; i-- {
+		m := a.messages[i]
+		if m.Kind != messageThought {
+			break
+		}
+		if m.Done || m.ID == keepID {
+			continue
+		}
+		m.Done = true
+		if !a.replayingHistory {
+			m.ThoughtDuration = now.Sub(m.At)
+		}
+	}
+}
+
 // applyUpdate folds one session/update notification into the transcript.
 func (a *nativeApp) applyUpdate(n sessionUpdateNotification) {
 	if n.SessionID == "" {
@@ -231,6 +255,7 @@ func (a *nativeApp) applyUpdate(n sessionUpdateNotification) {
 			m.Images = appendUniqueImage(m.Images, image)
 		}
 	case "agent_message_chunk":
+		a.finishOpenThoughts("")
 		id := "agent:" + u.MessageID
 		if u.MessageID == "" {
 			id = a.nextLocalMessageID("agent")
@@ -247,6 +272,7 @@ func (a *nativeApp) applyUpdate(n sessionUpdateNotification) {
 		if u.MessageID == "" {
 			id = a.nextLocalMessageID("thought")
 		}
+		a.finishOpenThoughts(id)
 		m := a.upsertMessage(id, messageThought)
 		if m.Text == "" {
 			m.Collapsed = true
@@ -258,6 +284,7 @@ func (a *nativeApp) applyUpdate(n sessionUpdateNotification) {
 		if u.ToolCallID == "" {
 			return
 		}
+		a.finishOpenThoughts("")
 		id := "tool:" + u.ToolCallID
 		m := a.upsertMessage(id, messageTool)
 		m.ToolID = u.ToolCallID
@@ -535,6 +562,7 @@ func (a *nativeApp) applySessionResult(res sessionResult) {
 }
 
 func (a *nativeApp) markRunDone(stopReason string) {
+	a.finishOpenThoughts("")
 	a.running = false
 	a.awaitingUserEcho = false
 	a.localUserMessageID = ""

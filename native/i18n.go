@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+
+	"github.com/egoist/mygo"
 )
 
 // This file owns the Native UI locale projection. English strings are seeded
@@ -28,12 +30,15 @@ func setLocale(locale string) {
 	nativeLocale.Store("zh")
 }
 
-func setLocaleFromTag(tag string) {
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(tag)), "en") {
-		setLocale("en")
+// setNativeLocale keeps the shell UI and the platform's own texts (menus and
+// standard dialogs) on the same language.
+func setNativeLocale(locale string) {
+	setLocale(locale)
+	if currentLocale() == "en" {
+		mygo.App.SetLocale("en")
 		return
 	}
-	setLocale("zh")
+	mygo.App.SetLocale("zh-Hans")
 }
 
 // T translates a Native UI string. The map is intentionally keyed by the

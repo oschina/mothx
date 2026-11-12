@@ -483,9 +483,9 @@ func (a *nativeApp) retryLoadSettings() {
 // settingsPage renders the full Settings View inside the native content area.
 // The primary chat sidebar stays visible so the user can return to chats from
 // there; an explicit back control is also provided in the page header.
-func (a *nativeApp) settingsPage(c *ui.Context, p palette, bar ui.TitleBar) {
-	right := float32(12 + bar.Right)
-	left := float32(18 + bar.Left)
+func (a *nativeApp) settingsPage(c *ui.Context, p palette) {
+	right := float32(12)
+	left := float32(18)
 	ui.Column(c).Fill().Background(p.t.Background).Children(func() {
 		a.settingsPageHeader(c, p, left, right)
 		ui.Row(c).Grow(1).Children(func() {
@@ -811,12 +811,8 @@ func (a *nativeApp) appearanceLanguageButton(c *ui.Context, p palette, key, labe
 	})
 	b.Label(T(label)).Tooltip(T(label))
 	if b.Clicked() && currentLocale() != locale {
-		setLocale(locale)
-		if locale == "en" {
-			mygo.App.SetLocale("en")
-		} else {
-			mygo.App.SetLocale("zh-Hans")
-		}
+		setNativeLocale(locale)
+		a.saveNativePreferences()
 	}
 }
 
@@ -983,9 +979,9 @@ func (a *nativeApp) settingsAboutPane(c *ui.Context, p palette) {
 			featureCount++
 		}
 	}
-	a.settingsCard(c, p, "关于 MothX Native", fmt.Sprintf("版本 %s", nativeVersion), func() {
+	a.settingsCard(c, p, "关于 MothX Native", fmt.Sprintf("版本 %s", a.version()), func() {
 		ui.Column(c).Gap(10).Children(func() {
-			a.settingsRuntimeRow(c, p, "Native 版本", nativeVersion)
+			a.settingsRuntimeRow(c, p, "MothX 版本", a.version())
 			a.settingsRuntimeRow(c, p, "ACP 状态", a.connectionLabel())
 			a.settingsRuntimeRow(c, p, "可用能力数", fmt.Sprintf("%d", featureCount))
 			a.settingsRuntimeRow(c, p, "平台", runtime.GOOS+"/"+runtime.GOARCH)

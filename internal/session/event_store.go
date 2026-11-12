@@ -446,15 +446,15 @@ func (s *EventStore) scanLayout() (eventStoreLayout, error) {
 
 func (s *EventStore) scanState(layout eventStoreLayout, repairTail, verifyDigest bool) (eventStoreScan, error) {
 	eventStoreStats.fullScans.Add(1)
+	results, err := scanEventStorePaths(layout, repairTail, verifyDigest)
+	if err != nil {
+		return eventStoreScan{}, err
+	}
 	all := make([]EventBatch, 0)
 	nextSeq := int64(eventStoreSeqBase)
 	seenBatchIDs := make(map[string]struct{})
 	seenEventIDs := make(map[string]struct{})
-	for index, path := range layout.paths {
-		result, err := scanEventStore(path, repairTail && (!layout.legacy || index == len(layout.paths)-1), verifyDigest)
-		if err != nil {
-			return eventStoreScan{}, err
-		}
+	for _, result := range results {
 		for _, batch := range result.batches {
 			if batch.SeqFrom != nextSeq {
 				return eventStoreScan{}, fmt.Errorf("event store segments are not contiguous at %d: want %d", batch.SeqFrom, nextSeq)
@@ -631,6 +631,62 @@ func cloneEventStoreAppendCache(cache *eventStoreAppendCache) *eventStoreAppendC
 		out.eventIDs[key] = struct{}{}
 	}
 	return out
+}
+
+// scanEventStorePaths scans sealed segments concurrently while keeping the
+// result ordered by segment. Segments are immutable once sealed and independent
+// in framing, so the expensive JSON/digest work parallelizes without changing
+// sequence, duplicate, or corruption checks in scanState. Bounded workers keep
+// the temporary memory and disk pressure predictable for large sessions.
+func scanEventStorePaths(layout eventStoreLayout, repairTail, verifyDigest bool) ([]eventStoreScan, error) {
+	results := make([]eventStoreScan, len(layout.paths))
+	if len(layout.paths) == 0 {
+		return results, nil
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 4 {
+		workers = 4
+	}
+	if workers > len(layout.paths) {
+		workers = len(layout.paths)
+	}
+	if workers <= 1 {
+		for index, path := range layout.paths {
+			result, err := scanEventStore(path, repairTail && (!layout.legacy || index == len(layout.paths)-1), verifyDigest)
+			if err != nil {
+				return nil, err
+			}
+			results[index] = result
+		}
+		return results, nil
+	}
+	errs := make([]error, len(layout.paths))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for worker := 0; worker < workers; worker++ {
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				results[index], errs[index] = scanEventStore(
+					layout.paths[index],
+					repairTail && (!layout.legacy || index == len(layout.paths)-1),
+					verifyDigest,
+				)
+			}
+		}()
+	}
+	for index := range layout.paths {
+		jobs <- index
+	}
+	close(jobs)
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+	return results, nil
 }
 
 func scanEventStore(path string, repairTail, verifyDigest bool) (eventStoreScan, error) {

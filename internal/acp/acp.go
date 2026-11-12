@@ -178,10 +178,11 @@ type server struct {
 	// runs jobs inline, keeping direct handler invocations synchronous.
 	ops *sessionOpLanes
 
-	toolTitles  map[string]string
-	mcpNotify   map[string]bool
-	initialized bool
-	clientCaps  clientCapabilities
+	toolTitles          map[string]string
+	mcpNotify           map[string]bool
+	initialized         bool
+	displayBackfillOnce sync.Once
+	clientCaps          clientCapabilities
 
 	// subagents tracks which child-agent lifecycle events were already
 	// projected per session so exactly one started and one terminal subagent
@@ -877,10 +878,13 @@ type listSessionsRequest struct {
 	// Supported scope values are "all" (the default), "project", and
 	// "ungrouped". A non-empty projectId also implies the project scope for
 	// backwards-friendly clients that do not send scope explicitly.
-	Scope     string      `json:"scope,omitempty"`
-	ProjectID string      `json:"projectId,omitempty"`
-	Query     string      `json:"query,omitempty"`
-	Meta      requestMeta `json:"_meta,omitempty"`
+	Scope     string `json:"scope,omitempty"`
+	ProjectID string `json:"projectId,omitempty"`
+	Query     string `json:"query,omitempty"`
+	// Limit bounds one page for catalog pickers that do not need the default
+	// full page. Values above the server cap are clamped; zero keeps the default.
+	Limit int         `json:"limit,omitempty"`
+	Meta  requestMeta `json:"_meta,omitempty"`
 }
 
 type listSessionsResult struct {
@@ -1341,6 +1345,7 @@ func Run(opts RunOptions) (runErr error) {
 	if _, _, cronErr := srv.ensureManageCron(); cronErr != nil {
 		log.Printf("[acp] start management cron runtime: %v", cronErr)
 	}
+	srv.startDisplayProjectionBackfill()
 
 	for {
 		req, err := srv.readRequest()
@@ -2200,6 +2205,32 @@ func (s *server) handleInitialize(req rpcRequest) {
 	s.writeResponse(req.ID, result, nil)
 }
 
+// startDisplayProjectionBackfill repairs old EventStore sessions that predate
+// session_display_projection. It runs once per ACP host, after a short delay so
+// the first handshake/list page is not competing for the write lock, and never
+// blocks the read loop. Until a session is projected, list search keeps the
+// legacy full-detail fallback for correctness.
+func (s *server) startDisplayProjectionBackfill() {
+	if s == nil {
+		return
+	}
+	s.displayBackfillOnce.Do(func() {
+		go func() {
+			time.Sleep(2 * time.Second)
+			if s.currentSettings() == nil {
+				return
+			}
+			sessionDir := s.currentSettings().GetSessionDir()
+			for attempt := 0; attempt < 8; attempt++ {
+				result, err := session.BackfillSessionDisplayProjections(context.Background(), sessionDir, 64)
+				if err != nil || !result.More {
+					return
+				}
+			}
+		}()
+	})
+}
+
 func (s *server) handleDoctor(req rpcRequest) {
 	var in doctorRequest
 	if len(bytes.TrimSpace(req.Params)) > 0 {
@@ -2685,6 +2716,14 @@ func (s *server) handleLoadSession(req rpcRequest) {
 			return
 		}
 		existing.registry.SetAdditionalDirectories(existing.runtime.AdditionalDirectoriesSnapshot())
+		if existing.mgr != nil && existing.mgr.Partial() && in.HistoryLimit <= 0 {
+			// A full-history load cannot be served from the tail-only Manager.
+			if err := existing.mgr.Reload(); err != nil {
+				s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
+				return
+			}
+			_ = existing.mgr.MigrateToEventStore(context.Background())
+		}
 		if err := s.replayPendingDecisionRequests(in.SessionID); err != nil {
 			s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
 			return
@@ -2699,7 +2738,7 @@ func (s *server) handleLoadSession(req rpcRequest) {
 		_ = s.notifyAvailableCommands(in.SessionID)
 		return
 	}
-	rt, err := s.openSessionRuntime(in.SessionID, cwd, in.McpServers)
+	rt, err := s.openSessionRuntimeWithHistory(in.SessionID, cwd, in.McpServers, in.HistoryLimit)
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
 		return
@@ -3058,7 +3097,24 @@ func (s *server) sessionRuntime(sessionID string) *sessionRuntime {
 }
 
 func (s *server) openSessionRuntime(sessionID, cwd string, servers []mcp.ServerConfig) (*sessionRuntime, error) {
-	mgr, err := agentruntime.OpenSessionForWorkDir(cwd, s.currentSettings().GetSessionDir(), sessionID)
+	return s.openSessionRuntimeWithHistory(sessionID, cwd, servers, 0)
+}
+
+// openSessionRuntimeWithHistory opens only the EventStore tail when the caller
+// requested a bounded history page and the session supports it. Everything
+// else (prompt, fork, resume, new) keeps the canonical full open. A tail-open
+// Manager is Partial; the first prompt Reloads it before replaying or
+// appending, so the fast path never becomes a second lifecycle.
+func (s *server) openSessionRuntimeWithHistory(sessionID, cwd string, servers []mcp.ServerConfig, historyLimit int) (*sessionRuntime, error) {
+	sessionDir := s.currentSettings().GetSessionDir()
+	var mgr *session.Manager
+	var err error
+	if historyLimit > 0 {
+		mgr, err = session.OpenByIDExactTail(sessionDir, sessionID, cwd, historyLimit)
+	}
+	if mgr == nil {
+		mgr, err = agentruntime.OpenSessionForWorkDir(cwd, sessionDir, sessionID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -3538,8 +3594,17 @@ func (s *server) handlePromptContext(admissionCtx context.Context, req rpcReques
 	if rt.mgr != nil {
 		if reloadErr := rt.mgr.Reload(); reloadErr != nil {
 			log.Printf("[acp] reload session history for %s: %v", runID, reloadErr)
-		} else if replayState := rt.mgr.GetReplayState(); len(replayState.Messages) > 0 {
-			a.LoadHistoryState(replayState.Messages, replayState.EntryIDs)
+		} else {
+			// A tail-opened Manager deferred attach-time convergence and indexing
+			// until it held canonical replay state. Complete them now that the
+			// first prompt has forced the full reload.
+			_ = rt.mgr.MigrateToEventStore(context.Background())
+			if seededCost, seededUsage := persistedSessionUsage(rt.mgr, runtimeModel(rt.runtime)); seededCost > 0 || seededUsage != (cacheUsage{}) {
+				rt.cost, rt.usageCache = seededCost, seededUsage
+			}
+			if replayState := rt.mgr.GetReplayState(); len(replayState.Messages) > 0 {
+				a.LoadHistoryState(replayState.Messages, replayState.EntryIDs)
+			}
 		}
 	}
 	rt.execution.SetAgent(a)
@@ -4098,6 +4163,15 @@ func (s *server) handleSetSessionTitle(req rpcRequest) {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: "session header is unavailable"})
 		return
 	}
+	if mgr.Partial() {
+		// A direct metadata write needs canonical replay state and must not leave
+		// the binding overrides from the tail open in place.
+		if err := mgr.Reload(); err != nil {
+			s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
+			return
+		}
+		_ = mgr.MigrateToEventStore(context.Background())
+	}
 	if _, _, err := s.resolveWorkspace(in.Meta, mgr.GetHeader().Cwd); err != nil {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32000, Message: err.Error()})
 		return
@@ -4201,6 +4275,14 @@ func (s *server) handleSetSessionWorkDir(req rpcRequest) {
 }
 
 const sessionListPageSize = 50
+
+// sessionListPageSizeFor clamps a client-requested page size to the server cap.
+func sessionListPageSizeFor(limit int) int {
+	if limit > 0 && limit < sessionListPageSize {
+		return limit
+	}
+	return sessionListPageSize
+}
 
 func encodeSessionCursor(offset int) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("acp-v1:%d", offset)))
@@ -4307,6 +4389,7 @@ func (s *server) handleListAllSessions(req rpcRequest) {
 		return
 	}
 	sessionDir := s.currentSettings().GetSessionDir()
+	pageSize := sessionListPageSizeFor(in.Limit)
 	if strings.TrimSpace(in.Query) == "" {
 		offset, err := sessionListOffset(in.Cursor)
 		if err != nil {
@@ -4314,7 +4397,7 @@ func (s *server) handleListAllSessions(req rpcRequest) {
 			return
 		}
 		listOpts := []session.ListOption{
-			session.WithLimit(sessionListPageSize + 1),
+			session.WithLimit(pageSize + 1),
 			session.WithOffset(offset),
 			session.WithDeferredEventStorePreview(),
 		}
@@ -4327,8 +4410,8 @@ func (s *server) handleListAllSessions(req rpcRequest) {
 			return
 		}
 		nextCursor := ""
-		if len(details) > sessionListPageSize {
-			details = details[:sessionListPageSize]
+		if len(details) > pageSize {
+			details = details[:pageSize]
 			nextCursor = encodeSessionCursor(offset + len(details))
 		} else if len(details) == 0 && offset > 0 {
 			previous, probeErr := session.ListAllDetailed(sessionDir, append(listOpts, session.WithLimit(1), session.WithOffset(offset-1))...)
@@ -4345,13 +4428,52 @@ func (s *server) handleListAllSessions(req rpcRequest) {
 		return
 	}
 
-	// Search still needs every candidate's title/preview before it can determine
-	// the page, but the project scope is already constrained in SQL.
+	// Query search first narrows and paginates on the persisted catalog fields,
+	// so only the returned page pays for previews, bindings, and EventStore
+	// projections. A missing display projection falls back to the legacy full
+	// detail path so title/preview matching stays exact.
+	offset, err := sessionListOffset(in.Cursor)
+	if err != nil {
+		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
+		return
+	}
 	listOpts := []session.ListOption{}
 	if scope != "all" {
 		listOpts = append(listOpts, session.WithProjectScope(projectID))
 	}
-	details, err := session.ListAllDetailed(sessionDir, listOpts...)
+	details, hasMore, fallback, err := session.ListAllDetailedQueryPage(sessionDir, in.Query, pageSize, offset, listOpts...)
+	if err != nil {
+		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
+		return
+	}
+	if !fallback {
+		nextCursor := ""
+		if hasMore {
+			nextCursor = encodeSessionCursor(offset + len(details))
+		}
+		if len(details) == 0 && offset > 0 {
+			previous, _, previousFallback, probeErr := session.ListAllDetailedQueryPage(sessionDir, in.Query, 1, offset-1, listOpts...)
+			if probeErr != nil {
+				s.writeResponse(req.ID, nil, acpFailureRPCError(probeErr, nil, agentruntime.PhasePersistence))
+				return
+			}
+			switch {
+			case previousFallback:
+				fallback = true
+			case len(previous) == 0:
+				s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
+				return
+			}
+		}
+		if !fallback {
+			s.writeSessionListPage(req, details, nextCursor)
+			return
+		}
+	}
+
+	// Compatibility fallback: only reachable while an EventStore session still
+	// lacks its derived display projection.
+	details, err = session.ListAllDetailed(sessionDir, listOpts...)
 	if err != nil {
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
 		return
@@ -4361,7 +4483,7 @@ func (s *server) handleListAllSessions(req rpcRequest) {
 		s.writeResponse(req.ID, nil, acpFailureRPCError(err, nil, agentruntime.PhasePersistence))
 		return
 	}
-	s.writeSessionList(req, details, in.Cursor)
+	s.writeSessionList(req, details, in.Cursor, pageSize)
 }
 
 // filterGlobalSessionList narrows mothx/session/listAll before cursor
@@ -4449,7 +4571,7 @@ func (s *server) filterGlobalSessionList(details []session.SessionDetail, in lis
 // writeSessionList paginates an already materialized catalog. Standard
 // session/list uses writeSessionListPage with a SQL page; the global catalog
 // still needs its Go-side scope/query filters before a page is known.
-func (s *server) writeSessionList(req rpcRequest, details []session.SessionDetail, cursor string) {
+func (s *server) writeSessionList(req rpcRequest, details []session.SessionDetail, cursor string, pageSize int) {
 	offset, err := sessionListOffset(cursor)
 	if err != nil {
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
@@ -4459,7 +4581,7 @@ func (s *server) writeSessionList(req rpcRequest, details []session.SessionDetai
 		s.writeResponse(req.ID, nil, &mcp.RPCError{Code: -32602, Message: "invalid cursor"})
 		return
 	}
-	end := offset + sessionListPageSize
+	end := offset + pageSize
 	if end > len(details) {
 		end = len(details)
 	}
@@ -5799,6 +5921,9 @@ func (s *server) transcriptPage(sessionID string, mgr *session.Manager, cursor s
 	if mgr == nil {
 		return transcriptPageResult{}, fmt.Errorf("session is unavailable")
 	}
+	if mgr.Partial() {
+		return s.tailTranscriptPage(sessionID, mgr, cursor, limit)
+	}
 	state := mgr.GetReplayState()
 	before := len(state.Messages)
 	if cursor != "" {
@@ -5819,6 +5944,36 @@ func (s *server) transcriptPage(sessionID string, mgr *session.Manager, cursor s
 	}
 	if start > 0 {
 		result.NextCursor = encodeTranscriptCursor(start)
+	}
+	return result, nil
+}
+
+// tailTranscriptPage serves history for a partial Manager without building the
+// full replay state. The cursor is still an absolute message index, so the
+// adapter contract and older-page paging stay identical to the canonical path.
+func (s *server) tailTranscriptPage(sessionID string, mgr *session.Manager, cursor string, limit int) (transcriptPageResult, error) {
+	before := 0
+	if cursor != "" {
+		decoded, err := decodeTranscriptCursor(cursor)
+		if err != nil {
+			return transcriptPageResult{}, fmt.Errorf("invalid history cursor")
+		}
+		before = decoded
+	}
+	page, err := session.ReadEventStoreTailPage(mgr.GetSessionDir(), sessionID, before, transcriptPageSize(limit))
+	if err != nil {
+		return transcriptPageResult{}, err
+	}
+	result := transcriptPageResult{SessionID: sessionID}
+	for index, message := range page.Messages {
+		entryID := ""
+		if index < len(page.EntryIDs) {
+			entryID = page.EntryIDs[index]
+		}
+		result.Updates = append(result.Updates, s.messageUpdates(sessionID, message, entryID)...)
+	}
+	if page.Start > 0 {
+		result.NextCursor = encodeTranscriptCursor(page.Start)
 	}
 	return result, nil
 }

@@ -29,6 +29,7 @@ type nativePreferences struct {
 	HomeBackgroundFit      string   `json:"homeBackgroundFit,omitempty"`
 	HomeBackgroundPosition string   `json:"homeBackgroundPosition,omitempty"`
 	RuntimeBinary          string   `json:"runtimeBinary,omitempty"`
+	Locale                 string   `json:"locale,omitempty"`
 }
 
 type homeAppearance struct {
@@ -95,6 +96,7 @@ func (a *nativeApp) saveNativePreferences() {
 		HomeBackgroundFit:      a.home.backgroundFit,
 		HomeBackgroundPosition: a.home.backgroundPosition,
 		RuntimeBinary:          runtimeBinaryPreference,
+		Locale:                 currentLocale(),
 	}
 	data, err := json.MarshalIndent(prefs, "", "  ")
 	if err != nil {
@@ -145,6 +147,10 @@ func (a *nativeApp) applyNativePreferences(prefs nativePreferences) {
 	}
 	if bin := strings.TrimSpace(prefs.RuntimeBinary); bin != "" {
 		setRuntimeBinaryPreference(bin, false)
+	}
+	switch strings.ToLower(strings.TrimSpace(prefs.Locale)) {
+	case "zh", "en":
+		setNativeLocale(strings.ToLower(strings.TrimSpace(prefs.Locale)))
 	}
 	a.loadHomeImages()
 }
