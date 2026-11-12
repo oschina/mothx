@@ -1,0 +1,210 @@
+name: Build Native Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要构建的版本 Tag；留空则使用当前 ref 的精确 Tag'
+        required: false
+        type: string
+        default: ''
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Native tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache-dependency-path: native/go.sum
+
+      - name: Download native module
+        working-directory: native
+        run: go mod download
+
+      - name: Run native tests
+        working-directory: native
+        run: go test ./...
+
+      - name: Vet native UI
+        working-directory: native
+        run: |
+          go vet ./...
+          go tool mygo vet .
+
+  native:
+    name: Native ${{ matrix.platform }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            target: linux/amd64
+          - os: macos-latest
+            platform: darwin
+            target: darwin/universal
+          - os: windows-latest
+            platform: windows
+            target: windows/amd64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache-dependency-path: native/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve release tag and version
+        shell: bash
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+          MATRIX_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+
+          tag="$TAG_INPUT"
+          if [ -z "$tag" ]; then
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+              tag="${GITHUB_REF_NAME}"
+            else
+              tag="$(git describe --tags --exact-match 2>/dev/null || true)"
+            fi
+          fi
+          if [ -z "$tag" ]; then
+            echo "::error::Native release requires a v* tag or explicit tag input."
+            exit 1
+          fi
+          version="${tag#v}"
+          if [ -z "$version" ]; then
+            echo "::error::Native release tag must include a version."
+            exit 1
+          fi
+          platform_arch="${MATRIX_TARGET//\//-}"
+          release_base="mothx-native-${version}-${platform_arch}"
+          printf 'TAG=%s\nVERSION=%s\nPLATFORM_ARCH=%s\nRELEASE_BASE=%s\n' \
+            "$tag" "$version" "$platform_arch" "$release_base" >> "$GITHUB_ENV"
+
+      - name: Sync native package version
+        working-directory: native
+        env:
+          PKG_VERSION: ${{ env.VERSION }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = "mygo.json";
+            const config = JSON.parse(fs.readFileSync(path, "utf8"));
+            config.version = process.env.PKG_VERSION;
+            fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+          '
+
+      - name: Download native module
+        working-directory: native
+        run: go mod download
+
+      - name: Build native package
+        working-directory: native
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          MYGO_LDFLAGS: "-X main.nativeBuildVersion=${{ env.VERSION }}"
+        run: |
+          go tool mygo build \
+            -platform "${{ matrix.target }}" \
+            -sign -
+
+      - name: Collect release files
+        working-directory: native
+        shell: bash
+        env:
+          RELEASE_BASE: ${{ env.RELEASE_BASE }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          checksum_name="${RELEASE_BASE}-checksums.txt"
+          rm -rf release
+          mkdir -p release
+
+          copy_as() {
+            local source="$1"
+            local target="$2"
+            cp -f "$source" "release/$target"
+          }
+
+          while IFS= read -r -d '' file; do
+            name="$(basename "$file")"
+            case "$PLATFORM:$name" in
+              linux:mothx-native) copy_as "$file" "$RELEASE_BASE" ;;
+              linux:*.deb) copy_as "$file" "$RELEASE_BASE.deb" ;;
+              linux:*.tar.gz) copy_as "$file" "$RELEASE_BASE.tar.gz" ;;
+              linux:PKGBUILD) copy_as "$file" "$RELEASE_BASE.PKGBUILD" ;;
+              darwin:*.dmg) copy_as "$file" "$RELEASE_BASE.dmg" ;;
+              windows:mothx-native.exe) copy_as "$file" "$RELEASE_BASE.exe" ;;
+              windows:*-setup-*.exe) copy_as "$file" "$RELEASE_BASE-setup.exe" ;;
+            esac
+          done < <(find build -type f -print0)
+
+          if [ -z "$(ls -A release)" ]; then
+            echo "::error::Native build produced no release files."
+            exit 1
+          fi
+          cd release
+          CHECKSUM_NAME="$checksum_name" node -e '
+            const fs = require("fs");
+            const crypto = require("crypto");
+            const lines = fs.readdirSync(".")
+              .filter((name) => name !== process.env.CHECKSUM_NAME)
+              .sort()
+              .map((name) => {
+                const digest = crypto.createHash("sha256").update(fs.readFileSync(name)).digest("hex");
+                return `${digest}  ${name}`;
+              });
+            fs.writeFileSync(process.env.CHECKSUM_NAME, lines.join("\n") + "\n");
+          '
+          cat "$checksum_name"
+
+      - name: Upload native build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_BASE }}
+          path: native/release/*
+          if-no-files-found: error
+
+      - name: Publish native release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          body_path: docs/changelog_online_en.md
+          generate_release_notes: false
+          prerelease: ${{ contains(env.TAG, 'pre') }}
+          make_latest: ${{ !contains(env.TAG, 'pre') }}
+          files: |
+            native/release/*
