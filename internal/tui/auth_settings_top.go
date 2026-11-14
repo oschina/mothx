@@ -226,19 +226,19 @@ func (a *App) selectSettingsFieldValue(value string) {
 		next.DefaultMode = cycleString(next.DefaultMode, defaultModeCycleValues, "yolo")
 		a.saveAuthSettingsPatch("defaultMode", map[string]any{"defaultMode": next.DefaultMode})
 	case "enablePlanTool":
-		next.EnablePlanTool = cycleSettingsBoolPtr(next.EnablePlanTool, true)
+		next.EnablePlanTool = toggleSettingsBoolPtr(next.EnablePlanTool, true)
 		a.saveAuthSettingsPatch("enablePlanTool", map[string]any{"enablePlanTool": next.EnablePlanTool})
 	case "enableArtifact":
-		next.EnableArtifact = cycleSettingsBoolPtr(next.EnableArtifact, false)
+		next.EnableArtifact = toggleSettingsBoolPtr(next.EnableArtifact, false)
 		a.saveAuthSettingsPatch("enableArtifact", map[string]any{"enableArtifact": next.EnableArtifact})
 	case "authored":
 		next.Authored = !next.Authored
 		a.saveAuthSettingsPatch("authored", map[string]any{"authored": next.Authored})
 	case "updateCheck":
-		next.UpdateCheck = cycleSettingsBoolPtr(next.UpdateCheck, true)
+		next.UpdateCheck = toggleSettingsBoolPtr(next.UpdateCheck, true)
 		a.saveAuthSettingsPatch("updateCheck", map[string]any{"updateCheck": next.UpdateCheck})
 	case "webSearch.enabled":
-		next.WebSearch.Enabled = cycleSettingsBoolPtr(next.WebSearch.Enabled, false)
+		next.WebSearch.Enabled = toggleSettingsBoolPtr(next.WebSearch.Enabled, false)
 		a.saveAuthSettingsPatch("webSearch.enabled", map[string]any{"webSearch": next.WebSearch})
 	case "webSearch.backend":
 		next.WebSearch.Backend = cycleString(next.WebSearch.Backend, []string{config.WebSearchBackendDeepSeek, config.WebSearchBackendYuanbao}, config.WebSearchBackendDeepSeek)
@@ -252,7 +252,7 @@ func (a *App) selectSettingsFieldValue(value string) {
 		toolExecution.Mode = cycleString(toolExecution.Mode, []string{"parallel", "sequential"}, "parallel")
 		a.saveAuthSettingsPatch("toolExecution.mode", map[string]any{"toolExecution": toolExecution})
 	case "imageGeneration.enabled":
-		next.ImageGeneration.Enabled = cycleSettingsBoolPtr(next.ImageGeneration.Enabled, false)
+		next.ImageGeneration.Enabled = toggleSettingsBoolPtr(next.ImageGeneration.Enabled, false)
 		a.saveAuthSettingsPatch("imageGeneration.enabled", map[string]any{"imageGeneration": next.ImageGeneration})
 	case "contextFiles.enabled":
 		next.ContextFiles.Enabled = !next.ContextFiles.Enabled
@@ -274,7 +274,7 @@ func (a *App) selectSettingsFieldValue(value string) {
 		next.Retry.Enabled = !next.Retry.Enabled
 		a.saveAuthSettingsPatch("retry.enabled", map[string]any{"retry": next.Retry})
 	case "approval.confirmBeforeWrite":
-		next.Approval.ConfirmBeforeWrite = cycleSettingsBoolPtr(next.Approval.ConfirmBeforeWrite, true)
+		next.Approval.ConfirmBeforeWrite = toggleSettingsBoolPtr(next.Approval.ConfirmBeforeWrite, true)
 		a.saveAuthSettingsPatch("approval.confirmBeforeWrite", map[string]any{"approval": next.Approval})
 	default:
 		a.auth.ParamField = value
@@ -856,16 +856,19 @@ func cycleString(current string, values []string, fallback string) string {
 	return fallback
 }
 
-func cycleSettingsBoolPtr(v *bool, defaultValue bool) *bool {
-	if v == nil {
-		b := !defaultValue
-		return &b
+// toggleSettingsBoolPtr flips the effective value of an optional bool setting
+// and always returns an explicit pointer. Settings load on top of
+// DefaultSettings, so an omitted (nil, "auto") value is materialized as its
+// default on every reload. Returning nil for the default value therefore made
+// toggling a default-off setting (webSearch.enabled, imageGeneration.enabled,
+// enableArtifact) write nil and reload as off forever.
+func toggleSettingsBoolPtr(v *bool, defaultValue bool) *bool {
+	current := defaultValue
+	if v != nil {
+		current = *v
 	}
-	if *v != defaultValue {
-		b := defaultValue
-		return &b
-	}
-	return nil
+	next := !current
+	return &next
 }
 
 func (a *App) boolPtrSummary(v *bool, defaultValue bool) string {
