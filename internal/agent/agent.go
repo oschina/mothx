@@ -12,6 +12,7 @@ import (
 	"time"
 
 	agentpkg "github.com/oschina/mothx/agent"
+	titlepkg "github.com/oschina/mothx/internal/ai/title"
 	"github.com/oschina/mothx/internal/config"
 	ctxpkg "github.com/oschina/mothx/internal/context"
 	"github.com/oschina/mothx/internal/imageproc"
@@ -183,12 +184,18 @@ type Config struct {
 	ThinkingLevel    provider.ThinkingLevel
 	MaxTokens        int
 	MaxTokensUserSet bool
-	SandboxMgr       *sandbox.Manager
-	Settings         *config.Settings
-	Allow            *config.AllowConfig // auto-approval (allow.json): autoEdit, editPaths, bash rules
-	Session          *session.Manager
-	ExtraContext     string // extra context from files and skills
-	RuleContent      string // content of .mothx/rule.md (project rules)
+	// RequestTitle enables in-band conversation-title generation on the first
+	// model request of this Agent. OnTitle receives the normalized title once;
+	// when the provider omits a title, Agent Core falls back to the first user
+	// message so the session still gets a useful display name.
+	RequestTitle bool
+	OnTitle      func(string)
+	SandboxMgr   *sandbox.Manager
+	Settings     *config.Settings
+	Allow        *config.AllowConfig // auto-approval (allow.json): autoEdit, editPaths, bash rules
+	Session      *session.Manager
+	ExtraContext string // extra context from files and skills
+	RuleContent  string // content of .mothx/rule.md (project rules)
 	// ExpertIdentity is the runtime-injected expert persona overlay and
 	// ExpertRoster the team roster + dispatch rules section. Both are
 	// authoritative runtime content (empty when no expert is bound) rendered
@@ -475,6 +482,11 @@ type Agent struct {
 
 	// Force compaction flag, consumed before the next request is built.
 	forceCompact int32 // atomic: 0=false, 1=true
+
+	// titleRequested guards one native-title request per Agent lifetime. The
+	// Runtime only enables RequestTitle while the session has no title, and the
+	// first response (or its local fallback) supplies the durable title.
+	titleRequested atomic.Bool
 }
 
 type conversationTurnStore interface {
@@ -501,6 +513,34 @@ func (a *Agent) SetConversationTurn(turnID, intentID, runID string) {
 	a.lastAssistantEntryID = ""
 	a.lastAssistantMessage = provider.Message{}
 	a.mu.Unlock()
+}
+
+// claimTitleRequest reserves the single native-title request for this Agent.
+// It returns true only for the first model request of the first run; providers
+// without the extension simply ignore the flag, and the local fallback still
+// yields a display title.
+func (a *Agent) claimTitleRequest(iteration int) bool {
+	if a == nil || iteration != 0 || !a.config.RequestTitle {
+		return false
+	}
+	return a.titleRequested.CompareAndSwap(false, true)
+}
+
+// deliverTitle hands one normalized title to the Runtime hook. A provider may
+// omit the title even after opting in (refusals, errors), so fall back to the
+// first user message as the API documentation recommends.
+func (a *Agent) deliverTitle(raw string, messages []provider.Message) {
+	if a == nil || a.config.OnTitle == nil {
+		return
+	}
+	name := titlepkg.Normalize(raw)
+	if name == "" {
+		name = titlepkg.Fallback(messages)
+	}
+	if name == "" {
+		return
+	}
+	a.config.OnTitle(name)
 }
 
 // buildFrozenPrompt builds the system prompt and tools once at construction time.
@@ -1576,6 +1616,7 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 		messagesWithMarkers := applyCacheMarkers(allMessages, markers)
 
 		// Chat request with frozen system prompt and cache markers
+		titleEnabled := a.claimTitleRequest(i)
 		params := provider.ChatParams{
 			Messages:      messagesWithMarkers,
 			Tools:         a.frozenToolDefs,
@@ -1586,6 +1627,7 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 			TopP:          config.NormalizeSamplingPtr(a.config.Model.TopP),
 			ModelID:       a.config.Model.ID,
 			Abort:         a.abort,
+			TitleEnabled:  titleEnabled,
 		}
 		if err := a.validateImageRequestBudget(allMessages); err != nil {
 			a.emitRunFinished(ch, TaskIncomplete, "image_request_limit", err, nil, nil)
@@ -1625,6 +1667,7 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 			usage          *provider.Usage
 			attachments    []provider.Attachment
 			stopReason     string
+			nativeTitle    string
 			streamErr      error
 		)
 
@@ -1681,6 +1724,9 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 			case provider.StreamDone:
 				stopReason = event.StopReason
 				attachments = append([]provider.Attachment(nil), event.Attachments...)
+				if event.Title != "" {
+					nativeTitle = event.Title
+				}
 			case provider.StreamError:
 				streamErr = event.Error
 				stopReason = event.StopReason
@@ -1708,6 +1754,10 @@ func (a *Agent) loop(ctx context.Context, ch chan<- Event) {
 					RetryReason:      "provider",
 				})
 			}
+		}
+
+		if titleEnabled {
+			a.deliverTitle(nativeTitle, allMessages)
 		}
 
 		if streamErr != nil {

@@ -611,14 +611,19 @@ const (
 
 // StreamEvent represents a single event from a streaming response.
 type StreamEvent struct {
-	Type              StreamEventType
-	TextDelta         string         // for StreamTextDelta
-	ThinkDelta        string         // for StreamThinkDelta
-	ThinkSignature    string         // for StreamThinkSignature
-	ToolCall          *ToolCallBlock // for StreamToolCall
-	HostedItem        *HostedItem    // for StreamHostedItem
-	Usage             *Usage         // for StreamUsage
-	Error             error          // for StreamError
+	Type           StreamEventType
+	TextDelta      string         // for StreamTextDelta
+	ThinkDelta     string         // for StreamThinkDelta
+	ThinkSignature string         // for StreamThinkSignature
+	ToolCall       *ToolCallBlock // for StreamToolCall
+	HostedItem     *HostedItem    // for StreamHostedItem
+	Usage          *Usage         // for StreamUsage
+	Error          error          // for StreamError
+	// Title carries a provider-generated conversation title when the request
+	// opted in via ChatParams.TitleEnabled and the endpoint supports the
+	// extension. It is reported on StreamDone; providers without native title
+	// support leave it empty.
+	Title             string
 	StopReason        string         // for StreamDone: "stop", "length", "toolUse", "error", "aborted"
 	RetryAttempt      int            // for StreamRetry: current retry attempt number
 	RetryMax          int            // Deprecated: use RetryMaxAttempts.
@@ -736,14 +741,18 @@ type ResponseStateFailureClassifier interface {
 
 // ChatParams contains all parameters for a chat request.
 type ChatParams struct {
-	Messages        []Message
-	Tools           []ToolDefinition
-	SystemPrompt    string
-	ThinkingLevel   ThinkingLevel
-	MaxTokens       int
-	Temperature     *float64        // nil = use API default
-	TopP            *float64        // nil = use API default
-	ModelID         string          // which model to use
-	Abort           <-chan struct{} // closed to abort the request
+	Messages      []Message
+	Tools         []ToolDefinition
+	SystemPrompt  string
+	ThinkingLevel ThinkingLevel
+	MaxTokens     int
+	Temperature   *float64        // nil = use API default
+	TopP          *float64        // nil = use API default
+	ModelID       string          // which model to use
+	Abort         <-chan struct{} // closed to abort the request
+	// TitleEnabled requests an in-band conversation title from endpoints that
+	// support native title generation. Providers without the extension ignore
+	// it, so callers may set it unconditionally.
+	TitleEnabled    bool
 	ResponseOptions *ResponseOptions
 }

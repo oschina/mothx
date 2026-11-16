@@ -3563,3 +3563,100 @@ func TestResponsesMessageContentAudioVideoBlocks(t *testing.T) {
 		t.Fatalf("video block = %#v", blocks[2])
 	}
 }
+
+func TestOpenAIDeepSeekNativeTitle(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"hi"}}]}`,
+		`data: {"choices":[{"delta":{"title":"北京明天天气"},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	bodyCh := make(chan string, 1)
+	p := newMockOpenAIProviderAtURL(t, "https://api.deepseek.com", []*provider.Model{{ID: "deepseek-flash"}}, sse, bodyCh)
+
+	events := chatAndCollect(t, p, provider.ChatParams{
+		Messages:     []provider.Message{provider.NewUserMessage("北京明天会下雨吗")},
+		Abort:        make(chan struct{}),
+		TitleEnabled: true,
+	})
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodyCh)), &body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	title, ok := body["title"].(map[string]any)
+	if !ok || title["enabled"] != true {
+		t.Fatalf("request title = %#v, want {\"enabled\":true}", body["title"])
+	}
+
+	var gotTitle string
+	for _, event := range events {
+		if event.Type == provider.StreamDone {
+			gotTitle = event.Title
+		}
+	}
+	if gotTitle != "北京明天天气" {
+		t.Fatalf("StreamDone title = %q, want 北京明天天气", gotTitle)
+	}
+}
+
+func TestOpenAINonDeepSeekEndpointOmitsNativeTitle(t *testing.T) {
+	bodyCh := make(chan string, 1)
+	p := newMockOpenAIProviderAtURL(t, "https://api.example.com/v1", []*provider.Model{{ID: "mock"}}, "data: [DONE]\n", bodyCh)
+	_ = chatAndCollect(t, p, provider.ChatParams{
+		Messages:     []provider.Message{provider.NewUserMessage("hi")},
+		Abort:        make(chan struct{}),
+		TitleEnabled: true,
+	})
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodyCh)), &body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	if _, ok := body["title"]; ok {
+		t.Fatalf("request title = %#v, want omitted for a non-DeepSeek endpoint", body["title"])
+	}
+}
+
+func TestOpenAIResponsesDeepSeekNativeTitle(t *testing.T) {
+	lines := []string{
+		`{"type":"response.output_text.delta","delta":"hi"}`,
+		`{"type":"response.completed","response":{"status":"completed","title":"北京明天天气"}}`,
+	}
+	var stream strings.Builder
+	for _, line := range lines {
+		stream.WriteString("data: ")
+		stream.WriteString(line)
+		stream.WriteByte('\n')
+	}
+	stream.WriteString("data: [DONE]\n")
+
+	bodyCh := make(chan string, 1)
+	p := newMockOpenAIProviderAtURL(t, "https://api.deepseek.com", []*provider.Model{{ID: "deepseek-flash"}}, stream.String(), bodyCh)
+	p.SetUseResponsesAPI(true)
+
+	events := chatAndCollect(t, p, provider.ChatParams{
+		Messages:     []provider.Message{provider.NewUserMessage("北京明天会下雨吗")},
+		Abort:        make(chan struct{}),
+		TitleEnabled: true,
+	})
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodyCh)), &body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	title, ok := body["title"].(map[string]any)
+	if !ok || title["enabled"] != true {
+		t.Fatalf("request title = %#v, want {\"enabled\":true}", body["title"])
+	}
+
+	var gotTitle string
+	for _, event := range events {
+		if event.Type == provider.StreamDone {
+			gotTitle = event.Title
+		}
+	}
+	if gotTitle != "北京明天天气" {
+		t.Fatalf("StreamDone title = %q, want 北京明天天气", gotTitle)
+	}
+}

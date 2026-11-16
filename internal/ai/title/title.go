@@ -75,7 +75,7 @@ func (g Generator) Generate(ctx context.Context, messages []provider.Message) (s
 // title model is unavailable or returns no text.
 func Fallback(messages []provider.Message) string {
 	for _, message := range messages {
-		if message.Role != "user" {
+		if message.Role != "user" || message.SystemInjected {
 			continue
 		}
 		if name := Normalize(messageText(message)); name != "" {

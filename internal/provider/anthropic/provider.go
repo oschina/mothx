@@ -107,6 +107,11 @@ func (p *Provider) API() string {
 	return "anthropic-messages"
 }
 
+// SupportsNativeTitle implements provider.NativeTitleProvider.
+func (p *Provider) SupportsNativeTitle() bool {
+	return provider.SupportsNativeTitleBaseURL(p.baseURL)
+}
+
 // SetThinkingFormat sets the thinking parameter format.
 // "anthropic" = thinking with budget_tokens, "deepseek" = thinking with output_config,
 // "xiaomi" = legacy thinking-only format.
@@ -152,6 +157,13 @@ type anthropicRequest struct {
 	Stream       bool                   `json:"stream"`
 	Thinking     *anthropicThinking     `json:"thinking,omitempty"`
 	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
+	Title        *anthropicTitle        `json:"title,omitempty"`
+}
+
+// anthropicTitle enables provider-native conversation-title generation for
+// DeepSeek's Anthropic-compatible endpoint.
+type anthropicTitle struct {
+	Enabled bool `json:"enabled"`
 }
 
 // anthropicToolChoice keeps parallel tool use enabled explicitly. Anthropic
@@ -231,6 +243,7 @@ type anthropicDelta struct {
 	Signature   string `json:"signature,omitempty"`
 	StopReason  string `json:"stop_reason,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
+	Title       string `json:"title,omitempty"`
 }
 
 type contentBlock struct {
@@ -293,6 +306,9 @@ func (p *Provider) Chat(ctx context.Context, params provider.ChatParams) <-chan 
 		}
 		reqBody.ToolChoice = anthropicToolChoiceFor(model, reqBody.Tools, params.ResponseOptions)
 		reqBody.MaxTokens = &maxTokens
+		if params.TitleEnabled && p.SupportsNativeTitle() {
+			reqBody.Title = &anthropicTitle{Enabled: true}
+		}
 		if params.SystemPrompt != "" {
 			if p.IsCacheControlEnabled() {
 				// Send system prompt as content block array with cache_control for prompt caching
@@ -545,6 +561,7 @@ func (p *Provider) parseSSE(ctx context.Context, body io.Reader, ch chan<- provi
 		toolCallBuffers  = make(map[int]*strings.Builder)
 		toolCallInitial  = make(map[int]json.RawMessage)
 		stopReason       string
+		title            string
 		usage            *provider.Usage
 		currentBlockType string
 		toolCallIndex    int = -1
@@ -644,6 +661,9 @@ func (p *Provider) parseSSE(ctx context.Context, body io.Reader, ch chan<- provi
 			if event.Delta != nil && event.Delta.StopReason != "" {
 				stopReason = event.Delta.StopReason
 			}
+			if event.Delta != nil && event.Delta.Title != "" {
+				title = event.Delta.Title
+			}
 			if event.Usage != nil {
 				if usage == nil {
 					usage = &provider.Usage{}
@@ -687,7 +707,7 @@ func (p *Provider) parseSSE(ctx context.Context, body io.Reader, ch chan<- provi
 		visibleOutput = true
 		ch <- provider.StreamEvent{Type: provider.StreamUsage, Usage: usage}
 	}
-	ch <- provider.StreamEvent{Type: provider.StreamDone, StopReason: stopReason}
+	ch <- provider.StreamEvent{Type: provider.StreamDone, StopReason: stopReason, Title: title}
 	return visibleOutput, nil
 }
 

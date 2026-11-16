@@ -966,6 +966,11 @@ func (s *Server) executeBackgroundRun(sess *APISession, durableCtx context.Conte
 		ThinkingLevel: provider.ThinkingLevel(s.cfg.DefaultThinkingLevel),
 		MultiAgent:    sess.MultiAgent, DelegateMode: sess.DelegateMode, Workflows: sess.Workflows,
 		GetSteeringMessages: s.esmSteeringMessages(sess.ID),
+		OnTitle: func(name string) {
+			if broker := s.getEventBroker(); broker != nil {
+				broker.PublishRawJSON(sess.ID, "", "title_updated", map[string]any{"title": name})
+			}
+		},
 	})
 	if err != nil {
 		terminalErrMsg = err.Error()
@@ -1062,7 +1067,13 @@ func (s *Server) executeBackgroundRun(sess *APISession, durableCtx context.Conte
 		// GoCtx also hands the task the shutdown context: a title call parked in
 		// the provider is cancelled by the very drain waiting for it, instead of
 		// holding Shutdown hostage until its own internal timeout expires.
-		_ = s.pool.GoCtx(func(ctx context.Context) { s.generateSessionTitle(ctx, sess, model) })
+		if native, ok := runProvider.(provider.NativeTitleProvider); ok && native.SupportsNativeTitle() {
+			// Agent Core requested the title inside the first model response and
+			// the Runtime persisted it (or its local fallback) during the run, so
+			// an extra title request is unnecessary.
+		} else {
+			_ = s.pool.GoCtx(func(ctx context.Context) { s.generateSessionTitle(ctx, sess, model) })
+		}
 	}
 }
 

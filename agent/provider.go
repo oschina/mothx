@@ -27,6 +27,9 @@ type ChatParams struct {
 	MaxTokens     int
 	ModelID       string
 	Abort         chan struct{}
+	// TitleEnabled requests an in-band conversation title from endpoints that
+	// support native title generation. Providers without the extension ignore it.
+	TitleEnabled bool
 }
 
 // ThinkingLevel represents the thinking/reasoning level.
@@ -71,6 +74,10 @@ type StreamEvent struct {
 	RetryMaxAttempts int
 	RetryAfterMS     int
 	Attachments      []Attachment
+	// Title carries a provider-generated conversation title when the request
+	// opted in with ChatParams.TitleEnabled. Providers without native title
+	// support leave it empty.
+	Title string
 }
 
 // HostedItem is the provider-neutral lifecycle projection for a native hosted

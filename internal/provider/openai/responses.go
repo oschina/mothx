@@ -41,6 +41,7 @@ type responsesRequest struct {
 	ServiceTier          string                       `json:"service_tier,omitempty"`
 	Metadata             map[string]string            `json:"metadata,omitempty"`
 	SafetyIdentifier     string                       `json:"safety_identifier,omitempty"`
+	Title                *titleRequest                `json:"title,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -184,6 +185,7 @@ type responsesCompletedObject struct {
 	Output             []json.RawMessage `json:"output,omitempty"`
 	Usage              *responsesUsage   `json:"usage,omitempty"`
 	Error              *responsesError   `json:"error,omitempty"`
+	Title              string            `json:"title,omitempty"`
 	IncompleteDetails  *struct {
 		Reason string `json:"reason,omitempty"`
 	} `json:"incomplete_details,omitempty"`
@@ -361,6 +363,9 @@ func (p *Provider) buildResponsesRequest(params provider.ChatParams, modelID str
 	}
 	if params.MaxTokens > 0 {
 		reqBody.MaxOutputTokens = params.MaxTokens
+	}
+	if params.TitleEnabled && p.SupportsNativeTitle() {
+		reqBody.Title = &titleRequest{Enabled: true}
 	}
 
 	if p.responsesConfig != nil && p.responsesConfig.promptCacheEnabled && supportsPromptCacheKey(model) {
@@ -777,6 +782,7 @@ func (p *Provider) parseResponsesSSE(ctx context.Context, body io.Reader, ch cha
 		reasoning     strings.Builder
 		usage         *provider.Usage
 		stopReason    string
+		title         string
 		visibleOutput bool
 		completed     bool
 	)
@@ -954,6 +960,7 @@ func (p *Provider) parseResponsesSSE(ctx context.Context, body io.Reader, ch cha
 			if event.Response != nil {
 				usage = convertResponsesUsage(event.Response.Usage)
 				stopReason = responseStopReason(event.Response.Status)
+				title = event.Response.Title
 			}
 			if err := responsesEventError(event); err != nil {
 				return err
@@ -965,6 +972,7 @@ func (p *Provider) parseResponsesSSE(ctx context.Context, body io.Reader, ch cha
 			if event.Response != nil {
 				usage = convertResponsesUsage(event.Response.Usage)
 				stopReason = responseStopReason(event.Response.Status)
+				title = event.Response.Title
 				if stopReason == "" {
 					stopReason = "incomplete"
 				}
@@ -1032,6 +1040,7 @@ func (p *Provider) parseResponsesSSE(ctx context.Context, body io.Reader, ch cha
 	ch <- provider.StreamEvent{
 		Type:        provider.StreamDone,
 		StopReason:  stopReason,
+		Title:       title,
 		Metadata:    normalizer.metadata(),
 		Attachments: attachments,
 	}

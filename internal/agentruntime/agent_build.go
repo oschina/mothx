@@ -3,6 +3,8 @@ package agentruntime
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
 
 	agentpkg "github.com/oschina/mothx/agent"
 	"github.com/oschina/mothx/internal/agent"
@@ -66,6 +68,11 @@ type AgentBuildOptions struct {
 	// mailbox hooks: it must not wait for the session's members nor consume
 	// member notifications that belong to the lead.
 	AuxiliaryRole bool
+	// OnTitle, when set, is invoked after the Runtime persists an
+	// automatically generated session title. The title is already durable when
+	// the hook runs; adapters may use it only to project (for example publish a
+	// title-updated notification).
+	OnTitle func(string)
 }
 
 // AgentBuildOptionsFromConfig converts the legacy Agent.Config shape used by
@@ -82,6 +89,7 @@ func AgentBuildOptionsFromConfig(cfg agent.Config) AgentBuildOptions {
 		RuntimeOwnsTurnEnd:   cfg.RuntimeOwnsTurnEnd,
 		RuntimeOwnsUserEntry: cfg.RuntimeOwnsUserEntry, UserEntryID: cfg.UserEntryID,
 		ApprovalHandler: cfg.ApprovalHandler, ApprovalDecisionLookup: cfg.ApprovalDecisionLookup,
+		OnTitle: cfg.OnTitle,
 	}
 }
 
@@ -267,6 +275,35 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 			registry.Register(agent.NewExtendBudgetTool())
 		}
 	}
+	// Conversation-title generation is Runtime-owned because only this boundary
+	// knows both the resolved provider and the durable session. DeepSeek
+	// endpoints can return a title inside the first model response; when one is
+	// persisted, the adapter callback is merely a projection hook.
+	requestTitle := false
+	var persistTitle func(string)
+	if manager != nil && opts.ParentID == "" && !opts.AuxiliaryRole && !opts.SyntheticContinuation {
+		if native, ok := opts.Provider.(provider.NativeTitleProvider); ok && native.SupportsNativeTitle() {
+			if info, ok := manager.GetLatestSessionInfo(); !ok || strings.TrimSpace(info.Name) == "" {
+				requestTitle = true
+				persistTitle = func(title string) {
+					title = strings.TrimSpace(title)
+					if title == "" {
+						return
+					}
+					if info, ok := manager.GetLatestSessionInfo(); ok && strings.TrimSpace(info.Name) != "" {
+						return
+					}
+					if _, err := manager.AppendSessionTitle(title, "auto"); err != nil {
+						log.Printf("[agentruntime] persist automatic session title: %v", err)
+						return
+					}
+					if opts.OnTitle != nil {
+						opts.OnTitle(title)
+					}
+				}
+			}
+		}
+	}
 	return agent.NewWithLoopConfig(agent.AgentLoopConfig{
 		Config: agent.Config{
 			ID: opts.ID, ParentID: opts.ParentID, Provider: opts.Provider, Vendor: opts.ProviderName, Model: opts.Model, Mode: mode,
@@ -281,6 +318,7 @@ func (r *SessionRuntime) buildAgent(registry *tools.Registry, manager *session.M
 			ConversationTurn:     opts.ConversationTurn,
 			RuntimeOwnsTurnEnd:   opts.RuntimeOwnsTurnEnd,
 			RuntimeOwnsUserEntry: opts.RuntimeOwnsUserEntry, UserEntryID: opts.UserEntryID,
+			RequestTitle: requestTitle, OnTitle: persistTitle,
 		},
 		ToolExecutionMode: toolExecutionMode, MaxToolConcurrency: maxToolConcurrency,
 		MaxIterations: opts.MaxIterations, ContextPressureThreshold: opts.ContextPressure,

@@ -25,6 +25,7 @@ func (a *providerAdapter) Chat(ctx context.Context, params agent.ChatParams) <-c
 		MaxTokens:     params.MaxTokens,
 		ModelID:       params.ModelID,
 		Abort:         params.Abort,
+		TitleEnabled:  params.TitleEnabled,
 	}
 	for i, m := range params.Messages {
 		internalParams.Messages[i] = internalprovider.Message{
@@ -118,6 +119,7 @@ func (a *providerAdapter) Chat(ctx context.Context, params agent.ChatParams) <-c
 				RetryAttempt:     ev.RetryAttempt,
 				RetryMaxAttempts: streamRetryMaxAttempts(ev),
 				RetryAfterMS:     ev.RetryAfterMS,
+				Title:            ev.Title,
 			}
 		}
 	}()

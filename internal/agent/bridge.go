@@ -471,6 +471,7 @@ func ChatParamsFromPublic(p agentpkg.ChatParams) provider.ChatParams {
 		MaxTokens:     p.MaxTokens,
 		ModelID:       p.ModelID,
 		Abort:         abort,
+		TitleEnabled:  p.TitleEnabled,
 	}
 }
 
@@ -486,6 +487,7 @@ func StreamEventToPublic(e provider.StreamEvent) agentpkg.StreamEvent {
 		RetryMaxAttempts: streamRetryMaxAttempts(e),
 		RetryAfterMS:     e.RetryAfterMS,
 		Attachments:      AttachmentsToPublic(e.Attachments),
+		Title:            e.Title,
 	}
 	if e.HostedItem != nil {
 		ev.HostedItem = hostedItemToPublic(e.HostedItem)
@@ -774,6 +776,7 @@ func ChatParamsToPublic(p provider.ChatParams) agentpkg.ChatParams {
 		MaxTokens:     p.MaxTokens,
 		ModelID:       p.ModelID,
 		Abort:         abort,
+		TitleEnabled:  p.TitleEnabled,
 	}
 }
 
@@ -790,6 +793,7 @@ func StreamEventFromPublic(e agentpkg.StreamEvent) provider.StreamEvent {
 		RetryMaxAttempts: e.RetryMaxAttempts,
 		RetryAfterMS:     e.RetryAfterMS,
 		Attachments:      AttachmentsFromPublic(e.Attachments),
+		Title:            e.Title,
 	}
 	if e.HostedItem != nil {
 		ev.HostedItem = &provider.HostedItem{ID: e.HostedItem.ID, Type: e.HostedItem.Type, Status: e.HostedItem.Status, OutputIndex: e.HostedItem.OutputIndex, Metadata: e.HostedItem.Metadata}

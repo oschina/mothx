@@ -1227,3 +1227,61 @@ func TestConvertMessagesReplacesAudioVideoWithPlaceholder(t *testing.T) {
 		t.Fatalf("video placeholder = %#v", blocks[2])
 	}
 }
+
+func TestAnthropicDeepSeekNativeTitle(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","title":"北京明天天气"}}`,
+		``,
+	}, "\n")
+	bodyCh := make(chan string, 1)
+	p := NewProviderWithModels("fake-key", "https://api.deepseek.com/anthropic", []*provider.Model{{ID: "deepseek-flash"}})
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		bodyCh <- string(body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewBufferString(sse)),
+			Request:    r,
+		}, nil
+	})}
+
+	events := chatAndCollect(t, p, provider.ChatParams{
+		Messages:     []provider.Message{provider.NewUserMessage("北京明天会下雨吗")},
+		Abort:        make(chan struct{}),
+		TitleEnabled: true,
+	})
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(bodyChString(t, bodyCh)), &body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	title, ok := body["title"].(map[string]any)
+	if !ok || title["enabled"] != true {
+		t.Fatalf("request title = %#v, want {\"enabled\":true}", body["title"])
+	}
+
+	var gotTitle string
+	for _, event := range events {
+		if event.Type == provider.StreamDone {
+			gotTitle = event.Title
+		}
+	}
+	if gotTitle != "北京明天天气" {
+		t.Fatalf("StreamDone title = %q, want 北京明天天气", gotTitle)
+	}
+}
+
+func bodyChString(t *testing.T, bodyCh <-chan string) string {
+	t.Helper()
+	select {
+	case body := <-bodyCh:
+		return body
+	default:
+		t.Fatal("no request body captured")
+		return ""
+	}
+}

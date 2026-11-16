@@ -162,6 +162,11 @@ func (p *Provider) API() string {
 	return p.api
 }
 
+// SupportsNativeTitle implements provider.NativeTitleProvider.
+func (p *Provider) SupportsNativeTitle() bool {
+	return provider.SupportsNativeTitleBaseURL(p.baseURL)
+}
+
 // ResponseStateMode implements provider.ResponseStateModeProvider.
 func (p *Provider) ResponseStateMode() string {
 	if p.responsesConfig == nil || p.responsesConfig.stateMode == "" {
@@ -333,6 +338,13 @@ type openAIRequest struct {
 	Thinking            *thinkingConfig `json:"thinking,omitempty"`
 	EnableThinking      *bool           `json:"enable_thinking,omitempty"`
 	ThinkingBudget      int             `json:"thinking_budget,omitempty"`
+	Title               *titleRequest   `json:"title,omitempty"`
+}
+
+// titleRequest enables provider-native conversation-title generation. Only
+// endpoints that document the extension receive it.
+type titleRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 type thinkingConfig struct {
@@ -459,6 +471,7 @@ type openAIDelta struct {
 	Content   string           `json:"content"`
 	Reasoning *string          `json:"reasoning_content,omitempty"`
 	ToolCalls []openAIToolCall `json:"tool_calls"`
+	Title     string           `json:"title,omitempty"`
 }
 
 type openAIUsageResponse struct {
@@ -519,6 +532,9 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 			} else {
 				reqBody.MaxTokens = params.MaxTokens
 			}
+		}
+		if params.TitleEnabled && p.SupportsNativeTitle() {
+			reqBody.Title = &titleRequest{Enabled: true}
 		}
 
 		if !p.disableReasoning && model != nil && model.Reasoning {
@@ -794,6 +810,7 @@ func (p *Provider) parseSSE(ctx context.Context, body io.Reader, ch chan<- provi
 		toolCalls       []provider.ToolCallBlock
 		toolCallBuffers = make(map[int]*strings.Builder)
 		stopReason      string
+		title           string
 		usage           *provider.Usage
 		visibleOutput   bool
 	)
@@ -903,6 +920,9 @@ func (p *Provider) parseSSE(ctx context.Context, body io.Reader, ch chan<- provi
 					toolCallBuffers[idx].Write(tc.Function.Arguments)
 				}
 			}
+			if choice.Delta.Title != "" {
+				title = choice.Delta.Title
+			}
 			if choice.FinishReason != nil {
 				stopReason = *choice.FinishReason
 			}
@@ -944,7 +964,7 @@ func (p *Provider) parseSSE(ctx context.Context, body io.Reader, ch chan<- provi
 		visibleOutput = true
 		ch <- provider.StreamEvent{Type: provider.StreamUsage, Usage: usage}
 	}
-	ch <- provider.StreamEvent{Type: provider.StreamDone, StopReason: stopReason}
+	ch <- provider.StreamEvent{Type: provider.StreamDone, StopReason: stopReason, Title: title}
 	return visibleOutput, nil
 }
 
