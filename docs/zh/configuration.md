@@ -512,7 +512,7 @@ DeepSeek 的 effort 取值遵循官方映射：`minimal`/`low` → `low`，`medi
 
 Qwen 混合思考模型在显式关闭时发送 `enable_thinking: false`。GLM 模型的 effort 映射为 `low`/`high`/`max`（`medium`/`high`/`xhigh` → `high`）；GLM-5.3 不支持关闭思考，因此显式关闭时保留厂商的常开默认值，而不发送会被拒绝的 `thinking.type: "disabled"`。
 
-Chat Completions 请求携带 tools 时，回放的 assistant 消息会携带真实记录的 `reasoning_content`；对不要求该字段的模型不会合成空占位。
+Chat Completions 请求携带 tools 时，回放的 assistant 消息会携带真实记录的 `reasoning_content`。要求该字段的端点始终会收到它，即使没有记录到 reasoning：官方 DeepSeek、Kimi/Moonshot，以及 MiMo（包括 B.AI、Gitee/Moark、OpenRouter 等聚合商以 `mimo-*` 模型 ID 提供的 MiMo）。对不要求该字段的模型不会合成空占位。
 
 MothX 也会在运行时学习该能力：当 OpenAI 兼容网关拒绝 `reasoning_effort` 时，会立即去掉该参数重试，在重试提示中说明原因，并把该模型的 `thinkingFormat` 记录为 `thinking-only`、`supportsReasoningEffort` 记录为 `false`，后续运行不再发送该参数。
 
@@ -589,7 +589,7 @@ MothX 也会在运行时学习该能力：当 OpenAI 兼容网关拒绝 `reasoni
 | 字段 | 类型 | 描述 |
 |------|------|------|
 | `thinkingFormat` | string | 覆盖模型 thinking 格式（`openai`、`deepseek`、`xiaomi`、`anthropic` 等） |
-| `requiresReasoningContentOnAssistant` | bool | 回放 assistant 消息时发送空 `reasoning_content` |
+| `requiresReasoningContentOnAssistant` | bool | 回放 assistant 消息时发送空 `reasoning_content`（Kimi/MiMo 模型 ID 与 DeepSeek/MiMo/Moonshot 端点会自动推断） |
 | `requiresReasoningContentOnAssistantMessages` | bool | 参考实现中的别名，与上一项等价 |
 | `forceAdaptiveThinking` | bool | 强制使用 Anthropic adaptive thinking 格式 |
 | `supportsReasoningEffort` | bool | 模型是否接受 `reasoning_effort` |

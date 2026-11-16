@@ -911,6 +911,82 @@ func TestOpenAIRequiresReasoningContentForKimiModels(t *testing.T) {
 	}
 }
 
+func TestOpenAIRequiresReasoningContentForMiMoModels(t *testing.T) {
+	// MiMo's contract applies to the model, not only to the official host:
+	// aggregators keep the vendor's model ID but use their own base URL.
+	cases := []struct {
+		name    string
+		baseURL string
+		modelID string
+		want    bool
+	}{
+		{name: "official endpoint", baseURL: "https://api.xiaomimimo.com/v1", modelID: "mimo-v2.6-flash", want: true},
+		{name: "token plan endpoint", baseURL: "https://token-plan-cn.xiaomimimo.com/v1", modelID: "mimo-v2.6-pro", want: true},
+		{name: "aggregator", baseURL: "https://api.b.ai/v1", modelID: "mimo-v2.5-pro", want: true},
+		{name: "namespaced aggregator", baseURL: "https://openrouter.ai/api/v1", modelID: "xiaomi/mimo-v2.5", want: true},
+		{name: "unrelated model", baseURL: "https://api.b.ai/v1", modelID: "mimosa-chat", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewProviderWithModels("key", tc.baseURL, nil)
+			if got := p.requiresReasoningContentOnAssistant(&provider.Model{ID: tc.modelID, Reasoning: true}); got != tc.want {
+				t.Fatalf("requiresReasoningContentOnAssistant(%q at %q) = %v, want %v", tc.modelID, tc.baseURL, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOpenAIMiMoReplaysReasoningContentWithToolCalls(t *testing.T) {
+	toolCall := provider.ContentBlock{Type: "toolCall", ToolCall: &provider.ToolCallBlock{ID: "call_1", Name: "read"}}
+
+	t.Run("recorded reasoning is replayed verbatim", func(t *testing.T) {
+		bodyCh := make(chan string, 1)
+		p := newMockOpenAIProviderAtURL(t, "https://api.b.ai/v1", []*provider.Model{{ID: "mimo-v2.5-pro", Reasoning: true}}, "data: [DONE]\n", bodyCh)
+		req := captureOpenAIRequestBody(t, p, provider.ChatParams{
+			ModelID: "mimo-v2.5-pro",
+			Messages: []provider.Message{
+				provider.NewUserMessage("hi"),
+				provider.NewAssistantMessage([]provider.ContentBlock{{Type: "thinking", Thinking: "prior reasoning text"}, toolCall}),
+				provider.NewToolResultMessage("call_1", "read", "ok", false),
+			},
+			Tools: []provider.ToolDefinition{{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)}},
+			Abort: make(chan struct{}),
+		}, bodyCh)
+		if len(req.Messages) < 2 {
+			t.Fatalf("messages = %#v", req.Messages)
+		}
+		assistant := req.Messages[1]
+		if assistant.Reasoning == nil || *assistant.Reasoning != "prior reasoning text" {
+			t.Fatalf("reasoning_content = %#v, want %q", assistant.Reasoning, "prior reasoning text")
+		}
+		if len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].ID != "call_1" {
+			t.Fatalf("tool_calls = %#v, want call_1", assistant.ToolCalls)
+		}
+	})
+
+	t.Run("missing reasoning still carries the field", func(t *testing.T) {
+		bodyCh := make(chan string, 1)
+		p := newMockOpenAIProviderAtURL(t, "https://api.b.ai/v1", []*provider.Model{{ID: "mimo-v2.5-pro", Reasoning: true}}, "data: [DONE]\n", bodyCh)
+		req := captureOpenAIRequestBody(t, p, provider.ChatParams{
+			ModelID: "mimo-v2.5-pro",
+			Messages: []provider.Message{
+				provider.NewUserMessage("hi"),
+				provider.NewAssistantMessage([]provider.ContentBlock{toolCall}),
+				provider.NewToolResultMessage("call_1", "read", "ok", false),
+			},
+			Tools: []provider.ToolDefinition{{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)}},
+			Abort: make(chan struct{}),
+		}, bodyCh)
+		if len(req.Messages) < 2 {
+			t.Fatalf("messages = %#v", req.Messages)
+		}
+		assistant := req.Messages[1]
+		if assistant.Reasoning == nil || *assistant.Reasoning != "" {
+			t.Fatalf("reasoning_content = %#v, want an empty placeholder", assistant.Reasoning)
+		}
+	})
+}
+
 func TestConvertMessagesKeepsImageToolResponsesAdjacent(t *testing.T) {
 	image := &provider.ImageContent{Data: "a", MimeType: "image/png"}
 	messages := []provider.Message{

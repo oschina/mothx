@@ -512,7 +512,7 @@ DeepSeek effort values follow its documented mapping: `minimal`/`low` → `low`,
 
 Qwen hybrid thinking models send `enable_thinking: false` for an explicit off. GLM models map effort to `low`/`high`/`max` (`medium`/`high`/`xhigh` → `high`); GLM-5.3 cannot disable reasoning, so an explicit off leaves the vendor's always-on default instead of sending the rejected `thinking.type: "disabled"`.
 
-When a Chat Completions request carries tools, replayed assistant messages carry their recorded reasoning content as `reasoning_content`. No empty placeholder is synthesized for models that do not require the field.
+When a Chat Completions request carries tools, replayed assistant messages carry their recorded reasoning content as `reasoning_content`. Endpoints that require the field always receive it, even when no reasoning was recorded: official DeepSeek, Kimi/Moonshot, and MiMo — including `mimo-*` model IDs served by aggregators such as B.AI, Gitee/Moark, or OpenRouter. No empty placeholder is synthesized for models that do not require it.
 
 MothX also learns this at runtime: when an OpenAI-compatible gateway rejects `reasoning_effort`, it retries immediately without the field, shows the reason in the retry notice, and records `thinkingFormat: "thinking-only"` plus `supportsReasoningEffort: false` on that model so later runs omit it.
 
@@ -589,7 +589,7 @@ The `compat` object is optional and should only be set when a model needs protoc
 | Field | Type | Description |
 |-------|------|-------------|
 | `thinkingFormat` | string | Override model thinking format (`openai`, `deepseek`, `xiaomi`, `anthropic`, etc.) |
-| `requiresReasoningContentOnAssistant` | bool | Send empty `reasoning_content` on replayed assistant messages |
+| `requiresReasoningContentOnAssistant` | bool | Send empty `reasoning_content` on replayed assistant messages (also inferred for Kimi/MiMo model IDs and DeepSeek/MiMo/Moonshot endpoints) |
 | `requiresReasoningContentOnAssistantMessages` | bool | Alias used by the reference implementation; treated the same as above |
 | `forceAdaptiveThinking` | bool | Force Anthropic adaptive thinking format |
 | `supportsReasoningEffort` | bool | Whether the model accepts `reasoning_effort` |

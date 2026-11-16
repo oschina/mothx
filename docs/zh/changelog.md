@@ -29,6 +29,10 @@
 
 - **ACP worker 能力改为类型化解析模型。** `internal/agentruntime/workerdriver` 拥有 `WorkerCapabilities`、显式 `generic-acp` adapter 与 profile ∩ advertised ∩ policy 解析器；业务代码读取能力而不是探测原始 `agentCapabilities` map。Profile 新增可选 `driver`、`mcpBridge` 与只能收紧的 `capabilityOverrides`。解析结果、降级原因与 bridge 状态写入 `session_child_runs`（migration 58）并投影到 child metadata。`mothx doctor` 检查 loopback `tcp4` 可绑定性与 profile driver/bridge/override 合法性；`internal/architecture` 守护 workerdriver 叶子边界并禁止业务代码按 driver 身份分支。2026-11-10 的真实 interop 使用 OpenCode 2.0.16 与 codex-acp 0.16.0 验证了 loopback bridge（OpenCode 写入了真实 `worker_mgr` finding，codex-acp 完成了 MCP handshake）；两者均可由 `generic-acp` 描述，因此没有新增未经验证的 flavor。
 
+### 🐛 问题修复
+
+- **聚合商提供的 MiMo 模型会随 `tool_calls` 回传 `reasoning_content`。** MiMo 要求携带 `tool_calls` 的 assistant 消息在下一轮请求中原样回传 `reasoning_content`。此前仅根据 `xiaomimimo` base URL 判定，因此 B.AI、Gitee/Moark、OpenRouter 等聚合商提供的 `mimo-*` 模型在会话没有记录到 reasoning 时可能缺少该字段。现在也会按模型 ID 识别 MiMo，并在没有记录到 reasoning 的 assistant 工具调用消息上补空的 `reasoning_content` 占位。
+
 ## v1.3.108
 
 ### 💥 行为变更

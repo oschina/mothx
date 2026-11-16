@@ -1147,6 +1147,27 @@ func isDeepSeekV41Model(modelID string) bool {
 	return strings.Contains(lower, "deepseek-v4.1") || strings.Contains(lower, "deepseek-v4-1")
 }
 
+// isMiMoModel matches Xiaomi MiMo model IDs, including namespaced spellings
+// used by aggregators (for example "mimo-v2.5-pro" on B.AI or
+// "xiaomi/mimo-v2.5" on OpenRouter). MiMo requires an assistant message that
+// carries tool_calls to replay its reasoning_content, the same contract as the
+// official xiaomimimo endpoint.
+func isMiMoModel(modelID string) bool {
+	lower := strings.ToLower(strings.TrimSpace(modelID))
+	if lower == "" {
+		return false
+	}
+	if lower == "mimo" || strings.HasPrefix(lower, "mimo-") || strings.HasPrefix(lower, "mimo/") || strings.HasPrefix(lower, "mimo:") {
+		return true
+	}
+	for _, prefix := range []string{"/mimo-", "/mimo/", ":mimo-"} {
+		if strings.Contains(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // deepSeekV41ReasoningEffort maps a thinking level onto the DeepSeek V4.1
 // effort scale. ThinkingOff disables the gateway's think-by-default behavior
 // with "none"; an empty or unset level falls back to "medium", matching
@@ -1264,6 +1285,12 @@ func (p *Provider) requiresReasoningContentOnAssistant(model *provider.Model) bo
 	if model != nil {
 		modelID := strings.ToLower(model.ID)
 		if strings.Contains(modelID, "kimi") || modelID == "k3" || strings.HasPrefix(modelID, "k3-") {
+			return true
+		}
+		// Aggregators (B.AI, Gitee/Moark, ...) serve MiMo models from their own
+		// hosts, so the base URL cannot identify the vendor. Detect the model
+		// family instead and keep the same replay contract as xiaomimimo.com.
+		if isMiMoModel(modelID) {
 			return true
 		}
 	}
