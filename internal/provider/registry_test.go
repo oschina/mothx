@@ -76,6 +76,7 @@ func TestVendorFromBaseURL(t *testing.T) {
 		{"https://aip.baidubce.com/rpc", "qianfan"},
 		{"https://dashscope.aliyuncs.com/api", "bailian"},
 		{"https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "bailian"},
+		{"https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1", "bailian"},
 		{"https://coding.dashscope.aliyuncs.com/v1", "bailian"},
 		{"https://ai.gitee.com/v1", "gitee"},
 		{"https://openrouter.ai/api/v1", "openrouter"},

@@ -1007,18 +1007,18 @@ func TestAuthSaveOmitsBuiltinModelMaxTokens(t *testing.T) {
 	if pc == nil {
 		t.Fatal("alibaba-token-plan provider missing")
 	}
-	var kimi *config.ModelConfig
+	var glm *config.ModelConfig
 	for i := range pc.Models {
-		if pc.Models[i].ID == "kimi-k2.6" {
-			kimi = &pc.Models[i]
+		if pc.Models[i].ID == "glm-5.3" {
+			glm = &pc.Models[i]
 			break
 		}
 	}
-	if kimi == nil {
-		t.Fatal("kimi-k2.6 model missing")
+	if glm == nil {
+		t.Fatal("glm-5.3 model missing")
 	}
-	if kimi.MaxTokens != 0 {
-		t.Fatalf("kimi-k2.6 MaxTokens = %d, want 0/omitted for builtin default", kimi.MaxTokens)
+	if glm.MaxTokens != 0 {
+		t.Fatalf("glm-5.3 MaxTokens = %d, want 0/omitted for builtin default", glm.MaxTokens)
 	}
 }
 

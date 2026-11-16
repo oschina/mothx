@@ -2,7 +2,7 @@
 
 > 由 `docs/scripts/generate-models.py` 依据 `internal/config/settings.go`（`defaultProviderConfigs`）与 `internal/provider/vendor_*.go` 生成，请勿手工编辑；运行 `make docs-models` 重新生成。
 
-本文档是 MothX 内置供应商与模型的完整参考：共 **64 个供应商**、**598 个模型**。
+本文档是 MothX 内置供应商与模型的完整参考：共 **64 个供应商**、**595 个模型**。
 
 ## API 类型说明
 
@@ -32,7 +32,7 @@
 
 | 供应商 | Provider | Vendor | API 协议 | Thinking 格式 | 模型数 |
 |--------|----------|--------|----------|--------------|--------|
-| Moark | `moark` | gitee | openai-chat | - | 36 |
+| Moark | `moark` | gitee | openai-chat | - | 37 |
 | DeepSeek（官方 · Anthropic） | `deepseek-anthropic` | - | anthropic-messages | - | 3 |
 | DeepSeek（官方） | `deepseek-openai` | - | openai-chat | - | 3 |
 | 小米 MiMo | `xiaomi` | - | openai-chat | xiaomi | 2 |
@@ -47,14 +47,14 @@
 | LongCat（Anthropic） | `longcat-anthropic` | longcat | anthropic-messages | - | 1 |
 | MiniMax（Anthropic） | `minimax-anthropic` | - | anthropic-messages | - | 3 |
 | MiniMax 国内（Anthropic） | `minimax-cn-anthropic` | - | anthropic-messages | - | 3 |
-| 腾讯混元（Anthropic） | `tencent-hy-plan-anthropic` | tencent-hy-plan | anthropic-messages | - | 1 |
+| 腾讯混元（Anthropic） | `tencent-hy-plan-anthropic` | tencent-hy-plan | anthropic-messages | - | 2 |
 | Google Gemini | `google-gemini` | - | google-gemini | - | 16 |
 | Google Vertex AI | `google-vertex` | - | google-vertex | - | 10 |
 | Agnes AI（国际版） | `agnes` | agnes | openai-chat | - | 3 |
 | Agnes AI（国内版） | `agnes-cn` | agnes | openai-chat | - | 3 |
 | 阿里云百炼 Coding Plan | `alibaba-coding-plan` | bailian | openai-chat | - | 10 |
 | 阿里云百炼（标准） | `alibaba-standard` | bailian | openai-chat | - | 6 |
-| 阿里云百炼 Token Plan | `alibaba-token-plan` | bailian | openai-chat | - | 14 |
+| 阿里云百炼 Token Plan | `alibaba-token-plan` | bailian | openai-chat | - | 7 |
 | Amazon Bedrock | `amazon-bedrock` | amazon-bedrock | openai-chat | - | 10 |
 | AMD Radeon | `amd-radeon` | amd-radeon | openai-chat | - | 2 |
 | 蚂蚁 Ling（Cerebras） | `ant-ling` | - | openai-chat | - | 3 |
@@ -65,7 +65,7 @@
 | CodeOK | `codeok` | codeok | openai-responses | - | 4 |
 | 天翼云 Coding Plan | `ctyun-plan` | ctyun-plan | openai-chat | - | 3 |
 | Fireworks AI | `fireworks` | - | anthropic-messages | - | 7 |
-| Gitee AI | `gitee` | gitee | openai-chat | - | 36 |
+| Gitee AI | `gitee` | gitee | openai-chat | - | 37 |
 | GitHub Copilot | `github-copilot` | github-copilot | openai-chat | - | 10 |
 | Groq | `groq` | - | openai-chat | - | 7 |
 | 华为云（ModelArts） | `huawei` | huawei | openai-chat | - | 8 |
@@ -89,7 +89,7 @@
 | 百度千帆 Token Plan | `qianfan-token-plan` | qianfan | openai-chat | - | 6 |
 | 商汤日日新（SenseNova） | `sensenova` | sensenova | openai-chat | - | 2 |
 | 阶跃星辰（StepFun） | `stepfun` | - | openai-chat | - | 2 |
-| 腾讯混元（Tencent Hunyuan） | `tencent-hy-plan` | tencent-hy-plan | openai-chat | - | 1 |
+| 腾讯混元（Tencent Hunyuan） | `tencent-hy-plan` | tencent-hy-plan | openai-chat | - | 2 |
 | Together AI | `together` | - | openai-chat | - | 5 |
 | Vercel AI Gateway | `vercel-ai-gateway` | - | anthropic-messages | - | 14 |
 | xAI（Grok） | `xai` | - | openai-chat | - | 7 |
@@ -110,6 +110,7 @@ Vendor `gitee` · BaseURL `https://api.moark.com/v1` · API `openai-chat` · API
 | `deepseek-v4.1-flash-1017` | 1M | - | **是** | text,image | - | - | - | - |
 | `deepseek-v4.1-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `hy4-flash` | 1M | - | **是** | text,image | - | - | - | - |
+| `hy4` | 1M | - | **是** | text | - | - | - | - |
 | `Qwen4-Max` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-max` | 1M | - | **是** | text,image | - | - | - | - |
@@ -395,7 +396,8 @@ Vendor `tencent-hy-plan` · BaseURL `https://api.lkeap.cloud.tencent.com/plan/an
 
 | 模型 | Context | MaxTokens | 推理 | 输入 | Prompt $/M | Completion $/M | Cache Read $/M | Cache Write $/M |
 |------|---------|-----------|------|------|-----------|----------------|----------------|-----------------|
-| `hy3` | 262K | 66K | **是** | text | - | - | - | - |
+| `hy4` | 1M | 66K | **是** | text | - | - | - | - |
+| `hy4-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
 
 ---
 
@@ -503,24 +505,17 @@ Vendor `bailian` · BaseURL `https://dashscope.aliyuncs.com/compatible-mode/v1` 
 
 ### 阿里云百炼 Token Plan（`alibaba-token-plan`） <a id="alibaba-token-plan"></a>
 
-Vendor `bailian` · BaseURL `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` · API `openai-chat` · API Key `${BAILIAN_TOKEN_PLAN_API_KEY}`
+Vendor `bailian` · BaseURL `https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1` · API `openai-chat` · API Key `${BAILIAN_TOKEN_PLAN_API_KEY}`
 
 | 模型 | Context | MaxTokens | 推理 | 输入 | Prompt $/M | Completion $/M | Cache Read $/M | Cache Write $/M |
 |------|---------|-----------|------|------|-----------|----------------|----------------|-----------------|
-| `qwen3.8-max-preview` | 1M | 66K | **是** | text | - | - | - | - |
-| `qwen3.6-plus` | 1M | 66K | **是** | text,image | - | - | - | - |
-| `qwen3.7-max` | 1M | 66K | **是** | text | - | - | - | - |
-| `qwen3.7-plus` | 1M | 66K | **是** | text,image | - | - | - | - |
-| `qwen3.6-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
-| `deepseek-v4-pro` | 1M | 384K | 否 | text | - | - | - | - |
-| `deepseek-v4-flash` | 1M | 384K | 否 | text | - | - | - | - |
-| `deepseek-v3.2` | 131K | 66K | **是** | text | - | - | - | - |
-| `kimi-k2.6` | 262K | 262K | **是** | text,image,video | - | - | - | - |
-| `kimi-k2.5` | 262K | 262K | **是** | text,image,video | - | - | - | - |
+| `auto` | 1M | - | **是** | text,image | - | - | - | - |
+| `qwen4-max` | 1M | - | **是** | text,image | - | - | - | - |
+| `qwen3.8-max` | 1M | - | **是** | text,image | - | - | - | - |
+| `qwen3.8-flash` | 1M | - | **是** | text,image | - | - | - | - |
+| `deepseek-v4.1-flash-1017` | 1M | - | **是** | text,image | - | - | - | - |
+| `deepseek-v4.1-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `glm-5.3` | 1M | 131K | **是** | text | - | - | - | - |
-| `glm-5.1` | 200K | 131K | **是** | text | - | - | - | - |
-| `glm-5` | 200K | 33K | **是** | text | - | - | - | - |
-| `MiniMax-M2.5` | 197K | 131K | 否 | text | - | - | - | - |
 
 ---
 
@@ -718,6 +713,7 @@ Vendor `gitee` · BaseURL `https://ai.gitee.com/v1` · API `openai-chat` · API 
 | `deepseek-v4.1-flash-1017` | 1M | - | **是** | text,image | - | - | - | - |
 | `deepseek-v4.1-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `hy4-flash` | 1M | - | **是** | text,image | - | - | - | - |
+| `hy4` | 1M | - | **是** | text | - | - | - | - |
 | `Qwen4-Max` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-max` | 1M | - | **是** | text,image | - | - | - | - |
@@ -1173,7 +1169,8 @@ Vendor `tencent-hy-plan` · BaseURL `https://api.lkeap.cloud.tencent.com/plan/v3
 
 | 模型 | Context | MaxTokens | 推理 | 输入 | Prompt $/M | Completion $/M | Cache Read $/M | Cache Write $/M |
 |------|---------|-----------|------|------|-----------|----------------|----------------|-----------------|
-| `hy3` | 262K | 66K | **是** | text | - | - | - | - |
+| `hy4` | 1M | 66K | **是** | text | - | - | - | - |
+| `hy4-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
 
 ---
 
@@ -1311,10 +1308,10 @@ xhigh    // 最高
 
 | 区间 | 数量 |
 |------|------|
-| 1M+ | 247 |
+| 1M+ | 252 |
 | 500K-1M | 6 |
-| 200K-500K | 230 |
-| 100K-200K | 86 |
+| 200K-500K | 224 |
+| 100K-200K | 84 |
 | 32K-100K | 12 |
 | <32K | 5 |
 | 未设置 | 12 |
@@ -1323,7 +1320,7 @@ xhigh    // 最高
 
 | 模态 | 数量 |
 |------|------|
-| text/image | 332 |
-| text | 229 |
-| text/image/video | 35 |
+| text/image | 337 |
+| text | 223 |
+| text/image/video | 33 |
 | text/image/audio/video | 2 |

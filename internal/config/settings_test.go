@@ -432,6 +432,7 @@ func TestMoarkModelMaxTokens(t *testing.T) {
 		"deepseek-v4.1-flash":      0,
 		"deepseek-v4.1-flash-1017": 0,
 		"hy4-flash":                0,
+		"hy4":                      0,
 		"Qwen4-Max":                0,
 		"step-3.7-flash":           16384,
 		"qwen3.8-flash":            0,
@@ -488,6 +489,86 @@ func TestGiteeMoarkHy4FlashAndQwen4MaxDefaults(t *testing.T) {
 				t.Fatalf("%s %s compat = %#v, want deepseek-v4.1 effort scale", providerName, modelID, model.Compat)
 			}
 		}
+	}
+}
+
+func TestGiteeMoarkHy4Defaults(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"gitee", "moark"} {
+		model := s.GetModelConfig(providerName, "hy4")
+		if model == nil {
+			t.Fatalf("%s missing hy4", providerName)
+		}
+		if !model.Reasoning || model.ContextWindow != 1000000 {
+			t.Fatalf("%s hy4 = %#v, want reasoning model with 1M context", providerName, model)
+		}
+		if len(model.Input) != 1 || model.Input[0] != "text" {
+			t.Fatalf("%s hy4 input = %#v, want text only", providerName, model.Input)
+		}
+		if model.MaxTokens != 0 || model.MaxTokensWasSet() {
+			t.Fatalf("%s hy4 maxTokens = %d, explicitly set = %v; want 0, false", providerName, model.MaxTokens, model.MaxTokensWasSet())
+		}
+		if model.Compat == nil || model.Compat.ThinkingFormat != "deepseek-v4.1" {
+			t.Fatalf("%s hy4 compat = %#v, want deepseek-v4.1 effort scale", providerName, model.Compat)
+		}
+	}
+}
+
+func TestTencentHYPlanOnlyExposesHy4Models(t *testing.T) {
+	s := DefaultSettings()
+	want := map[string][]string{
+		"hy4":       {"text"},
+		"hy4-flash": {"text", "image"},
+	}
+	for _, providerName := range []string{"tencent-hy-plan", "tencent-hy-plan-anthropic"} {
+		providerConfig := s.Providers[providerName]
+		if providerConfig == nil {
+			t.Fatalf("expected %s provider", providerName)
+		}
+		if len(providerConfig.Models) != len(want) {
+			t.Fatalf("%s models = %d, want %d", providerName, len(providerConfig.Models), len(want))
+		}
+		for _, model := range providerConfig.Models {
+			wantInput, ok := want[model.ID]
+			if !ok {
+				t.Fatalf("unexpected %s model %q", providerName, model.ID)
+			}
+			if !model.Reasoning || model.ContextWindow != 1000000 || model.MaxTokens != 65536 {
+				t.Fatalf("%s %s = %#v, want reasoning model with 1M context and 65536 max output", providerName, model.ID, model)
+			}
+			if len(model.Input) != len(wantInput) {
+				t.Fatalf("%s %s input = %#v, want %#v", providerName, model.ID, model.Input, wantInput)
+			}
+			for i := range wantInput {
+				if model.Input[i] != wantInput[i] {
+					t.Fatalf("%s %s input = %#v, want %#v", providerName, model.ID, model.Input, wantInput)
+				}
+			}
+		}
+	}
+}
+
+func TestAlibabaTokenPlanCatalog(t *testing.T) {
+	s := DefaultSettings()
+	providerConfig := s.Providers["alibaba-token-plan"]
+	if providerConfig == nil {
+		t.Fatal("expected alibaba-token-plan provider")
+	}
+	if got, want := providerConfig.BaseURL, "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1"; got != want {
+		t.Fatalf("alibaba-token-plan BaseURL = %q, want %q", got, want)
+	}
+	wantIDs := []string{"auto", "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "deepseek-v4.1-flash-1017", "deepseek-v4.1-flash", "glm-5.3"}
+	if len(providerConfig.Models) != len(wantIDs) {
+		t.Fatalf("alibaba-token-plan models = %d, want %d", len(providerConfig.Models), len(wantIDs))
+	}
+	for i, wantID := range wantIDs {
+		if got := providerConfig.Models[i].ID; got != wantID {
+			t.Fatalf("alibaba-token-plan model[%d] = %q, want %q", i, got, wantID)
+		}
+	}
+	qwen4 := s.GetModelConfig("alibaba-token-plan", "qwen4-max")
+	if qwen4 == nil || qwen4.Compat == nil || qwen4.Compat.ThinkingFormat != "qwen" {
+		t.Fatalf("alibaba-token-plan qwen4-max = %#v, want qwen thinking format", qwen4)
 	}
 }
 
@@ -1046,6 +1127,7 @@ func TestRoutedProviderModelMaxTokensAreExplicit(t *testing.T) {
 			"deepseek-v4.1-flash":      0,
 			"deepseek-v4.1-flash-1017": 0,
 			"hy4-flash":                0,
+			"hy4":                      0,
 			"Qwen4-Max":                0,
 			"qwen3.8-flash":            0,
 		},
@@ -1070,17 +1152,13 @@ func TestRoutedProviderModelMaxTokensAreExplicit(t *testing.T) {
 			"glm-4.7":              131072,
 		},
 		"alibaba-token-plan": {
-			"qwen3.6-plus":      65536,
-			"qwen3.7-max":       65536,
-			"qwen3.6-flash":     65536,
-			"deepseek-v4-pro":   384000,
-			"deepseek-v4-flash": 384000,
-			"deepseek-v3.2":     65536,
-			"kimi-k2.6":         262144,
-			"kimi-k2.5":         262144,
-			"glm-5.1":           131072,
-			"glm-5":             32768,
-			"MiniMax-M2.5":      131072,
+			"auto":                     0,
+			"qwen4-max":                0,
+			"qwen3.8-max":              0,
+			"qwen3.8-flash":            0,
+			"deepseek-v4.1-flash-1017": 0,
+			"deepseek-v4.1-flash":      0,
+			"glm-5.3":                  131072,
 		},
 	}
 
