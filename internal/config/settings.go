@@ -1307,6 +1307,8 @@ var defaultProviderConfigs = map[string]*ProviderConfig{
 	"gitee": {Vendor: "gitee", BaseURL: "https://ai.gitee.com/v1", APIKey: "${GITEE_API_KEY}", API: "openai-chat", MaxImagesPerRequest: 5, Models: []ModelConfig{
 		{ID: "deepseek-v4.1-flash-1017", Name: "DeepSeek-V4.1-Flash-1017", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}},
 		{ID: "deepseek-v4.1-flash", Name: "DeepSeek-V4.1-Flash", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}},
+		{ID: "hy4-flash", Name: "Hunyuan 4 Flash", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}, Compat: &ModelCompat{ThinkingFormat: "deepseek-v4.1"}},
+		{ID: "Qwen4-Max", Name: "Qwen4 Max", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}, Compat: &ModelCompat{ThinkingFormat: "deepseek-v4.1"}},
 		{ID: "qwen3.8-flash", Name: "Qwen3.8 Flash", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}},
 		{ID: "qwen3.8-max", Name: "Qwen3.8 Max", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}},
 		{ID: "glm-5.3-flash", Name: "GLM-5.3-Flash", Reasoning: true, ContextWindow: 1000000, MaxTokens: 131072, Input: []string{"text", "image"}},
@@ -1380,6 +1382,8 @@ var defaultProviderConfigs = map[string]*ProviderConfig{
 	"moark": {Vendor: "gitee", BaseURL: "https://api.moark.com/v1", APIKey: "${MOARK_API_KEY}", API: "openai-chat", MaxImagesPerRequest: 5, Models: []ModelConfig{
 		{ID: "deepseek-v4.1-flash-1017", Name: "DeepSeek-V4.1-Flash-1017", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}},
 		{ID: "deepseek-v4.1-flash", Name: "DeepSeek-V4.1-Flash", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}},
+		{ID: "hy4-flash", Name: "Hunyuan 4 Flash", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}, Compat: &ModelCompat{ThinkingFormat: "deepseek-v4.1"}},
+		{ID: "Qwen4-Max", Name: "Qwen4 Max", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}, Compat: &ModelCompat{ThinkingFormat: "deepseek-v4.1"}},
 		{ID: "qwen3.8-flash", Name: "Qwen3.8 Flash", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}},
 		{ID: "qwen3.8-max", Name: "Qwen3.8 Max", Reasoning: true, ContextWindow: 1000000, Input: []string{"text", "image"}},
 		{ID: "glm-5.3-flash", Name: "GLM-5.3-Flash", Reasoning: true, ContextWindow: 1000000, MaxTokens: 131072, Input: []string{"text", "image"}},

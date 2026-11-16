@@ -431,6 +431,8 @@ func TestMoarkModelMaxTokens(t *testing.T) {
 		"deepseek-v4-flash-0731":   0,
 		"deepseek-v4.1-flash":      0,
 		"deepseek-v4.1-flash-1017": 0,
+		"hy4-flash":                0,
+		"Qwen4-Max":                0,
 		"step-3.7-flash":           16384,
 		"qwen3.8-flash":            0,
 	}
@@ -455,6 +457,36 @@ func TestMoarkModelMaxTokens(t *testing.T) {
 		}
 		if model.MaxTokens != wantMaxTokens {
 			t.Fatalf("moark %s MaxTokens = %d, want %d", model.ID, model.MaxTokens, wantMaxTokens)
+		}
+	}
+}
+
+func TestGiteeMoarkHy4FlashAndQwen4MaxDefaults(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"gitee", "moark"} {
+		for _, modelID := range []string{"hy4-flash", "Qwen4-Max"} {
+			model := s.GetModelConfig(providerName, modelID)
+			if model == nil {
+				t.Fatalf("%s missing %s", providerName, modelID)
+			}
+			if !model.Reasoning || model.ContextWindow != 1000000 {
+				t.Fatalf("%s %s = %#v, want reasoning model with 1M context", providerName, modelID, model)
+			}
+			wantInput := []string{"text", "image"}
+			if len(model.Input) != len(wantInput) {
+				t.Fatalf("%s %s input = %#v, want %#v", providerName, modelID, model.Input, wantInput)
+			}
+			for i := range wantInput {
+				if model.Input[i] != wantInput[i] {
+					t.Fatalf("%s %s input = %#v, want %#v", providerName, modelID, model.Input, wantInput)
+				}
+			}
+			if model.MaxTokens != 0 || model.MaxTokensWasSet() {
+				t.Fatalf("%s %s maxTokens = %d, explicitly set = %v; want 0, false", providerName, modelID, model.MaxTokens, model.MaxTokensWasSet())
+			}
+			if model.Compat == nil || model.Compat.ThinkingFormat != "deepseek-v4.1" {
+				t.Fatalf("%s %s compat = %#v, want deepseek-v4.1 effort scale", providerName, modelID, model.Compat)
+			}
 		}
 	}
 }
@@ -1013,6 +1045,8 @@ func TestRoutedProviderModelMaxTokensAreExplicit(t *testing.T) {
 			"deepseek-v4-flash-0731":   0,
 			"deepseek-v4.1-flash":      0,
 			"deepseek-v4.1-flash-1017": 0,
+			"hy4-flash":                0,
+			"Qwen4-Max":                0,
 			"qwen3.8-flash":            0,
 		},
 		"alibaba-standard": {
