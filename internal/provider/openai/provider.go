@@ -536,11 +536,28 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 				}
 			}
 			if params.ThinkingLevel == provider.ThinkingOff {
-				// DeepSeek V4.1 gateways think by default when no parameter is
-				// sent, so an explicit off must map to "none" instead of
-				// omitting the field.
-				if format == "deepseek-v4.1" && effortAllowed {
-					reqBody.ReasoningEffort = deepSeekV41ReasoningEffort(provider.ThinkingOff)
+				switch format {
+				case "deepseek-v4.1":
+					// DeepSeek accepts reasoning_effort="none" and documents it as
+					// the chat-completions off switch. Gateways whose chat template
+					// rejects reasoning_effort fall back to the thinking switch.
+					if effortAllowed {
+						reqBody.ReasoningEffort = deepSeekV41ReasoningEffort(provider.ThinkingOff)
+					} else {
+						reqBody.Thinking = &thinkingConfig{Type: "disabled"}
+					}
+				case "deepseek", "thinking-only":
+					// DeepSeek thinks by default, so omitting the switch would keep
+					// thinking on. The documented off switch is type=disabled.
+					reqBody.Thinking = &thinkingConfig{Type: "disabled"}
+				case "qwen":
+					// Qwen hybrid thinking models default to thinking on; the
+					// documented off switch is enable_thinking=false.
+					enabled := false
+					reqBody.EnableThinking = &enabled
+				case "zai":
+					// GLM-5.3 always reasons. Its thinking.type=disabled value is
+					// rejected, so an explicit off leaves the default enabled mode.
 				}
 			} else {
 				// Determine thinking format: explicit config > URL auto-detect > default
@@ -569,6 +586,11 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 					reqBody.EnableThinking = &enabled
 					if budget := qwenThinkingBudget(params.ThinkingLevel); budget > 0 {
 						reqBody.ThinkingBudget = budget
+					}
+				case "zai":
+					reqBody.Thinking = &thinkingConfig{Type: "enabled"}
+					if effortAllowed {
+						reqBody.ReasoningEffort = glmReasoningEffort(params.ThinkingLevel)
 					}
 				default: // "openai" or ""
 					if effortAllowed {
@@ -994,9 +1016,16 @@ func kimiReasoningEffort(level provider.ThinkingLevel) string {
 	}
 }
 
+// deepseekReasoningEffort maps a thinking level onto the DeepSeek effort scale.
+// DeepSeek accepts low/high/max natively and documents minimal->low and
+// medium/xhigh->high (and ultra->max, which has no MothX level).
 func deepseekReasoningEffort(level provider.ThinkingLevel) string {
 	switch level {
-	case provider.ThinkingXHigh, provider.ThinkingMax:
+	case provider.ThinkingMinimal, provider.ThinkingLow:
+		return "low"
+	case provider.ThinkingMedium, provider.ThinkingHigh, provider.ThinkingXHigh:
+		return "high"
+	case provider.ThinkingMax:
 		return "max"
 	default:
 		return "high"
@@ -1033,6 +1062,21 @@ func qwenThinkingBudget(level provider.ThinkingLevel) int {
 	}
 }
 
+// glmReasoningEffort maps a thinking level onto GLM's low/high/max effort
+// scale. GLM rejects medium, so levels are folded onto the accepted values.
+func glmReasoningEffort(level provider.ThinkingLevel) string {
+	switch level {
+	case provider.ThinkingMinimal, provider.ThinkingLow:
+		return "low"
+	case provider.ThinkingMedium, provider.ThinkingHigh, provider.ThinkingXHigh:
+		return "high"
+	case provider.ThinkingMax:
+		return "max"
+	default:
+		return "high"
+	}
+}
+
 func (p *Provider) thinkingFormatForModel(model *provider.Model) string {
 	if p.thinkingFormat != "" {
 		return p.thinkingFormat
@@ -1045,6 +1089,9 @@ func (p *Provider) thinkingFormatForModel(model *provider.Model) string {
 	}
 	if model != nil && isQwenModel(model.ID) {
 		return "qwen"
+	}
+	if model != nil && isGLMModel(model.ID) {
+		return "zai"
 	}
 	if model != nil && isDoubaoSeedModel(model.ID) {
 		return "doubao-seed"
@@ -1061,10 +1108,18 @@ func (p *Provider) thinkingFormatForModel(model *provider.Model) string {
 
 func isQwenModel(modelID string) bool {
 	lower := strings.ToLower(modelID)
-	// Match qwen3.6+, qwen3.7+, qwen3.8+ with or without prefix (e.g. "qwen/qwen3.7-plus")
-	return strings.Contains(lower, "qwen3.6") ||
+	// Match qwen3.5+, qwen3.6+, qwen3.7+, qwen3.8+ with or without prefix
+	// (e.g. "qwen/qwen3.7-plus"). Qwen3.5 is also a hybrid thinking series.
+	return strings.Contains(lower, "qwen3.5") ||
+		strings.Contains(lower, "qwen3.6") ||
 		strings.Contains(lower, "qwen3.7") ||
 		strings.Contains(lower, "qwen3.8")
+}
+
+// isGLMModel detects GLM models on gateways that do not carry an explicit
+// thinkingFormat. They use the Z.ai thinking/effort protocol (low/high/max).
+func isGLMModel(modelID string) bool {
+	return strings.Contains(strings.ToLower(modelID), "glm")
 }
 
 func isDeepSeekV41Model(modelID string) bool {

@@ -376,10 +376,20 @@ func (p *Provider) buildResponsesRequest(params provider.ChatParams, modelID str
 		}
 	}
 
-	if !p.disableReasoning && params.ThinkingLevel != provider.ThinkingOff && model != nil && model.Reasoning {
-		reqBody.Reasoning = &responsesReasoning{
-			Effort:  responsesReasoningEffort(params.ThinkingLevel),
-			Summary: p.responsesReasoningSummary(model),
+	if !p.disableReasoning && model != nil && model.Reasoning {
+		if params.ThinkingLevel == provider.ThinkingOff {
+			// DeepSeek Responses API defaults to thinking on; explicit "none"
+			// is the documented off switch. Without it an explicit off would
+			// silently keep thinking enabled.
+			switch p.thinkingFormatForModel(model) {
+			case "deepseek", "deepseek-v4.1":
+				reqBody.Reasoning = &responsesReasoning{Effort: "none"}
+			}
+		} else {
+			reqBody.Reasoning = &responsesReasoning{
+				Effort:  responsesReasoningEffort(params.ThinkingLevel),
+				Summary: p.responsesReasoningSummary(model),
+			}
 		}
 	}
 	if p.responsesConfig != nil && (p.responsesConfig.reasoningContext != "" || p.responsesConfig.reasoningMode != "") {
@@ -391,8 +401,10 @@ func (p *Provider) buildResponsesRequest(params provider.ChatParams, modelID str
 	}
 
 	// Responses-API reasoning models reject temperature/top_p, and some
-	// models reject sampling parameters entirely (compat flag).
-	if reqBody.Reasoning != nil || provider.SamplingParamsDisabled(model) {
+	// models reject sampling parameters entirely (compat flag). An explicit
+	// "none" effort means thinking is off, so sampling remains valid.
+	reasoningActive := reqBody.Reasoning != nil && reqBody.Reasoning.Effort != "none"
+	if reasoningActive || provider.SamplingParamsDisabled(model) {
 		reqBody.Temperature = nil
 		reqBody.TopP = nil
 	}

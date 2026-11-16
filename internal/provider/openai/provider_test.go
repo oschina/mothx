@@ -935,11 +935,12 @@ func TestDeepSeekReasoningEffort(t *testing.T) {
 		level provider.ThinkingLevel
 		want  string
 	}{
-		{provider.ThinkingMinimal, "high"},
-		{provider.ThinkingLow, "high"},
+		{provider.ThinkingMinimal, "low"},
+		{provider.ThinkingLow, "low"},
 		{provider.ThinkingMedium, "high"},
 		{provider.ThinkingHigh, "high"},
-		{provider.ThinkingXHigh, "max"},
+		{provider.ThinkingXHigh, "high"},
+		{provider.ThinkingMax, "max"},
 	}
 	for _, tc := range cases {
 		if got := deepseekReasoningEffort(tc.level); got != tc.want {
@@ -981,6 +982,150 @@ func TestIsDoubaoSeedModel(t *testing.T) {
 		if got := isDoubaoSeedModel(tc.id); got != tc.want {
 			t.Errorf("isDoubaoSeedModel(%q) = %v, want %v", tc.id, got, tc.want)
 		}
+	}
+}
+
+func TestOpenAIThinkingFormatDeepSeekOffSendsDisabled(t *testing.T) {
+	// DeepSeek thinks by default; an explicit off must send the documented
+	// thinking switch instead of omitting every parameter.
+	bodyCh := make(chan string, 1)
+	p := newMockOpenAIProviderAtURL(t, "https://api.test/v1", []*provider.Model{
+		{ID: "deepseek-test", Reasoning: true, Compat: &provider.ModelCompat{ThinkingFormat: "deepseek"}},
+	}, "data: [DONE]\n", bodyCh)
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "deepseek-test",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingOff,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+	var req openAIRequest
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodyCh)), &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if req.Thinking == nil || req.Thinking.Type != "disabled" {
+		t.Fatalf("thinking = %#v, want disabled", req.Thinking)
+	}
+	if req.ReasoningEffort != "" {
+		t.Fatalf("reasoning_effort = %q, want omitted when thinking is disabled", req.ReasoningEffort)
+	}
+}
+
+func TestOpenAIThinkingOnlyOffSendsDisabled(t *testing.T) {
+	bodyCh := make(chan string, 1)
+	p := newMockOpenAIProviderAtURL(t, "https://ai.gitee.com/v1", []*provider.Model{
+		{ID: "deepseek-v4.1-flash-1017", Reasoning: true, Compat: &provider.ModelCompat{ThinkingFormat: "thinking-only"}},
+	}, "data: [DONE]\n", bodyCh)
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "deepseek-v4.1-flash-1017",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingOff,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+	var req openAIRequest
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodyCh)), &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if req.Thinking == nil || req.Thinking.Type != "disabled" {
+		t.Fatalf("thinking = %#v, want disabled", req.Thinking)
+	}
+}
+
+func TestOpenAIOfficialDeepSeekRequiresReasoningContent(t *testing.T) {
+	p := NewProviderWithModels("key", "https://api.deepseek.com", nil)
+	if !p.requiresReasoningContentOnAssistant(&provider.Model{ID: "deepseek-v4.1-flash", Reasoning: true}) {
+		t.Fatal("official DeepSeek endpoint should require reasoning_content")
+	}
+}
+
+func TestOpenAIGatewayDeepSeekDoesNotSynthesizeEmptyReasoning(t *testing.T) {
+	// Gateway-hosted DeepSeek models accept omitted reasoning_content. Only send
+	// the field when actual reasoning was recorded.
+	p := NewProviderWithModels("key", "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1", nil)
+	if p.requiresReasoningContentOnAssistant(&provider.Model{ID: "deepseek-v4.1-flash-1017", Reasoning: true}) {
+		t.Fatal("gateway-hosted deepseek should not force an empty reasoning_content placeholder")
+	}
+	messages := p.convertMessages(provider.ChatParams{Messages: []provider.Message{
+		provider.NewUserMessage("hi"),
+		provider.NewAssistantMessage([]provider.ContentBlock{{Type: "text", Text: "answer"}}),
+	}}, false)
+	if len(messages) != 2 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if messages[1].Reasoning != nil {
+		t.Fatalf("assistant reasoning_content = %#v, want omitted when no reasoning was recorded", messages[1].Reasoning)
+	}
+}
+
+func TestOpenAIReplaysActualAssistantReasoningOnToolContinuations(t *testing.T) {
+	models := []struct {
+		id     string
+		compat *provider.ModelCompat
+	}{
+		{id: "qwen3.5-flash"},
+		{id: "qwen3.8-flash"},
+		{id: "glm-5.3-flash"},
+		{id: "minimax-m3"},
+		{id: "step-3.7-flash", compat: &provider.ModelCompat{ThinkingFormat: "kimi"}},
+		{id: "deepseek-v4.1-flash-1017"},
+	}
+	for _, tc := range models {
+		t.Run(tc.id, func(t *testing.T) {
+			bodyCh := make(chan string, 1)
+			p := newMockOpenAIProvider(t, []*provider.Model{{ID: tc.id, Reasoning: true, Compat: tc.compat}}, "data: [DONE]\n", bodyCh, nil)
+			req := captureOpenAIRequestBody(t, p, provider.ChatParams{
+				ModelID: tc.id,
+				Messages: []provider.Message{
+					provider.NewUserMessage("hi"),
+					provider.NewAssistantMessage([]provider.ContentBlock{
+						{Type: "thinking", Thinking: "prior reasoning text"},
+						{Type: "toolCall", ToolCall: &provider.ToolCallBlock{ID: "call_1", Name: "read"}},
+					}),
+					provider.NewToolResultMessage("call_1", "read", "ok", false),
+				},
+				Tools: []provider.ToolDefinition{{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)}},
+				Abort: make(chan struct{}),
+			}, bodyCh)
+			if len(req.Messages) < 2 || req.Messages[1].Reasoning == nil || *req.Messages[1].Reasoning != "prior reasoning text" {
+				t.Fatalf("assistant reasoning_content = %#v, want the recorded thinking content", req.Messages)
+			}
+		})
+	}
+}
+
+func TestOpenAINoEmptyReasoningPlaceholderForNonRequiringModels(t *testing.T) {
+	// Qwen/GLM and gateway-hosted DeepSeek tool continuations must carry only
+	// real reasoning content. Do not synthesize an empty reasoning_content
+	// field when no reasoning was recorded.
+	models := []struct {
+		id     string
+		compat *provider.ModelCompat
+	}{
+		{id: "qwen3.5-flash"},
+		{id: "qwen3.8-flash"},
+		{id: "glm-5.3-flash"},
+		{id: "minimax-m3"},
+		{id: "step-3.7-flash", compat: &provider.ModelCompat{ThinkingFormat: "kimi"}},
+		{id: "deepseek-v4.1-flash-1017"},
+	}
+	for _, tc := range models {
+		t.Run(tc.id, func(t *testing.T) {
+			bodyCh := make(chan string, 1)
+			p := newMockOpenAIProvider(t, []*provider.Model{{ID: tc.id, Reasoning: true, Compat: tc.compat}}, "data: [DONE]\n", bodyCh, nil)
+			req := captureOpenAIRequestBody(t, p, provider.ChatParams{
+				ModelID: tc.id,
+				Messages: []provider.Message{
+					provider.NewUserMessage("hi"),
+					provider.NewAssistantMessage([]provider.ContentBlock{{Type: "text", Text: "answer"}}),
+				},
+				Tools: []provider.ToolDefinition{{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)}},
+				Abort: make(chan struct{}),
+			}, bodyCh)
+			if len(req.Messages) >= 2 && req.Messages[1].Reasoning != nil {
+				t.Fatalf("assistant reasoning_content = %#v, want omitted when no reasoning was recorded", req.Messages)
+			}
+		})
 	}
 }
 
@@ -1279,8 +1424,8 @@ func TestOpenAIThinkingFormatDeepSeekAutoDetect(t *testing.T) {
 	if req.Thinking == nil || req.Thinking.Type != "enabled" {
 		t.Fatalf("thinking = %#v, want enabled", req.Thinking)
 	}
-	if req.ReasoningEffort != "max" {
-		t.Fatalf("reasoning_effort = %q, want max", req.ReasoningEffort)
+	if req.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", req.ReasoningEffort)
 	}
 }
 
@@ -1367,7 +1512,7 @@ func TestQwenThinkingBudget(t *testing.T) {
 }
 
 func TestIsQwenModel(t *testing.T) {
-	positive := []string{"qwen3.6-flash", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max-preview", "qwen/qwen3.7-plus", "Qwen3.6-Max"}
+	positive := []string{"qwen3.5-flash", "qwen3.6-flash", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max-preview", "qwen/qwen3.7-plus", "Qwen3.6-Max"}
 	for _, id := range positive {
 		if !isQwenModel(id) {
 			t.Errorf("isQwenModel(%q) = false, want true", id)
@@ -1388,8 +1533,8 @@ func TestOpenAIThinkingFormatQwen(t *testing.T) {
 		level      provider.ThinkingLevel
 		wantBudget int
 	}{
-		{"qwen3.7-plus low", "qwen3.7-plus", provider.ThinkingLow, 500},
-		{"qwen3.7-plus medium", "qwen3.7-plus", provider.ThinkingMedium, 4096},
+		{"qwen3.5-flash medium", "qwen3.5-flash", provider.ThinkingMedium, 4096},
+		{"qwen3.7-plus low", "qwen3.7-plus", provider.ThinkingLow, 500}, {"qwen3.7-plus medium", "qwen3.7-plus", provider.ThinkingMedium, 4096},
 		{"qwen3.6-flash high", "qwen3.6-flash", provider.ThinkingHigh, 4096},
 		{"qwen3.8-max-preview xhigh", "qwen3.8-max-preview", provider.ThinkingXHigh, 10240},
 	}
@@ -1431,6 +1576,114 @@ func TestOpenAIThinkingFormatQwen(t *testing.T) {
 				t.Fatalf("thinking = %#v, should be nil for qwen", req.Thinking)
 			}
 		})
+	}
+}
+
+func TestOpenAIThinkingFormatQwenOffSendsDisabled(t *testing.T) {
+	bodyCh := make(chan string, 1)
+	p := newMockOpenAIProvider(t, []*provider.Model{
+		{ID: "qwen3.8-flash", Reasoning: true},
+	}, "data: [DONE]\n", bodyCh, nil)
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "qwen3.8-flash",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingOff,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+
+	var req openAIRequest
+	select {
+	case body := <-bodyCh:
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatalf("unmarshal request body: %v\nbody: %s", err, body)
+		}
+	default:
+		t.Fatal("no request body captured")
+	}
+	if req.EnableThinking == nil || *req.EnableThinking {
+		t.Fatalf("enable_thinking = %v, want false", req.EnableThinking)
+	}
+	if req.ThinkingBudget != 0 {
+		t.Fatalf("thinking_budget = %d, want omitted", req.ThinkingBudget)
+	}
+}
+
+func TestOpenAIThinkingFormatGLMEffortAndOff(t *testing.T) {
+	cases := []struct {
+		level  provider.ThinkingLevel
+		effort string
+	}{
+		{provider.ThinkingMinimal, "low"},
+		{provider.ThinkingLow, "low"},
+		{provider.ThinkingMedium, "high"},
+		{provider.ThinkingHigh, "high"},
+		{provider.ThinkingXHigh, "high"},
+		{provider.ThinkingMax, "max"},
+	}
+	for _, tc := range cases {
+		bodyCh := make(chan string, 1)
+		p := newMockOpenAIProviderAtURL(t, "https://api.moark.com/v1", []*provider.Model{
+			{ID: "glm-5.3-flash", Reasoning: true},
+		}, "data: [DONE]\n", bodyCh)
+		for range p.Chat(context.Background(), provider.ChatParams{
+			ModelID:       "glm-5.3-flash",
+			Messages:      []provider.Message{provider.NewUserMessage("hi")},
+			ThinkingLevel: tc.level,
+			Abort:         make(chan struct{}),
+		}) {
+		}
+		var req openAIRequest
+		if err := json.Unmarshal([]byte(capturedRequestBody(t, bodyCh)), &req); err != nil {
+			t.Fatalf("unmarshal request body: %v", err)
+		}
+		if req.Thinking == nil || req.Thinking.Type != "enabled" {
+			t.Fatalf("%s thinking = %#v, want enabled", tc.level, req.Thinking)
+		}
+		if req.ReasoningEffort != tc.effort {
+			t.Fatalf("%s reasoning_effort = %q, want %q", tc.level, req.ReasoningEffort, tc.effort)
+		}
+	}
+
+	// GLM rejects thinking.type=disabled, so an explicit off must leave the
+	// field out instead of turning the request into a 400.
+	bodyCh := make(chan string, 1)
+	p := newMockOpenAIProviderAtURL(t, "https://api.moark.com/v1", []*provider.Model{
+		{ID: "glm-5.3-flash", Reasoning: true},
+	}, "data: [DONE]\n", bodyCh)
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "glm-5.3-flash",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingOff,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+	var req openAIRequest
+	if err := json.Unmarshal([]byte(capturedRequestBody(t, bodyCh)), &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if req.Thinking != nil {
+		t.Fatalf("thinking = %#v, want omitted for GLM off", req.Thinking)
+	}
+	if req.ReasoningEffort != "" {
+		t.Fatalf("reasoning_effort = %q, want omitted for GLM off", req.ReasoningEffort)
+	}
+}
+
+func TestIsGLMModel(t *testing.T) {
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{"glm-5.3-flash", true},
+		{"GLM-5.3", true},
+		{"ZhipuAI/GLM-4.7-Flash", true},
+		{"qwen3.8-flash", false},
+		{"deepseek-v4.1-flash", false},
+	} {
+		if got := isGLMModel(tc.id); got != tc.want {
+			t.Errorf("isGLMModel(%q) = %v, want %v", tc.id, got, tc.want)
+		}
 	}
 }
 
@@ -1971,6 +2224,46 @@ func TestOpenAIResponsesAPINativeReplayItemsArePreserved(t *testing.T) {
 	}
 	if len(raw.Input) != 3 || !strings.Contains(string(raw.Input[1]), `"encrypted_content":"ciphertext"`) || !strings.Contains(string(raw.Input[2]), `"call_id":"call_1"`) {
 		t.Fatalf("native replay input = %#v", raw.Input)
+	}
+}
+
+func TestOpenAIResponsesAPIDeepSeekThinkingOffSendsNone(t *testing.T) {
+	disableSampling := false
+	p := NewProviderWithModels("fake-key", "https://api.test/v1", []*provider.Model{
+		{ID: "deepseek-v4.1-flash", Reasoning: true, Compat: &provider.ModelCompat{DisableSamplingParams: &disableSampling}},
+	})
+	temperature := 0.3
+	req, err := p.buildResponsesRequest(provider.ChatParams{
+		ModelID:       "deepseek-v4.1-flash",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingOff,
+		Temperature:   &temperature,
+	}, "deepseek-v4.1-flash", p.GetModel("deepseek-v4.1-flash"), false, false)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.Reasoning == nil || req.Reasoning.Effort != "none" {
+		t.Fatalf("reasoning = %#v, want effort none", req.Reasoning)
+	}
+	if req.Temperature == nil || *req.Temperature != temperature {
+		t.Fatalf("temperature = %#v, want kept in non-thinking mode", req.Temperature)
+	}
+}
+
+func TestOpenAIResponsesAPINonDeepSeekThinkingOffOmitsReasoning(t *testing.T) {
+	p := NewProviderWithModels("fake-key", "https://api.test/v1", []*provider.Model{
+		{ID: "responses-test", Reasoning: true},
+	})
+	req, err := p.buildResponsesRequest(provider.ChatParams{
+		ModelID:       "responses-test",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingOff,
+	}, "responses-test", p.GetModel("responses-test"), false, false)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.Reasoning != nil {
+		t.Fatalf("reasoning = %#v, want omitted", req.Reasoning)
 	}
 }
 

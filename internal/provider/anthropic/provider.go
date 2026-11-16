@@ -329,12 +329,18 @@ func (p *Provider) Chat(ctx context.Context, params provider.ChatParams) <-chan 
 					reqBody.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: &budget}
 				}
 			}
-		} else if params.ThinkingLevel == provider.ThinkingOff && model != nil && model.Reasoning &&
-			p.thinkingFormatForModel(model) == "adaptive" {
-			// Adaptive third-party models (MiniMax) think by default when the
-			// field is omitted, so honor an explicit off with the disabled
-			// switch, mirroring DeepSeek V4.1's reasoning_effort="none".
-			reqBody.Thinking = &anthropicThinking{Type: "disabled"}
+		} else if params.ThinkingLevel == provider.ThinkingOff && model != nil && model.Reasoning {
+			switch p.thinkingFormatForModel(model) {
+			case "deepseek":
+				// DeepSeek thinking defaults on; type=disabled is the documented
+				// Anthropic-compatible off switch.
+				reqBody.Thinking = &anthropicThinking{Type: "disabled"}
+			case "adaptive":
+				// Adaptive third-party models (MiniMax) think by default when the
+				// field is omitted, so honor an explicit off with the disabled
+				// switch, mirroring DeepSeek V4.1's reasoning_effort="none".
+				reqBody.Thinking = &anthropicThinking{Type: "disabled"}
+			}
 		}
 
 		// The Anthropic API rejects temperature/top_p when thinking is enabled,
@@ -815,9 +821,16 @@ func (p *Provider) convertTools(tools []provider.ToolDefinition) []anthropicTool
 	return result
 }
 
+// deepseekReasoningEffort maps a thinking level onto the DeepSeek effort scale.
+// DeepSeek accepts low/high/max natively and documents minimal->low and
+// medium/xhigh->high (and ultra->max, which has no MothX level).
 func deepseekReasoningEffort(level provider.ThinkingLevel) string {
 	switch level {
-	case provider.ThinkingXHigh:
+	case provider.ThinkingMinimal, provider.ThinkingLow:
+		return "low"
+	case provider.ThinkingMedium, provider.ThinkingHigh, provider.ThinkingXHigh:
+		return "high"
+	case provider.ThinkingMax:
 		return "max"
 	default:
 		return "high"

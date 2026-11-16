@@ -792,6 +792,13 @@ func (pc *ProviderConfig) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	aux := providerConfigJSON(*pc)
+	// A settings file that lists models must not reuse the built-in default
+	// slice element-by-element: that leaks fields such as compat from a
+	// default model at the same index onto a different model ID. Start from
+	// an empty slice so each configured entry is decoded independently.
+	if _, hasModels := raw["models"]; hasModels {
+		aux.Models = nil
+	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}

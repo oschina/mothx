@@ -685,8 +685,59 @@ func TestAnthropicThinkingFormatDeepSeek(t *testing.T) {
 	if req.Thinking == nil || req.Thinking.Type != "enabled" || req.Thinking.BudgetTokens != nil {
 		t.Fatalf("thinking = %#v, want enabled without budget_tokens", req.Thinking)
 	}
-	if req.OutputConfig == nil || req.OutputConfig.Effort != "max" {
-		t.Fatalf("output_config = %#v, want effort max", req.OutputConfig)
+	if req.OutputConfig == nil || req.OutputConfig.Effort != "high" {
+		t.Fatalf("output_config = %#v, want effort high", req.OutputConfig)
+	}
+}
+
+func TestAnthropicDeepSeekReasoningEffortMappings(t *testing.T) {
+	cases := []struct {
+		level provider.ThinkingLevel
+		want  string
+	}{
+		{provider.ThinkingMinimal, "low"},
+		{provider.ThinkingLow, "low"},
+		{provider.ThinkingMedium, "high"},
+		{provider.ThinkingHigh, "high"},
+		{provider.ThinkingXHigh, "high"},
+		{provider.ThinkingMax, "max"},
+	}
+	for _, tc := range cases {
+		if got := deepseekReasoningEffort(tc.level); got != tc.want {
+			t.Errorf("deepseekReasoningEffort(%q) = %q, want %q", tc.level, got, tc.want)
+		}
+	}
+}
+
+func TestAnthropicThinkingFormatDeepSeekOffSendsDisabled(t *testing.T) {
+	bodyCh := make(chan string, 1)
+	p := newMockAnthropicProvider(t, []*provider.Model{
+		{ID: "deepseek-test", Reasoning: true},
+	}, "data: {\"type\":\"message_stop\"}\n", bodyCh, nil)
+	p.SetThinkingFormat("deepseek")
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "deepseek-test",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingOff,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+
+	var req anthropicRequest
+	select {
+	case body := <-bodyCh:
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatalf("unmarshal request body: %v\nbody: %s", err, body)
+		}
+	default:
+		t.Fatal("no request body captured")
+	}
+
+	if req.Thinking == nil || req.Thinking.Type != "disabled" {
+		t.Fatalf("thinking = %#v, want disabled", req.Thinking)
+	}
+	if req.OutputConfig != nil {
+		t.Fatalf("output_config = %#v, want omitted when thinking is disabled", req.OutputConfig)
 	}
 }
 

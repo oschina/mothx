@@ -2289,3 +2289,39 @@ func TestACPAgentProfileDriverBridgeAndCapabilityOverrides(t *testing.T) {
 		t.Fatal("ACPAgentProfile aliased the settings override map")
 	}
 }
+
+func TestProviderConfigUnmarshalDoesNotLeakModelCompatByIndex(t *testing.T) {
+	// Runtime settings reuse the default provider entry before decoding. A
+	// configured model list must be decoded independently; otherwise compat
+	// from a built-in model at the same index leaks onto a different model ID.
+	pc := &ProviderConfig{
+		Models: []ModelConfig{
+			{ID: "kimi-k3.1-pro", Compat: &ModelCompat{ThinkingFormat: "kimi"}},
+		},
+	}
+	if err := json.Unmarshal([]byte(`{"models":[{"id":"deepseek-v4.1-flash-1017","reasoning":true}]}`), pc); err != nil {
+		t.Fatalf("unmarshal provider config: %v", err)
+	}
+	if len(pc.Models) != 1 {
+		t.Fatalf("models = %#v", pc.Models)
+	}
+	if pc.Models[0].ID != "deepseek-v4.1-flash-1017" {
+		t.Fatalf("model id = %q", pc.Models[0].ID)
+	}
+	if pc.Models[0].Compat != nil {
+		t.Fatalf("model compat leaked from the default slice: %#v", pc.Models[0].Compat)
+	}
+}
+
+func TestProviderConfigUnmarshalKeepsDefaultModelsWhenOmitted(t *testing.T) {
+	pc := &ProviderConfig{
+		API:    "openai-chat",
+		Models: []ModelConfig{{ID: "builtin-model"}},
+	}
+	if err := json.Unmarshal([]byte(`{"api":"openai-chat"}`), pc); err != nil {
+		t.Fatalf("unmarshal provider config: %v", err)
+	}
+	if len(pc.Models) != 1 || pc.Models[0].ID != "builtin-model" {
+		t.Fatalf("models = %#v, want built-in model preserved", pc.Models)
+	}
+}

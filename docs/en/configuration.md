@@ -494,7 +494,7 @@ Specifies how thinking/reasoning parameters are sent to the API:
 | `""` (empty) | Auto-detect based on URL |
 | `"openai"` | Use OpenAI `reasoning_effort` format |
 | `"anthropic"` | Use Anthropic `thinking` with `budget_tokens` |
-| `"deepseek"` | Use DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort` (OpenAI) or `output_config.effort` (Anthropic) |
+| `"deepseek"` | Use DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort` (OpenAI) or `output_config.effort` (Anthropic); an explicit off sends `thinking: {type: "disabled"}` |
 | `"xiaomi"` | Legacy thinking-only format: `thinking: {type: "enabled"}` |
 | `"thinking-only"` | Thinking switch without an effort field; use it to opt a DeepSeek V4.1 deployment out of `reasoning_effort` |
 | `"deepseek-v4.1"` | DeepSeek V4.1 `reasoning_effort`: `none` (no thinking), `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
@@ -507,6 +507,12 @@ When not set, automatically detects:
 - Model ID contains `deepseek-v4.1` or `deepseek-v4-1` → `"deepseek-v4.1"`
 
 An explicit provider `thinkingFormat` (or a model's `compat.thinkingFormat`) always wins over these heuristics. A deployment that only accepts the older thinking switch can opt out of `reasoning_effort` by setting `thinkingFormat` to `thinking-only`.
+
+DeepSeek effort values follow its documented mapping: `minimal`/`low` → `low`, `medium`/`high`/`xhigh` → `high`, `max` → `max`. An explicit off sends `thinking: {type: "disabled"}` for Chat Completions and Anthropic Messages, and `reasoning_effort: "none"` for DeepSeek V4.1 and the Responses API.
+
+Qwen hybrid thinking models send `enable_thinking: false` for an explicit off. GLM models map effort to `low`/`high`/`max` (`medium`/`high`/`xhigh` → `high`); GLM-5.3 cannot disable reasoning, so an explicit off leaves the vendor's always-on default instead of sending the rejected `thinking.type: "disabled"`.
+
+When a Chat Completions request carries tools, replayed assistant messages carry their recorded reasoning content as `reasoning_content`. No empty placeholder is synthesized for models that do not require the field.
 
 MothX also learns this at runtime: when an OpenAI-compatible gateway rejects `reasoning_effort`, it retries immediately without the field, shows the reason in the retry notice, and records `thinkingFormat: "thinking-only"` plus `supportsReasoningEffort: false` on that model so later runs omit it.
 

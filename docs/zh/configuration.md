@@ -494,7 +494,7 @@ Google 原生 provider 可以直接配置：
 | `""` (空) | 根据 URL 自动检测 |
 | `"openai"` | 使用 OpenAI `reasoning_effort` 格式 |
 | `"anthropic"` | 使用 Anthropic `thinking` 带 `budget_tokens` |
-| `"deepseek"` | 使用 DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort` (OpenAI) 或 `output_config.effort` (Anthropic) |
+| `"deepseek"` | 使用 DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort`（OpenAI）或 `output_config.effort`（Anthropic）；显式关闭时发送 `thinking: {type: "disabled"}` |
 | `"xiaomi"` | 旧的 thinking-only 格式: `thinking: {type: "enabled"}` |
 | `"thinking-only"` | 只发送思考开关，不发送强度字段；用于让不兼容的 DeepSeek V4.1 部署退出 `reasoning_effort` |
 | `"deepseek-v4.1"` | DeepSeek V4.1 `reasoning_effort`: `none`（不思考）、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` |
@@ -507,6 +507,12 @@ Google 原生 provider 可以直接配置：
 - 模型 ID 包含 `deepseek-v4.1` 或 `deepseek-v4-1` → `"deepseek-v4.1"`
 
 显式的 provider `thinkingFormat`（或模型的 `compat.thinkingFormat`）始终优先于上述自动检测。仅接受旧思考开关的部署可将 `thinkingFormat` 设为 `thinking-only`，退回不使用 `reasoning_effort`。
+
+DeepSeek 的 effort 取值遵循官方映射：`minimal`/`low` → `low`，`medium`/`high`/`xhigh` → `high`，`max` → `max`。显式关闭思考时，Chat Completions 与 Anthropic Messages 发送 `thinking: {type: "disabled"}`，DeepSeek V4.1 与 Responses API 发送 `reasoning_effort: "none"`。
+
+Qwen 混合思考模型在显式关闭时发送 `enable_thinking: false`。GLM 模型的 effort 映射为 `low`/`high`/`max`（`medium`/`high`/`xhigh` → `high`）；GLM-5.3 不支持关闭思考，因此显式关闭时保留厂商的常开默认值，而不发送会被拒绝的 `thinking.type: "disabled"`。
+
+Chat Completions 请求携带 tools 时，回放的 assistant 消息会携带真实记录的 `reasoning_content`；对不要求该字段的模型不会合成空占位。
 
 MothX 也会在运行时学习该能力：当 OpenAI 兼容网关拒绝 `reasoning_effort` 时，会立即去掉该参数重试，在重试提示中说明原因，并把该模型的 `thinkingFormat` 记录为 `thinking-only`、`supportsReasoningEffort` 记录为 `false`，后续运行不再发送该参数。
 
