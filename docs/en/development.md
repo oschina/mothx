@@ -73,6 +73,22 @@ host, so it needs `npm run build` first. The Desktop round trip needs a runtime
 built from the current source, because it asserts the Router management
 projection that the host binary carries.
 
+### Native desktop checks
+
+MothX Native (the primary desktop client) is a nested Go module with headless
+UI coverage instead of a browser driver:
+
+```bash
+make native-test    # transcript reducer + headless page/i18n/pixel tests
+make native-vet     # go vet + MyGo lifetime/goroutine checks
+make native-build   # stripped binary into native/build/
+```
+
+The headless tester renders every settings page and main view offline; English
+scans fail on untranslated Chinese UI, and pixel probes pin the background
+image/veil/shell paint order. Run `go test -race ./...` inside `native/` when
+touching background-run routing or panel invalidation.
+
 ## Project Structure
 
 ```
@@ -80,7 +96,8 @@ mothx/
 ├── agent/                     # Public SDK types (Agent, Provider, Builder)
 ├── bootstrap/                 # Public SDK wiring into internal implementations
 ├── cmd/mothx/                 # CLI entry point and subcommands
-├── desktop/                   # Electron desktop client (pure ACP)
+├── desktop/                   # Electron desktop client (pure ACP; deprecated)
+├── native/                    # Primary desktop client: pure-Go MyGo app (pure ACP)
 ├── ui/                        # Svelte Web UI embedded into Serve
 ├── internal/
 │   ├── agent/                 # Core Agent loop, events, prompts, sub-agent tools

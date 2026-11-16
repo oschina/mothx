@@ -12,7 +12,8 @@ mothx/
 ├── agent/                       # 公共 SDK 类型（Agent、Provider、Builder）
 ├── bootstrap/                   # 将公共 SDK 接口接到内部实现
 ├── cmd/mothx/                   # CLI 入口与子命令
-├── desktop/                     # Electron 桌面客户端（纯 ACP 投影）
+├── desktop/                     # Electron 桌面客户端（纯 ACP 投影；已弃用）
+├── native/                      # 主力桌面客户端：纯 Go MyGo 应用（纯 ACP 投影）
 ├── ui/                          # 内嵌到 Serve 的 Svelte Web UI
 ├── internal/
 │   ├── agent/                   # 核心 Agent 循环、事件、提示词、子 Agent 工具

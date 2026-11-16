@@ -51,6 +51,10 @@ func main() {
 		if prefs, ok := loadNativePreferences(a.prefsPath); ok {
 			a.applyNativePreferences(prefs)
 		}
+		// Desktop's launch quick-start: the first draft gets a private scratch
+		// directory instead of the process cwd. Every session still supplies
+		// its own cwd through ACP afterwards.
+		a.initQuickStartWorkspace()
 		opts := nativeWindowOptions()
 		opts.Content = ui.View(a.view)
 		a.win = mygo.NewWindow(opts)

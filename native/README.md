@@ -11,11 +11,15 @@ sidebar with compact per-session `⋯` menus, cursor pagination and per-branch
 IA (Skills command cards plus a card-grid skill marketplace, Automation rows,
 read-only Library status); and a centered transcript with the same
 markdown/tool/diff/decision language as Desktop, including inline
-approval/question cards, a 300-message render window, plan progress side panel,
-inline status lines, structured error cards, inline images, publish_artifact
-fallback cards, full-transcript copy, and file export. The composer
+approval/question cards, inline sub-agent lifecycle cards with a live
+running/total header count, a 300-message render window, plan progress side
+panel with the Runtime-provided plan title/note, inline status lines,
+structured error cards, inline images, a compact live preview of the thought
+that is still streaming, publish_artifact fallback cards, full-transcript
+copy, and file export. The composer
 has mode, provider, model, expert, capabilities, attachment, and command
-controls plus a searchable provider/model picker with capability badges and a
+controls plus a searchable provider/model picker with capability badges, a
+workspace picker menu backed by the shell's recent-directory history, and a
 bottom StatusBar with context, cost, prompt-cache hit rate, mode, model, and
 workspace.
 
@@ -25,10 +29,20 @@ embedded as base64 resources. Attachments show thumbnails, mime type, and size;
 generated image artifacts can be fetched by canonical attachment ID and
 previewed in-window, while other attachments can be saved. Runs are cached per
 session, so switching tasks or starting a new one does not stop a background
-session; background approvals surface a toast and a sidebar attention count.
+session; background approvals surface a toast and a sidebar attention count,
+and background sub-agent events keep updating their own session's roster.
 Both light and dark palettes are included. Appearance can follow the system or
-pin a theme, and it persists theme, Home preset/logo/background appearance in a
-Native-local preferences file. The interface switches between Chinese and
+pin a theme, and it persists theme, Home preset/logo/background appearance
+(including whether the background paints the whole app or only Home) in a
+Native-local preferences file. Like Desktop, a fresh process gives the first
+draft a private `~/MothX/mothx_projects_*` quick-start scratch directory, and
+explicitly picked directories are remembered as picker history only — never
+as a session cwd fallback. A New Task draft inherits no directory: the shell
+asks at creation and again at send time if still unset, and until a directory
+exists the provider/model menu is projected from the provider catalog. A
+user-selected runtime binary that fails to start
+or initialize rolls back to the previous choice automatically. The interface
+switches between Chinese and
 English using the shared Desktop dictionary plus Native-only labels, including
 dynamic status and error text; an English-page scan test renders every settings
 entry and main page offline and fails on untranslated Chinese UI leaking through.
@@ -41,8 +55,9 @@ mark from `docs/assets/mothx.png` (a cleaned copy lives in `assets/mothx.png`).
 ## Run
 
 MothX Native needs a `mothx` binary. It resolves, in order, the launch
-argument `--mothx-bin`, `MOTHX_BIN`, `PATH`, then `../bin/mothx` (the
-repository's development binary):
+argument `--mothx-bin`, the binary persisted in Settings → Runtime,
+`MOTHX_BIN`, `PATH`, then `../bin/mothx` (the repository's development
+binary):
 
 ```sh
 cd native
@@ -106,6 +121,10 @@ The same commands are available from the repository root as
 | `mothx/manage/skillhub/install` / `activate` / `uninstall` | Explicit marketplace install, session activation, and confirmed removal |
 | `mothx/manage/mcp/list` | Global or active-session project MCP projection (when `manageMcp` is advertised) |
 | `mothx/manage/mcp/set` | Full replacement of the selected scope's MCP list, including stdio/http/sse, env, and headers |
+| `mothx/manage/memory/get` / `put` | Global memory text projection and save (when `manageMemory` is advertised) |
+| `mothx/manage/cron/list` / `create` / `update` / `remove` / `run` | Canonical cron automation rows and mutations (when `manageCron` is advertised) |
+| `mothx/manage/channels/get` / `patch` | WeChat/Feishu channel configuration (when `manageChannels` is advertised) |
+| `mothx/manage/experts/list` / `get` / `create` / `update` / `delete` | Expert and Expert Team bundle management (when `manageExperts` is advertised) |
 | `mothx/manage/knowledge-bases/list` / `get` / `status` | Knowledge-base list, single status, and indexing progress projection (when `manageKnowledgeBases` is advertised) |
 | `mothx/manage/knowledge-bases/create` / `update` / `delete` | Directory knowledge-base configuration lifecycle; deleting never removes the source directory |
 | `mothx/manage/knowledge-bases/scan` | Starts a background Runtime-owned index scan; the panel polls progress |
@@ -123,11 +142,15 @@ The same commands are available from the repository root as
 | `mothx/manage/stats/summary` / `timeseries` | Session/run/token summary and bucketed usage trend (when `manageStats` is advertised) |
 | `mothx/doctor` | Shared Runtime diagnostics shown in Settings → Runtime (when `doctor` is advertised) |
 | `session/request_permission` | Approval dialog |
-| `mothx/requestQuestion` / `elicitation/create` | Question dialog |
+| `mothx/requestQuestion` / `elicitation/create` | Question dialog; multi-property elicitation forms render one field per schema property |
 
 `session/update` notifications build the transcript (text, reasoning, tool
-calls and output, plans, usage, titles, artifacts), and
-`_mothx/session_event` drives run status. The server echoes accepted user
+calls and output, plans with their `mothx.dev` title/note annotation, usage,
+titles, artifacts), and
+`_mothx/session_event` drives run status and the live sub-agent projection
+(`event=subagent` upserts one inline card per child and updates the session
+roster; a terminal event re-reads the canonical `mothx/subagent/list`). The
+server echoes accepted user
 content as `user_message_chunk`; the optimistic bubble is replaced by that
 echo instead of duplicated.
 
@@ -141,7 +164,7 @@ echo instead of duplicated.
 - `task_tree.go` — shared project/recent/ungrouped task-tree projection and project catalog refresh.
 - `session_menu.go` — compact per-session and per-project action menus.
 - `session_state.go` — per-session transcript/run/config cache for background runs.
-- `decision_view.go` — inline approval/question cards with deadlines and resolved state.
+- `decision_view.go` — inline approval/question cards with deadlines, resolved state, and multi-property elicitation form fields.
 - `artifact_preview.go` — canonical artifact fetch, image preview, and attachment save.
 - `i18n.go` / `i18n_extra.go` — native zh/en locale projection and translation table.
 - `composer_config.go` — draft-config selection, provider model projection, menu controls, and post-create flush.

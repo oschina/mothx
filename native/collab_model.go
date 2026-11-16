@@ -728,3 +728,256 @@ func (a *nativeApp) subagentSelectedInfo() (subagentInfoView, bool) {
 	}
 	return subagentInfoView{}, false
 }
+
+// --- Subagent live projection ----------------------------------------------
+//
+// The Runtime emits `_mothx/session_event` with event=subagent whenever a
+// managed child starts or reaches a terminal state. Native projects that
+// canonical stream into (1) an inline transcript card, (2) a per-session
+// roster used by the header summary, and (3) the open panel's live list.
+// Child identity, status, and transcripts stay Runtime-owned; the roster is
+// an in-memory projection cache reconciled by mothx/subagent/list.
+
+// subagentStatusKind normalizes the Runtime child status vocabulary into the
+// five projection states shared by the inline card, roster, and summary.
+func subagentStatusKind(status string) string {
+	switch status {
+	case "done", "completed":
+		return "completed"
+	case "error", "failed":
+		return "failed"
+	case "canceled", "cancelled":
+		return "cancelled"
+	case "incomplete":
+		return "incomplete"
+	default:
+		return "running"
+	}
+}
+
+// A long-lived team/ESM session can spawn many children. Keep running agents
+// and the newest terminal ones; older terminal projections are recoverable
+// from the Runtime list when the panel is reopened.
+const maxSubagentsPerSession = 200
+
+func capSubagentRoster(list []subagentInfoView) []subagentInfoView {
+	if len(list) <= maxSubagentsPerSession {
+		return list
+	}
+	running := make([]subagentInfoView, 0, len(list))
+	terminal := make([]subagentInfoView, 0, len(list))
+	for _, info := range list {
+		if subagentStatusKind(info.Status) == "running" {
+			running = append(running, info)
+		} else {
+			terminal = append(terminal, info)
+		}
+	}
+	if len(running) >= maxSubagentsPerSession {
+		return running[len(running)-maxSubagentsPerSession:]
+	}
+	keep := maxSubagentsPerSession - len(running)
+	if len(terminal) > keep {
+		terminal = terminal[len(terminal)-keep:]
+	}
+	return append(running, terminal...)
+}
+
+// mergeSubagentInfo keeps previously projected fields the new projection
+// omits, then normalizes the status. The newer projection wins on conflicts.
+func mergeSubagentInfo(previous *subagentInfoView, next subagentInfoView) subagentInfoView {
+	merged := next
+	if previous != nil {
+		if merged.ParentAgentID == "" {
+			merged.ParentAgentID = previous.ParentAgentID
+		}
+		if merged.MemberID == "" {
+			merged.MemberID = previous.MemberID
+		}
+		if merged.ExpertID == "" {
+			merged.ExpertID = previous.ExpertID
+		}
+		if merged.MemberDisplayName == "" {
+			merged.MemberDisplayName = previous.MemberDisplayName
+		}
+		if merged.MemberEmoji == "" {
+			merged.MemberEmoji = previous.MemberEmoji
+		}
+		if merged.MemberRole == "" {
+			merged.MemberRole = previous.MemberRole
+		}
+		if merged.MessageCount == 0 {
+			merged.MessageCount = previous.MessageCount
+		}
+		if merged.LastResponse == "" {
+			merged.LastResponse = previous.LastResponse
+		}
+		if merged.StartedAt == "" {
+			merged.StartedAt = previous.StartedAt
+		}
+	}
+	merged.Status = subagentStatusKind(merged.Status)
+	return merged
+}
+
+func (a *nativeApp) subagentRoster(sessionID string) []subagentInfoView {
+	if sessionID == "" || a.subagentRosters == nil {
+		return nil
+	}
+	return a.subagentRosters[sessionID]
+}
+
+// subagentSummary projects the header badge counts from the live roster.
+func (a *nativeApp) subagentSummary(sessionID string) (total, running, failed int) {
+	for _, info := range a.subagentRoster(sessionID) {
+		total++
+		switch subagentStatusKind(info.Status) {
+		case "running":
+			running++
+		case "failed":
+			failed++
+		}
+	}
+	return total, running, failed
+}
+
+// applySubagentEvent folds one canonical child lifecycle event into the
+// session roster and the owning transcript. handleSessionEvent has already
+// routed background sessions, so the inline card lands in the right cache.
+func (a *nativeApp) applySubagentEvent(ev sessionEvent) {
+	if ev.SessionID == "" || ev.AgentID == "" {
+		return
+	}
+	if a.subagentRosters == nil {
+		a.subagentRosters = make(map[string][]subagentInfoView)
+	}
+	roster := a.subagentRosters[ev.SessionID]
+	index := -1
+	for i := range roster {
+		if roster[i].AgentID == ev.AgentID {
+			index = i
+			break
+		}
+	}
+	next := subagentInfoView{
+		AgentID:           ev.AgentID,
+		ParentAgentID:     ev.ParentAgentID,
+		MemberID:          ev.MemberID,
+		ExpertID:          ev.ExpertID,
+		MemberDisplayName: ev.MemberDisplayName,
+		MemberEmoji:       ev.MemberEmoji,
+		MemberRole:        ev.MemberRole,
+		Status:            ev.Status,
+	}
+	var previous *subagentInfoView
+	if index >= 0 {
+		previous = &roster[index]
+	}
+	merged := mergeSubagentInfo(previous, next)
+	merged.Active = subagentStatusKind(merged.Status) == "running"
+	if index >= 0 {
+		roster[index] = merged
+	} else {
+		roster = append(roster, merged)
+	}
+	a.subagentRosters[ev.SessionID] = capSubagentRoster(roster)
+	a.syncSubagentPanelRoster(ev.SessionID)
+
+	m := a.upsertMessage("subagent:"+ev.AgentID, messageSubagent)
+	m.SubagentID = ev.AgentID
+	m.SubagentStatus = subagentStatusKind(merged.Status)
+	m.SubagentTitle = subagentDisplayName(merged)
+	m.SubagentRole = merged.MemberRole
+	m.SubagentExpertID = merged.ExpertID
+	m.Done = m.SubagentStatus != "running"
+}
+
+// syncSubagentPanelRoster keeps an open panel's list live without waiting for
+// its next poll. The server list may carry extra fields; event updates merge
+// into it rather than replacing it.
+func (a *nativeApp) syncSubagentPanelRoster(sessionID string) {
+	p := &a.subagent
+	if !p.Open || p.SessionID != sessionID {
+		return
+	}
+	roster := a.subagentRoster(sessionID)
+	for _, info := range roster {
+		found := false
+		for i := range p.Agents {
+			if p.Agents[i].AgentID == info.AgentID {
+				p.Agents[i] = mergeSubagentInfo(&p.Agents[i], info)
+				found = true
+				break
+			}
+		}
+		if !found {
+			p.Agents = append(p.Agents, info)
+		}
+	}
+}
+
+// refreshSubagentRoster re-reads the canonical child list after a terminal
+// event or session load. A failed read keeps the last known roster instead
+// of inventing idle or empty state.
+func (a *nativeApp) refreshSubagentRoster(sessionID string) {
+	if sessionID == "" || !a.subagentCapable() {
+		return
+	}
+	client := a.acp
+	if client == nil {
+		return
+	}
+	if a.subagentRosterSeq == nil {
+		a.subagentRosterSeq = make(map[string]int64)
+	}
+	a.subagentRosterSeq[sessionID]++
+	seq := a.subagentRosterSeq[sessionID]
+	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
+	go func() {
+		raw, err := client.call("mothx/subagent/list", map[string]any{"sessionId": sessionID})
+		a.dispatch(func() {
+			if err != nil || seq != a.subagentRosterSeq[sessionID] ||
+				startReloadSeq != atomic.LoadInt64(&a.reloadSeq) {
+				return
+			}
+			var result subagentListResultView
+			if err := json.Unmarshal(raw, &result); err != nil {
+				return
+			}
+			previous := a.subagentRosters[sessionID]
+			merged := make([]subagentInfoView, 0, len(result.Agents))
+			for _, info := range result.Agents {
+				var prev *subagentInfoView
+				for i := range previous {
+					if previous[i].AgentID == info.AgentID {
+						prev = &previous[i]
+						break
+					}
+				}
+				merged = append(merged, mergeSubagentInfo(prev, info))
+			}
+			if a.subagentRosters == nil {
+				a.subagentRosters = make(map[string][]subagentInfoView)
+			}
+			a.subagentRosters[sessionID] = capSubagentRoster(merged)
+			a.syncSubagentPanelRoster(sessionID)
+		})
+	}()
+}
+
+// openSubagentPanelFor opens the panel focused on one child, used by the
+// inline transcript card. The canonical list still loads; the requested
+// selection survives when the Runtime reports that child.
+func (a *nativeApp) openSubagentPanelFor(agentID string) {
+	if !a.subagentCapable() || a.currentSession == "" {
+		return
+	}
+	a.openSubagentPanel()
+	if agentID == "" {
+		return
+	}
+	p := &a.subagent
+	p.Selected = agentID
+	a.loadSubagentMessages()
+	a.startSubagentPoll(agentID)
+}

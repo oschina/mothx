@@ -27,6 +27,7 @@ const (
 	messageDecision
 	messageStatus
 	messageError
+	messageSubagent
 )
 
 type toolDiff struct {
@@ -59,8 +60,18 @@ type chatMessage struct {
 	ToolLocations []string
 	ToolExpanded  bool
 
-	// Plan messages.
-	Plan []planEntry
+	// Plan messages. PlanTitle/PlanNote project the additive
+	// _meta["mothx.dev"] plan annotation; empty means the generic label.
+	Plan      []planEntry
+	PlanTitle string
+	PlanNote  string
+
+	// Subagent lifecycle cards project the canonical event=subagent stream.
+	SubagentID       string
+	SubagentStatus   string
+	SubagentTitle    string
+	SubagentRole     string
+	SubagentExpertID string
 
 	// Artifact messages.
 	ArtifactID   string
@@ -138,6 +149,18 @@ type decision struct {
 	ResolvedValue string
 	Multi         bool
 	Elicit        bool
+	// Fields projects a multi-property elicitation form schema: one input or
+	// enum choice per property, answered as content keyed by property name.
+	// A single-property schema keeps the legacy Options/Answer projection.
+	Fields []decisionField
+}
+
+type decisionField struct {
+	Name        string
+	Title       string
+	Description string
+	Options     []decisionOption
+	Value       string
 }
 
 type decisionOption struct {
@@ -302,7 +325,7 @@ func (a *nativeApp) applyUpdate(n sessionUpdateNotification) {
 			m.ToolInput = u.RawInput
 		}
 		if text := toolContentText(u.Content, u.RawOutput); text != "" {
-			m.ToolText = text
+			m.ToolText = truncateToolText(text, maxToolTextChars)
 		}
 		if diffs := toolDiffContents(u.Content); len(diffs) > 0 {
 			m.ToolDiffs = diffs
@@ -323,7 +346,7 @@ func (a *nativeApp) applyUpdate(n sessionUpdateNotification) {
 		}
 		a.maybeAddToolArtifactFallback(m)
 	case "plan":
-		a.updatePlan(u.Entries)
+		a.updatePlan(u.Entries, u.Meta)
 	case "usage_update":
 		a.usageUsed = u.Used
 		a.usageSize = u.Size
@@ -481,7 +504,7 @@ func (a *nativeApp) nextLocalMessageID(prefix string) string {
 	return fmt.Sprintf("%s:local:%d", prefix, a.localMessageSeq)
 }
 
-func (a *nativeApp) updatePlan(entries []planEntry) {
+func (a *nativeApp) updatePlan(entries []planEntry, meta map[string]json.RawMessage) {
 	if len(entries) == 0 {
 		return
 	}
@@ -490,6 +513,24 @@ func (a *nativeApp) updatePlan(entries []planEntry) {
 	}
 	m := a.upsertMessage(a.planMessageID, messagePlan)
 	m.Plan = entries
+	m.PlanTitle, m.PlanNote = planMetaFromUpdate(meta)
+}
+
+// planMetaFromUpdate reads the additive mothx.dev plan annotation. It never
+// invents a title or note: an absent projection keeps the generic labels.
+func planMetaFromUpdate(meta map[string]json.RawMessage) (string, string) {
+	raw, ok := meta["mothx.dev"]
+	if !ok || len(raw) == 0 {
+		return "", ""
+	}
+	var annotation struct {
+		Title string `json:"title"`
+		Note  string `json:"note"`
+	}
+	if err := json.Unmarshal(raw, &annotation); err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(annotation.Title), strings.TrimSpace(annotation.Note)
 }
 
 func (a *nativeApp) updateSessionTitle(sessionID, title, updatedAt string) {
@@ -612,6 +653,9 @@ func (a *nativeApp) handleSessionEvent(ev sessionEvent) {
 			}
 			a.appendErrorCard(text, code, retryable)
 		}
+		// The terminal projection is authoritative for final child counts and
+		// statuses; re-read the Runtime roster instead of inferring completion.
+		a.refreshSubagentRoster(ev.SessionID)
 	case "retrying":
 		a.status = "模型连接中断，正在重试…"
 		if ev.Message != "" {
@@ -636,6 +680,8 @@ func (a *nativeApp) handleSessionEvent(ev sessionEvent) {
 	case "compaction_finished":
 		a.status = "正在生成…"
 		a.setStatusLine("正在生成…")
+	case "subagent":
+		a.applySubagentEvent(ev)
 	}
 }
 
@@ -777,9 +823,31 @@ func toolDiffContents(raw json.RawMessage) []toolDiff {
 		if item.Type != "diff" {
 			continue
 		}
-		diffs = append(diffs, toolDiff{Path: item.Path, OldText: item.OldText, NewText: item.NewText})
+		diffs = append(diffs, toolDiff{
+			Path:    item.Path,
+			OldText: truncateToolText(item.OldText, maxToolDiffChars),
+			NewText: truncateToolText(item.NewText, maxToolDiffChars),
+		})
 	}
 	return diffs
+}
+
+// Desktop bounds the stored tool projection so a long-running task cannot
+// grow the shell heap without limit; the card truncates display further.
+const (
+	maxToolTextChars = 20000
+	maxToolDiffChars = 40000
+)
+
+func truncateToolText(text string, max int) string {
+	if max <= 0 {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	return string(runes[:max]) + "\n…"
 }
 
 func toolContentImages(raw json.RawMessage) []chatImage {

@@ -705,7 +705,7 @@ func (a *nativeApp) settingsAppearancePane(c *ui.Context, p palette) {
 			})
 		})
 	})
-	a.settingsCard(c, p, "首页背景", "仅作用于新会话首页，不改变转录或侧栏背景。", func() {
+	a.settingsCard(c, p, "首页背景", "背景图可作用于整个应用或仅新会话首页；作用范围与图片一起保存。", func() {
 		ui.Column(c).Gap(9).Children(func() {
 			if a.home.backgroundPath != "" {
 				a.settingsRuntimeRow(c, p, "背景文件", a.home.backgroundPath)
@@ -720,6 +720,18 @@ func (a *nativeApp) settingsAppearancePane(c *ui.Context, p palette) {
 					if ui.Button(c.Key("appearance-bg-clear"), T("移除背景")).Clicked() {
 						a.clearHomeBackground()
 					}
+				}
+			})
+			ui.Row(c).AlignItems(ui.Center).Gap(6).Wrap().Children(func() {
+				ui.Text(c, T("作用范围")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+				for _, option := range []struct{ label, value string }{
+					{"整个应用", "app"}, {"仅首页", "home"},
+				} {
+					option := option
+					a.appearanceChoiceButton(c, p, "bg-scope:"+option.value, option.label, a.home.backgroundScope == option.value, func() {
+						a.home.backgroundScope = option.value
+						a.saveNativePreferences()
+					})
 				}
 			})
 			ui.Column(c).Gap(3).Children(func() {
@@ -868,6 +880,8 @@ func (a *nativeApp) settingsRuntimePane(c *ui.Context, p palette) {
 				}
 				if getRuntimeBinaryPreference() != "" {
 					if ui.Button(c.Key("runtime-binary-clear"), T("清除选择")).Clicked() {
+						a.binaryRollbackPending = false
+						a.binaryRollbackPrevious = ""
 						setRuntimeBinaryPreference("", true)
 						addDiagnostic("info", "runtime binary preference cleared")
 						a.reconnectACP()
@@ -1009,6 +1023,10 @@ func (a *nativeApp) chooseRuntimeBinary() {
 			return
 		}
 		a.dispatch(func() {
+			// Desktop rolls a failed binary switch back to the previous
+			// runtime; remember it until the new child proves it can serve.
+			a.binaryRollbackPrevious = getRuntimeBinaryPreference()
+			a.binaryRollbackPending = true
 			setRuntimeBinaryPreference(path, true)
 			addDiagnostic("info", "runtime binary preference set: "+path)
 			a.showToast("运行时已切换，正在重新连接")

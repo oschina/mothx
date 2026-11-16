@@ -1,6 +1,6 @@
 # Native Desktop 功能迁移进度
 
-更新时间：2026-11-12
+更新时间：2026-11-16
 
 ## 目标与边界
 
@@ -113,9 +113,76 @@
 
 本轮真实 UI 截图覆盖 Home（英/中）、加载后的真实转录、审批卡、Capabilities/附件/专家菜单、History、Worktree、Router、Subagent，以及 1920×1097 与窄窗口。测试会话与临时目录均在验收后清理。
 
+## 2026-11-16 Desktop 下线前 parity 审查与补齐
+
+目标：下线 `desktop/`、主推 `native/`。本轮先做客观差异审查，再补齐剩余功能点。
+
+### 审查结论（已对齐，无需动作）
+
+- ACP 方法面：对两侧代码提取的方法集合几乎完全重合（会话/项目/工作树/Router/子代理/投递/附件/全部 manage/* 面板）；Native 另有 `knowledge-bases/get|status|query` 等超集。
+- Settings 三级 IA 与全部管理面板（Application/Providers/MCP/Skills/SkillHub/Experts/ACP Workers/Env/Stats/Memory/Cron/Channels+Deliveries/Serve/Knowledge）已对齐；Application 面板字段与 `manage_application.go` 的 10 个分组一一对应。
+- 会话生命周期（new/load/fork/delete/setTitle/setMeta/setWorkDir）、分页任务树、转录分页、决策（permission/question/elicitation，含 multi 与自由文本）、附件/剪贴板粘贴、制品预览/保存/fallback、转录复制/导出、Home 预设、i18n、Toast、诊断日志、doctor、About、窗口控制均已对齐。
+- Desktop 也没有的（不构成缺口）：OS 通知、托盘、全局快捷键、文件拖放、单实例锁、自动更新；`session/resume`、`mothx/workspace/extend` 仅存在于旧 README，现行 Desktop 代码未使用。
+
+### 本轮补齐的缺口
+
+1. **subagent 实时事件投影（ canonical 事件语义缺口）**：`_mothx/session_event event=subagent` 现在投影为转录内联生命周期卡（可点击打开对应子代理面板）、按会话 ID 的实时名册（上限 200，保留运行中+最新终态，与 Desktop 一致）、头部运行中/总数计数与失败红点；后台会话事件继续写入各自缓存；terminal 事件与 session/load 后通过 `mothx/subagent/list` 重读权威名册；打开的面板无需等轮询即可合并事件；删除会话清理名册。
+2. **plan 标题/备注**：`plan._meta["mothx.dev"].title/note` 现在投影到计划侧栏与计划卡；缺席时保持通用标签；导出同步包含。
+3. **思考 live 预览**：折叠状态下正在流式输出的 thought 显示尾部 600 字符紧凑预览（Desktop 同款）。
+4. **工具输出入库截断**：工具文本 20k、diff 40k 字符上限（Desktop 的 MAX_TOOL_TEXT_CHARS/MAX_TOOL_DIFF_CHARS 对齐），显示层截断保留。
+5. **背景图作用范围**：新增 `homeBackgroundScope`（app/home，默认 app 与 Desktop 一致）；app 作用域下背景铺满整个窗口并叠加主题色 veil，chrome 表面半透明化；Appearance 面板新增作用范围选择；偏好持久化。
+6. **quick-start 草稿目录 + 最近目录历史**：启动时创建 `~/MothX/mothx_projects_<ts>_*` 私有草稿目录（与 Desktop initialNewSessionDirectory 一致，ACP 子进程初始 cwd 同步）；显式选择的目录写入 `lastWorkspace`/`recentWorkspaces`（上限 12，仅选择器便利，绝不成为会话 cwd 回退）；Composer 工作区按钮改为菜单：选择目录… + 最近目录；会话内选择仍走 canonical setWorkDir，运行中会话拒绝改目录。
+7. **运行时二进制切换回滚**：用户选择的二进制启动/初始化失败时自动回退到之前的选择并重连一次（Desktop failed-switch rollback 对齐），错误 Toast 提示；成功连接清除回滚态；“清除选择”取消待回滚。
+
+### 明确不做（审查后判定非缺口）
+
+- Desktop 的 `desktop-store.sessionStatus` 持久化侧栏点：Native 已由 `listAll` 的 canonical `lastRun` 投影覆盖，不新增本地权威缓存。
+- Desktop 隐藏的 mac/win 窗体切换开关（WINDOW_STYLE_SWITCH_VISIBLE=false）：Native 已按平台投影原生 chrome。
+- New Task 强制选目录的 draft-generation 语义：Native 现行 newChat 复用草稿目录的流程更宽松，本轮保留，不引入第二套草稿状态机。
+
+## 2026-11-16 第二轮：veil 验收、paint-order 修复与发布渠道切换
+
+用户批准处理上一轮遗留项后执行：
+
+### 背景 veil 验收与 paint-order bug 修复
+
+- 用无头 tester 在繁忙照片感背景（渐变+噪点+60 个高饱和圆）上渲染 dark/light/home 三组截图验收。**发现真实 bug**：MyGo 默认把 absolute 子节点画在 flow 兄弟之上（paint.go 两趟绘制），导致 app 作用域的背景层遮住整个外壳；上一轮的 home 作用域背景同样遮住首页内容（此前仅用 Texts() 断言，未查像素）。
+- 修复：背景图 `ZIndex(-2)`、veil `ZIndex(-1)`（home 作用域同），负 z-index 画在 flow 内容之下、父背景之上；home 作用域补上此前缺失的 veil。
+- 可读性调参：veil 0.52 在亮区正文对比不足，定为 **0.66**（`nativeBackgroundVeilAlpha`）；chrome 表面 0.72、卡片 0.82。像素探针确认 dark 正文对最亮背景区对比约 6:1、light 约 11:1。
+- 新增确定性回归 `TestBackgroundLayersPaintUnderShell`：纯白背景+像素探针固定 图片/veil/外壳 顺序（app 与 home 两种作用域），防止 paint-order 回归。临时验收截图与 helper 已清理（截图曾存于被 gitignore 的 native/build/）。
+
+### 发布渠道切换（只改配置/文档，未执行发布）
+
+- 盘点结论：npm/pypi/packaging/install 脚本只分发 CLI，不含 Desktop；Desktop 的发布面只有 `desktop-release.yml`、根 Makefile desktop-* targets 与文档。
+- `.github/workflows/desktop-release.yml`：移除 `push: tags` 自动触发，仅留 workflow_dispatch 手动兼容桥；改名 "(deprecated)"；首步输出弃用 warning；`make_latest: false`（手动构建不得降级 Native 的 latest 标记）。注释写明移除条件。
+- `.github/workflows/native-release.yml`：注释明确其为 tag 上唯一桌面产物自动发布入口。
+- 根 Makefile help：Native targets 置前标 "primary desktop app"，Desktop 段标 "deprecated … compatibility only, use Native"；targets 本身保留。
+- 文档：新增 `docs/en/native.md` / `docs/zh/native.md`（安装、功能面、从 Desktop 迁移对照表、故障排查、开发）；`docs/en/desktop.md` / `docs/zh/desktop.md` 顶部弃用横幅+移除条件；docs 双语索引链接更新（Native 主力、Desktop 弃用），zh 目录树补 native/。
+- changelog：v1.3.109（当前开发周期）四个文件（en/zh 累计 + online）新增行为变更（Desktop 弃用/发布切换）与新功能（Native parity 补齐+paint-order 修复）条目。
+
+## 2026-11-16 第三轮 review：发现的问题与修复
+
+对本轮与前两轮改动再做一次批判性 review，发现并修复：
+
+1. **elicitation/create replay 解析脆弱**：Runtime 把 legacy question 投影成 form 时，enum 里是 `{id,label}` 对象；Native 旧代码 `Enum []string` 会在跨客户端 replay（form-capable 客户端创建的 pending decision 被 Native 重放）时整体解析失败并回 -32602。改为 `[]json.RawMessage` + `parseElicitationEnum` 兼容两种形状；多 property schema 优先取 `answer`、否则排序后第一个，不再混合所有 property 的选项；纯函数 `buildElicitationDecision` 便于回归。新增 `TestElicitationProjectionToleratesReplayedFormSchemas`。顺带核对：Desktop/Native initialize 都不声明 form 能力，Runtime 对两者走 legacy `mothx/requestQuestion`；`questionAnswer` 同时接受 legacy 与 standard 形状，故两侧响应形状均兼容，无功能 bug。
+2. **文档/上下文不同步**：AGENTS.md 完全没有 native/ 条目且仍称 Desktop 为 primary；docs 双语 architecture/development 目录树缺 native/；development 缺 Native 检查命令；native/README 与 native/Makefile 的二进制优先级列表漏了持久化选择；README 方法表缺 memory/cron/channels/experts 行。全部补齐（AGENTS.md 增加 Native 快照/目录/边界句，Desktop 标弃用）。
+
+Review 确认无问题的点：toast 走 T()；Router pending questions 已有 lead-only 提示；侧栏搜索含项目名；名册在 reconnect/删除时清理；refreshSubagentRoster 有 seq+reloadSeq 守卫；对话框外壳用不透明 Surface；veil/图片 HitTest(false) 不拦指针；question/elicitation 响应形状与 Runtime `questionAnswer` 兼容。
+
+## 2026-11-16 第四轮：修复遗留问题（用户批准“需要修复”）
+
+1. **changelog 结构归位**：累计 changelog（en/zh）把 v1.3.109 段移回文件顶部（新版本在前惯例）；online changelog（en/zh）删除残留的 v1.3.108 段，仅保留当前版本 v1.3.109，符合“online 仅含当前版本”规则。
+2. **New Task 目录契约对齐 Desktop**：新增 `draftSource`（quick-start/new-task/selected）；`newChat()` 不再继承目录（unset + new-task），`startNewTask()` 创建时即弹选择器（取消保持 unset），`send()` 对 unset 的 new-task 草稿发送时再问一次（取消保留草稿、不启动 run）；`newChatIn`/`applyWorkspaceChoice` 置 selected；侧栏新会话按钮与 Skills/SkillHub “新建会话”入口改走 `startNewTask`；删除当前会话仍走免询问的 `newChat()`（Desktop startNewTask(false) 同款）。无窗口时 requestDraftDirectory 解析为取消，保证无头测试确定性。
+3. **unset 草稿的供应商/模型菜单**：`draft-config-options` 要求非空 cwd（Runtime 回 -32602），故 cwd 为空时改从 `mothx/manage/providers/list` 投影 provider/model（已配置优先、全未配置时不隐藏全部、目录顺序、草稿>现有>默认偏好），纯函数 `projectDraftProviderModel` 可单测；与 Desktop refreshDraftConfigOptions 行为一致。
+4. **多 property elicitation form**：decision 新增 `Fields []decisionField`；多 property schema 每 property 渲染输入/枚举字段，应答 content 按 property 名 keyed（`elicitationContent`/`elicitationResolvedLabel`），空 form decline；单 property 与对象 enum replay 路径不变。新增回归：form 字段渲染与枚举点击、content 形状、send 目录门控、draft 投影。
+5. 同步更新：native/README、docs/en+zh/native.md、四个 changelog 文件新增本轮条目；session_ui_test 两个旧语义测试改为新契约断言。
+
 ## 尚未完成
 
 1. **P1 逐像素视觉对照**：Worktree/Router/Subagent 与主要页面已做真实截图与交互检查，状态徽标、计数、空态与英文文案正常；与 Desktop 的逐像素排版对照仍建议人工验收（非功能阻塞）。
+2. **真实照片背景的人工复核**：veil 0.66 已用合成繁忙背景做像素级验收；真实照片（高亮/高饱和区域更多）建议发布前人工再看一眼，非阻塞。
+3. **Desktop 代码移除**：发布渠道已切换（desktop workflow 仅手动兼容桥）。按横幅移除条件，完整一个发布周期不发布 Desktop 产物且无需手动兼容构建后，删除 `desktop/`、desktop-* targets 与 desktop-release.yml；该删除动作需另行批准。
+4. **changelog 结构**：已于第四轮归位（v1.3.109 置顶、online 仅当前版本），不再遗留。
 
 ## 验证
 
@@ -129,7 +196,7 @@ go tool mygo vet .
 make build
 ```
 
-最后验证：2026-11-12，上述检查全部通过（含 `go test -race`、`go vet`、`go tool mygo vet`、`make build`）。新增回归覆盖：publish_artifact fallback 去重、fallback 不可读路径、完整转录导出/文件名、活动会话菜单导出入口、英文 Settings/主页面零汉字扫描、页面级对话框渲染、Home 预设元数据、断连侧栏状态；本轮新增动态菜单/审批/截止时间/默认标题/History 空态/Worktree 弹层英文扫描、Home 标签横向布局、StatusBar 单一 context 投影、Composer 菜单向上展开、History 初始化等待能力。
+最后验证：2026-11-16，上述检查全部通过（含 `go test -race`、`go vet`、`go tool mygo vet`、`make build`）。本轮新增 `desktop_parity_test.go`：subagent 内联卡/名册/后台路由/状态归一/200 上限/面板合并/头部计数、plan meta 投影与侧栏渲染、思考预览、工具入库截断、背景作用域偏好与无头渲染、quick-start 目录、最近目录菜单与运行中会话拒绝、二进制回滚、导出包含 subagent/plan meta、新增文案英文翻译。上一轮（2026-11-12）回归覆盖：publish_artifact fallback 去重、fallback 不可读路径、完整转录导出/文件名、活动会话菜单导出入口、英文 Settings/主页面零汉字扫描、页面级对话框渲染、Home 预设元数据、断连侧栏状态；本轮新增动态菜单/审批/截止时间/默认标题/History 空态/Worktree 弹层英文扫描、Home 标签横向布局、StatusBar 单一 context 投影、Composer 菜单向上展开、History 初始化等待能力。第二轮（同日）新增 `TestBackgroundLayersPaintUnderShell` 像素探针回归（app/home 作用域下 图片/veil/外壳 绘制顺序），并重跑全部检查通过。
 
 ## 工作树提示
 

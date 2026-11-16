@@ -399,3 +399,72 @@ func (a *nativeApp) subagentRow(c *ui.Context, p palette, agent subagentInfoView
 		a.selectSubagent(agent.AgentID)
 	}
 }
+
+// subagentCard projects one canonical child lifecycle event inline in the
+// transcript, mirroring Desktop's SubagentCard. Clicking it opens the
+// read-only panel focused on that child; the Runtime stays the transcript
+// and status authority.
+func (a *nativeApp) subagentCard(c *ui.Context, p palette, m *chatMessage) {
+	b := ui.ButtonBase(c.Key(m.ID)).WidthPercent(100).MaxWidth(780).Margin(0, ui.Auto).
+		Radius(10).Background(p.thought).Border(1, p.t.Border).Padding(8, 12)
+	if b.Hovered() {
+		b.Background(p.hover)
+	}
+	b.Children(func() {
+		ui.Column(c).WidthPercent(100).Gap(3).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(7).Children(func() {
+				ui.Icon(c, iconUsers).FontSize(14).TextColor(p.t.Accent)
+				ui.Text(c, T("子代理")+" · "+m.SubagentTitle).FontSize(11.5).FontWeight(600).
+					TextColor(p.t.Text).Grow(1).SingleLine()
+				statusPill(c, p, m.SubagentStatus)
+			})
+			detail := make([]string, 0, 2)
+			if m.SubagentRole != "" {
+				detail = append(detail, m.SubagentRole)
+			}
+			if m.SubagentExpertID != "" {
+				detail = append(detail, m.SubagentExpertID)
+			}
+			if len(detail) > 0 {
+				ui.Text(c, strings.Join(detail, " · ")).FontSize(10).TextColor(p.t.TextMuted).SingleLine()
+			}
+		})
+	})
+	b.Label(Tf("查看子代理 %s", m.SubagentTitle))
+	if b.Clicked() {
+		a.openSubagentPanelFor(m.SubagentID)
+	}
+}
+
+// subagentSummaryButton is the header entry with Desktop's live counts: the
+// running/total projection comes from the canonical event roster, and a
+// failed child adds a danger dot. Without children it stays a plain icon.
+func (a *nativeApp) subagentSummaryButton(c *ui.Context, p palette) {
+	total, running, failed := a.subagentSummary(a.currentSession)
+	label := T("子代理")
+	if total > 0 {
+		if running > 0 {
+			label = Tf("子代理 %d/%d 运行中", running, total)
+		} else {
+			label = Tf("子代理 %d", total)
+		}
+	}
+	b := ui.ButtonBase(c.Key("subagent-summary")).Height(28).Padding(0, 7).Radius(7).
+		Gap(5).AlignItems(ui.Center).Justify(ui.Center)
+	if b.Hovered() {
+		b.Background(p.hover)
+	}
+	b.Children(func() {
+		ui.Icon(c, iconUsers).FontSize(15).TextColor(p.t.TextMuted)
+		if total > 0 {
+			ui.Text(c, label).FontSize(9.5).TextColor(p.t.TextMuted).SingleLine()
+			if failed > 0 {
+				ui.Box(c).Size(5, 5).Radius(3).Background(p.t.Danger)
+			}
+		}
+	})
+	b.Label(label).Tooltip(T("子代理"))
+	if b.Clicked() {
+		a.openSubagentPanel()
+	}
+}

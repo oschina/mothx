@@ -76,7 +76,8 @@ Welcome to the MothX Documentation Center!
 ### ✨ Core Features
 - [Features Overview](features-overview.md) — Multi-provider, sandbox, sessions, skills, and more
 - [Expert Teams](expert-teams.md) — Reusable lead identities and member teams
-- [Desktop Client](desktop.md) — Electron ACP desktop app
+- [Native Desktop Client](native.md) — primary self-drawn Go desktop app (pure ACP)
+- [Desktop Client (deprecated)](desktop.md) — legacy Electron ACP desktop app
 - [Knowledge Bases](knowledge-bases.md) — Index a directory and search it through MCP
 
 ### 🎯 Use Cases

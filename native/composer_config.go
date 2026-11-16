@@ -835,3 +835,136 @@ func (a *nativeApp) modelProviderChip(c *ui.Context, p palette, provider, label 
 		a.modelPickerProvider = provider
 	}
 }
+
+// refreshDraftProviderModelOptions projects the next-task provider/model menu
+// from the ACP provider catalog while the draft has no directory yet:
+// draft-config-options requires a cwd, but Desktop still offers provider and
+// model choices before one is picked. Selection semantics stay in the
+// Runtime; this only reshapes the catalog projection for the composer menu.
+func (a *nativeApp) refreshDraftProviderModelOptions(client *acpClient, features map[string]bool) {
+	if client == nil || !(features["manageProviders"] || a.featureEnabled("manageProviders")) {
+		return
+	}
+	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
+	go func() {
+		raw, err := client.call("mothx/manage/providers/list", map[string]any{})
+		a.dispatch(func() {
+			if err != nil || startReloadSeq != atomic.LoadInt64(&a.reloadSeq) || a.currentSession != "" {
+				return
+			}
+			var catalog providerCatalogView
+			if json.Unmarshal(raw, &catalog) != nil {
+				return
+			}
+			options, provider, model := projectDraftProviderModel(catalog, a.draftConfig, a.configOptions)
+			if len(options) == 0 {
+				return
+			}
+			a.configOptions = options
+			if provider != "" {
+				a.draftConfig["provider"] = provider
+			}
+			if model != "" {
+				a.draftConfig["model"] = model
+			}
+			a.syncModelState()
+		})
+	}()
+}
+
+// projectDraftProviderModel mirrors Desktop's draft picker projection: only
+// configured providers are offered (never hide every provider), the Runtime
+// catalog order is kept, and the preferred provider/model come from the draft
+// selection, the existing option, then the catalog defaults.
+func projectDraftProviderModel(catalog providerCatalogView, draft map[string]string, existing []configOption) ([]configOption, string, string) {
+	choices := make([]configChoice, 0, len(catalog.Providers))
+	for _, provider := range catalog.Providers {
+		name := strings.TrimSpace(provider.Name)
+		if name != "" && provider.APIKeyConfigured {
+			choices = append(choices, configChoice{Value: name, Name: name})
+		}
+	}
+	if len(choices) == 0 {
+		for _, provider := range catalog.Providers {
+			if name := strings.TrimSpace(provider.Name); name != "" {
+				choices = append(choices, configChoice{Value: name, Name: name})
+			}
+		}
+	}
+	if len(choices) == 0 {
+		return nil, "", ""
+	}
+	var existingProvider, existingModel *configOption
+	for i := range existing {
+		switch existing[i].ID {
+		case "provider":
+			existingProvider = &existing[i]
+		case "model":
+			existingModel = &existing[i]
+		}
+	}
+	preferred := draft["provider"]
+	if preferred == "" && existingProvider != nil {
+		preferred = existingProvider.CurrentValue
+	}
+	if preferred == "" {
+		preferred = catalog.DefaultProvider
+	}
+	provider := choices[0].Value
+	for _, choice := range choices {
+		if choice.Value == preferred {
+			provider = choice.Value
+			break
+		}
+	}
+	models := make([]configChoice, 0)
+	for _, model := range catalog.Models {
+		if !strings.EqualFold(model.Provider, provider) || strings.TrimSpace(model.ID) == "" {
+			continue
+		}
+		name := model.Name
+		if name == "" {
+			name = model.ID
+		}
+		models = append(models, configChoice{Value: model.ID, Name: name})
+	}
+	preferredModel := draft["model"]
+	if preferredModel == "" && existingModel != nil {
+		preferredModel = existingModel.CurrentValue
+	}
+	if preferredModel == "" && provider == catalog.DefaultProvider {
+		preferredModel = catalog.DefaultModel
+	}
+	model := ""
+	if len(models) > 0 {
+		model = models[0].Value
+		for _, choice := range models {
+			if choice.Value == preferredModel {
+				model = choice.Value
+				break
+			}
+		}
+	}
+	next := make([]configOption, 0, len(existing)+2)
+	replacedProvider, replacedModel := false, false
+	for _, option := range existing {
+		switch option.ID {
+		case "provider":
+			option.CurrentValue = provider
+			option.Options = choices
+			replacedProvider = true
+		case "model":
+			option.CurrentValue = model
+			option.Options = models
+			replacedModel = true
+		}
+		next = append(next, option)
+	}
+	if !replacedProvider {
+		next = append(next, configOption{Type: "select", ID: "provider", Name: "Provider", CurrentValue: provider, Options: choices})
+	}
+	if !replacedModel {
+		next = append(next, configOption{Type: "select", ID: "model", Name: "Model", CurrentValue: model, Options: models})
+	}
+	return next, provider, model
+}

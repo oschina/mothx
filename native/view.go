@@ -104,8 +104,23 @@ func (a *nativeApp) applyTheme(c *ui.Context) palette {
 
 func (a *nativeApp) view(c *ui.Context) {
 	p := a.applyTheme(c)
+	appBackground := a.appBackgroundActive()
+	var veil ui.Color
+	if appBackground {
+		veil = p.t.Background.Alpha(nativeBackgroundVeilAlpha)
+		p = p.veiled()
+	}
 	bar := c.TitleBar()
-	ui.Column(c).Fill().Background(p.t.Background).Children(func() {
+	rootBackground := p.t.Background
+	if appBackground {
+		// The image + veil layer below is the shell surface; an opaque root
+		// would hide it entirely.
+		rootBackground = ui.Color{}
+	}
+	ui.Column(c).Fill().Background(rootBackground).Children(func() {
+		if appBackground {
+			a.appBackgroundLayer(c, veil)
+		}
 		a.titleBar(c, p, bar)
 		ui.Row(c).Grow(1).Children(func() {
 			if a.sidebar {
@@ -157,6 +172,29 @@ func (a *nativeApp) view(c *ui.Context) {
 	}
 	a.modelPickerDialog(c, p)
 	a.toastView(c, p)
+}
+
+// appBackgroundLayer paints the user background across the whole shell with
+// a theme-colored veil, mirroring Desktop's homeBackgroundScope=app. It is
+// presentation only and never intercepts input.
+func (a *nativeApp) appBackgroundLayer(c *ui.Context, veil ui.Color) {
+	opacity := float32(a.home.backgroundOpacity)
+	if opacity < 0 {
+		opacity = 0
+	}
+	if opacity > 1 {
+		opacity = 1
+	}
+	x, y := a.homeObjectPosition()
+	// MyGo paints absolute children above flow siblings; a negative ZIndex
+	// puts the image and veil under the shell while staying above the root
+	// background, so the chrome renders on top of them.
+	ui.Image(c, a.home.backgroundImage).Absolute().Left(0).Top(0).Right(0).Bottom(0).
+		Fit(a.homeFit()).ObjectPosition(x, y).Opacity(opacity).
+		Blur(float32(a.home.backgroundBlur)).ZIndex(-2).
+		HitTest(func(x, y float32, r ui.Rect) bool { return false })
+	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Background(veil).ZIndex(-1).
+		HitTest(func(x, y float32, r ui.Rect) bool { return false })
 }
 
 // titleBar draws the window chrome instead of the system title bar. It follows
@@ -332,9 +370,9 @@ func (a *nativeApp) newChatButton(c *ui.Context, p palette) {
 		ui.Icon(c, iconPlus).FontSize(15).TextColor(p.t.Text)
 		ui.Text(c, T("新会话")).FontSize(12.5).FontWeight(550).TextColor(p.t.Text)
 	})
-	b.Label(T("新会话")).Tooltip(T("在当前工作区开始新会话"))
+	b.Label(T("新会话")).Tooltip(T("开始新任务并选择工作目录"))
 	if b.Clicked() {
-		a.newChat()
+		a.startNewTask()
 	}
 }
 
@@ -962,7 +1000,7 @@ func (a *nativeApp) header(c *ui.Context, p palette) {
 			iconButton(c, p, iconCpu, "Router 协作", 15, a.openRouterPanel)
 		}
 		if a.subagentCapable() && a.currentSession != "" && a.loadingSession == "" {
-			iconButton(c, p, iconUsers, "子代理", 15, a.openSubagentPanel)
+			a.subagentSummaryButton(c, p)
 		}
 		if a.mcpCapable() && a.currentSession != "" && a.loadingSession == "" {
 			iconButton(c, p, iconServer, "项目 MCP", 15, a.openProjectMCPPanel)
@@ -984,7 +1022,7 @@ func (a *nativeApp) header(c *ui.Context, p palette) {
 
 func (a *nativeApp) emptyState(c *ui.Context, p palette) {
 	ui.Column(c).Grow(1).FillHeight().Children(func() {
-		if a.home.backgroundImage != nil {
+		if a.home.backgroundImage != nil && !a.appBackgroundActive() {
 			opacity := float32(a.home.backgroundOpacity)
 			if opacity < 0 {
 				opacity = 0
@@ -995,7 +1033,13 @@ func (a *nativeApp) emptyState(c *ui.Context, p palette) {
 			x, y := a.homeObjectPosition()
 			ui.Image(c, a.home.backgroundImage).Absolute().Left(0).Top(0).Right(0).Bottom(0).
 				Fit(a.homeFit()).ObjectPosition(x, y).Opacity(opacity).
-				Blur(float32(a.home.backgroundBlur)).
+				Blur(float32(a.home.backgroundBlur)).ZIndex(-2).
+				HitTest(func(x, y float32, r ui.Rect) bool { return false })
+			// The home veil keeps preset/logo text readable on any image, as
+			// Desktop's home overlay does; it sits above the image and below
+			// the flow content.
+			ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).
+				Background(p.t.Background.Alpha(nativeBackgroundVeilAlpha)).ZIndex(-1).
 				HitTest(func(x, y float32, r ui.Rect) bool { return false })
 		}
 		ui.Column(c).Grow(1).Center().Padding(24).Children(func() {
@@ -1130,18 +1174,18 @@ func (a *nativeApp) connectionError(c *ui.Context, p palette) {
 const transcriptRenderWindow = 300
 
 func (a *nativeApp) transcriptWithPlan(c *ui.Context, p palette) {
-	entries := a.activePlanEntries()
-	if len(entries) == 0 {
+	plan := a.activePlanMessage()
+	if plan == nil {
 		a.transcript(c, p)
 		return
 	}
 	ui.Row(c).Grow(1).Children(func() {
 		ui.Column(c).Grow(1).Children(func() { a.transcript(c, p) })
-		a.planProgressPanel(c, p, entries)
+		a.planProgressPanel(c, p, plan)
 	})
 }
 
-func (a *nativeApp) activePlanEntries() []planEntry {
+func (a *nativeApp) activePlanMessage() *chatMessage {
 	if a.planMessageID == "" {
 		return nil
 	}
@@ -1149,7 +1193,7 @@ func (a *nativeApp) activePlanEntries() []planEntry {
 	if m == nil || m.Kind != messagePlan || len(m.Plan) == 0 {
 		return nil
 	}
-	return m.Plan
+	return m
 }
 
 func (a *nativeApp) transcriptWindow() ([]*chatMessage, int) {
@@ -1190,21 +1234,28 @@ func (a *nativeApp) transcript(c *ui.Context, p palette) {
 	})
 }
 
-func (a *nativeApp) planProgressPanel(c *ui.Context, p palette, entries []planEntry) {
+func (a *nativeApp) planProgressPanel(c *ui.Context, p palette, plan *chatMessage) {
+	entries := plan.Plan
 	completed := 0
 	for _, entry := range entries {
 		if entry.Status == "completed" {
 			completed++
 		}
 	}
+	title := plan.PlanTitle
+	if title == "" {
+		title = T("计划进度")
+	}
 	ui.Column(c).Width(240).FillHeight().Padding(12, 12).Gap(8).
 		BorderWidth(0, 0, 0, 1).BorderColor(p.t.Border).Background(p.t.Background).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
 			ui.Icon(c, iconSpark).FontSize(13).TextColor(p.t.Accent)
-			ui.Text(c, T("计划进度")).FontSize(11).FontWeight(650).TextColor(p.t.Text)
-			ui.Spacer(c)
+			ui.Text(c, title).FontSize(11).FontWeight(650).TextColor(p.t.Text).Grow(1).SingleLine()
 			ui.Textf(c, "%d/%d", completed, len(entries)).FontSize(9.5).TextColor(p.t.TextMuted)
 		})
+		if plan.PlanNote != "" {
+			ui.Text(c, plan.PlanNote).FontSize(10).TextColor(p.t.TextMuted).LineHeight(1.35)
+		}
 		ui.Scroll(c).Grow(1).Children(func() {
 			ui.Column(c).Gap(7).Children(func() {
 				for _, entry := range entries {
@@ -1280,6 +1331,13 @@ func (a *nativeApp) messageRow(c *ui.Context, p palette, m *chatMessage) {
 			if b.Clicked() {
 				m.Collapsed = !m.Collapsed
 			}
+			// Desktop previews the tail of the thought that is still streaming
+			// even while collapsed, so reasoning progress stays visible without
+			// expanding the full block. Completed thoughts stay compact.
+			if m.Collapsed && !m.Done && m.Text != "" {
+				ui.Text(c, thoughtPreview(m.Text)).FontSize(10.5).TextColor(p.t.TextMuted).
+					SingleLine().LineHeight(1.3)
+			}
 			if !m.Collapsed {
 				ui.Column(c).Padding(9, 12).Radius(10).Background(p.thought).
 					Border(1, p.t.Border).Children(func() {
@@ -1330,6 +1388,8 @@ func (a *nativeApp) messageRow(c *ui.Context, p palette, m *chatMessage) {
 		}
 	case messageDecision:
 		a.decisionCard(c, p, m)
+	case messageSubagent:
+		a.subagentCard(c, p, m)
 	case messageStatus:
 		ui.Row(c).Key(m.ID).AlignItems(ui.Center).Gap(6).Margin(0, ui.Auto).Children(func() {
 			color := p.t.TextMuted
@@ -1440,8 +1500,15 @@ func (a *nativeApp) planCard(c *ui.Context, p palette, m *chatMessage) {
 		Border(1, p.t.Border).Padding(10, 12).Gap(6).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
 			ui.Icon(c, iconSpark).FontSize(13).TextColor(p.t.Accent)
-			ui.Text(c, T("计划")).FontSize(11).FontWeight(650).TextColor(p.t.TextMuted)
+			label := m.PlanTitle
+			if label == "" {
+				label = T("计划")
+			}
+			ui.Text(c, label).FontSize(11).FontWeight(650).TextColor(p.t.TextMuted)
 		})
+		if m.PlanNote != "" {
+			ui.Text(c, m.PlanNote).FontSize(10.5).TextColor(p.t.TextMuted).LineHeight(1.35)
+		}
 		for _, entry := range m.Plan {
 			entry := entry
 			ui.Row(c).AlignItems(ui.Center).Gap(7).Children(func() {
@@ -1525,20 +1592,24 @@ func (a *nativeApp) composer(c *ui.Context, p palette) {
 					a.attachmentMenu(c, p)
 					a.capabilitiesMenu(c, p)
 					a.modeMenu(c, p)
-					b := ui.ButtonBase(c.Key("workspace-picker")).Padding(4, 7).Radius(7).
-						Gap(5).AlignItems(ui.Center)
-					if b.Hovered() {
-						b.Background(p.hover)
-					}
-					b.Children(func() {
-						ui.Icon(c, iconFolder).FontSize(12).TextColor(p.t.TextMuted)
-						ui.Text(c, a.workspaceLabel()).FontSize(10.5).TextColor(p.t.TextMuted).SingleLine().MaxWidth(150)
-						ui.Icon(c, iconChevronDown).FontSize(10).TextColor(p.t.TextMuted)
-					})
-					b.Label(T("切换工作区")).Tooltip(T("已打开会话时修改会话工作目录；否则选择下一个新会话目录"))
-					if b.Clicked() {
-						a.chooseWorkspace()
-					}
+					// The workspace picker projects the shell's recent-directory
+					// history (Desktop's desktop-store convenience) plus the native
+					// picker. Selection semantics stay in applyWorkspaceChoice.
+					workspaceBtn := ui.PopoverMenuButton(c.Key("workspace-picker"), a.workspaceLabel(), func(m *ui.Menu) {
+						if m.Item(T("选择目录") + "…").ID("workspace:choose").Chosen() {
+							a.chooseWorkspace()
+						}
+						if len(a.recentWorkspaces) > 0 {
+							m.Separator()
+							for _, entry := range a.recentWorkspaces {
+								entry := entry
+								if m.Item(entry).ID("workspace:recent:" + entry).Chosen() {
+									a.applyWorkspaceChoice(entry)
+								}
+							}
+						}
+					}, composerMenuOptions...).FontSize(10.5).TextColor(p.t.TextMuted).Padding(4, 6).Radius(7)
+					workspaceBtn.Tooltip(T("已打开会话时修改会话工作目录；否则选择下一个新会话目录"))
 					ui.Spacer(c)
 					a.expertMenu(c, p)
 					a.modelMenu(c, p)
@@ -1707,7 +1778,16 @@ func (a *nativeApp) transcriptPlainText() string {
 			b.WriteString("\n\n")
 			b.WriteString(m.ToolText)
 		case messagePlan:
-			b.WriteString("## Plan\n\n")
+			b.WriteString("## Plan")
+			if m.PlanTitle != "" {
+				b.WriteString(": ")
+				b.WriteString(m.PlanTitle)
+			}
+			b.WriteString("\n\n")
+			if m.PlanNote != "" {
+				b.WriteString(m.PlanNote)
+				b.WriteString("\n\n")
+			}
 			for _, entry := range m.Plan {
 				b.WriteString("- [")
 				b.WriteString(entry.Status)
@@ -1715,6 +1795,11 @@ func (a *nativeApp) transcriptPlainText() string {
 				b.WriteString(entry.Content)
 				b.WriteString("\n")
 			}
+		case messageSubagent:
+			b.WriteString("## Sub-agent: ")
+			b.WriteString(m.SubagentTitle)
+			b.WriteString(" — ")
+			b.WriteString(m.SubagentStatus)
 		case messageStatus, messageSystem, messageError:
 			b.WriteString(m.Text)
 		case messageArtifact:
@@ -1759,6 +1844,16 @@ func formatThoughtDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm", minutes)
 	}
 	return fmt.Sprintf("%dm %02ds", minutes, seconds)
+}
+
+// thoughtPreview projects the compact tail of a still-streaming thought for
+// the collapsed live row, mirroring Desktop's 600-character preview window.
+func thoughtPreview(text string) string {
+	runes := []rune(text)
+	if len(runes) > 600 {
+		runes = runes[len(runes)-600:]
+	}
+	return strings.Join(strings.Fields(string(runes)), " ")
 }
 
 func humanCount(n int) string {

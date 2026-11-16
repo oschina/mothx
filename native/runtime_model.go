@@ -112,12 +112,32 @@ func (a *nativeApp) reconnectACP() {
 	a.invalidateHistoryPanel()
 	a.invalidateRouterPanel()
 	a.invalidateSubagentPanel()
+	a.subagentRosters = make(map[string][]subagentInfoView)
 	a.closeArtifactPreview()
 	a.closeWorktreePanel()
 	a.invalidateMCPPanel()
 	if old != nil {
 		old.close()
 	}
+	go a.connect()
+}
+
+// rollbackRuntimeBinaryIfPending restores the previous runtime binary when
+// a user-selected executable failed to start or initialize, mirroring
+// Desktop's failed-switch rollback. It runs on the UI thread inside the
+// connect failure dispatch and retries once with the restored preference so
+// a bad switch cannot strand the shell. The pending flag is cleared first,
+// so a second failure surfaces normally instead of looping.
+func (a *nativeApp) rollbackRuntimeBinaryIfPending() {
+	if !a.binaryRollbackPending {
+		return
+	}
+	previous := a.binaryRollbackPrevious
+	a.binaryRollbackPending = false
+	a.binaryRollbackPrevious = ""
+	setRuntimeBinaryPreference(previous, true)
+	addDiagnostic("info", "runtime binary rolled back to: "+previous)
+	a.showErrorToast("所选运行时无法启动，已回退到之前的二进制")
 	go a.connect()
 }
 

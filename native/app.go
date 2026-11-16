@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,6 +70,14 @@ type nativeApp struct {
 	workspace      string
 	draftCwd       string
 	cwd            string
+	// draftSource mirrors Desktop's draft workspace provenance: quick-start
+	// (launch scratch), new-task (unset until picked), selected (explicit).
+	draftSource     string
+	pickingDraftDir bool
+	// lastWorkspace/recentWorkspaces are native-local picker conveniences
+	// (Desktop's desktop-store boundary); they never become a session cwd.
+	lastWorkspace    string
+	recentWorkspaces []string
 
 	messages             []*chatMessage
 	messageIndex         map[string]*chatMessage
@@ -111,16 +120,21 @@ type nativeApp struct {
 	// create an empty session by itself.
 	draftConfig map[string]string
 
-	search            string
-	searching         bool
-	history           bool
-	historyOpen       bool
-	historyQuery      string
-	page              string
-	historyPanel      historyState
-	worktree          worktreePanelState
-	router            routerPanelState
-	subagent          subagentPanelState
+	search       string
+	searching    bool
+	history      bool
+	historyOpen  bool
+	historyQuery string
+	page         string
+	historyPanel historyState
+	worktree     worktreePanelState
+	router       routerPanelState
+	subagent     subagentPanelState
+	// subagentRosters is the per-session live child projection keyed by
+	// session ID (background teams keep reporting). It is reconciled by
+	// mothx/subagent/list and never becomes canonical state.
+	subagentRosters   map[string][]subagentInfoView
+	subagentRosterSeq map[string]int64
 	sidebar           bool
 	expandedProjects  map[string]bool
 	sessionStates     map[string]sessionSnapshot
@@ -132,6 +146,12 @@ type nativeApp struct {
 
 	prefsPath string
 	home      homeAppearance
+
+	// binaryRollbackPrevious holds the runtime binary preference to restore
+	// when a user-selected binary fails to start/initialize. Empty means no
+	// rollback is pending; the shell must stay usable after a bad switch.
+	binaryRollbackPrevious string
+	binaryRollbackPending  bool
 
 	toasts   []toastItem
 	toastSeq int64
@@ -201,6 +221,7 @@ func newNativeApp() *nativeApp {
 		cwd:              cwd,
 		workspace:        cwd,
 		draftCwd:         cwd,
+		draftSource:      "quick-start",
 		sidebar:          true,
 		expandedProjects: make(map[string]bool),
 		sessionStates:    make(map[string]sessionSnapshot),
@@ -226,6 +247,7 @@ func newNativeApp() *nativeApp {
 		historyPanel:     newHistoryState(),
 		worktree:         newWorktreePanelState(),
 		router:           newRouterPanelState(),
+		subagentRosters:  make(map[string][]subagentInfoView),
 	}
 	a.md = markdown.Options{WrapCode: true}
 	a.list.FollowEnd = true
@@ -261,6 +283,9 @@ func (a *nativeApp) setConn(state connState, errText string) {
 }
 
 func (a *nativeApp) connect() {
+	if a.closing.Load() {
+		return
+	}
 	seq := atomic.AddInt64(&a.reloadSeq, 1)
 	bin, source := resolveMothxBinarySource()
 	addDiagnostic("info", "connect: binary="+bin+" source="+source)
@@ -326,7 +351,10 @@ func (a *nativeApp) connect() {
 	)
 	if err := client.start(bin, a.cwd, os.Environ()); err != nil {
 		addDiagnostic("error", "ACP start failed: "+err.Error())
-		a.dispatch(func() { a.setConn(connFailed, "无法启动 ACP："+err.Error()) })
+		a.dispatch(func() {
+			a.setConn(connFailed, "无法启动 ACP："+err.Error())
+			a.rollbackRuntimeBinaryIfPending()
+		})
 		return
 	}
 	a.dispatch(func() { a.acp = client })
@@ -348,14 +376,20 @@ func (a *nativeApp) connect() {
 	if err != nil {
 		client.close()
 		addDiagnostic("error", "ACP initialize failed: "+err.Error())
-		a.dispatch(func() { a.setConn(connFailed, "ACP 初始化失败："+err.Error()) })
+		a.dispatch(func() {
+			a.setConn(connFailed, "ACP 初始化失败："+err.Error())
+			a.rollbackRuntimeBinaryIfPending()
+		})
 		return
 	}
 	var init initializeResult
 	if err := json.Unmarshal(raw, &init); err != nil {
 		client.close()
 		addDiagnostic("error", "ACP initialize response invalid: "+err.Error())
-		a.dispatch(func() { a.setConn(connFailed, "ACP initialize 响应无效："+err.Error()) })
+		a.dispatch(func() {
+			a.setConn(connFailed, "ACP initialize 响应无效："+err.Error())
+			a.rollbackRuntimeBinaryIfPending()
+		})
 		return
 	}
 	features := parseFeatures(init)
@@ -368,6 +402,8 @@ func (a *nativeApp) connect() {
 		}
 		a.setConn(connReady, "")
 		a.setFeatures(features)
+		a.binaryRollbackPending = false
+		a.binaryRollbackPrevious = ""
 	})
 	if seq != atomic.LoadInt64(&a.reloadSeq) {
 		client.close()
@@ -442,6 +478,12 @@ func parseFeatures(init initializeResult) map[string]bool {
 
 func (a *nativeApp) refreshDraftConfig(client *acpClient, cwd string, features map[string]bool) {
 	if client == nil {
+		return
+	}
+	if strings.TrimSpace(cwd) == "" {
+		// An unset New Task draft has no cwd for draft-config-options; Desktop
+		// still projects the provider/model menu from the provider catalog.
+		a.refreshDraftProviderModelOptions(client, features)
 		return
 	}
 	if len(features) > 0 && !features["sessionDraftConfigOptions"] {
@@ -631,31 +673,138 @@ func (a *nativeApp) handleReverse(client *acpClient, msg incoming) {
 			}
 			return
 		}
-		d := decision{
-			ID:      append(json.RawMessage(nil), msg.ID...),
-			Kind:    "elicitation",
-			Session: p.SessionID,
-			Title:   T("MothX 想确认一下"),
-			Prompt:  p.Message,
-			Elicit:  true,
-		}
-		for name, prop := range p.Schema.Properties {
-			if prop.Title != "" {
-				d.Title = prop.Title
-			}
-			for _, enum := range prop.Enum {
-				d.Options = append(d.Options, decisionOption{ID: enum, Label: enum})
-			}
-			if len(d.Options) == 0 {
-				d.Options = append(d.Options, decisionOption{ID: name, Label: prop.Title})
-			}
-		}
+		d := buildElicitationDecision(msg.ID, p)
 		a.queueDecision(d)
 	default:
 		if client != nil && msg.hasID() {
 			_ = client.respondError(msg.ID, -32601, "method not found: "+msg.Method)
 		}
 	}
+}
+
+// buildElicitationDecision projects one elicitation/create request into the
+// inline decision card. The Runtime's form projection uses a single "answer"
+// property, but a request replayed from a form-capable client may carry other
+// shapes: prefer "answer", else the first property in sorted order, and accept
+// both string and {id,label} enum entries instead of failing the whole request
+// on a mixed schema.
+func buildElicitationDecision(id json.RawMessage, p elicitationParams) decision {
+	d := decision{
+		ID:      append(json.RawMessage(nil), id...),
+		Kind:    "elicitation",
+		Session: p.SessionID,
+		Title:   T("MothX 想确认一下"),
+		Prompt:  p.Message,
+		Elicit:  true,
+	}
+	names := make([]string, 0, len(p.Schema.Properties))
+	for name := range p.Schema.Properties {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if len(names) > 1 {
+		// A real multi-property form: one field per property, answered as
+		// content keyed by property name instead of a single free text.
+		for _, name := range names {
+			prop := p.Schema.Properties[name]
+			field := decisionField{Name: name, Title: prop.Title, Description: prop.Description}
+			if field.Title == "" {
+				field.Title = name
+			}
+			for _, raw := range prop.Enum {
+				if option, ok := parseElicitationEnum(raw); ok {
+					field.Options = append(field.Options, option)
+				}
+			}
+			d.Fields = append(d.Fields, field)
+		}
+		return d
+	}
+	chosen := ""
+	for _, name := range names {
+		if name == "answer" {
+			chosen = name
+			break
+		}
+	}
+	if chosen == "" && len(names) > 0 {
+		chosen = names[0]
+	}
+	if chosen != "" {
+		prop := p.Schema.Properties[chosen]
+		if prop.Title != "" {
+			d.Title = prop.Title
+		}
+		for _, raw := range prop.Enum {
+			if option, ok := parseElicitationEnum(raw); ok {
+				d.Options = append(d.Options, option)
+			}
+		}
+	}
+	return d
+}
+
+// elicitationContent builds the accept payload: a multi-property form answers
+// as content keyed by property name; the single-property projection keeps the
+// Runtime's "answer" key. Empty forms decline instead of accepting blank data.
+func elicitationContent(d *decision) map[string]any {
+	content := make(map[string]any)
+	if len(d.Fields) > 0 {
+		for _, field := range d.Fields {
+			if value := strings.TrimSpace(field.Value); value != "" {
+				content[field.Name] = value
+			}
+		}
+		return content
+	}
+	if answer := strings.TrimSpace(d.Answer); answer != "" {
+		content["answer"] = answer
+	}
+	return content
+}
+
+func elicitationResolvedLabel(d *decision, content map[string]any) string {
+	if len(d.Fields) == 0 {
+		if value, ok := content["answer"].(string); ok {
+			return value
+		}
+		return ""
+	}
+	parts := make([]string, 0, len(d.Fields))
+	for _, field := range d.Fields {
+		if value, ok := content[field.Name].(string); ok {
+			parts = append(parts, field.Name+"="+value)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// parseElicitationEnum accepts both enum shapes used by ACP form schemas:
+// plain strings and the {id,label} option objects the Runtime embeds when it
+// projects a legacy question into elicitation/create.
+func parseElicitationEnum(raw json.RawMessage) (decisionOption, bool) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil && strings.TrimSpace(text) != "" {
+		return decisionOption{ID: text, Label: text}, true
+	}
+	var obj struct {
+		ID    string `json:"id"`
+		Label string `json:"label"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		id := obj.ID
+		if id == "" {
+			id = obj.Label
+		}
+		label := obj.Label
+		if label == "" {
+			label = id
+		}
+		if id != "" {
+			return decisionOption{ID: id, Label: label}, true
+		}
+	}
+	return decisionOption{}, false
 }
 
 // permissionOptionLabel keeps the Runtime-provided option name, which is the
@@ -787,16 +936,17 @@ func (a *nativeApp) answerDecision(d *decision, optionID string) {
 			}
 		}
 	case "elicitation":
+		content := elicitationContent(d)
 		if client != nil {
-			if answer == "" {
+			if len(content) == 0 {
 				_ = client.respond(d.ID, map[string]any{"action": "decline"})
 			} else {
-				_ = client.respond(d.ID, map[string]any{"action": "accept", "content": map[string]any{"answer": answer}})
+				_ = client.respond(d.ID, map[string]any{"action": "accept", "content": content})
 			}
 		}
 		resolved = T("已取消")
-		if answer != "" {
-			resolved = Tf("已提交：%s", answer)
+		if len(content) > 0 {
+			resolved = Tf("已提交：%s", elicitationResolvedLabel(d, content))
 		}
 	default:
 		if client != nil {
@@ -878,16 +1028,59 @@ func (a *nativeApp) newChat() {
 	a.attachments = nil
 	a.draftConfig = make(map[string]string)
 	a.resetTranscript()
-	cwd := a.draftCwd
-	if cwd == "" {
-		cwd = a.workspace
+	// Desktop's New Task draft has no inherited directory: it stays unset
+	// until the native picker (or a worktree action) supplies one, and send
+	// asks again if it is still empty. Only the launch quick-start seeds a
+	// scratch directory without asking.
+	a.draftSource = "new-task"
+	a.workspace = ""
+	a.draftCwd = ""
+	go a.refreshDraftConfig(a.acp, "", a.featureSnapshot())
+}
+
+// startNewTask mirrors Desktop's New Task: reset to an unset draft and ask
+// for the directory immediately; cancelling leaves it unset for send time.
+func (a *nativeApp) startNewTask() {
+	a.newChat()
+	a.requestDraftDirectory(func(picked string) {
+		if picked == "" {
+			return
+		}
+		a.applyWorkspaceChoice(picked)
+	})
+}
+
+// requestDraftDirectory opens the native directory picker once at a time and
+// delivers the choice (or "" on cancel) on the UI thread. With no window it
+// resolves to cancel so headless tests stay deterministic.
+func (a *nativeApp) requestDraftDirectory(onPick func(string)) {
+	if a.pickingDraftDir {
+		return
 	}
-	if cwd == "" {
-		cwd = a.cwd
+	if a.win == nil {
+		onPick("")
+		return
 	}
-	a.workspace = cwd
-	a.draftCwd = cwd
-	go a.refreshDraftConfig(a.acp, cwd, a.featureSnapshot())
+	a.pickingDraftDir = true
+	win := a.win
+	defaultPath := a.lastWorkspace
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent:            win,
+			Title:             T("选择新会话工作区"),
+			DefaultPath:       defaultPath,
+			Directory:         true,
+			CreateDirectories: true,
+		})
+		picked := ""
+		if err == nil && len(paths) > 0 {
+			picked = paths[0]
+		}
+		a.dispatch(func() {
+			a.pickingDraftDir = false
+			onPick(picked)
+		})
+	}()
 }
 
 func (a *nativeApp) newChatIn(cwd string) {
@@ -895,11 +1088,14 @@ func (a *nativeApp) newChatIn(cwd string) {
 		a.status = "请等待当前会话创建完成"
 		return
 	}
+	a.newChat()
 	if cwd != "" {
+		a.recordWorkspace(cwd)
 		a.workspace = cwd
 		a.draftCwd = cwd
+		a.draftSource = "selected"
+		go a.refreshDraftConfig(a.acp, cwd, a.featureSnapshot())
 	}
-	a.newChat()
 }
 
 func (a *nativeApp) chooseWorkspace() {
@@ -922,10 +1118,12 @@ func (a *nativeApp) chooseWorkspace() {
 		return
 	}
 	win := a.win
+	defaultPath := a.lastWorkspace
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:            win,
 			Title:             T("选择新会话工作区"),
+			DefaultPath:       defaultPath,
 			Directory:         true,
 			CreateDirectories: true,
 		})
@@ -934,12 +1132,42 @@ func (a *nativeApp) chooseWorkspace() {
 		}
 		path := paths[0]
 		a.dispatch(func() {
-			a.workspace = path
-			a.draftCwd = path
-			a.status = "新会话工作区已切换"
-			go a.refreshDraftConfig(a.acp, path, a.featureSnapshot())
+			a.applyWorkspaceChoice(path)
 		})
 	}()
+}
+
+// applyWorkspaceChoice applies one explicitly picked directory with the same
+// semantics as the native picker: an open session changes its canonical cwd
+// through setWorkDir; a draft only changes the next new-session directory.
+// Recent-directory menu entries reuse this path instead of forking it.
+func (a *nativeApp) applyWorkspaceChoice(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	if a.currentSession != "" {
+		session, ok := a.sessionByID(a.currentSession)
+		if !ok {
+			session = listedSession{SessionID: a.currentSession, Cwd: a.workspace}
+		} else if a.sessionRunActive(session) {
+			a.status = "该会话正在运行，请先停止"
+			return
+		}
+		if !a.historyWorkDirCapable() {
+			a.status = "当前运行时不支持修改会话工作目录"
+			return
+		}
+		a.recordWorkspace(path)
+		a.runHistoryWorkDir(session, path)
+		return
+	}
+	a.recordWorkspace(path)
+	a.workspace = path
+	a.draftCwd = path
+	a.draftSource = "selected"
+	a.status = "新会话工作区已切换"
+	go a.refreshDraftConfig(a.acp, path, a.featureSnapshot())
 }
 
 func (a *nativeApp) attachFiles() {
@@ -1087,6 +1315,7 @@ func (a *nativeApp) finishSessionLoad(sessionID string, res sessionResult, title
 	if a.currentTitle == "" && res.SessionID != "" {
 		a.currentTitle = title
 	}
+	a.refreshSubagentRoster(sessionID)
 	a.settleWorktreeOpen()
 }
 
@@ -1106,7 +1335,25 @@ func (a *nativeApp) send() {
 	if text == "" || a.running || a.creatingSession {
 		return
 	}
-	if a.conn != connReady || a.acp == nil {
+	if a.conn != connReady {
+		a.appendMessage(&chatMessage{ID: a.nextLocalMessageID("error"), Kind: messageSystem, Text: "尚未连接到 MothX ACP。", Done: true})
+		return
+	}
+	if a.currentSession == "" && a.draftSource == "new-task" &&
+		strings.TrimSpace(a.workspace) == "" && strings.TrimSpace(a.draftCwd) == "" {
+		// Desktop asks again at send time when the New Task draft still has
+		// no directory; cancelling keeps the draft instead of sending nowhere.
+		a.requestDraftDirectory(func(picked string) {
+			if picked == "" {
+				a.status = "未选择工作目录，新任务未发送"
+				return
+			}
+			a.applyWorkspaceChoice(picked)
+			a.send()
+		})
+		return
+	}
+	if a.acp == nil {
 		a.appendMessage(&chatMessage{ID: a.nextLocalMessageID("error"), Kind: messageSystem, Text: "尚未连接到 MothX ACP。", Done: true})
 		return
 	}

@@ -72,7 +72,7 @@ func (a *nativeApp) skillsPageMarketSessionRequired(c *ui.Context, p palette) {
 					FontSize(10.5).TextColor(p.t.TextMuted).LineHeight(1.4)
 			})
 			if ui.PrimaryButton(c.Key("skills-market-open-session"), T("新建会话")).Clicked() {
-				a.newChat()
+				a.startNewTask()
 			}
 		})
 	})

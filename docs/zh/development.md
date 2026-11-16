@@ -71,6 +71,20 @@ WebUI 冒烟测试用无头 Chromium 跑已构建的 UI 并配一个假 host，�
 `npm run build`。Desktop 往返测试需要从当前源码构建的 runtime，因为它断言的是
 宿主二进制携带的 Router 管理投影。
 
+### Native 桌面检查
+
+MothX Native（主力桌面客户端）是嵌套 Go module，用无头 UI 覆盖代替浏览器驱动：
+
+```bash
+make native-test    # 转录 reducer + 无头页面/i18n/像素测试
+make native-vet     # go vet + MyGo 生命周期/goroutine 检查
+make native-build   # native/build/ 下的 stripped 二进制
+```
+
+无头 tester 离线渲染全部设置页与主视图；英文扫描对未翻译中文 UI 直接失败，
+像素探针固定背景图/veil/外壳的绘制顺序。改动后台运行路由或面板失效逻辑时，
+在 `native/` 内跑 `go test -race ./...`。
+
 ## 项目结构
 
 ```
@@ -78,7 +92,8 @@ mothx/
 ├── agent/                     # 公共 SDK 类型（Agent、Provider、Builder）
 ├── bootstrap/                 # 将公共 SDK 接口接到内部实现
 ├── cmd/mothx/                 # CLI 入口与子命令
-├── desktop/                   # Electron 桌面客户端（纯 ACP）
+├── desktop/                   # Electron 桌面客户端（纯 ACP；已弃用）
+├── native/                    # 主力桌面客户端：纯 Go MyGo 应用（纯 ACP）
 ├── ui/                        # 内嵌到 Serve 的 Svelte Web UI
 ├── internal/
 │   ├── agent/                 # 核心 Agent 循环、事件、提示词、子 Agent 工具

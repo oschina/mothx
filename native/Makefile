@@ -33,8 +33,8 @@ help:
 	@echo "  make dist-windows  Package windows/amd64"
 	@echo "  make clean         Remove $(OUT)/"
 	@echo ""
-	@echo "Runtime selection: set MOTHX_BIN=/path/to/mothx, or rely on PATH"
-	@echo "or the repository's ../bin/mothx fallback."
+	@echo "Runtime selection: --mothx-bin, the persisted Settings > Runtime choice,"
+	@echo "MOTHX_BIN, PATH, or the repository's ../bin/mothx fallback."
 
 dev:
 	$(GO) run -ldflags "$(NATIVE_LDFLAGS)" .

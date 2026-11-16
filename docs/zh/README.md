@@ -138,7 +138,8 @@ mothx/
 ├── agent/                 # 公共 SDK 类型（Agent、Provider、Builder）
 ├── bootstrap/             # 公共 SDK 到内部实现的接线
 ├── cmd/mothx/             # CLI 入口
-├── desktop/               # Electron ACP 桌面客户端
+├── desktop/               # Electron ACP 桌面客户端（已弃用，兼容保留）
+├── native/                # 主力纯 Go 自绘桌面客户端（MyGo + ACP）
 ├── ui/                    # Serve 内嵌的 Svelte Web UI
 ├── internal/
 │   ├── agent/             # 核心 Agent 循环
@@ -167,7 +168,8 @@ mothx/
 ### ✨ 核心特性
 - [核心特性详解](features-overview.md) — 多提供商、沙箱、会话、技能等
 - [主角团](expert-teams.md) — 可复用的 lead 身份与成员团队
-- [桌面客户端](desktop.md) — Electron ACP 桌面应用
+- [Native 桌面客户端](native.md) — 主力纯 Go 自绘桌面应用（纯 ACP）
+- [桌面客户端（已弃用）](desktop.md) — 旧版 Electron ACP 桌面应用
 - [知识库](knowledge-bases.md) — 索引目录并通过 MCP 搜索
 
 ### 🎯 使用场景

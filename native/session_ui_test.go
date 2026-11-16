@@ -116,17 +116,24 @@ func TestSelectSessionKeepsDraftWorkspace(t *testing.T) {
 	}
 }
 
-func TestNewChatUsesDraftWorkspace(t *testing.T) {
+func TestNewChatUnsetsDraftUntilPicked(t *testing.T) {
 	a := testApp()
 	a.currentSession = "s1"
 	a.workspace = "/work/session"
 	a.draftCwd = "/work/draft"
+	a.draftSource = "selected"
 	a.newChat()
 	if a.currentSession != "" {
 		t.Fatalf("new chat retained session %q", a.currentSession)
 	}
-	if a.workspace != "/work/draft" || a.draftCwd != "/work/draft" {
-		t.Fatalf("new chat workspace = %q draft = %q", a.workspace, a.draftCwd)
+	// Desktop parity: a New Task draft inherits no directory; only an
+	// explicit pick (or the launch quick-start) seeds one.
+	if a.draftSource != "new-task" || a.workspace != "" || a.draftCwd != "" {
+		t.Fatalf("new-task draft must stay unset: source=%q workspace=%q draft=%q", a.draftSource, a.workspace, a.draftCwd)
+	}
+	a.applyWorkspaceChoice("/work/picked")
+	if a.draftSource != "selected" || a.workspace != "/work/picked" || a.draftCwd != "/work/picked" {
+		t.Fatalf("explicit pick did not seed the draft: source=%q workspace=%q draft=%q", a.draftSource, a.workspace, a.draftCwd)
 	}
 }
 
@@ -180,8 +187,8 @@ func TestNewChatCanRunWhileAnotherSessionContinues(t *testing.T) {
 	if state, ok := a.sessionStates["s1"]; !ok || !state.Running || len(state.Messages) != 1 {
 		t.Fatalf("background session was not preserved: %+v", state)
 	}
-	if a.workspace != "/draft" {
-		t.Fatalf("new chat workspace = %q", a.workspace)
+	if a.draftSource != "new-task" || a.workspace != "" {
+		t.Fatalf("new chat draft = source %q workspace %q", a.draftSource, a.workspace)
 	}
 	a.selectSessionState("s1")
 	if !a.running || len(a.messages) != 1 || a.messages[0].Text != "working" {

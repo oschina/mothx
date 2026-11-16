@@ -196,6 +196,17 @@ type sessionEvent struct {
 	Remaining  *int           `json:"remainingMs,omitempty"`
 	Attempt    *int           `json:"attempt,omitempty"`
 	ErrorInfo  map[string]any `json:"errorInfo,omitempty"`
+
+	// Subagent lifecycle projection (_mothx/session_event event=subagent).
+	// The Runtime owns child identity and status; these fields only project
+	// the canonical event into the transcript card and the session roster.
+	AgentID           string `json:"agentId,omitempty"`
+	ParentAgentID     string `json:"parentAgentId,omitempty"`
+	MemberID          string `json:"memberId,omitempty"`
+	ExpertID          string `json:"expertId,omitempty"`
+	MemberDisplayName string `json:"memberDisplayName,omitempty"`
+	MemberEmoji       string `json:"memberEmoji,omitempty"`
+	MemberRole        string `json:"memberRole,omitempty"`
 }
 
 type permissionToolCall struct {
@@ -242,10 +253,12 @@ type elicitationParams struct {
 	Schema    struct {
 		Type       string `json:"type"`
 		Properties map[string]struct {
-			Type        string   `json:"type"`
-			Title       string   `json:"title"`
-			Description string   `json:"description"`
-			Enum        []string `json:"enum"`
+			Type        string `json:"type"`
+			Title       string `json:"title"`
+			Description string `json:"description"`
+			// Enum entries may be plain strings or {id,label} objects: the
+			// Runtime's form projection embeds question options as objects.
+			Enum []json.RawMessage `json:"enum"`
 		} `json:"properties"`
 		Required []string `json:"required"`
 	} `json:"requestedSchema"`

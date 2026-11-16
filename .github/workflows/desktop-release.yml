@@ -1,5 +1,11 @@
-name: Build Desktop Release
+name: Build Desktop Release (deprecated)
 
+# Desktop (Electron) is deprecated: MothX Native is the primary desktop client
+# and the only desktop artifact published automatically on v* tags
+# (native-release.yml). This workflow remains as a manual compatibility bridge
+# for users who still need an Electron build during the migration window.
+# Removal condition: delete this workflow together with desktop/ once a full
+# release cycle ships no Desktop assets and no manual dispatch was needed.
 on:
   workflow_dispatch:
     inputs:
@@ -8,9 +14,6 @@ on:
         required: false
         type: string
         default: ''
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: write
@@ -31,6 +34,11 @@ jobs:
             platform: linux
 
     steps:
+      - name: Deprecation notice
+        shell: bash
+        run: |
+          echo "::warning::Desktop (Electron) is deprecated. MothX Native is the primary desktop client; this manual build is a compatibility bridge only. See docs/en/native.md and docs/zh/native.md."
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -166,7 +174,9 @@ jobs:
           body_path: docs/changelog_online_en.md
           generate_release_notes: false
           prerelease: ${{ contains(inputs.tag || github.ref_name, 'pre') }}
-          make_latest: ${{ !contains(inputs.tag || github.ref_name, 'pre') }}
+          # A manual compatibility build must never demote the Native release
+          # that owns this tag's "latest" marker.
+          make_latest: false
           files: |
             desktop/release/MothX-Desktop-*
             desktop/release/checksums.txt

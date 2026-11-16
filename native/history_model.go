@@ -744,6 +744,7 @@ func (a *nativeApp) runHistoryDelete(session listedSession) {
 			}
 			deletedCurrent := a.currentSession == session.SessionID
 			delete(a.sessionStates, session.SessionID)
+			delete(a.subagentRosters, session.SessionID)
 			p.Sessions = removeListedSession(p.Sessions, session.SessionID)
 			a.sessions = removeListedSession(a.sessions, session.SessionID)
 			p.DialogOpen = false
@@ -847,17 +848,25 @@ func (a *nativeApp) chooseHistoryWorkDir(session listedSession) {
 		return
 	}
 	win := a.win
+	defaultPath := a.lastWorkspace
+	if defaultPath == "" {
+		defaultPath = session.Cwd
+	}
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:            win,
 			Title:             T("选择会话工作目录"),
+			DefaultPath:       defaultPath,
 			Directory:         true,
 			CreateDirectories: true,
 		})
 		if err != nil || len(paths) == 0 {
 			return
 		}
-		a.dispatch(func() { a.runHistoryWorkDir(session, paths[0]) })
+		a.dispatch(func() {
+			a.recordWorkspace(paths[0])
+			a.runHistoryWorkDir(session, paths[0])
+		})
 	}()
 }
 

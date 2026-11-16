@@ -1,5 +1,15 @@
 # MothX Desktop
 
+> **Deprecated.** MothX Native is now the primary desktop client
+> ([Native guide](native.md)). Desktop (Electron) no longer publishes release
+> artifacts automatically; only manual compatibility builds remain during the
+> migration window, and this codebase is frozen except for security fixes.
+> Sessions and configuration are shared Runtime state, so moving to Native
+> requires no data migration — see [Migrating from Desktop](native.md#migrating-from-desktop).
+> Removal condition: `desktop/` and its build/release entry points are deleted
+> once a full release cycle ships no Desktop assets and no manual compatibility
+> build was needed.
+
 MothX Desktop is the graphical MothX client. It is a **pure ACP (Agent Client
 Protocol) client**: the Electron main process launches the bundled `mothx acp`
 runtime over stdio and speaks newline-delimited JSON-RPC. It does not start

@@ -1,5 +1,12 @@
 # MothX 桌面客户端
 
+> **已弃用。** MothX Native 现在是主力桌面客户端（[Native 指南](native.md)）。
+> Desktop（Electron）不再自动发布 release 产物；迁移窗口内仅保留手动兼容
+> 构建，代码除安全修复外冻结。会话与配置是共享 Runtime 状态，迁移到 Native
+> 不需要搬移任何数据——见[从 Desktop 迁移](native.md#从-desktop-迁移)。
+> 移除条件：完整一个发布周期不再发布 Desktop 产物、且无需手动兼容构建后，
+> 删除 `desktop/` 及其构建/发布入口。
+
 MothX Desktop 是 MothX 的图形客户端，也是一个**纯 ACP（Agent Client
 Protocol）客户端**：Electron 主进程启动内置的 `mothx acp` 运行时，通过 stdio
 上的 newline-delimited JSON-RPC 通信。它不会启动 `mothx serve`，不会嵌入

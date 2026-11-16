@@ -53,6 +53,37 @@ func (a *nativeApp) decisionCard(c *ui.Context, p palette, message *chatMessage)
 					ui.Checkbox(c, ptr, option.Label).FontSize(11.5)
 				}
 			}
+		} else if len(d.Fields) > 0 {
+			// Multi-property elicitation form: one input or enum choice per
+			// property; values are submitted as content keyed by name.
+			for i := range d.Fields {
+				field := &d.Fields[i]
+				ui.Column(c).Gap(3).Children(func() {
+					ui.Text(c, field.Title).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+					if field.Description != "" {
+						ui.Text(c, field.Description).FontSize(9.5).TextColor(p.t.TextMuted).LineHeight(1.3)
+					}
+					if len(field.Options) > 0 {
+						ui.Row(c).Wrap().Gap(6).Children(func() {
+							for _, option := range field.Options {
+								option := option
+								b := ui.Button(c.Key("decision:"+id+":field:"+field.Name+":"+option.ID), option.Label)
+								if field.Value == option.ID {
+									b.Background(p.active)
+								}
+								if b.Clicked() {
+									field.Value = option.ID
+								}
+							}
+						})
+					} else {
+						input := ui.TextInput(c.Key("decision:"+id+":field:"+field.Name), &field.Value).
+							Placeholder(T("输入回答…")).FontSize(11.5).Height(30).Padding(0, 8).
+							Background(p.t.Background).Radius(7).Border(1, p.t.Border)
+						input.Label(field.Title)
+					}
+				})
+			}
 		} else if d.Kind != "permission" {
 			ui.Row(c).Wrap().Gap(6).Children(func() {
 				for _, option := range d.Options {
@@ -63,7 +94,7 @@ func (a *nativeApp) decisionCard(c *ui.Context, p palette, message *chatMessage)
 				}
 			})
 		}
-		if d.Kind != "permission" {
+		if d.Kind != "permission" && len(d.Fields) == 0 {
 			input := ui.TextInput(c.Key("decision:"+id+":answer"), &d.Answer).
 				Placeholder(T("输入回答…")).FontSize(11.5).Height(30).Padding(0, 8).
 				Background(p.t.Background).Radius(7).Border(1, p.t.Border)

@@ -1,5 +1,8 @@
 name: Build Native Release
 
+# MothX Native is the primary desktop client. On v* tags this workflow is the
+# only desktop artifact publisher; the deprecated Electron desktop-release.yml
+# is manual-only and must not set make_latest against these releases.
 on:
   workflow_dispatch:
     inputs:

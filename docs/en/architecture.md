@@ -12,7 +12,8 @@ mothx/
 ├── agent/                       # Public SDK types (Agent, Provider, Builder)
 ├── bootstrap/                   # Public SDK wiring into internal implementations
 ├── cmd/mothx/                   # CLI entry point and subcommands
-├── desktop/                     # Electron desktop client (pure ACP projection)
+├── desktop/                     # Electron desktop client (pure ACP projection; deprecated)
+├── native/                      # Primary desktop client: pure-Go MyGo app (pure ACP projection)
 ├── ui/                          # Svelte Web UI embedded into Serve
 ├── internal/
 │   ├── agent/                   # Core Agent loop, events, prompts, sub-agent tools

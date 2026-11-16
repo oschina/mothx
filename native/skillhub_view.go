@@ -200,7 +200,7 @@ func (a *nativeApp) skillHubBrowsePane(c *ui.Context, p palette) {
 	if strings.TrimSpace(a.currentSession) == "" {
 		a.settingsCard(c, p, "技能市场需要活动会话", "先在对话中打开或新建会话，再回来浏览与安装在线技能。", func() {
 			if ui.PrimaryButton(c.Key("skillhub-open-session"), T("新建会话")).Clicked() {
-				a.newChat()
+				a.startNewTask()
 			}
 		})
 		return
