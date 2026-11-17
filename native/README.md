@@ -1,5 +1,7 @@
 # MothX Native
 
+<a href="https://awesomemygo.dev/apps/mothx-native"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo"></a>
+
 A pure-native desktop client for MothX, written in Go with
 [MyGo](https://github.com/egoist/mygo)'s `ui` package. It draws every
 widget itself — no HTML, no JavaScript, and no webview — and talks to
