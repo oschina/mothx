@@ -33,4 +33,6 @@
 
 ### 🐛 问题修复
 
-- **聚合商提供的 MiMo 模型会随 `tool_calls` 回传 `reasoning_content`。** MiMo 要求携带 `tool_calls` 的 assistant 消息在下一轮请求中原样回传 `reasoning_content`。此前仅根据 `xiaomimimo` base URL 判定，因此 B.AI、Gitee/Moark、OpenRouter 等聚合商提供的 `mimo-*` 模型在会话没有记录到 reasoning 时可能缺少该字段。现在也会按模型 ID 识别 MiMo，并在没有记录到 reasoning 的 assistant 工具调用消息上补空的 `reasoning_content` 占位。
+- **聚合商提供的 MiMo 模型会随 `tool_calls` 回传 `reasoning_content`。** MiMo 要求携带 `tool_calls` 的 assistant 消息在下一轮请求中原样回传 `reasoning_content`。此前仅根据 `xiaomimimo` base URL 判定，因此 B.AI、Gitee/Moark、OpenRouter 等聚合商提供的 `mimo-*` 模型在会话没有记录到 reasoning 时可能缺少该字段。现在也会按模型 ID 识别 MiMo（包括网关目录中未列出的模型），并在没有记录到 reasoning 的回放 assistant 消息上补空的 `reasoning_content` 占位。
+
+- **思考开关与 reasoning effort 现在严格按各厂商的文档契约发送。** 显式关闭思考时，DeepSeek Chat Completions/Anthropic Messages 现在发送 `thinking: {type: "disabled"}`，Qwen 混合思考模型发送 `enable_thinking: false`，不再静默保持思考开启；DeepSeek V4.1 在 Responses API 上使用 `reasoning_effort: "none"`；GLM 的 effort 映射为 `low`/`high`/`max`，不会再发送 `medium`。DeepSeek 的 effort 遵循官方映射（`minimal`/`low` → `low`，`medium`/`high`/`xhigh` → `high`，`max` → `max`），聚合商提供的 Qwen3.5+ 与 GLM 模型 ID 会被识别用于 thinking 格式解析，配置的模型列表也不再按相同下标继承内置预设的 `compat`。

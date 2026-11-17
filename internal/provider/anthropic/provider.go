@@ -347,9 +347,11 @@ func (p *Provider) Chat(ctx context.Context, params provider.ChatParams) <-chan 
 			}
 		} else if params.ThinkingLevel == provider.ThinkingOff && model != nil && model.Reasoning {
 			switch p.thinkingFormatForModel(model) {
-			case "deepseek":
+			case "deepseek", "thinking-only":
 				// DeepSeek thinking defaults on; type=disabled is the documented
-				// Anthropic-compatible off switch.
+				// Anthropic-compatible off switch. "thinking-only" is the same
+				// switch without an effort field, so an explicit off must still
+				// send it instead of silently leaving thinking enabled.
 				reqBody.Thinking = &anthropicThinking{Type: "disabled"}
 			case "adaptive":
 				// Adaptive third-party models (MiniMax) think by default when the

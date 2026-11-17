@@ -903,11 +903,15 @@ func TestNormalizeToolResultSequenceDropsOrphanedResults(t *testing.T) {
 
 func TestOpenAIRequiresReasoningContentForKimiModels(t *testing.T) {
 	p := NewProviderWithModels("key", "https://api.test/v1", nil)
-	if !p.requiresReasoningContentOnAssistant(&provider.Model{ID: "kimi-k3"}) {
+	if !p.requiresReasoningContentOnAssistant(nil, "kimi-k3") {
 		t.Fatal("kimi-k3 should require reasoning_content")
 	}
-	if !p.requiresReasoningContentOnAssistant(&provider.Model{ID: "k3"}) {
+	if !p.requiresReasoningContentOnAssistant(nil, "k3") {
 		t.Fatal("k3 should require reasoning_content")
+	}
+	// The resolved model is a fallback for callers that pass no request ID.
+	if !p.requiresReasoningContentOnAssistant(&provider.Model{ID: "kimi-k3"}, "") {
+		t.Fatal("resolved kimi model should require reasoning_content")
 	}
 }
 
@@ -924,12 +928,18 @@ func TestOpenAIRequiresReasoningContentForMiMoModels(t *testing.T) {
 		{name: "token plan endpoint", baseURL: "https://token-plan-cn.xiaomimimo.com/v1", modelID: "mimo-v2.6-pro", want: true},
 		{name: "aggregator", baseURL: "https://api.b.ai/v1", modelID: "mimo-v2.5-pro", want: true},
 		{name: "namespaced aggregator", baseURL: "https://openrouter.ai/api/v1", modelID: "xiaomi/mimo-v2.5", want: true},
+		{name: "unregistered and unnormalized", baseURL: "https://api.b.ai/v1", modelID: "  MiMo-V2.5-Pro  ", want: true},
 		{name: "unrelated model", baseURL: "https://api.b.ai/v1", modelID: "mimosa-chat", want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := NewProviderWithModels("key", tc.baseURL, nil)
-			if got := p.requiresReasoningContentOnAssistant(&provider.Model{ID: tc.modelID, Reasoning: true}); got != tc.want {
+			// The gateway catalog may not list the model at all, in which case
+			// GetModel returns nil and only the requested ID is available.
+			if got := p.requiresReasoningContentOnAssistant(nil, tc.modelID); got != tc.want {
+				t.Fatalf("requiresReasoningContentOnAssistant(nil, %q at %q) = %v, want %v", tc.modelID, tc.baseURL, got, tc.want)
+			}
+			if got := p.requiresReasoningContentOnAssistant(&provider.Model{ID: tc.modelID, Reasoning: true}, tc.modelID); got != tc.want {
 				t.Fatalf("requiresReasoningContentOnAssistant(%q at %q) = %v, want %v", tc.modelID, tc.baseURL, got, tc.want)
 			}
 		})
@@ -967,6 +977,30 @@ func TestOpenAIMiMoReplaysReasoningContentWithToolCalls(t *testing.T) {
 	t.Run("missing reasoning still carries the field", func(t *testing.T) {
 		bodyCh := make(chan string, 1)
 		p := newMockOpenAIProviderAtURL(t, "https://api.b.ai/v1", []*provider.Model{{ID: "mimo-v2.5-pro", Reasoning: true}}, "data: [DONE]\n", bodyCh)
+		req := captureOpenAIRequestBody(t, p, provider.ChatParams{
+			ModelID: "mimo-v2.5-pro",
+			Messages: []provider.Message{
+				provider.NewUserMessage("hi"),
+				provider.NewAssistantMessage([]provider.ContentBlock{toolCall}),
+				provider.NewToolResultMessage("call_1", "read", "ok", false),
+			},
+			Tools: []provider.ToolDefinition{{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)}},
+			Abort: make(chan struct{}),
+		}, bodyCh)
+		if len(req.Messages) < 2 {
+			t.Fatalf("messages = %#v", req.Messages)
+		}
+		assistant := req.Messages[1]
+		if assistant.Reasoning == nil || *assistant.Reasoning != "" {
+			t.Fatalf("reasoning_content = %#v, want an empty placeholder", assistant.Reasoning)
+		}
+	})
+
+	t.Run("unregistered model still carries the field", func(t *testing.T) {
+		// The gateway catalog does not list the requested MiMo model, so the
+		// provider resolves no model for it and only the request ID is left.
+		bodyCh := make(chan string, 1)
+		p := newMockOpenAIProviderAtURL(t, "https://api.b.ai/v1", []*provider.Model{{ID: "another-model", Reasoning: true}}, "data: [DONE]\n", bodyCh)
 		req := captureOpenAIRequestBody(t, p, provider.ChatParams{
 			ModelID: "mimo-v2.5-pro",
 			Messages: []provider.Message{
@@ -1110,7 +1144,7 @@ func TestOpenAIThinkingOnlyOffSendsDisabled(t *testing.T) {
 
 func TestOpenAIOfficialDeepSeekRequiresReasoningContent(t *testing.T) {
 	p := NewProviderWithModels("key", "https://api.deepseek.com", nil)
-	if !p.requiresReasoningContentOnAssistant(&provider.Model{ID: "deepseek-v4.1-flash", Reasoning: true}) {
+	if !p.requiresReasoningContentOnAssistant(&provider.Model{ID: "deepseek-v4.1-flash", Reasoning: true}, "deepseek-v4.1-flash") {
 		t.Fatal("official DeepSeek endpoint should require reasoning_content")
 	}
 }
@@ -1119,7 +1153,7 @@ func TestOpenAIGatewayDeepSeekDoesNotSynthesizeEmptyReasoning(t *testing.T) {
 	// Gateway-hosted DeepSeek models accept omitted reasoning_content. Only send
 	// the field when actual reasoning was recorded.
 	p := NewProviderWithModels("key", "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1", nil)
-	if p.requiresReasoningContentOnAssistant(&provider.Model{ID: "deepseek-v4.1-flash-1017", Reasoning: true}) {
+	if p.requiresReasoningContentOnAssistant(&provider.Model{ID: "deepseek-v4.1-flash-1017", Reasoning: true}, "deepseek-v4.1-flash-1017") {
 		t.Fatal("gateway-hosted deepseek should not force an empty reasoning_content placeholder")
 	}
 	messages := p.convertMessages(provider.ChatParams{Messages: []provider.Message{

@@ -513,7 +513,7 @@ func (p *Provider) chatCompletions(ctx context.Context, params provider.ChatPara
 		}
 
 		model := p.GetModel(modelID)
-		messages := p.convertMessages(params, p.requiresReasoningContentOnAssistant(model))
+		messages := p.convertMessages(params, p.requiresReasoningContentOnAssistant(model, modelID))
 		tools := p.convertTools(params.Tools)
 
 		reqBody := openAIRequest{
@@ -1116,6 +1116,10 @@ func (p *Provider) thinkingFormatForModel(model *provider.Model) string {
 	if model != nil && isDoubaoSeedModel(model.ID) {
 		return "doubao-seed"
 	}
+	// MiMo is intentionally not inferred from the model ID here: aggregators
+	// that serve mimo-* models reject the xiaomi thinking switch, so only the
+	// official xiaomimimo host selects that format. The reasoning replay
+	// contract is separate; see requiresReasoningContentOnAssistant.
 	lowerBaseURL := strings.ToLower(p.baseURL)
 	if strings.Contains(lowerBaseURL, "deepseek") {
 		return "deepseek"
@@ -1147,13 +1151,27 @@ func isDeepSeekV41Model(modelID string) bool {
 	return strings.Contains(lower, "deepseek-v4.1") || strings.Contains(lower, "deepseek-v4-1")
 }
 
+// normalizeModelID lowercases a model ID and trims surrounding whitespace so
+// model-family heuristics behave the same for catalog and user-entered IDs.
+func normalizeModelID(modelID string) string {
+	return strings.ToLower(strings.TrimSpace(modelID))
+}
+
+// isKimiModel matches Kimi/Moonshot model IDs, including namespaced spellings
+// used by aggregators (for example "moonshotai/kimi-k2.5"). Kimi requires
+// replayed assistant messages to carry reasoning_content.
+func isKimiModel(modelID string) bool {
+	lower := normalizeModelID(modelID)
+	return strings.Contains(lower, "kimi") || lower == "k3" || strings.HasPrefix(lower, "k3-")
+}
+
 // isMiMoModel matches Xiaomi MiMo model IDs, including namespaced spellings
 // used by aggregators (for example "mimo-v2.5-pro" on B.AI or
 // "xiaomi/mimo-v2.5" on OpenRouter). MiMo requires an assistant message that
 // carries tool_calls to replay its reasoning_content, the same contract as the
 // official xiaomimimo endpoint.
 func isMiMoModel(modelID string) bool {
-	lower := strings.ToLower(strings.TrimSpace(modelID))
+	lower := normalizeModelID(modelID)
 	if lower == "" {
 		return false
 	}
@@ -1278,21 +1296,26 @@ func maxTokensField(model *provider.Model) string {
 	return ""
 }
 
-func (p *Provider) requiresReasoningContentOnAssistant(model *provider.Model) bool {
+func (p *Provider) requiresReasoningContentOnAssistant(model *provider.Model, requestedModelID string) bool {
 	if model != nil && model.Compat != nil && model.Compat.RequiresReasoningContentOnAssistant {
 		return true
 	}
-	if model != nil {
-		modelID := strings.ToLower(model.ID)
-		if strings.Contains(modelID, "kimi") || modelID == "k3" || strings.HasPrefix(modelID, "k3-") {
-			return true
-		}
-		// Aggregators (B.AI, Gitee/Moark, ...) serve MiMo models from their own
-		// hosts, so the base URL cannot identify the vendor. Detect the model
-		// family instead and keep the same replay contract as xiaomimimo.com.
-		if isMiMoModel(modelID) {
-			return true
-		}
+	// The requested ID is authoritative: aggregator gateways can serve a model
+	// that the provider never registered, so GetModel returns nil and model.ID
+	// is unavailable. Fall back to the resolved model only when the caller has
+	// no request ID.
+	modelID := normalizeModelID(requestedModelID)
+	if modelID == "" && model != nil {
+		modelID = normalizeModelID(model.ID)
+	}
+	if isKimiModel(modelID) {
+		return true
+	}
+	// Aggregators (B.AI, Gitee/Moark, ...) serve MiMo models from their own
+	// hosts, so the base URL cannot identify the vendor. Detect the model
+	// family instead and keep the same replay contract as xiaomimimo.com.
+	if isMiMoModel(modelID) {
+		return true
 	}
 	lowerBaseURL := strings.ToLower(p.baseURL)
 	return strings.Contains(lowerBaseURL, "deepseek") || strings.Contains(lowerBaseURL, "xiaomimimo") ||

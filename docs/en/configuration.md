@@ -496,8 +496,11 @@ Specifies how thinking/reasoning parameters are sent to the API:
 | `"anthropic"` | Use Anthropic `thinking` with `budget_tokens` |
 | `"deepseek"` | Use DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort` (OpenAI) or `output_config.effort` (Anthropic); an explicit off sends `thinking: {type: "disabled"}` |
 | `"xiaomi"` | Legacy thinking-only format: `thinking: {type: "enabled"}` |
-| `"thinking-only"` | Thinking switch without an effort field; use it to opt a DeepSeek V4.1 deployment out of `reasoning_effort` |
+| `"thinking-only"` | Thinking switch without an effort field; use it to opt a DeepSeek V4.1 deployment out of `reasoning_effort`; an explicit off sends `thinking: {type: "disabled"}` |
 | `"deepseek-v4.1"` | DeepSeek V4.1 `reasoning_effort`: `none` (no thinking), `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `"kimi"` | Kimi `reasoning_effort`: `low`, `high`, `max` |
+| `"qwen"` | Qwen hybrid thinking: `enable_thinking` plus `thinking_budget` |
+| `"zai"` | GLM/Z.ai thinking switch plus `reasoning_effort` mapped to `low`/`high`/`max` |
 | `"doubao-seed"` | Doubao Seed 2.1 / Evolving `reasoning_effort`: `minimal` (no thinking), `low`, `medium`, `high` (default) |
 
 When not set, automatically detects:
@@ -505,6 +508,8 @@ When not set, automatically detects:
 - URL contains `xiaomimimo` → `"xiaomi"`
 - Model ID matches `doubao-seed-2.1*` or `doubao-seed-evolving` → `"doubao-seed"`
 - Model ID contains `deepseek-v4.1` or `deepseek-v4-1` → `"deepseek-v4.1"`
+- Model ID contains `qwen3.5`, `qwen3.6`, `qwen3.7`, or `qwen3.8` → `"qwen"`
+- Model ID contains `glm` → `"zai"`
 
 An explicit provider `thinkingFormat` (or a model's `compat.thinkingFormat`) always wins over these heuristics. A deployment that only accepts the older thinking switch can opt out of `reasoning_effort` by setting `thinkingFormat` to `thinking-only`.
 

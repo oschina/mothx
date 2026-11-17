@@ -690,6 +690,41 @@ func TestAnthropicThinkingFormatDeepSeek(t *testing.T) {
 	}
 }
 
+func TestAnthropicThinkingOnlyOffSendsDisabled(t *testing.T) {
+	// A DeepSeek deployment configured with thinkingFormat "thinking-only" uses
+	// the plain switch without an effort field, so an explicit off must still
+	// send the disabled switch instead of silently leaving thinking on.
+	bodyCh := make(chan string, 1)
+	p := newMockAnthropicProvider(t, []*provider.Model{
+		{ID: "deepseek-test", Reasoning: true},
+	}, "data: {\"type\":\"message_stop\"}\n", bodyCh, nil)
+	p.SetThinkingFormat("thinking-only")
+	for range p.Chat(context.Background(), provider.ChatParams{
+		ModelID:       "deepseek-test",
+		Messages:      []provider.Message{provider.NewUserMessage("hi")},
+		ThinkingLevel: provider.ThinkingOff,
+		Abort:         make(chan struct{}),
+	}) {
+	}
+
+	var req anthropicRequest
+	select {
+	case body := <-bodyCh:
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatalf("unmarshal request body: %v\nbody: %s", err, body)
+		}
+	default:
+		t.Fatal("no request body captured")
+	}
+
+	if req.Thinking == nil || req.Thinking.Type != "disabled" {
+		t.Fatalf("thinking = %#v, want disabled", req.Thinking)
+	}
+	if req.OutputConfig != nil {
+		t.Fatalf("output_config = %#v, want omitted when thinking is disabled", req.OutputConfig)
+	}
+}
+
 func TestAnthropicDeepSeekReasoningEffortMappings(t *testing.T) {
 	cases := []struct {
 		level provider.ThinkingLevel

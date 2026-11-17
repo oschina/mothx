@@ -496,8 +496,11 @@ Google 原生 provider 可以直接配置：
 | `"anthropic"` | 使用 Anthropic `thinking` 带 `budget_tokens` |
 | `"deepseek"` | 使用 DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort`（OpenAI）或 `output_config.effort`（Anthropic）；显式关闭时发送 `thinking: {type: "disabled"}` |
 | `"xiaomi"` | 旧的 thinking-only 格式: `thinking: {type: "enabled"}` |
-| `"thinking-only"` | 只发送思考开关，不发送强度字段；用于让不兼容的 DeepSeek V4.1 部署退出 `reasoning_effort` |
+| `"thinking-only"` | 只发送思考开关，不发送强度字段；用于让不兼容的 DeepSeek V4.1 部署退出 `reasoning_effort`；显式关闭会发送 `thinking: {type: "disabled"}` |
 | `"deepseek-v4.1"` | DeepSeek V4.1 `reasoning_effort`: `none`（不思考）、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` |
+| `"kimi"` | Kimi `reasoning_effort`：`low`、`high`、`max` |
+| `"qwen"` | Qwen 混合思考：`enable_thinking` 与 `thinking_budget` |
+| `"zai"` | GLM/Z.ai 思考开关，以及映射为 `low`/`high`/`max` 的 `reasoning_effort` |
 | `"doubao-seed"` | 豆包 Seed 2.1 / Evolving `reasoning_effort`: `minimal`（不思考）、`low`、`medium`、`high`（默认） |
 
 未设置时自动检测：
@@ -505,6 +508,8 @@ Google 原生 provider 可以直接配置：
 - URL 包含 `xiaomimimo` → `"xiaomi"`
 - 模型 ID 匹配 `doubao-seed-2.1*` 或 `doubao-seed-evolving` → `"doubao-seed"`
 - 模型 ID 包含 `deepseek-v4.1` 或 `deepseek-v4-1` → `"deepseek-v4.1"`
+- 模型 ID 包含 `qwen3.5`、`qwen3.6`、`qwen3.7` 或 `qwen3.8` → `"qwen"`
+- 模型 ID 包含 `glm` → `"zai"`
 
 显式的 provider `thinkingFormat`（或模型的 `compat.thinkingFormat`）始终优先于上述自动检测。仅接受旧思考开关的部署可将 `thinkingFormat` 设为 `thinking-only`，退回不使用 `reasoning_effort`。
 
