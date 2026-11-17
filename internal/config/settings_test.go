@@ -464,6 +464,11 @@ func TestMoarkModelMaxTokens(t *testing.T) {
 
 func TestGiteeMoarkHy4FlashAndQwen4MaxDefaults(t *testing.T) {
 	s := DefaultSettings()
+	// Qwen4-Max is multimodal: text, image, and video input.
+	wantInputs := map[string][]string{
+		"hy4-flash": {"text", "image"},
+		"Qwen4-Max": {"text", "image", "video"},
+	}
 	for _, providerName := range []string{"gitee", "moark"} {
 		for _, modelID := range []string{"hy4-flash", "Qwen4-Max"} {
 			model := s.GetModelConfig(providerName, modelID)
@@ -473,7 +478,7 @@ func TestGiteeMoarkHy4FlashAndQwen4MaxDefaults(t *testing.T) {
 			if !model.Reasoning || model.ContextWindow != 1000000 {
 				t.Fatalf("%s %s = %#v, want reasoning model with 1M context", providerName, modelID, model)
 			}
-			wantInput := []string{"text", "image"}
+			wantInput := wantInputs[modelID]
 			if len(model.Input) != len(wantInput) {
 				t.Fatalf("%s %s input = %#v, want %#v", providerName, modelID, model.Input, wantInput)
 			}

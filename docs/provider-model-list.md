@@ -111,7 +111,7 @@ Vendor `gitee` · BaseURL `https://api.moark.com/v1` · API `openai-chat` · API
 | `deepseek-v4.1-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `hy4-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `hy4` | 1M | - | **是** | text | - | - | - | - |
-| `Qwen4-Max` | 1M | - | **是** | text,image | - | - | - | - |
+| `Qwen4-Max` | 1M | - | **是** | text,image,video | - | - | - | - |
 | `qwen3.8-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-max` | 1M | - | **是** | text,image | - | - | - | - |
 | `glm-5.3-flash` | 1M | 131K | **是** | text,image | - | - | - | - |
@@ -714,7 +714,7 @@ Vendor `gitee` · BaseURL `https://ai.gitee.com/v1` · API `openai-chat` · API 
 | `deepseek-v4.1-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `hy4-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `hy4` | 1M | - | **是** | text | - | - | - | - |
-| `Qwen4-Max` | 1M | - | **是** | text,image | - | - | - | - |
+| `Qwen4-Max` | 1M | - | **是** | text,image,video | - | - | - | - |
 | `qwen3.8-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-max` | 1M | - | **是** | text,image | - | - | - | - |
 | `glm-5.3-flash` | 1M | 131K | **是** | text,image | - | - | - | - |
@@ -1320,7 +1320,7 @@ xhigh    // 最高
 
 | 模态 | 数量 |
 |------|------|
-| text/image | 337 |
+| text/image | 335 |
 | text | 223 |
-| text/image/video | 33 |
+| text/image/video | 35 |
 | text/image/audio/video | 2 |
