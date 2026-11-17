@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/oschina/mothx/internal/dao"
 	"github.com/oschina/mothx/internal/provider"
 )
 
@@ -36,34 +37,41 @@ func TailReplaySupported(sessionDir, sessionID string) bool {
 	if err != nil || !ok {
 		return false
 	}
-	var contentStore string
-	if err := db.Bun().NewSelect().Table("sessions").Column("content_store").
-		Where("id = ?", sessionID).Scan(ctx, &contentStore); err != nil || contentStore != "event_store" {
-		return false
-	}
-	var projections, sensitive int
-	if err := db.Bun().NewSelect().Table("session_display_projection").ColumnExpr("COUNT(*)").
-		Where("session_id = ?", sessionID).Scan(ctx, &projections); err != nil || projections == 0 {
-		return false
-	}
-	if err := db.Bun().NewRaw(`SELECT COUNT(*) FROM session_event_projections
-		WHERE session_id = ? AND type IN (?, ?)`, sessionID, string(EntryCompaction), string(EntryContentOverride)).
-		Scan(ctx, &sensitive); err != nil || sensitive > 0 {
+	if !tailProjectionReadable(ctx, db, sessionID) {
 		return false
 	}
 	// The committed intent's sequence range and the derived projection must agree.
 	// If they do not, the tail cannot be aligned to the full message index without
 	// inspection; fall back to the canonical open.
-	var maxIntent, maxProjection int64
-	if err := db.Bun().NewRaw(`SELECT COALESCE(MAX(seq_to), 0) FROM session_event_intents
-		WHERE session_id = ? AND state = ?`, sessionID, string(EventIntentCommitted)).Scan(ctx, &maxIntent); err != nil {
+	executor := db.Bun()
+	maxIntent, err := dao.NewSessionEventIntentDAO(executor).MaxSeqToByState(ctx, executor, sessionID, string(EventIntentCommitted))
+	if err != nil {
 		return false
 	}
-	if err := db.Bun().NewSelect().Table("session_event_projections").ColumnExpr("COALESCE(MAX(seq), 0)").
-		Where("session_id = ?", sessionID).Scan(ctx, &maxProjection); err != nil {
+	maxProjection, err := dao.NewSessionEventProjectionDAO(executor).MaxSeq(ctx, executor, sessionID)
+	if err != nil {
 		return false
 	}
 	return maxIntent == maxProjection
+}
+
+// tailProjectionReadable reports the checks both tail readers share: the
+// session must be an EventStore session with a display projection (bindings and
+// title) and without compaction or content-override entries, whose replay state
+// depends on messages that may live before the requested page.
+func tailProjectionReadable(ctx context.Context, db *dao.Database, sessionID string) bool {
+	eventStore, err := sessionUsesEventStore(ctx, db, sessionID)
+	if err != nil || !eventStore {
+		return false
+	}
+	executor := db.Bun()
+	display, err := dao.NewSessionDisplayProjectionDAO(executor).HasProjection(ctx, executor, sessionID)
+	if err != nil || !display {
+		return false
+	}
+	sensitive, err := dao.NewSessionEventProjectionDAO(executor).CountByTypes(ctx, executor, sessionID,
+		[]string{string(EntryCompaction), string(EntryContentOverride)})
+	return err == nil && sensitive == 0
 }
 
 // ReadEventStoreTailPage reads only the segments needed for the requested page
@@ -83,25 +91,17 @@ func ReadEventStoreTailPage(sessionDir, sessionID string, before, limit int) (Ta
 	if err != nil || !ok {
 		return TailTranscriptPage{}, ErrTailReplayUnsupported
 	}
-	var contentStore string
-	if err := db.Bun().NewSelect().Table("sessions").Column("content_store").
-		Where("id = ?", sessionID).Scan(ctx, &contentStore); err != nil || contentStore != "event_store" {
+	if !tailProjectionReadable(ctx, db, sessionID) {
 		return TailTranscriptPage{}, ErrTailReplayUnsupported
 	}
-	var sensitive int
-	if err := db.Bun().NewRaw(`SELECT COUNT(*) FROM session_event_projections
-		WHERE session_id = ? AND type IN (?, ?)`, sessionID, string(EntryCompaction), string(EntryContentOverride)).
-		Scan(ctx, &sensitive); err != nil || sensitive > 0 {
+	executor := db.Bun()
+	totalCount, err := dao.NewSessionEventProjectionDAO(executor).CountByTypes(ctx, executor, sessionID, []string{string(EntryMessage)})
+	if err != nil {
 		return TailTranscriptPage{}, ErrTailReplayUnsupported
 	}
-	var total int
-	if err := db.Bun().NewSelect().Table("session_event_projections").ColumnExpr("COUNT(*)").
-		Where("session_id = ? AND type = ?", sessionID, string(EntryMessage)).Scan(ctx, &total); err != nil {
-		return TailTranscriptPage{}, ErrTailReplayUnsupported
-	}
-	var committedIDs []string
-	if err := db.Bun().NewSelect().Table("session_event_intents").Column("id").
-		Where("session_id = ? AND state = ?", sessionID, string(EventIntentCommitted)).Scan(ctx, &committedIDs); err != nil {
+	total := int(totalCount)
+	committedIDs, err := dao.NewSessionEventIntentDAO(executor).IDsByState(ctx, executor, sessionID, string(EventIntentCommitted))
+	if err != nil {
 		return TailTranscriptPage{}, ErrTailReplayUnsupported
 	}
 	committed := make(map[string]struct{}, len(committedIDs))

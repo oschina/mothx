@@ -59,8 +59,10 @@ func OpenByIDExactTail(sessionDir, sessionID, cwd string, historyLimit int) (*Ma
 		ForkKind: record.ForkKind, ExpertID: record.ExpertID,
 	}
 	var leafID string
-	if err := db.Bun().NewSelect().Table("session_event_projections").Column("id").
-		Where("session_id = ?", sessionID).OrderExpr("seq DESC").Limit(1).Scan(context.Background(), &leafID); err == nil && leafID != "" {
+	if latest, leafErr := dao.NewSessionEventProjectionDAO(db.Bun()).LeafID(context.Background(), db.Bun(), sessionID); leafErr == nil {
+		leafID = latest
+	}
+	if leafID != "" {
 		m.leafID = &leafID
 	}
 	bindings, err := LatestSessionBindings(sessionDir, []string{sessionID})

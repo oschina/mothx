@@ -49,6 +49,17 @@ func (d *SessionDisplayProjectionDAO) Upsert(ctx context.Context, executor bun.I
 	return err
 }
 
+// HasProjection reports whether the session has a display projection row. The
+// tail display path needs it for bindings and title, so it declines the tail
+// read instead of rendering a session without them.
+func (d *SessionDisplayProjectionDAO) HasProjection(ctx context.Context, executor bun.IDB, sessionID string) (bool, error) {
+	return executor.NewSelect().Model((*SessionDisplayProjectionRecord)(nil)).
+		Column("session_id").
+		Where("session_id = ?", sessionID).
+		Limit(1).
+		Exists(ctx)
+}
+
 func (d *SessionDisplayProjectionDAO) DeleteSession(ctx context.Context, executor bun.IDB, sessionID string) error {
 	_, err := executor.NewDelete().Model((*SessionDisplayProjectionRecord)(nil)).Where("session_id = ?", sessionID).Exec(ctx)
 	return err

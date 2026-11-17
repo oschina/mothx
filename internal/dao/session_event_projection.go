@@ -68,6 +68,43 @@ func (d *SessionEventProjectionDAO) Seq(ctx context.Context, executor bun.IDB, s
 	return seq, err
 }
 
+// CountByTypes counts projection rows of the given entry kinds. The display tail
+// path uses it to decide whether a session can be projected from its tail alone
+// (a compaction or content override depends on earlier messages) and to size the
+// message page.
+func (d *SessionEventProjectionDAO) CountByTypes(ctx context.Context, executor bun.IDB, sessionID string, types []string) (int64, error) {
+	if len(types) == 0 {
+		return 0, nil
+	}
+	var count int64
+	err := executor.NewSelect().Table("session_event_projections").ColumnExpr("COUNT(*)").
+		Where("session_id = ?", sessionID).
+		Where("type IN (?)", bun.In(types)).
+		Scan(ctx, &count)
+	return count, err
+}
+
+// MaxSeq returns the highest committed EventStore sequence recorded for the
+// session, or 0 when nothing is projected yet.
+func (d *SessionEventProjectionDAO) MaxSeq(ctx context.Context, executor bun.IDB, sessionID string) (int64, error) {
+	var seq int64
+	err := executor.NewSelect().Table("session_event_projections").ColumnExpr("COALESCE(MAX(seq), 0)").
+		Where("session_id = ?", sessionID).
+		Scan(ctx, &seq)
+	return seq, err
+}
+
+// LeafID returns the newest projected entry ID for the session. It is the
+// SQLite projection of the EventStore leaf, not canonical content.
+func (d *SessionEventProjectionDAO) LeafID(ctx context.Context, executor bun.IDB, sessionID string) (string, error) {
+	var id string
+	err := executor.NewSelect().Table("session_event_projections").Column("id").
+		Where("session_id = ?", sessionID).
+		OrderExpr("seq DESC").Limit(1).
+		Scan(ctx, &id)
+	return id, err
+}
+
 // BoundarySeqsByTurn returns each turn marker's EventStore sequence as recorded
 // in the projection columns, keyed by turn ID and marker kind
 // ("turn_start"/"turn_end").

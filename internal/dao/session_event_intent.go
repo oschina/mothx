@@ -48,6 +48,28 @@ func (d *SessionEventIntentDAO) Insert(ctx context.Context, executor bun.IDB, re
 	return err
 }
 
+// MaxSeqToByState returns the highest committed sequence boundary of the given
+// state for the session, or 0 when no intent reached that state. The display
+// tail path compares it with the projection's MaxSeq to prove that the SQLite
+// projection and the committed EventStore intent agree.
+func (d *SessionEventIntentDAO) MaxSeqToByState(ctx context.Context, executor bun.IDB, sessionID, state string) (int64, error) {
+	var seq int64
+	err := executor.NewSelect().Table("session_event_intents").ColumnExpr("COALESCE(MAX(seq_to), 0)").
+		Where("session_id = ? AND state = ?", sessionID, state).
+		Scan(ctx, &seq)
+	return seq, err
+}
+
+// IDsByState lists the intent IDs of the session in the given state. The tail
+// reader uses it to restrict staged EventStore batches to committed ones.
+func (d *SessionEventIntentDAO) IDsByState(ctx context.Context, executor bun.IDB, sessionID, state string) ([]string, error) {
+	ids := make([]string, 0)
+	err := executor.NewSelect().Table("session_event_intents").Column("id").
+		Where("session_id = ? AND state = ?", sessionID, state).
+		Scan(ctx, &ids)
+	return ids, err
+}
+
 // InsertFenced creates an intent only while the same owner/epoch/token is
 // active in the SQLite lease table. EventStore bytes alone never authorize a
 // control-plane intent.

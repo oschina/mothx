@@ -99,6 +99,7 @@ func TestContentStoreReadProjectionsAreAllowlisted(t *testing.T) {
 		"ListSessionMessagesAfter":                "read-only transcript projection",
 		"ListSessionMessagesLatest":               "read-only transcript projection",
 		"ListSessionMessagesBefore":               "read-only transcript projection",
+		"tailProjectionReadable":                  "read-only display tail projection; selects a replay source, never a write target",
 	}
 	var violations []string
 	walkProductionGoFiles(t, root, func(rel string, fileAST *ast.File) {
