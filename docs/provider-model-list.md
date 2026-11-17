@@ -510,7 +510,7 @@ Vendor `bailian` · BaseURL `https://token-plan.maas.qianwenaiapi.com/compatible
 | 模型 | Context | MaxTokens | 推理 | 输入 | Prompt $/M | Completion $/M | Cache Read $/M | Cache Write $/M |
 |------|---------|-----------|------|------|-----------|----------------|----------------|-----------------|
 | `auto` | 1M | - | **是** | text,image | - | - | - | - |
-| `qwen4-max` | 1M | - | **是** | text,image | - | - | - | - |
+| `qwen4-max` | 1M | - | **是** | text,image,video | - | - | - | - |
 | `qwen3.8-max` | 1M | - | **是** | text,image | - | - | - | - |
 | `qwen3.8-flash` | 1M | - | **是** | text,image | - | - | - | - |
 | `deepseek-v4.1-flash-1017` | 1M | - | **是** | text,image | - | - | - | - |
@@ -1320,7 +1320,7 @@ xhigh    // 最高
 
 | 模态 | 数量 |
 |------|------|
-| text/image | 335 |
+| text/image | 334 |
 | text | 223 |
-| text/image/video | 35 |
+| text/image/video | 36 |
 | text/image/audio/video | 2 |

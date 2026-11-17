@@ -575,6 +575,15 @@ func TestAlibabaTokenPlanCatalog(t *testing.T) {
 	if qwen4 == nil || qwen4.Compat == nil || qwen4.Compat.ThinkingFormat != "qwen" {
 		t.Fatalf("alibaba-token-plan qwen4-max = %#v, want qwen thinking format", qwen4)
 	}
+	wantQwen4Input := []string{"text", "image", "video"}
+	if len(qwen4.Input) != len(wantQwen4Input) {
+		t.Fatalf("alibaba-token-plan qwen4-max input = %#v, want %#v", qwen4.Input, wantQwen4Input)
+	}
+	for i := range wantQwen4Input {
+		if qwen4.Input[i] != wantQwen4Input[i] {
+			t.Fatalf("alibaba-token-plan qwen4-max input = %#v, want %#v", qwen4.Input, wantQwen4Input)
+		}
+	}
 }
 
 func TestGiteeMoarkQwen3827BDefaults(t *testing.T) {
