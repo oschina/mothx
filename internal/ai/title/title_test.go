@@ -55,6 +55,21 @@ func TestGeneratorFallsBackWhenProviderFails(t *testing.T) {
 	}
 }
 
+func TestFallbackSkipsSystemInjectedMessages(t *testing.T) {
+	// A system-injected user message (context recovery, worker findings, ...) is
+	// not something the user typed, so it must never become the session title.
+	messages := []provider.Message{
+		provider.NewSystemInjectedUserMessage("## Goal\ncheckpoint"),
+		provider.NewUserMessage("修复登录问题"),
+	}
+	if got := Fallback(messages); got != "修复登录问题" {
+		t.Fatalf("Fallback = %q, want the first real user message", got)
+	}
+	if got := Fallback([]provider.Message{provider.NewSystemInjectedUserMessage("worker finding")}); got != "" {
+		t.Fatalf("Fallback(injected only) = %q, want empty", got)
+	}
+}
+
 func TestNormalizeLimitsUnicodeTitle(t *testing.T) {
 	got := Normalize("###" + "界" + "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界")
 	if len([]rune(got)) != maxTitleRunes {
