@@ -1,6 +1,6 @@
 # Native Desktop 功能迁移进度
 
-更新时间：2026-11-16
+更新时间：2026-11-21
 
 ## 目标与边界
 
@@ -201,3 +201,47 @@ make build
 ## 工作树提示
 
 `native/` 当前仍有未提交修改和新增文件（包括本轮与上一轮迁移）。提交前应逐项审查，不要把 `build/`、本地二进制或临时截图纳入版本控制。
+
+## 2026-11-21 第五轮：继续核对 Native / Desktop 差距并补齐
+
+审查方式：逐项对照 `desktop/renderer/src` 的导航、视图、设置面板、ACP 子进程启动参数与 Native 对应实现，并以 Desktop 的测试断言作为行为基线。
+
+### 本轮补齐
+
+1. **侧栏导航顺序与入口**：对齐 Desktop 的 canonical order（首页 → 技能 → 会话历史 → 自动化 → 主角团 → 资料库），新增“首页”和“主角团”入口；“主角团”按 `manageExperts` 能力隐藏，点击进入 Settings 的 Experts 页且不高亮行（与 Desktop 一致）。新增 `openHome`/`homePage`：首页保留当前会话与转录，发送后回到聊天视图，不复用 New Task 的草稿重置语义。
+2. **ACP 子进程决策截止时间**：Native 启动 `mothx acp` 时注入 `MOTHX_ACP_PERMISSION_TIMEOUT=30m` 与 `MOTHX_ACP_QUESTION_TIMEOUT=30m`，并去重用户环境中的同名变量；对齐 Desktop 的人工审批/提问窗口，避免使用 Runtime 默认的 5 分钟。
+3. **ACP 启动错误投影**：解析 `MOTHX_ACP_ERROR` 标记（code/message/fix），连接失败卡显示 Runtime 的结构化消息与修复建议，并新增“打开设置”动作；不再只显示通用进程退出文本。
+4. **SkillHub 排序**：新增“下载 / Star / 最新”排序选择，请求 `sort` 使用 `downloads|stars|updated_at`；clawhub.ai 仍省略 sort。切换市场时重置为下载排序。
+5. **SkillHub 详情补全**：详情对话框现在展示安全报告、评估和下载来源（格式化 JSON / URL 列表），并在摘要中补充 Star 数。
+6. **Composer 供应商过滤**：沿用 `mothx/manage/providers/list` 的 `apiKeyConfigured` 投影隐藏未配置供应商，保持 Runtime 目录顺序；全部未配置时保留完整菜单，避免空菜单。可搜索模型选择器也只列出可用供应商的模型。
+7. **计划进度折叠**：计划侧栏新增折叠/展开动作；折叠状态按当前 plan ID 归属，计划切换后自动展开（对齐 Desktop 的临时交互状态语义）。
+8. **ACP 意外退出自动重连**：补齐 Desktop 的 1/2/4/8/15 秒退避重启（最多 5 次），`config_invalid` / `provider_unusable` 不进入重启循环；新增待重连标志与连接状态检查，避免同一次故障重复排队；过期子进程的退出回调不会覆盖新连接状态。
+9. **SkillHub 远端图标**：投影 `iconUrl`，新增 http/https-only、10 秒超时、2 MiB 上限、按 URL 去重并缓存失败结果的 Native 图标缓存；页面卡片、设置浏览行与详情头部均显示远程图标，失败回退原内置图标。
+10. **Provider 降级面板设密钥**：只在 `manageSettings` 可用而 `manageProviders` 缺失时显示 Providers 页，并提供“设置密钥”对话框，通过 `settings/patch` 的 `providerKey` 写入；密钥只写不回显，成功后刷新 `providers` 投影。
+11. **Plan 进度视觉对齐**：计划侧栏补上进度条与 `done/total 已完成` 文案；步骤标记从色点改为 Desktop 同款圆形勾选/运行点/失败点；转录内计划卡默认标题改为“执行计划 · n 步”。
+12. **Home 首屏与状态栏细节**：Logo 调整为 Desktop 的 58px/14 圆角，首屏增加“已连接 · mothx <version> · ACP v1”状态行，Composer 最大宽度对齐 820，快捷卡改为 3 列固定宽度网格；状态栏模式图标改为 Desktop 的滑杆图标。
+13. **外壳与页面骨架尺寸**：侧栏宽度对齐 220px；聊天头部改为 46px；Skills/Automation/Library 改用 Desktop 的 PageInner 居中列（880/1120px）与 PageHead 标题块（19px/12.5px）并随内容滚动；页面文案改为 Desktop 的“技能 · 指令 / 自动化 · 定时任务 / 知识库”；侧栏底部改为“本地模式 · ACP”，当前导航项使用左侧强调条而不是勾选图标。
+
+### 复核确认无需改动
+
+- 代码块复制：Native 使用 MyGo `markdown.DefaultCodeBlock`，已内置代码复制按钮、语言标签与复制反馈；此前 miss 的判断不成立。
+- 新会话/草稿目录、专家绑定 fork、worktree、router、subagent、附件、制品预览、历史分页、Settings 全部面板字段与 capability gating 已在前几轮对齐。
+- Desktop 的窗口样式切换仍为隐藏开关，Native 继续按平台投影；`desktop-store.sessionStatus` 仍不作为 Native 本地权威缓存。
+
+### 仍未实现（明确记录）
+
+- **其余像素级排版**：Settings 各面板的间距、部分状态徽标与 Desktop 仍有视觉差异，留待人工逐像素验收；Plan 进度条、Home 首屏和状态栏模式图标已在本轮对齐。
+
+### 验证（2026-11-21）
+
+```sh
+cd native
+gofmt -l .
+go vet ./...
+go tool mygo vet .
+go test -count=1 ./...
+go test -race -count=1 ./...
+make build
+```
+
+上述检查全部通过。新增/更新回归：侧栏 Home/Experts 导航与能力门控、Home 保留活动会话与连接状态行、ACP 决策超时环境注入、启动错误 marker 解析与修复提示、ACP 退避重启参数与非重试错误分类、SkillHub 排序请求/界面、SkillHub 详情安全报告/评估/下载来源、SkillHub 远端图标 URL 限制与缓存、Provider 降级设密钥对话框/校验、Composer 未配置供应商过滤、Plan 进度折叠/完成度文案/步骤标记。

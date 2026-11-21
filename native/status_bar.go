@@ -60,7 +60,7 @@ func (a *nativeApp) statusBar(c *ui.Context, p palette) {
 			}
 		}
 		ui.Row(c).AlignItems(ui.Center).Gap(4).Children(func() {
-			ui.Icon(c, iconSettings).FontSize(11).TextColor(p.t.TextMuted)
+			ui.Icon(c, iconSliders).FontSize(11).TextColor(p.t.TextMuted)
 			ui.Text(c, strings.TrimSpace(a.modeLabel())).FontSize(9.5).TextColor(p.t.TextMuted)
 		})
 		ui.Row(c).AlignItems(ui.Center).Gap(4).MaxWidth(260).Children(func() {

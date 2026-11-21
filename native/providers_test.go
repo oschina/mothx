@@ -510,3 +510,40 @@ func TestProviderSelectionAndTabExitInvalidateInflightState(t *testing.T) {
 		t.Fatal("stale provider response must be rejected after leaving the tab")
 	}
 }
+
+func TestProviderFallbackKeyDialogAndValidation(t *testing.T) {
+	a := testApp()
+	a.setFeatures(map[string]bool{"manageSettings": true})
+	a.openSettingsTab("providers")
+	a.providers.Settings = providerTestSettings()
+	a.providers.Catalog = providerTestCatalog()
+	a.providers.Loaded = true
+	a.providers.Loading = false
+
+	tt := ui.NewTester(a.view, 1180, 900)
+	if !textPresent(tt, "设置密钥") {
+		t.Fatalf("fallback set-key action missing: %q", tt.Texts())
+	}
+	if err := tt.Click("设置密钥"); err != nil {
+		t.Fatalf("open fallback key dialog: %v", err)
+	}
+	if !a.providers.FallbackKeyOpen || a.providers.FallbackKeyName != "deepseek" {
+		t.Fatalf("fallback key state = %+v", a.providers)
+	}
+	tt = ui.NewTester(a.view, 1180, 900)
+	for _, want := range []string{"设置供应商密钥：deepseek", "密钥只写入服务端，不会回显。", "保存"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("fallback key dialog missing %q: %q", want, tt.Texts())
+		}
+	}
+
+	a.saveProviderFallbackKey()
+	if a.providers.FallbackKeyErr != "供应商密钥不能为空。" {
+		t.Fatalf("empty key validation = %q", a.providers.FallbackKeyErr)
+	}
+	a.providers.FallbackKeyValue = "sk-test"
+	a.saveProviderFallbackKey()
+	if !strings.Contains(a.providers.FallbackKeyErr, "尚未连接到 MothX ACP") {
+		t.Fatalf("disconnected save error = %q", a.providers.FallbackKeyErr)
+	}
+}

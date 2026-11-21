@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -247,7 +248,7 @@ func (a *nativeApp) modelMenu(c *ui.Context, p palette) {
 				providerName = T("供应商")
 			}
 			m.Submenu(Tf("供应商：%s", providerName), func(sub *ui.Menu) {
-				for _, choice := range provider.Options {
+				for _, choice := range a.visibleProviderChoices(*provider) {
 					choice := choice
 					if sub.Item(choice.Name).ID("provider:" + choice.Value).
 						Radio(choice.Value == provider.CurrentValue).Chosen() {
@@ -565,7 +566,64 @@ func (a *nativeApp) refreshModelCatalog(client *acpClient, features map[string]b
 	if err := json.Unmarshal(raw, &catalog); err != nil {
 		return
 	}
-	a.dispatch(func() { a.modelCatalog = catalog.Models })
+	a.dispatch(func() { a.applyProviderCatalog(catalog) })
+}
+
+// applyProviderCatalog keeps the safe provider/model projection shared by the
+// composer and picker. Only configured providers may appear in session config
+// menus, matching Desktop; an entirely unconfigured runtime still shows every
+// provider so the menu never becomes empty.
+func (a *nativeApp) applyProviderCatalog(catalog providerCatalogView) {
+	a.modelCatalog = catalog.Models
+	a.configuredProviders = make(map[string]bool, len(catalog.Providers))
+	a.providerCatalogOrder = make([]string, 0, len(catalog.Providers))
+	for _, provider := range catalog.Providers {
+		name := strings.TrimSpace(provider.Name)
+		if name == "" {
+			continue
+		}
+		a.providerCatalogOrder = append(a.providerCatalogOrder, name)
+		if provider.APIKeyConfigured {
+			a.configuredProviders[name] = true
+		}
+	}
+}
+
+func (a *nativeApp) providerUsable(name string) bool {
+	if len(a.configuredProviders) == 0 {
+		return true
+	}
+	return a.configuredProviders[name]
+}
+
+func (a *nativeApp) visibleProviderChoices(option configOption) []configChoice {
+	usable := make([]configChoice, 0, len(option.Options))
+	for _, choice := range option.Options {
+		if a.providerUsable(choice.Value) {
+			usable = append(usable, choice)
+		}
+	}
+	// Never hide every provider: a runtime that projects no usable key at all
+	// must still leave a selectable menu.
+	if len(usable) == 0 {
+		return option.Options
+	}
+	if len(a.providerCatalogOrder) == 0 {
+		return usable
+	}
+	rank := make(map[string]int, len(a.providerCatalogOrder))
+	for index, name := range a.providerCatalogOrder {
+		rank[name] = index
+	}
+	sort.SliceStable(usable, func(i, j int) bool {
+		left, leftOK := rank[usable[i].Value]
+		right, rightOK := rank[usable[j].Value]
+		if leftOK && rightOK {
+			return left < right
+		}
+		return leftOK && !rightOK
+	})
+	return usable
 }
 
 func (a *nativeApp) openModelPicker() {
@@ -589,7 +647,7 @@ func (a *nativeApp) openModelPicker() {
 					a.modelPickerErr = "供应商模型响应无效：" + err.Error()
 					return
 				}
-				a.modelCatalog = catalog.Models
+				a.applyProviderCatalog(catalog)
 				a.modelPickerModels = catalog.Models
 			})
 		}()
@@ -601,7 +659,7 @@ func (a *nativeApp) modelPickerProviders() []string {
 	seen := map[string]bool{}
 	var providers []string
 	for _, model := range a.modelCatalog {
-		if model.Provider == "" || seen[model.Provider] {
+		if model.Provider == "" || seen[model.Provider] || !a.providerUsable(model.Provider) {
 			continue
 		}
 		seen[model.Provider] = true
@@ -614,6 +672,9 @@ func (a *nativeApp) filteredPickerModels() []providerCatalogModel {
 	query := strings.ToLower(strings.TrimSpace(a.modelPickerQuery))
 	out := make([]providerCatalogModel, 0, len(a.modelPickerModels))
 	for _, model := range a.modelPickerModels {
+		if !a.providerUsable(model.Provider) {
+			continue
+		}
 		if a.modelPickerProvider != "" && !strings.EqualFold(model.Provider, a.modelPickerProvider) {
 			continue
 		}

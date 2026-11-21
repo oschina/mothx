@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -795,5 +796,244 @@ func TestDraftProviderModelProjectionBeforeDirectoryPick(t *testing.T) {
 	}
 	if po == nil || len(po.Options) != 2 {
 		t.Fatalf("fallback must keep every provider: %+v", po)
+	}
+}
+
+func TestSidebarHomeAndExpertsNavigationMatchDesktop(t *testing.T) {
+	a := sidebarTestApp(t)
+	a.setFeatures(map[string]bool{
+		"projects": true, "sessionMeta": true, "sessionFork": true,
+		"sessionWorkDir": true, "manageExperts": true,
+	})
+	a.currentSession = "s1"
+	a.currentTitle = "Open Task"
+	a.messages = []*chatMessage{{ID: "u1", Kind: messageUser, Text: "hello", Done: true}}
+
+	tt := ui.NewTester(a.view, 1180, 760)
+	for _, want := range []string{"首页", "技能", "会话历史", "自动化", "主角团", "资料库"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("sidebar nav missing %q: %q", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("首页"); err != nil {
+		t.Fatalf("open home: %v", err)
+	}
+	if a.page != "home" || a.currentSession != "s1" || len(a.messages) != 1 {
+		t.Fatalf("home nav must preserve the active session: page=%q session=%q messages=%d", a.page, a.currentSession, len(a.messages))
+	}
+
+	tt = ui.NewTester(a.view, 1180, 760)
+	if err := tt.Click("主角团"); err != nil {
+		t.Fatalf("open experts: %v", err)
+	}
+	if !a.settingsOpen || a.settingsTab != "experts" {
+		t.Fatalf("experts nav = settings %v tab %q", a.settingsOpen, a.settingsTab)
+	}
+}
+
+func TestSidebarExpertsEntryIsFeatureGated(t *testing.T) {
+	a := sidebarTestApp(t)
+	a.setFeatures(map[string]bool{"projects": true, "sessionMeta": true})
+	tt := ui.NewTester(a.view, 1180, 760)
+	if textPresent(tt, "主角团") {
+		t.Fatalf("experts nav must hide without manageExperts: %q", tt.Texts())
+	}
+}
+
+func TestStartupErrorMarkerProjectsMessageFixAndSettingsAction(t *testing.T) {
+	parsed, ok := parseNativeStartupErrorLine("MOTHX_ACP_ERROR {\"code\":\"config_invalid\",\"message\":\"provider unusable\",\"fix\":\"fix settings.json\"}")
+	if !ok || parsed.Code != "config_invalid" || parsed.Message != "provider unusable" || parsed.Fix != "fix settings.json" {
+		t.Fatalf("parsed startup error = %+v ok=%v", parsed, ok)
+	}
+
+	a := testApp()
+	a.setStartupError(parsed)
+	a.failConnection("ACP 进程已退出")
+	if a.conn != connFailed || a.connErr != "provider unusable" || a.connFix != "fix settings.json" {
+		t.Fatalf("failed connection = %v err=%q fix=%q", a.conn, a.connErr, a.connFix)
+	}
+	tt := ui.NewTester(a.view, 1180, 760)
+	for _, want := range []string{"provider unusable", "修复：fix settings.json", "打开设置"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("connection error missing %q: %q", want, tt.Texts())
+		}
+	}
+}
+
+func TestNativeACPChildUsesDesktopDecisionTimeouts(t *testing.T) {
+	t.Setenv("MOTHX_ACP_PERMISSION_TIMEOUT", "1m")
+	t.Setenv("MOTHX_ACP_QUESTION_TIMEOUT", "2m")
+	env := nativeACPEnvironment()
+	count := map[string]int{}
+	for _, entry := range env {
+		switch {
+		case entry == "MOTHX_ACP_PERMISSION_TIMEOUT=30m":
+			count["permission"]++
+		case entry == "MOTHX_ACP_QUESTION_TIMEOUT=30m":
+			count["question"]++
+		case entry == "MOTHX_ACP_PERMISSION_TIMEOUT=1m" || entry == "MOTHX_ACP_QUESTION_TIMEOUT=2m":
+			t.Fatalf("stale decision timeout leaked into ACP env: %q", entry)
+		}
+	}
+	if count["permission"] != 1 || count["question"] != 1 {
+		t.Fatalf("decision timeout env = %#v", count)
+	}
+}
+
+func TestComposerProviderOptionsHideUnconfiguredProviders(t *testing.T) {
+	a := testApp()
+	a.applyProviderCatalog(providerCatalogView{Providers: []providerSummary{
+		{Name: "openai", APIKeyConfigured: false},
+		{Name: "deepseek", APIKeyConfigured: true},
+		{Name: "anthropic", APIKeyConfigured: true},
+	}})
+	option := configOption{ID: "provider", Options: []configChoice{
+		{Value: "openai", Name: "OpenAI"},
+		{Value: "anthropic", Name: "Anthropic"},
+		{Value: "deepseek", Name: "DeepSeek"},
+	}}
+	choices := a.visibleProviderChoices(option)
+	if len(choices) != 2 || choices[0].Value != "deepseek" || choices[1].Value != "anthropic" {
+		t.Fatalf("visible provider choices = %+v", choices)
+	}
+
+	// With no configured provider the menu must keep every choice.
+	a.applyProviderCatalog(providerCatalogView{Providers: []providerSummary{
+		{Name: "openai"}, {Name: "deepseek"},
+	}})
+	if choices := a.visibleProviderChoices(option); len(choices) != 3 {
+		t.Fatalf("unconfigured runtime must keep all providers: %+v", choices)
+	}
+}
+
+func TestPlanProgressPanelCollapsesAndReopens(t *testing.T) {
+	a := testApp()
+	a.currentSession = "s1"
+	a.currentTitle = "Plan"
+	a.planMessageID = "plan-1"
+	plan := &chatMessage{
+		ID: "plan-1", Kind: messagePlan, Done: true, PlanTitle: "Build", PlanNote: "note",
+		Plan: []planEntry{{Content: "step one", Status: "in_progress"}},
+	}
+	a.messages = []*chatMessage{plan}
+	a.messageIndex = map[string]*chatMessage{"plan-1": plan}
+	tt := ui.NewTester(a.view, 1180, 760)
+	if !textPresent(tt, "step one") || !textPresent(tt, "0/1 已完成") {
+		t.Fatalf("plan entry/count missing: %q", tt.Texts())
+	}
+	if err := tt.Click("收起计划进度"); err != nil {
+		t.Fatalf("collapse plan: %v", err)
+	}
+	if !a.planCollapsed || a.planCollapsedID != "plan-1" {
+		t.Fatalf("plan collapse state = %v/%q", a.planCollapsed, a.planCollapsedID)
+	}
+	tt = ui.NewTester(a.view, 1180, 760)
+	if !textPresent(tt, "展开计划进度") {
+		t.Fatalf("collapsed plan must expose the expand action: %q", tt.Texts())
+	}
+	if err := tt.Click("展开计划进度"); err != nil {
+		t.Fatalf("expand plan: %v", err)
+	}
+	if a.planCollapsed {
+		t.Fatal("plan stayed collapsed after expand")
+	}
+	if tt = ui.NewTester(a.view, 1180, 760); !textPresent(tt, "收起计划进度") {
+		t.Fatalf("expanded plan must expose the collapse action: %q", tt.Texts())
+	}
+}
+
+func TestNativeAutoRestartBackoffMatchesDesktop(t *testing.T) {
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second, 15 * time.Second}
+	for index, expected := range want {
+		if got := nativeAutoRestartDelay(index + 1); got != expected {
+			t.Fatalf("delay(%d) = %v, want %v", index+1, got, expected)
+		}
+	}
+	if nativeNonRetryableStartupError(nativeStartupError{Code: "config_invalid"}) != true ||
+		nativeNonRetryableStartupError(nativeStartupError{Code: "provider_unusable"}) != true ||
+		nativeNonRetryableStartupError(nativeStartupError{Code: "acp_startup"}) != false {
+		t.Fatal("non-retryable startup error classification mismatch")
+	}
+
+	a := testApp()
+	a.setStartupError(nativeStartupError{Code: "config_invalid", Message: "bad config"})
+	a.maybeScheduleAutoRestart()
+	if a.autoRestartPending || a.autoRestartAttempts != 0 {
+		t.Fatalf("non-retryable error scheduled a restart: %+v", a)
+	}
+
+	a = testApp()
+	a.autoRestartAttempts = nativeMaxAutoRestartAttempts
+	a.maybeScheduleAutoRestart()
+	if a.autoRestartPending {
+		t.Fatal("restart scheduled past the attempt limit")
+	}
+}
+
+func TestSkillIconURLRestrictionAndCache(t *testing.T) {
+	if _, ok := validSkillIconURL("https://cdn.example/icon.png"); !ok {
+		t.Fatal("https icon URL rejected")
+	}
+	for _, raw := range []string{"file:///tmp/icon.png", "javascript:alert(1)", "data:image/png;base64,AAAA", "not a url"} {
+		if _, ok := validSkillIconURL(raw); ok {
+			t.Fatalf("invalid icon URL accepted: %q", raw)
+		}
+	}
+
+	var buf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := ui.DecodeImage(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := testApp()
+	url := "https://cdn.example/icon.png"
+	a.skillIconImages = map[string]ui.ImageSource{url: decoded}
+	if got := a.skillIcon(skillHubSkill{IconURL: url}); got != decoded {
+		t.Fatalf("cached icon not returned: %#v", got)
+	}
+
+	a.skillIconFailed = map[string]bool{}
+	if got := a.skillIcon(skillHubSkill{IconURL: "file:///tmp/icon.png"}); got != nil {
+		t.Fatalf("invalid scheme returned an image: %#v", got)
+	}
+	if !a.skillIconFailed["file:///tmp/icon.png"] {
+		t.Fatal("invalid icon scheme was not cached as failed")
+	}
+}
+
+func TestHomeProjectsDesktopConnectionSlogan(t *testing.T) {
+	a := testApp()
+	a.conn = connReady
+	a.runtimeVersion = "1.3.109"
+	a.page = "home"
+	tt := ui.NewTester(a.view, 1180, 760)
+	if !textPresent(tt, "已连接 · mothx 1.3.109 · ACP v1") {
+		t.Fatalf("home connection slogan missing: %q", tt.Texts())
+	}
+	a.conn = connStarting
+	if got := a.homeConnectionSlogan(); got != "正在连接 ACP…" {
+		t.Fatalf("connecting slogan = %q", got)
+	}
+}
+
+func TestPlanCardUsesDesktopDefaultTitleAndStepMarkers(t *testing.T) {
+	a := testApp()
+	a.currentSession = "s1"
+	plan := &chatMessage{ID: "plan-1", Kind: messagePlan, Done: true, Plan: []planEntry{
+		{Content: "done step", Status: "completed"},
+		{Content: "running step", Status: "in_progress"},
+		{Content: "failed step", Status: "failed"},
+	}}
+	a.messages = []*chatMessage{plan}
+	a.messageIndex = map[string]*chatMessage{"plan-1": plan}
+	tt := ui.NewTester(a.view, 1180, 760)
+	for _, want := range []string{"执行计划 · 3 步", "done step", "running step", "failed step"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("plan card missing %q: %q", want, tt.Texts())
+		}
 	}
 }

@@ -208,6 +208,14 @@ type providerPanelState struct {
 
 	PendingDelete bool
 
+	// Fallback quick-set-key dialog. Only used when manageSettings is available
+	// without manageProviders, matching Desktop's degraded provider panel.
+	FallbackKeyOpen   bool
+	FallbackKeyName   string
+	FallbackKeyValue  string
+	FallbackKeySaving bool
+	FallbackKeyErr    string
+
 	Discovering        bool
 	DiscoverOpen       bool
 	DiscoverSearch     string
@@ -610,6 +618,7 @@ func (a *nativeApp) invalidateProviderPanel() {
 	p.OriginalID = ""
 	p.Status = ""
 	p.StatusIsError = false
+	a.closeProviderFallbackKey()
 }
 
 // startProviderPanelLoad starts one capability-gated load. It is called from
@@ -1481,6 +1490,82 @@ func (a *nativeApp) setDefaultProvider(name string) {
 				}
 			}
 			p.Status = "默认供应商已设置为 " + name
+			p.StatusIsError = false
+		})
+	}()
+}
+
+// openProviderFallbackKey starts the degraded-panel quick key prompt. The key
+// stays write-only: it lives in this transient dialog state and is cleared on
+// success, cancel, or page invalidation.
+func (a *nativeApp) openProviderFallbackKey(name string) {
+	p := &a.providers
+	p.FallbackKeyOpen = true
+	p.FallbackKeyName = strings.TrimSpace(name)
+	p.FallbackKeyValue = ""
+	p.FallbackKeyErr = ""
+	p.FallbackKeySaving = false
+}
+
+func (a *nativeApp) closeProviderFallbackKey() {
+	p := &a.providers
+	p.FallbackKeyOpen = false
+	p.FallbackKeyName = ""
+	p.FallbackKeyValue = ""
+	p.FallbackKeyErr = ""
+	p.FallbackKeySaving = false
+}
+
+func (a *nativeApp) saveProviderFallbackKey() {
+	p := &a.providers
+	caps := a.providerCapabilities()
+	if !caps.Settings {
+		p.FallbackKeyErr = "当前运行时不支持设置供应商密钥（manageSettings）。"
+		return
+	}
+	name := strings.TrimSpace(p.FallbackKeyName)
+	key := strings.TrimSpace(p.FallbackKeyValue)
+	if name == "" {
+		p.FallbackKeyErr = "供应商名称不能为空。"
+		return
+	}
+	if key == "" {
+		p.FallbackKeyErr = "供应商密钥不能为空。"
+		return
+	}
+	client := a.acp
+	if client == nil {
+		p.FallbackKeyErr = "保存供应商密钥失败：尚未连接到 MothX ACP。"
+		return
+	}
+	seq := atomic.AddInt64(&p.Seq, 1)
+	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
+	p.FallbackKeySaving = true
+	p.FallbackKeyErr = ""
+	go func() {
+		raw, err := client.call("mothx/manage/settings/patch", map[string]any{
+			"patch": map[string]any{
+				"providerKey": map[string]any{"name": name, "key": key},
+			},
+		})
+		a.dispatch(func() {
+			if !a.providerPanelCurrent(seq, startReloadSeq) {
+				return
+			}
+			p := &a.providers
+			p.FallbackKeySaving = false
+			if err != nil {
+				p.FallbackKeyErr = "保存供应商密钥失败：" + err.Error()
+				return
+			}
+			var view providerSettingsView
+			if err := json.Unmarshal(raw, &view); err != nil {
+				p.FallbackKeyErr = "保存供应商密钥失败：响应无效"
+				return
+			}
+			p.Settings = &view
+			a.closeProviderFallbackKey()
+			p.Status = "供应商密钥已保存"
 			p.StatusIsError = false
 		})
 	}()

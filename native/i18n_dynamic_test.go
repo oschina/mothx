@@ -22,6 +22,9 @@ func TestEnglishSessionAndProjectMenusHaveNoUntranslatedChinese(t *testing.T) {
 	}
 	assertNoChineseUI(t, "session menu", tt.Texts())
 
+	// Rebuild the tester so the first popover cannot sit over the project menu
+	// row after the sidebar's navigation layout changes.
+	tt = ui.NewTester(a.view, 1180, 760)
 	if err := tt.Click("Project actions"); err != nil {
 		t.Fatalf("open project menu: %v", err)
 	}

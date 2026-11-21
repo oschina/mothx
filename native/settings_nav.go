@@ -123,6 +123,12 @@ func (a *nativeApp) sectionEnabled(sec settingsSection) bool {
 	if sec.ID == "skillhub" {
 		return a.featureEnabled("manageSkillHub") || a.featureEnabled("manageSkillHubCatalog")
 	}
+	if sec.ID == "providers" {
+		// Desktop keeps the Providers tab available in degraded runtimes that
+		// expose manageSettings; the panel then offers test/default/set-key
+		// without the full provider editor.
+		return a.featureEnabled("manageProviders") || a.featureEnabled("manageSettings")
+	}
 	if sec.Feature == "" {
 		return true
 	}

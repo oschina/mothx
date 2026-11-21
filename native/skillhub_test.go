@@ -283,13 +283,16 @@ func TestSkillHubSearchDetailDecodeAndRequestBuilders(t *testing.T) {
 		t.Fatalf("detail = %+v", detail)
 	}
 
-	search := buildSkillHubSearchRequest(" s1 ", " skillhub.cn ", " pdf ", " docs ")
+	search := buildSkillHubSearchRequest(" s1 ", " skillhub.cn ", " pdf ", " docs ", "stars")
 	if search["sessionId"] != "s1" || search["market"] != "skillhub.cn" || search["query"] != "pdf" ||
-		search["sort"] != "downloads" || search["order"] != "desc" || search["limit"] != 20 {
+		search["sort"] != "stars" || search["order"] != "desc" || search["limit"] != 20 {
 		t.Fatalf("search request = %#v", search)
 	}
-	if got := buildSkillHubSearchRequest("s1", "clawhub.ai", "", "")["sort"]; got != "" {
+	if got := buildSkillHubSearchRequest("s1", "clawhub.ai", "", "", "stars")["sort"]; got != "" {
 		t.Fatalf("clawhub sort = %#v, want empty", got)
+	}
+	if got := buildSkillHubSearchRequest("s1", "skillhub.cn", "", "", "")["sort"]; got != skillHubDefaultSort {
+		t.Fatalf("default sort = %#v, want %q", got, skillHubDefaultSort)
 	}
 	detailRequest := buildSkillHubDetailRequest("s1", "skillhub.cn", " pdf ")
 	if detailRequest["sessionId"] != "s1" || detailRequest["market"] != "skillhub.cn" || detailRequest["id"] != "pdf" {
@@ -559,7 +562,7 @@ func TestSkillHubMarkInstalledAndRemoveInstalled(t *testing.T) {
 }
 
 func TestSkillHubCategoriesAndOfficialProjection(t *testing.T) {
-	request := buildSkillHubSearchRequest("s1", "skillhub.cn", "pdf", "docs")
+	request := buildSkillHubSearchRequest("s1", "skillhub.cn", "pdf", "docs", "downloads")
 	if request["category"] != "docs" || request["sort"] != "downloads" {
 		t.Fatalf("category search request = %#v", request)
 	}
@@ -574,5 +577,68 @@ func TestSkillHubCategoriesAndOfficialProjection(t *testing.T) {
 	flat := skillHubFlattenCategories(categories)
 	if len(flat) != 3 || flat[1].Key != "api" || skillHubCategoryName(flat[1]) != "API" {
 		t.Fatalf("flat categories = %+v", flat)
+	}
+}
+
+func TestSkillHubSortRowMirrorsDesktopOptions(t *testing.T) {
+	a := skillHubTestApp(t, skillHubTestFeatures())
+	setLocale("zh")
+	a.settingsTab = "skillhub"
+	a.skillhub.CatalogLoaded = true
+	a.skillhub.MarketInfos = []skillHubMarketInfo{{ID: "skillhub.cn", Name: "SkillHub.cn"}}
+	a.skillhub.SelectedMarket = "skillhub.cn"
+	a.skillhub.Sort = ""
+	a.skillhub.Category = ""
+	tt := ui.NewTester(a.view, 1180, 900)
+	for _, want := range []string{"排序", "下载", "Star", "最新"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("skillhub sort row missing %q: %q", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("Star"); err != nil {
+		t.Fatalf("select stars sort: %v", err)
+	}
+	if a.skillhub.Sort != "stars" {
+		t.Fatalf("sort = %q, want stars", a.skillhub.Sort)
+	}
+}
+
+func TestSkillHubDetailShowsSecurityEvaluationAndDownloadSources(t *testing.T) {
+	a := skillHubTestApp(t, skillHubTestFeatures())
+	setLocale("zh")
+	a.settingsTab = "skillhub"
+	a.skillhub.CatalogLoaded = true
+	a.skillhub.MarketInfos = []skillHubMarketInfo{{ID: "skillhub.cn", Name: "SkillHub.cn"}}
+	a.skillhub.SelectedMarket = "skillhub.cn"
+	a.skillhub.TargetPath = "/workspace/project/.skills"
+	a.skillhub.TargetScope = "project"
+	a.skillhub.DetailOpen = true
+	a.skillhub.Detail = &skillHubDetail{
+		skillHubSkill: skillHubSkill{Market: "skillhub.cn", ID: "pdf", Name: "pdf", Stars: 12},
+		DownloadSources: []skillHubDownloadSource{
+			{URL: "https://mirror.example/pdf.zip", Kind: "mirror"},
+		},
+		SecurityReports: json.RawMessage(`{"yuandun":{"status":"SAFE"}}`),
+		Evaluation:      json.RawMessage(`{"score":9}`),
+	}
+	tt := ui.NewTester(a.view, 1180, 900)
+	for _, want := range []string{"安全报告", "\"status\": \"SAFE\"", "评估", "\"score\": 9", "下载来源", "https://mirror.example/pdf.zip"} {
+		if !textPresent(tt, want) {
+			t.Fatalf("skillhub detail missing %q: %q", want, tt.Texts())
+		}
+	}
+}
+
+func TestSkillHubDetailLoadingStateDoesNotDereferenceNilDetail(t *testing.T) {
+	a := skillHubTestApp(t, skillHubTestFeatures())
+	setLocale("zh")
+	a.settingsTab = "skillhub"
+	a.skillhub.CatalogLoaded = true
+	a.skillhub.DetailOpen = true
+	a.skillhub.DetailBusy = true
+	a.skillhub.Detail = nil
+	tt := ui.NewTester(a.view, 1180, 900)
+	if !textPresent(tt, "正在读取技能详情…") {
+		t.Fatalf("detail loading state missing: %q", tt.Texts())
 	}
 }

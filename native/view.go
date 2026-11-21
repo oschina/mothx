@@ -130,6 +130,8 @@ func (a *nativeApp) view(c *ui.Context) {
 				a.settingsPage(c, p)
 			} else if a.historyOpen {
 				a.historyView(c, p)
+			} else if a.page == "home" {
+				a.homePage(c, p)
 			} else if a.page == "skills" {
 				a.skillsPage(c, p)
 			} else if a.page == "automation" {
@@ -284,7 +286,7 @@ func (a *nativeApp) closeWindow() {
 }
 
 func (a *nativeApp) sidebarView(c *ui.Context, p palette) {
-	ui.Column(c).Width(272).FillHeight().Background(p.sidebar).
+	ui.Column(c).Width(220).FillHeight().Background(p.sidebar).
 		BorderWidth(0, 1, 0, 0).BorderColor(p.t.Border).Children(func() {
 		ui.Column(c).Padding(10, 12, 8, 12).Grow(1).Children(func() {
 			a.brandRow(c, p)
@@ -296,6 +298,11 @@ func (a *nativeApp) sidebarView(c *ui.Context, p palette) {
 					a.search = ""
 				}
 			})
+			// Navigation order mirrors Desktop's canonical sidebar projection:
+			// home → skills → history → automation → experts → library. Extra
+			// Native-only entries (search, settings) sit outside that sequence.
+			a.navRow(c, p, "home", iconSpark, "首页", a.homeNavActive(), a.openHome)
+			a.navRow(c, p, "skills", iconZap, "技能", a.page == "skills" && !a.settingsOpen, func() { a.openPage("skills") })
 			a.navRow(c, p, "history", iconList, "会话历史", a.history, a.openHistory)
 			if count := a.backgroundAttentionCount(); count > 0 {
 				ui.Row(c).AlignItems(ui.Center).Gap(6).Padding(0, 10, 4, 36).Children(func() {
@@ -305,8 +312,12 @@ func (a *nativeApp) sidebarView(c *ui.Context, p palette) {
 					})
 				})
 			}
-			a.navRow(c, p, "skills", iconSpark, "技能", a.page == "skills" && !a.settingsOpen, func() { a.openPage("skills") })
 			a.navRow(c, p, "automation", iconClock, "自动化", a.page == "automation" && !a.settingsOpen, func() { a.openPage("automation") })
+			if a.featureEnabled("manageExperts") {
+				// Desktop never highlights this entry (it opens the Settings tab),
+				// so the row stays inactive while still exposing the shortcut.
+				a.navRow(c, p, "experts", iconUsers, "主角团", false, func() { a.openSettingsTab("experts") })
+			}
 			a.navRow(c, p, "library", iconBook, "资料库", a.page == "library" && !a.settingsOpen, func() { a.openPage("library") })
 			a.navRow(c, p, "settings", iconSettings, "应用设置", a.settingsOpen, a.openSettings)
 			ui.Box(c).Height(1).Background(p.t.Border).Margin(10, 2, 8, 2)
@@ -388,13 +399,10 @@ func (a *nativeApp) navRow(c *ui.Context, p palette, key string, icon *ui.SVG, l
 		color := p.t.TextMuted
 		if active {
 			color = p.t.Accent
+			ui.Box(c).Absolute().Left(0).Top(8).Width(3).Height(16).Radius(2).Background(p.t.Accent)
 		}
 		ui.Icon(c, icon).FontSize(15).TextColor(color)
 		ui.Text(c, T(label)).FontSize(12.5).TextColor(p.t.Text)
-		if active {
-			ui.Spacer(c)
-			ui.Icon(c, iconCheck).FontSize(12).TextColor(p.t.Accent)
-		}
 	})
 	b.Label(T(label))
 	if b.Clicked() {
@@ -591,21 +599,60 @@ func (a *nativeApp) openPage(page string) {
 	}
 }
 
-func (a *nativeApp) pageHeader(c *ui.Context, p palette, title, subtitle string) {
-	ui.Row(c).Height(52).Padding(0, 12, 0, 18).AlignItems(ui.Center).Gap(10).
-		BorderWidth(0, 0, 1, 0).BorderColor(p.t.Border).Children(func() {
-		ui.Column(c).Gap(1).Grow(1).Children(func() {
-			ui.Text(c, T(title)).FontSize(14).FontWeight(650)
-			ui.Text(c, T(subtitle)).FontSize(10).TextColor(p.t.TextMuted).SingleLine()
-		})
+// openHome mirrors Desktop's Home nav entry: it projects the home surface
+// without discarding the active session or its transcript. Sending from the
+// home composer continues that session (or creates one when the draft is
+// empty), exactly like Desktop's shared composer.
+func (a *nativeApp) openHome() {
+	if a.settingsOpen {
+		a.closeSettings()
+	}
+	a.historyOpen = false
+	a.history = false
+	a.page = "home"
+}
+
+// homeNavActive mirrors Desktop's view highlight: the home surface is selected
+// when explicitly opened or when the shell is showing an empty new-task draft.
+func (a *nativeApp) homeNavActive() bool {
+	if a.settingsOpen {
+		return false
+	}
+	if a.page == "home" {
+		return true
+	}
+	return a.page == "" && a.currentSession == "" && len(a.messages) == 0
+}
+
+func (a *nativeApp) homePage(c *ui.Context, p palette) {
+	ui.Column(c).Grow(1).FillHeight().Children(func() {
+		a.emptyState(c, p)
+		a.composer(c, p)
+		a.statusBar(c, p)
 	})
+}
+
+// pageHeader mirrors Desktop's PageHead: a wide title block inside the page
+// scroll area, not a fixed toolbar above it.
+func (a *nativeApp) pageHeader(c *ui.Context, p palette, title, subtitle string) {
+	ui.Column(c).Margin(0, 0, 20, 0).Gap(4).Children(func() {
+		ui.Text(c, T(title)).FontSize(19).FontWeight(700).TextColor(p.t.Text)
+		ui.Text(c, T(subtitle)).FontSize(12.5).TextColor(p.t.TextMuted).LineHeight(1.4)
+	})
+}
+
+// pageContent is Desktop's PageInner: a centered 880px column with 24px top
+// and 48px bottom padding. Pages keep their title and action rows inside it.
+func (a *nativeApp) pageContent(c *ui.Context, maxWidth float32, children func()) {
+	ui.Column(c).MaxWidth(maxWidth).WidthPercent(94).Margin(0, ui.Auto).
+		Padding(24, 0, 48, 0).Gap(14).Children(children)
 }
 
 func (a *nativeApp) skillsPage(c *ui.Context, p palette) {
 	ui.Column(c).Grow(1).FillHeight().Background(p.t.Background).Children(func() {
-		a.pageHeader(c, p, "技能", "可直接注入 Composer 的指令卡片、在线技能市场与本地技能入口")
 		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Padding(18, 24, 24, 24).Gap(14).Children(func() {
+			a.pageContent(c, 1120, func() {
+				a.pageHeader(c, p, "技能 · 指令", "来自 ACP available_commands_update：项目技能与内置指令，点击注入到输入框。")
 				a.skillsPageActions(c, p)
 				a.skillsCommandGrid(c, p)
 				a.skillsPageMarket(c, p)
@@ -725,9 +772,9 @@ func (a *nativeApp) pageStat(c *ui.Context, p palette, label, value, hint string
 
 func (a *nativeApp) automationPage(c *ui.Context, p palette) {
 	ui.Column(c).Grow(1).FillHeight().Background(p.t.Background).Children(func() {
-		a.pageHeader(c, p, "自动化", "Runtime 持有的定时任务与最近运行状态")
 		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Padding(18, 24, 24, 24).Gap(14).Children(func() {
+			a.pageContent(c, 880, func() {
+				a.pageHeader(c, p, "自动化 · 定时任务", "让 Agent 按计划自动运行（cron 调度随桌面在线生效）。")
 				enabled := 0
 				for _, job := range a.cron.Jobs {
 					if job.Enabled {
@@ -818,9 +865,9 @@ func (a *nativeApp) automationPageList(c *ui.Context, p palette) {
 
 func (a *nativeApp) libraryPage(c *ui.Context, p palette) {
 	ui.Column(c).Grow(1).FillHeight().Background(p.t.Background).Children(func() {
-		a.pageHeader(c, p, "资料库", "Runtime 持有的知识库索引与证据状态")
 		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Padding(18, 24, 24, 24).Gap(14).Children(func() {
+			a.pageContent(c, 880, func() {
+				a.pageHeader(c, p, "知识库", "管理目录索引、扫描状态与 MCP 使用配置。")
 				indexed := 0
 				files := 0
 				for _, view := range a.knowledge.Views {
@@ -943,14 +990,8 @@ func (a *nativeApp) libraryRow(c *ui.Context, p palette, index int) {
 
 func (a *nativeApp) sidebarFooter(c *ui.Context, p palette) {
 	ui.Box(c).Height(1).Background(p.t.Border).Margin(8, 2, 6, 2)
-	ui.Row(c).AlignItems(ui.Center).Gap(8).Padding(5, 6).Children(func() {
-		ui.Box(c).Size(24, 24).Radius(999).Background(p.active).Children(func() {
-			mothxLogoView(c, 20)
-		})
-		ui.Column(c).Gap(1).Grow(1).Children(func() {
-			ui.Text(c, "MothX Native").FontSize(11.5).FontWeight(600).SingleLine()
-			ui.Text(c, a.connectionLabel()).FontSize(9.5).TextColor(p.t.TextMuted).SingleLine()
-		})
+	ui.Row(c).AlignItems(ui.Center).Gap(4).Padding(5, 6).Children(func() {
+		ui.Text(c, T("本地模式 · ACP")).FontSize(11).TextColor(p.t.TextMuted).SingleLine().Grow(1)
 		iconButton(c, p, iconGlobe, "切换语言", 14, func() { a.toggleLocale() })
 		iconButton(c, p, a.appearanceIcon(), "切换外观", 14, func() { a.toggleTheme() })
 		dot := p.t.Success
@@ -978,7 +1019,7 @@ func (a *nativeApp) mainView(c *ui.Context, p palette) {
 }
 
 func (a *nativeApp) header(c *ui.Context, p palette) {
-	ui.Row(c).Height(52).Padding(0, 12, 0, 18).AlignItems(ui.Center).Gap(6).
+	ui.Row(c).Height(46).Padding(0, 16, 0, 16).AlignItems(ui.Center).Gap(10).
 		BorderWidth(0, 0, 1, 0).BorderColor(p.t.Border).Background(p.t.Background).Children(func() {
 		if label := a.currentSessionStatusLabel(); label != "" {
 			statusPill(c, p, label)
@@ -1049,18 +1090,21 @@ func (a *nativeApp) emptyState(c *ui.Context, p palette) {
 			}
 			if a.home.logoVisible {
 				if a.home.logoImage != nil {
-					ui.Image(c, a.home.logoImage).Size(78, 78).Radius(18).Fit(ui.Cover)
+					ui.Image(c, a.home.logoImage).Size(58, 58).Radius(14).Fit(ui.Cover)
 				} else {
-					mothxLogoView(c, 78)
+					mothxLogoView(c, 58)
 				}
 			}
 			ui.Row(c).AlignItems(ui.Center).Gap(9).Margin(10, 0, 0, 0).Children(func() {
-				ui.Text(c, "MothX").FontSize(27).FontWeight(650)
+				ui.Text(c, "MothX").FontSize(26).FontWeight(650)
 				ui.Text(c, T(" : Make OSCHINA Tokens Harness eXecution")).FontSize(14).
 					FontWeight(500).TextColor(p.t.TextMuted)
 			})
-			ui.Text(c, T(nativeChineseSlogan)).FontSize(12).
+			ui.Text(c, T(nativeChineseSlogan)).FontSize(12.5).
 				LetterSpacing(0.2).TextColor(p.t.TextMuted).Margin(4, 0, 0, 0)
+			if slogan := a.homeConnectionSlogan(); slogan != "" {
+				ui.Text(c, slogan).FontSize(11.5).TextColor(p.t.TextMuted).Margin(2, 0, 0, 0)
+			}
 			a.homePresetTabs(c, p)
 			preset := homePresetByID(a.home.preset)
 			locale := currentLocale()
@@ -1117,7 +1161,7 @@ func (a *nativeApp) homePresetPrompts(c *ui.Context, p palette, preset homePrese
 	tags := preset.tags(locale)
 	prompts := preset.prompts(locale)
 	protocol := executionProtocol(locale)
-	ui.Row(c).Wrap().Gap(8).MaxWidth(660).Justify(ui.Center).Margin(14, 0, 0, 0).Children(func() {
+	ui.Row(c).Wrap().Gap(8).MaxWidth(640).Justify(ui.Center).Margin(14, 0, 0, 0).Children(func() {
 		for i, label := range labels {
 			i, label := i, label
 			tag := ""
@@ -1128,7 +1172,7 @@ func (a *nativeApp) homePresetPrompts(c *ui.Context, p palette, preset homePrese
 			if i < len(prompts) {
 				prompt = prompts[i] + protocol
 			}
-			b := ui.ButtonBase(c.Key("home-prompt:"+preset.ID+":"+label)).Padding(8, 11).Radius(10).
+			b := ui.ButtonBase(c.Key("home-prompt:"+preset.ID+":"+label)).Width(206).Padding(8, 11).Radius(10).
 				Border(1, p.t.Border).Background(p.chip)
 			if b.Hovered() {
 				b.Background(p.hover).Border(1, p.t.Accent)
@@ -1148,6 +1192,26 @@ func (a *nativeApp) homePresetPrompts(c *ui.Context, p palette, preset homePrese
 	})
 }
 
+func (a *nativeApp) homeConnectionSlogan() string {
+	switch a.conn {
+	case connReady:
+		version := strings.TrimSpace(a.runtimeVersion)
+		if version == "" {
+			version = a.version()
+		}
+		if version != "" && version != "unknown" {
+			return Tf("已连接 · mothx %s · ACP v1", version)
+		}
+		return T("已连接 · ACP v1")
+	case connStarting:
+		return T("正在连接 ACP…")
+	case connFailed:
+		return a.connErr
+	default:
+		return T("未连接")
+	}
+}
+
 func (a *nativeApp) connectionError(c *ui.Context, p palette) {
 	ui.Column(c).Width(460).Padding(18).Radius(14).Background(p.errorBg).
 		Border(1, ui.RGBA(255, 107, 107, 0.28)).Gap(8).Children(func() {
@@ -1158,13 +1222,24 @@ func (a *nativeApp) connectionError(c *ui.Context, p palette) {
 		if a.connErr != "" {
 			ui.Text(c, T(a.connErr)).FontSize(11.5).TextColor(p.t.TextMuted).Selectable()
 		}
+		if a.connFix != "" {
+			ui.Text(c, T("修复：")+a.connFix).FontSize(11).TextColor(p.t.Accent).LineHeight(1.4).Selectable()
+		}
 		if len(a.stderr) > 0 {
 			ui.Text(c, strings.Join(a.stderr, "\n")).Font("monospace").FontSize(9.5).
 				TextColor(p.t.TextMuted).MaxLines(5).Selectable()
 		}
-		if ui.PrimaryButton(c.Key("retry-connection"), T("重试连接")).Clicked() {
-			go a.connect()
-		}
+		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+			retry := ui.PrimaryButton(c.Key("retry-connection"), T("重试连接"))
+			if retry.Clicked() {
+				go a.connect()
+			}
+			openSettings := ui.Button(c.Key("connection-open-settings"), T("打开设置"))
+			openSettings.Label(T("打开设置"))
+			if openSettings.Clicked() {
+				a.openSettings()
+			}
+		})
 	})
 }
 
@@ -1246,31 +1321,50 @@ func (a *nativeApp) planProgressPanel(c *ui.Context, p palette, plan *chatMessag
 	if title == "" {
 		title = T("计划进度")
 	}
-	ui.Column(c).Width(240).FillHeight().Padding(12, 12).Gap(8).
+	collapsed := a.planCollapsed && a.planCollapsedID == plan.ID
+	width := float32(288)
+	if collapsed {
+		width = 200
+	}
+	ui.Column(c).Width(width).FillHeight().Padding(12, 12).Gap(8).
 		BorderWidth(0, 0, 0, 1).BorderColor(p.t.Border).Background(p.t.Background).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
 			ui.Icon(c, iconSpark).FontSize(13).TextColor(p.t.Accent)
 			ui.Text(c, title).FontSize(11).FontWeight(650).TextColor(p.t.Text).Grow(1).SingleLine()
-			ui.Textf(c, "%d/%d", completed, len(entries)).FontSize(9.5).TextColor(p.t.TextMuted)
+			ui.Text(c, Tf("%d/%d 已完成", completed, len(entries))).FontSize(9.5).TextColor(p.t.TextMuted)
+			icon := iconChevronDown
+			label := T("收起计划进度")
+			if collapsed {
+				icon = iconChevronRight
+				label = T("展开计划进度")
+			}
+			toggle := ui.ButtonBase(c.Key("plan-toggle")).Size(20, 20).Radius(5).
+				Justify(ui.Center).AlignItems(ui.Center)
+			if toggle.Hovered() {
+				toggle.Background(p.hover)
+			}
+			toggle.Children(func() {
+				ui.Icon(c, icon).FontSize(11).TextColor(p.t.TextMuted)
+			})
+			toggle.Label(label).Tooltip(label)
+			if toggle.Clicked() {
+				a.planCollapsed = !collapsed
+				a.planCollapsedID = plan.ID
+			}
 		})
+		if collapsed {
+			return
+		}
 		if plan.PlanNote != "" {
 			ui.Text(c, plan.PlanNote).FontSize(10).TextColor(p.t.TextMuted).LineHeight(1.35)
 		}
+		planProgressBar(c, p, completed, len(entries))
 		ui.Scroll(c).Grow(1).Children(func() {
 			ui.Column(c).Gap(7).Children(func() {
 				for _, entry := range entries {
 					entry := entry
 					ui.Row(c).AlignItems(ui.Start).Gap(6).Children(func() {
-						color := p.t.TextMuted
-						switch entry.Status {
-						case "completed":
-							color = p.t.Success
-						case "in_progress", "running":
-							color = p.t.Accent
-						case "failed":
-							color = p.t.Danger
-						}
-						ui.Box(c).Size(6, 6).Radius(3).Background(color).Margin(4, 0, 0, 0)
+						planStepMarker(c, p, entry.Status)
 						t := ui.Text(c, entry.Content).FontSize(10.5).TextColor(p.t.Text).Grow(1).LineHeight(1.35)
 						if entry.Status == "completed" {
 							t.Strikethrough().TextColor(p.t.TextMuted)
@@ -1495,6 +1589,50 @@ func (a *nativeApp) toolCard(c *ui.Context, p palette, m *chatMessage) {
 	})
 }
 
+// planStepMarker mirrors Desktop's plan step indicator: a filled check for a
+// completed step, an accent ring with a dot while running, a danger ring for a
+// failed step, and a neutral empty ring otherwise.
+func planStepMarker(c *ui.Context, p palette, status string) {
+	color := p.t.Border
+	switch status {
+	case "completed":
+		color = p.t.Accent
+	case "in_progress", "running":
+		color = p.t.Accent
+	case "failed":
+		color = p.t.Danger
+	}
+	box := ui.Box(c).Size(15, 15).Radius(8).Border(1.5, color).
+		Justify(ui.Center).AlignItems(ui.Center).Margin(1, 0, 0, 0)
+	switch status {
+	case "completed":
+		box.Background(color).Children(func() {
+			ui.Icon(c, iconCheck).FontSize(9).TextColor(p.t.AccentText)
+		})
+	case "in_progress", "running":
+		box.Children(func() {
+			ui.Box(c).Size(6, 6).Radius(3).Background(p.t.Accent)
+		})
+	case "failed":
+		box.Children(func() {
+			ui.Box(c).Size(6, 6).Radius(3).Background(p.t.Danger)
+		})
+	}
+}
+
+func planProgressBar(c *ui.Context, p palette, completed, total int) {
+	percent := 0
+	if total > 0 {
+		percent = completed * 100 / total
+	}
+	const barWidth = 264
+	ui.Row(c).Height(8).WidthPercent(100).Radius(4).Background(p.chip).Clip().Children(func() {
+		if percent > 0 {
+			ui.Box(c).Height(8).Width(float32(barWidth * percent / 100)).Radius(4).Background(p.t.Accent)
+		}
+	})
+}
+
 func (a *nativeApp) planCard(c *ui.Context, p palette, m *chatMessage) {
 	ui.Column(c).Key(m.ID).WidthPercent(100).MaxWidth(780).Margin(0, ui.Auto).Radius(10).Background(p.thought).
 		Border(1, p.t.Border).Padding(10, 12).Gap(6).Children(func() {
@@ -1502,7 +1640,7 @@ func (a *nativeApp) planCard(c *ui.Context, p palette, m *chatMessage) {
 			ui.Icon(c, iconSpark).FontSize(13).TextColor(p.t.Accent)
 			label := m.PlanTitle
 			if label == "" {
-				label = T("计划")
+				label = Tf("执行计划 · %d 步", len(m.Plan))
 			}
 			ui.Text(c, label).FontSize(11).FontWeight(650).TextColor(p.t.TextMuted)
 		})
@@ -1511,17 +1649,8 @@ func (a *nativeApp) planCard(c *ui.Context, p palette, m *chatMessage) {
 		}
 		for _, entry := range m.Plan {
 			entry := entry
-			ui.Row(c).AlignItems(ui.Center).Gap(7).Children(func() {
-				color := p.t.TextMuted
-				switch entry.Status {
-				case "completed":
-					color = p.t.Success
-				case "in_progress", "running":
-					color = p.t.Accent
-				case "failed":
-					color = p.t.Danger
-				}
-				ui.Box(c).Size(5, 5).Radius(3).Background(color)
+			ui.Row(c).AlignItems(ui.Start).Gap(7).Children(func() {
+				planStepMarker(c, p, entry.Status)
 				t := ui.Text(c, entry.Content).FontSize(11.5).TextColor(p.t.Text).Grow(1)
 				if entry.Status == "completed" {
 					t.Strikethrough().TextColor(p.t.TextMuted)
@@ -1533,7 +1662,7 @@ func (a *nativeApp) planCard(c *ui.Context, p palette, m *chatMessage) {
 
 func (a *nativeApp) composer(c *ui.Context, p palette) {
 	ui.Column(c).Padding(0, 24, 16, 24).Children(func() {
-		ui.Column(c).MaxWidth(800).WidthPercent(100).Margin(0, ui.Auto).Gap(7).Children(func() {
+		ui.Column(c).MaxWidth(820).WidthPercent(100).Margin(0, ui.Auto).Gap(7).Children(func() {
 			if len(a.attachments) > 0 {
 				ui.Row(c).Wrap().Gap(6).Children(func() {
 					for i, f := range a.attachments {

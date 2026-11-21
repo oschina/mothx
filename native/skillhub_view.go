@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -266,6 +268,7 @@ func (a *nativeApp) skillHubBrowsePane(c *ui.Context, p palette) {
 				}
 			})
 			a.skillHubCategoryRow(c, p)
+			a.skillHubSortRow(c, p)
 			ui.Row(c).AlignItems(ui.End).Gap(8).Children(func() {
 				ui.Column(c).Grow(1).Gap(3).Children(func() {
 					ui.Text(c, T("搜索在线技能")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
@@ -355,11 +358,7 @@ func (a *nativeApp) skillHubResultRow(c *ui.Context, p palette, index int) {
 	ui.Column(c).Padding(9).Radius(9).Background(p.t.Background).
 		Border(1, p.t.Border).Gap(7).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			color := p.t.TextMuted
-			if state != nil {
-				color = p.t.Accent
-			}
-			ui.Icon(c, iconSpark).FontSize(15).TextColor(color)
+			a.skillIconElement(c, p, skill, 18)
 			ui.Column(c).Gap(2).Grow(1).Children(func() {
 				ui.Row(c).AlignItems(ui.Center).Gap(5).Children(func() {
 					ui.Text(c, skillHubTitle(skill)).FontSize(12).FontWeight(650).TextColor(p.t.Text).SingleLine()
@@ -449,6 +448,9 @@ func skillHubSkillMeta(skill skillHubSkill) string {
 	if skill.Downloads > 0 {
 		parts = append(parts, Tf("%d 下载", skill.Downloads))
 	}
+	if skill.Stars > 0 {
+		parts = append(parts, Tf("%d %s", skill.Stars, T("Star")))
+	}
 	if status := strings.TrimSpace(skill.SecurityStatusName); status != "" {
 		parts = append(parts, status)
 	}
@@ -522,6 +524,19 @@ func nonEmptyStrings(values ...string) []string {
 		}
 	}
 	return out
+}
+
+// prettySkillHubJSON formats an optional ACP JSON payload for the detail
+// dialog. Empty or malformed payloads are omitted rather than echoed raw.
+func prettySkillHubJSON(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, raw, "", "  "); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(buf.String())
 }
 
 func (a *nativeApp) skillHubStatusBanner(c *ui.Context, p palette, status string, isError, busy bool) {
@@ -663,7 +678,11 @@ func (a *nativeApp) skillHubDetailDialog(c *ui.Context, p palette) {
 				title = skillHubTitle(detail.skillHubSkill)
 			}
 			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-				ui.Icon(c, iconSpark).FontSize(17).TextColor(p.t.Accent)
+				if detail != nil {
+					a.skillIconElement(c, p, detail.skillHubSkill, 22)
+				} else {
+					ui.Icon(c, iconSpark).FontSize(17).TextColor(p.t.Accent)
+				}
 				ui.Text(c, title).FontSize(14).FontWeight(650).TextColor(p.t.Text).Grow(1).SingleLine()
 			})
 			if panel.DetailBusy && detail == nil {
@@ -742,6 +761,25 @@ func (a *nativeApp) skillHubDetailBody(c *ui.Context, p palette, detail *skillHu
 					if file.Size > 0 {
 						line += fmt.Sprintf(" · %d bytes", file.Size)
 					}
+					ui.Text(c, line).FontSize(9.5).TextColor(p.t.TextMuted).Selectable()
+				}
+			}
+			if text := prettySkillHubJSON(detail.SecurityReports); text != "" {
+				ui.Text(c, T("安全报告")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+				ui.Text(c, text).Font("monospace").FontSize(9.5).TextColor(p.t.TextMuted).Selectable()
+			}
+			if text := prettySkillHubJSON(detail.Evaluation); text != "" {
+				ui.Text(c, T("评估")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+				ui.Text(c, text).Font("monospace").FontSize(9.5).TextColor(p.t.TextMuted).Selectable()
+			}
+			if len(detail.DownloadSources) > 0 {
+				ui.Text(c, T("下载来源")).FontSize(10.5).FontWeight(600).TextColor(p.t.TextMuted)
+				for _, source := range detail.DownloadSources {
+					line := strings.TrimSpace(source.Kind)
+					if line != "" {
+						line += " · "
+					}
+					line += source.URL
 					ui.Text(c, line).FontSize(9.5).TextColor(p.t.TextMuted).Selectable()
 				}
 			}
@@ -913,6 +951,55 @@ func (a *nativeApp) skillHubCategoryChip(c *ui.Context, p palette, key, label st
 	b.Label(T(label))
 	if b.Clicked() && !active && !a.skillHubBrowseBusy() {
 		panel.Category = key
+		panel.Official = false
+		a.searchSkillHub()
+	}
+}
+
+// skillHubSortRow mirrors Desktop's market sort switch. clawhub.ai does not
+// support server-side sorting, so the row stays hidden there.
+func (a *nativeApp) skillHubSortRow(c *ui.Context, p palette) {
+	panel := &a.skillhub
+	if strings.EqualFold(strings.TrimSpace(panel.SelectedMarket), "clawhub.ai") {
+		return
+	}
+	ui.Row(c).AlignItems(ui.Center).Gap(6).Wrap().Children(func() {
+		ui.Text(c, T("排序")).FontSize(10).FontWeight(600).TextColor(p.t.TextMuted)
+		for _, option := range []struct{ ID, Label string }{
+			{"downloads", "下载"},
+			{"stars", "Star"},
+			{"updated_at", "最新"},
+		} {
+			option := option
+			a.skillHubSortChip(c, p, option.ID, option.Label)
+		}
+	})
+}
+
+func (a *nativeApp) skillHubSortChip(c *ui.Context, p palette, sort, label string) {
+	panel := &a.skillhub
+	current := panel.Sort
+	if current == "" {
+		current = skillHubDefaultSort
+	}
+	active := current == sort
+	b := ui.ButtonBase(c.Key("skillhub-sort:"+sort)).Height(26).Padding(0, 10).Radius(999).
+		AlignItems(ui.Center).Justify(ui.Center).Border(1, p.t.Border)
+	if active {
+		b.Background(p.active)
+	} else if b.Hovered() {
+		b.Background(p.hover)
+	}
+	b.Children(func() {
+		color := p.t.Text
+		if active {
+			color = p.t.Accent
+		}
+		ui.Text(c, T(label)).FontSize(10.5).TextColor(color).SingleLine()
+	})
+	b.Label(T(label))
+	if b.Clicked() && !active && !a.skillHubBrowseBusy() {
+		panel.Sort = sort
 		panel.Official = false
 		a.searchSkillHub()
 	}

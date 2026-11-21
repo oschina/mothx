@@ -195,6 +195,13 @@ func (a *nativeApp) providerFallbackPane(c *ui.Context, p palette) {
 							a.testProviderByName(provider.Name)
 						}
 					}
+					if caps.Settings {
+						setKey := ui.Button(c.Key("provider-fallback-key:"+provider.Name), T("设置密钥"))
+						setKey.Label(Tf("设置供应商密钥：%s", provider.Name))
+						if setKey.Clicked() {
+							a.openProviderFallbackKey(provider.Name)
+						}
+					}
 					if caps.Settings && !provider.IsDefault {
 						setDefault := ui.Button(c.Key("provider-fallback-default:"+provider.Name), T("设为默认"))
 						setDefault.Label(T("将 ") + provider.Name + T(" 设为默认供应商"))
@@ -571,6 +578,52 @@ func (a *nativeApp) settingsProviderDialogs(c *ui.Context, p palette) {
 	}
 	if panel.DiscoverOpen {
 		a.providerDiscoverDialog(c, p)
+	}
+	if panel.FallbackKeyOpen {
+		a.providerFallbackKeyDialog(c, p)
+	}
+}
+
+func (a *nativeApp) providerFallbackKeyDialog(c *ui.Context, p palette) {
+	panel := &a.providers
+	dialog := ui.DialogBase(c, &panel.FallbackKeyOpen, func(backdrop, dialog ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.55))
+		dialog.Width(430).Padding(18).Radius(14).Background(p.t.Background).
+			Border(1, p.t.Border).Gap(10)
+		dialog.Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+				ui.Icon(c, iconCpu).FontSize(16).TextColor(p.t.Accent)
+				ui.Text(c, Tf("设置供应商密钥：%s", panel.FallbackKeyName)).
+					FontSize(14).FontWeight(650).TextColor(p.t.Text).Grow(1).SingleLine()
+			})
+			ui.Text(c, T("密钥只写入服务端，不会回显。")).
+				FontSize(10.5).TextColor(p.t.TextMuted).LineHeight(1.4)
+			key := ui.TextInput(c.Key("provider-fallback-key-input"), &panel.FallbackKeyValue).
+				Password().FontSize(12).Height(32).Padding(0, 8).
+				Placeholder(T("输入新密钥；留空保持不变")).
+				Background(p.t.Background).Radius(8).Border(1, p.t.Border).
+				Label(T("API 密钥（只写）"))
+			key.Disabled(panel.FallbackKeySaving)
+			if panel.FallbackKeyErr != "" {
+				ui.Text(c, T(panel.FallbackKeyErr)).FontSize(10.5).TextColor(p.t.Danger).Selectable()
+			}
+			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+				cancel := ui.Button(c.Key("provider-fallback-key-cancel"), T("取消"))
+				cancel.Disabled(panel.FallbackKeySaving)
+				if cancel.Clicked() && !panel.FallbackKeySaving {
+					a.closeProviderFallbackKey()
+				}
+				ui.Spacer(c)
+				save := ui.PrimaryButton(c.Key("provider-fallback-key-save"), T("保存"))
+				save.Disabled(panel.FallbackKeySaving)
+				if save.Clicked() && !panel.FallbackKeySaving {
+					a.saveProviderFallbackKey()
+				}
+			})
+		})
+	})
+	if dialog.Dismissed() {
+		a.closeProviderFallbackKey()
 	}
 }
 

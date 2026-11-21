@@ -23,6 +23,10 @@ import (
 
 const skillHubDefaultScope = "project"
 
+// skillHubDefaultSort mirrors Desktop's initial SkillHub sort. Markets that do
+// not support sorting (clawhub.ai) still omit sort entirely in the request.
+const skillHubDefaultSort = "downloads"
+
 type skillHubMarketView struct {
 	ID                 string `json:"id"`
 	Name               string `json:"name,omitempty"`
@@ -104,6 +108,7 @@ type skillHubSkill struct {
 	Description        string                  `json:"description,omitempty"`
 	Version            string                  `json:"version,omitempty"`
 	Author             string                  `json:"author,omitempty"`
+	IconURL            string                  `json:"iconUrl,omitempty"`
 	Category           string                  `json:"category,omitempty"`
 	Tags               []string                `json:"tags,omitempty"`
 	Downloads          int64                   `json:"downloads,omitempty"`
@@ -223,6 +228,7 @@ type skillHubPanelState struct {
 	CategoriesLoaded  bool
 	CategoryLoading   bool
 	CategoryErr       string
+	Sort              string
 	Official          bool
 	SearchBusy        bool
 	SearchErr         string
@@ -265,6 +271,7 @@ type skillHubPanelState struct {
 func newSkillHubPanelState() skillHubPanelState {
 	return skillHubPanelState{
 		DefaultInstallScope: skillHubDefaultScope,
+		Sort:                skillHubDefaultSort,
 		Markets:             []skillHubMarketDraft{},
 		MarketInfos:         []skillHubMarketInfo{},
 		Targets:             []skillHubTarget{},
@@ -856,6 +863,7 @@ func skillHubOnMarketChanged(s *skillHubPanelState) {
 	s.CategoriesLoaded = false
 	s.CategoryLoading = false
 	s.CategoryErr = ""
+	s.Sort = skillHubDefaultSort
 	s.Official = false
 	s.Results = []skillHubSkill{}
 	s.ResultsLoaded = false
@@ -884,20 +892,25 @@ func buildSkillHubInstalledRequest(sessionID string) map[string]any {
 	return map[string]any{"sessionId": strings.TrimSpace(sessionID)}
 }
 
-func skillHubSearchSort(market string) string {
-	if strings.TrimSpace(market) == "clawhub.ai" {
+func skillHubSearchSort(market, sort string) string {
+	if strings.EqualFold(strings.TrimSpace(market), "clawhub.ai") {
 		return ""
 	}
-	return "downloads"
+	switch strings.TrimSpace(sort) {
+	case "stars", "updated_at":
+		return sort
+	default:
+		return skillHubDefaultSort
+	}
 }
 
-func buildSkillHubSearchRequest(sessionID, market, query, category string) map[string]any {
+func buildSkillHubSearchRequest(sessionID, market, query, category, sort string) map[string]any {
 	return map[string]any{
 		"sessionId": strings.TrimSpace(sessionID),
 		"market":    strings.TrimSpace(market),
 		"query":     strings.TrimSpace(query),
 		"category":  strings.TrimSpace(category),
-		"sort":      skillHubSearchSort(market),
+		"sort":      skillHubSearchSort(market, sort),
 		"order":     "desc",
 		"page":      1,
 		"limit":     20,
@@ -1206,7 +1219,7 @@ func (a *nativeApp) searchSkillHub() {
 	s.CatalogStatus = ""
 	s.CatalogStatusIsError = false
 	method := "mothx/manage/skillhub/search"
-	request := buildSkillHubSearchRequest(sessionID, market, query, s.Category)
+	request := buildSkillHubSearchRequest(sessionID, market, query, s.Category, s.Sort)
 	if s.Official {
 		method = "mothx/manage/skillhub/official"
 		request = buildSkillHubOfficialRequest(sessionID, market, query)

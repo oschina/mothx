@@ -160,6 +160,7 @@ func (a *nativeApp) skillHubPageHero(c *ui.Context, p palette) {
 			}
 		})
 		a.skillHubCategoryRow(c, p)
+		a.skillHubSortRow(c, p)
 
 		targetLabels := skillHubTargetLabels(panel.Targets)
 		if len(targetLabels) > 0 {
@@ -241,7 +242,7 @@ func (a *nativeApp) skillHubPageResultCard(c *ui.Context, p palette, index int) 
 		Border(1, p.t.Border).Gap(7).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(7).Children(func() {
 			ui.Box(c).Size(30, 30).Radius(9).Background(p.active).Justify(ui.Center).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, iconSpark).FontSize(15).TextColor(p.t.Accent)
+				a.skillIconElement(c, p, skill, 30)
 			})
 			ui.Column(c).Gap(1).Grow(1).Children(func() {
 				ui.Text(c, skillHubTitle(skill)).FontSize(12).FontWeight(650).TextColor(p.t.Text).SingleLine()

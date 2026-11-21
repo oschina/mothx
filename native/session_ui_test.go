@@ -241,7 +241,7 @@ func TestDedicatedMainPagesRender(t *testing.T) {
 
 	a.page = "skills"
 	tt := ui.NewTester(a.view, 1180, 900)
-	for _, want := range []string{"技能", "可直接注入 Composer 的指令卡片、在线技能市场与本地技能入口", "管理本地技能", "市场配置", "技能市场", "review"} {
+	for _, want := range []string{"技能 · 指令", "来自 ACP available_commands_update：项目技能与内置指令，点击注入到输入框。", "管理本地技能", "市场配置", "技能市场", "review"} {
 		if !textPresent(tt, want) {
 			t.Fatalf("skills page missing %q: %q", want, tt.Texts())
 		}
@@ -414,14 +414,14 @@ func TestEnglishLocaleRendersDedicatedPages(t *testing.T) {
 	}
 	a.page = "automation"
 	tt = ui.NewTester(a.view, 1180, 900)
-	for _, want := range []string{"Automation", "New task", "Scheduled tasks", "Enabled", "Runtime-owned scheduled tasks and recent run state"} {
+	for _, want := range []string{"Automation · Scheduled tasks", "New task", "Scheduled tasks", "Enabled", "Run agents on a schedule (cron scheduler lives while the desktop is online)."} {
 		if !textPresent(tt, want) {
 			t.Fatalf("English automation page missing %q: %q", want, tt.Texts())
 		}
 	}
 	a.page = "library"
 	tt = ui.NewTester(a.view, 1180, 900)
-	for _, want := range []string{"Library", "Knowledge bases", "Manage knowledge bases", "Docs", "Runtime-owned knowledge index and evidence state"} {
+	for _, want := range []string{"Library", "Knowledge bases", "Manage knowledge bases", "Docs", "Manage directory indexes, scan status, and MCP usage configuration."} {
 		if !textPresent(tt, want) {
 			t.Fatalf("English library page missing %q: %q", want, tt.Texts())
 		}

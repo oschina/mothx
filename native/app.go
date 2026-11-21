@@ -36,17 +36,24 @@ type nativeApp struct {
 	win *mygo.Window
 	acp *acpClient
 
-	conn       connState
-	connErr    string
-	stderr     []string
-	features   map[string]bool
-	featuresMu sync.RWMutex
+	conn            connState
+	connErr         string
+	connFix         string
+	stderr          []string
+	startupMu       sync.Mutex
+	startupErrState nativeStartupError
+	features        map[string]bool
+	featuresMu      sync.RWMutex
 	// featuresReady separates “initialize has not completed yet” from a real
 	// runtime that advertises no optional capabilities. Panels must wait for
 	// the handshake instead of permanently accepting a pre-init empty set.
 	featuresReady bool
 	closing       atomic.Bool
 	reloadSeq     int64
+	// autoRestartAttempts/Pending are UI-thread state mirroring Desktop's
+	// bounded ACP restart scheduler.
+	autoRestartAttempts int
+	autoRestartPending  bool
 
 	sessions            []listedSession
 	sessionsLoaded      bool
@@ -82,6 +89,8 @@ type nativeApp struct {
 	messages             []*chatMessage
 	messageIndex         map[string]*chatMessage
 	planMessageID        string
+	planCollapsed        bool
+	planCollapsedID      string
 	statusMessageID      string
 	transcriptNextCursor string
 	transcriptLoading    bool
@@ -163,14 +172,19 @@ type nativeApp struct {
 
 	diagnosticsFilter string
 
-	modelPickerOpen     bool
-	modelPickerQuery    string
-	modelPickerProvider string
-	modelPickerModels   []providerCatalogModel
-	modelPickerLoading  bool
-	modelPickerErr      string
-	modelCatalog        []providerCatalogModel
-	skillsPageQuery     string
+	modelPickerOpen      bool
+	modelPickerQuery     string
+	modelPickerProvider  string
+	modelPickerModels    []providerCatalogModel
+	modelPickerLoading   bool
+	modelPickerErr       string
+	modelCatalog         []providerCatalogModel
+	skillIconImages      map[string]ui.ImageSource
+	skillIconLoading     map[string]bool
+	skillIconFailed      map[string]bool
+	configuredProviders  map[string]bool
+	providerCatalogOrder []string
+	skillsPageQuery      string
 
 	previewOpen      bool
 	previewTitle     string
@@ -263,6 +277,9 @@ func (a *nativeApp) dispatch(fn func()) {
 }
 
 func (a *nativeApp) setConn(state connState, errText string) {
+	if state != connFailed {
+		a.connFix = ""
+	}
 	a.conn = state
 	a.connErr = errText
 	if state == connFailed {
@@ -282,6 +299,128 @@ func (a *nativeApp) setConn(state connState, errText string) {
 	}
 }
 
+func (a *nativeApp) setStartupError(err nativeStartupError) {
+	a.startupMu.Lock()
+	a.startupErrState = err
+	a.startupMu.Unlock()
+}
+
+func (a *nativeApp) loadStartupError() nativeStartupError {
+	a.startupMu.Lock()
+	defer a.startupMu.Unlock()
+	return a.startupErrState
+}
+
+// failConnection prefers the structured MOTHX_ACP_ERROR the ACP child printed
+// (message + fix) over the generic process-exit text, matching Desktop.
+func (a *nativeApp) failConnection(fallback string) {
+	text := fallback
+	startup := a.loadStartupError()
+	if strings.TrimSpace(startup.Message) != "" {
+		text = startup.Message
+		a.connFix = startup.Fix
+	} else {
+		a.connFix = ""
+	}
+	a.setConn(connFailed, text)
+}
+
+const nativeMaxAutoRestartAttempts = 5
+
+// nativeAutoRestartDelay mirrors Desktop's 1/2/4/8/15 second backoff.
+func nativeAutoRestartDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		return 0
+	}
+	delay := time.Second << (attempt - 1)
+	if delay > 15*time.Second {
+		delay = 15 * time.Second
+	}
+	return delay
+}
+
+// nativeNonRetryableStartupError mirrors Desktop: deterministic configuration
+// failures must not enter a restart loop; the person has to fix them first.
+func nativeNonRetryableStartupError(err nativeStartupError) bool {
+	switch strings.TrimSpace(err.Code) {
+	case "config_invalid", "provider_unusable":
+		return true
+	default:
+		return false
+	}
+}
+
+// scheduleAutoRestartOrRollback prefers the binary rollback reconnect when a
+// user-selected runtime just failed; otherwise it enters the bounded restart
+// scheduler. Never do both for one failure.
+func (a *nativeApp) scheduleAutoRestartOrRollback() {
+	if a.binaryRollbackPending {
+		a.rollbackRuntimeBinaryIfPending()
+		return
+	}
+	a.maybeScheduleAutoRestart()
+}
+
+// maybeScheduleAutoRestart is called on the UI thread after an unexpected ACP
+// child exit. It keeps the Desktop parity rule: retry at most five times with
+// bounded backoff, and never retry deterministic configuration failures.
+func (a *nativeApp) maybeScheduleAutoRestart() {
+	if a.closing.Load() || a.autoRestartPending {
+		return
+	}
+	startup := a.loadStartupError()
+	if nativeNonRetryableStartupError(startup) {
+		addDiagnostic("error", "ACP restart disabled for non-retryable startup error: "+startup.Code)
+		return
+	}
+	if a.autoRestartAttempts >= nativeMaxAutoRestartAttempts {
+		addDiagnostic("warn", "ACP auto-restart attempts exhausted")
+		return
+	}
+	a.autoRestartAttempts++
+	attempt := a.autoRestartAttempts
+	interval := nativeAutoRestartDelay(attempt)
+	a.autoRestartPending = true
+	a.status = fmt.Sprintf("ACP 已退出，%s后自动重连（%d/%d）", interval, attempt, nativeMaxAutoRestartAttempts)
+	go func() {
+		time.Sleep(interval)
+		a.dispatch(func() {
+			a.autoRestartPending = false
+			if a.closing.Load() {
+				return
+			}
+			if a.conn == connReady || a.conn == connStarting {
+				return
+			}
+			extra := a.loadStartupError()
+			if nativeNonRetryableStartupError(extra) {
+				return
+			}
+			a.status = "ACP 已退出，正在自动重连…"
+			go a.connect()
+		})
+	}()
+}
+
+// nativeACPEnvironment preserves the user's environment but extends the
+// approval/question decision deadlines to 30 minutes, matching Desktop's ACP
+// child launch. These are human-paced decisions; the Runtime defaults are much
+// shorter and would expire a decision while a person is still reviewing it.
+func nativeACPEnvironment() []string {
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "MOTHX_ACP_PERMISSION_TIMEOUT=") ||
+			strings.HasPrefix(entry, "MOTHX_ACP_QUESTION_TIMEOUT=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env,
+		"MOTHX_ACP_PERMISSION_TIMEOUT=30m",
+		"MOTHX_ACP_QUESTION_TIMEOUT=30m",
+	)
+}
+
 func (a *nativeApp) connect() {
 	if a.closing.Load() {
 		return
@@ -299,6 +438,7 @@ func (a *nativeApp) connect() {
 	a.dispatch(func() {
 		a.setConn(connStarting, "")
 		a.stderr = nil
+		a.setStartupError(nativeStartupError{})
 		a.featuresMu.Lock()
 		a.features = make(map[string]bool)
 		a.featuresReady = false
@@ -321,6 +461,9 @@ func (a *nativeApp) connect() {
 	client = newACPClient(
 		func(msg incoming) { a.handleIncoming(client, msg) },
 		func(line string) {
+			if parsed, ok := parseNativeStartupErrorLine(line); ok {
+				a.setStartupError(parsed)
+			}
 			a.dispatch(func() {
 				a.stderr = append(a.stderr, line)
 				if len(a.stderr) > 40 {
@@ -337,8 +480,13 @@ func (a *nativeApp) connect() {
 				text += "：" + err.Error()
 			}
 			a.dispatch(func() {
+				// A stale child (manual reconnect or binary rollback) must not
+				// overwrite the connection state of the child that replaced it.
+				if a.acp != client {
+					return
+				}
 				if a.conn != connFailed {
-					a.setConn(connFailed, text)
+					a.failConnection(text)
 				}
 				a.running = false
 				a.creatingSession = false
@@ -346,14 +494,15 @@ func (a *nativeApp) connect() {
 				// fulfilled. Drop it instead of leaving a resolved-looking promise.
 				a.clearPendingWorktreeOpen()
 				a.status = ""
+				a.maybeScheduleAutoRestart()
 			})
 		},
 	)
-	if err := client.start(bin, a.cwd, os.Environ()); err != nil {
+	if err := client.start(bin, a.cwd, nativeACPEnvironment()); err != nil {
 		addDiagnostic("error", "ACP start failed: "+err.Error())
 		a.dispatch(func() {
 			a.setConn(connFailed, "无法启动 ACP："+err.Error())
-			a.rollbackRuntimeBinaryIfPending()
+			a.scheduleAutoRestartOrRollback()
 		})
 		return
 	}
@@ -377,8 +526,8 @@ func (a *nativeApp) connect() {
 		client.close()
 		addDiagnostic("error", "ACP initialize failed: "+err.Error())
 		a.dispatch(func() {
-			a.setConn(connFailed, "ACP 初始化失败："+err.Error())
-			a.rollbackRuntimeBinaryIfPending()
+			a.failConnection("ACP 初始化失败：" + err.Error())
+			a.scheduleAutoRestartOrRollback()
 		})
 		return
 	}
@@ -387,8 +536,8 @@ func (a *nativeApp) connect() {
 		client.close()
 		addDiagnostic("error", "ACP initialize response invalid: "+err.Error())
 		a.dispatch(func() {
-			a.setConn(connFailed, "ACP initialize 响应无效："+err.Error())
-			a.rollbackRuntimeBinaryIfPending()
+			a.failConnection("ACP initialize 响应无效：" + err.Error())
+			a.scheduleAutoRestartOrRollback()
 		})
 		return
 	}
@@ -401,6 +550,8 @@ func (a *nativeApp) connect() {
 			a.runtimeVersion = version
 		}
 		a.setConn(connReady, "")
+		a.autoRestartAttempts = 0
+		a.autoRestartPending = false
 		a.setFeatures(features)
 		a.binaryRollbackPending = false
 		a.binaryRollbackPrevious = ""
@@ -1370,6 +1521,11 @@ func (a *nativeApp) send() {
 	a.draft = ""
 	a.attachments = nil
 	a.running = true
+	if a.page == "home" {
+		// Desktop's home composer returns to the chat view once a prompt is
+		// sent; the transcript then shows the same session's run.
+		a.page = ""
+	}
 	if sessionID == "" {
 		a.creatingSession = true
 	}

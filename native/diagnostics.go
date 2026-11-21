@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,6 +16,34 @@ import (
 // presentation state and never becomes Runtime/session truth.
 
 const maxDiagnosticEntries = 200
+
+// nativeStartupError is the structured failure the ACP child prints on stderr
+// with the MOTHX_ACP_ERROR marker. Desktop parses the same marker so the user
+// sees the Runtime's message and fix instead of a generic process exit.
+type nativeStartupError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Fix     string `json:"fix"`
+}
+
+func parseNativeStartupErrorLine(line string) (nativeStartupError, bool) {
+	const marker = "MOTHX_ACP_ERROR "
+	index := strings.Index(line, marker)
+	if index < 0 {
+		return nativeStartupError{}, false
+	}
+	var parsed nativeStartupError
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line[index+len(marker):])), &parsed); err != nil {
+		return nativeStartupError{}, false
+	}
+	if strings.TrimSpace(parsed.Message) == "" {
+		return nativeStartupError{}, false
+	}
+	if parsed.Code == "" {
+		parsed.Code = "acp_startup"
+	}
+	return parsed, true
+}
 
 type diagnosticEntry struct {
 	At    time.Time
