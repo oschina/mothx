@@ -503,18 +503,27 @@ func (a *App) processInput(input string) tea.Cmd {
 	}
 	// Session creation for the very first submission runs off the Bubble Tea
 	// update loop. While it is in flight the Runtime has no session to admit
-	// against, so additional submissions stay in the TUI queue.
+	// against, so additional submissions are staged locally and flushed into the
+	// shared SubmissionCoordinator once the session activates.
 	if a.preparingSession {
+		if strings.HasPrefix(strings.TrimSpace(input), "/") {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandsNotQueued))
+			return nil
+		}
 		resources := a.pendingInputResources
 		a.pendingInputResources = nil
 		a.queuedPrompts = append(a.queuedPrompts, queuedPrompt{text: input, resources: resources})
 		a.scheduleRender()
 		return nil
 	}
-	// A session permits exactly one foreground execution at a time. Keep later
-	// user submissions in the TUI instead of replacing a.run: replacing it
-	// would orphan the active run's terminal cleanup and its runtime lease.
-	if a.run != nil || a.isThinking {
+	// A session permits exactly one foreground execution at a time. Runtime
+	// submissions are queued by the shared coordinator; the TUI only records the
+	// projection and stages pre-session/headless prompts locally.
+	if a.run != nil || a.isThinking || a.hasPendingSubmissions() {
+		if strings.HasPrefix(strings.TrimSpace(input), "/") {
+			a.addCommandError(a.translator.Text(i18n.MsgCommandsNotQueued))
+			return nil
+		}
 		resources := a.pendingInputResources
 		a.pendingInputResources = nil
 		if a.program == nil {
@@ -524,13 +533,11 @@ func (a *App) processInput(input string) tea.Cmd {
 			a.scheduleRender()
 			return nil
 		}
-		if err := a.enqueueRuntimeSubmission(input, resources); err != nil {
+		if err := a.submitForeground(input, resources, true); err != nil {
+			a.discardPreparedResources(resources)
 			a.addCommandError(fmt.Sprintf("Failed to queue input: %v", err))
 			return nil
 		}
-		// Surface the queue immediately: the live view renders a styled
-		// "N queued" section with per-message previews until the run finishes
-		// and each prompt is submitted in order.
 		a.scheduleRender()
 		return nil
 	}
@@ -541,6 +548,28 @@ func (a *App) processInput(input string) tea.Cmd {
 
 	if a.session == nil {
 		return a.beginSessionPreparation(input)
+	}
+	// The serve-owned background coordinator is a separate durable execution
+	// lane. Keep its existing adapter path; the foreground coordinator only owns
+	// interactive submissions.
+	if a.backgroundSubmitter != nil && providerResponsesBackgroundEnabled(a.provider) {
+		return a.launchPromptRun(input, true)
+	}
+	if a.program != nil {
+		resources := a.pendingInputResources
+		a.pendingInputResources = nil
+		if err := a.submitForeground(input, resources, false); err != nil {
+			a.discardPreparedResources(resources)
+			a.failPromptStart()
+			a.addCommandError(fmt.Sprintf("Failed to accept input: %v", err))
+			return nil
+		}
+		a.echoUserPrompt(input)
+		a.isThinking = true
+		a.spinnerIndex = 0
+		a.requestStart = time.Now()
+		a.streamRate.reset(a.requestStart)
+		return tea.Batch(a.tickSpinner(), a.timer.Reset(), a.timer.Start())
 	}
 	return a.launchPromptRun(input, true)
 }
@@ -557,6 +586,11 @@ func (a *App) beginSessionPreparation(input string) tea.Cmd {
 	a.preparingSession = true
 	a.sessionPrepSeq++
 	seq := a.sessionPrepSeq
+	// Bind the staged resources to the first prompt before any later input can
+	// claim them. The first prompt's Runtime submission happens after the
+	// asynchronous session bootstrap.
+	a.preparingInputResources = a.pendingInputResources
+	a.pendingInputResources = nil
 	if !background {
 		a.isThinking = true
 		a.spinnerIndex = 0
@@ -707,44 +741,57 @@ func (a *App) cancelSessionPreparation() tea.Cmd {
 	a.preparingSession = false
 	a.isThinking = false
 	a.discardPendingInput()
+	a.discardPreparedResources(a.preparingInputResources)
+	a.preparingInputResources = nil
 	a.finishRequestTimer()
 	a.addMessage(statusStyle.Render(a.translator.Text(i18n.MsgAborted)))
 	a.scheduleRender()
-	// Prompts queued behind the abandoned first submission still run; nothing
+	// Prompts staged behind the abandoned first submission still run; nothing
 	// else restarts the local queue because no run terminal event will arrive.
 	return tea.Batch(a.timer.Stop(), a.scheduleNextQueuedPrompt())
 }
 
-// enqueueRuntimeSubmission transfers a queued foreground input to the shared
-// Runtime. The coordinator owns ordering and admission; Bubble Tea only
-// receives the main-thread handoff after the fenced lease is acquired.
-func (a *App) enqueueRuntimeSubmission(input string, resources []agentruntime.PreparedInput) error {
+// submitForeground transfers one foreground input to the shared Runtime. The
+// SubmissionCoordinator owns ordering, admission, and completion; the TUI only
+// keeps a projection row and receives the admitted hand-off on the main loop.
+// The session identity is captured here so a session switch cannot redirect an
+// already accepted submission into the next session.
+func (a *App) submitForeground(input string, resources []agentruntime.PreparedInput, echoInput bool) error {
 	if err := a.ensureRuntime(); err != nil {
 		return err
 	}
 	if a.session == nil || a.session.GetHeader() == nil {
 		return fmt.Errorf("session is unavailable")
 	}
+	header := a.session.GetHeader()
+	if strings.TrimSpace(header.ID) == "" {
+		return fmt.Errorf("session is unavailable")
+	}
 	coordinator := a.runtime.SubmissionCoordinator()
+	if coordinator == nil {
+		return agentruntime.ErrSubmissionClosed
+	}
+	sessionDir := a.getSessionDir()
+	sessionID := header.ID
 	runID := "tui_" + session.GenerateID()
+	sub := &tuiSubmission{
+		runID: runID, sessionID: sessionID, text: input, resources: resources, runtime: a.runtime,
+	}
 	ready := make(chan tuiSubmissionStartResult, 1)
 	handleReady := make(chan *agentruntime.ExecutionHandle, 1)
-	var handle *agentruntime.ExecutionHandle
-	var err error
-	handle, err = coordinator.Submit(context.Background(), runID, agentruntime.SubmitPolicy{QueueBehindLocal: true}, func(ctx context.Context) (func(), error) {
-		guard, acquireErr := agentruntime.AcquireExecutionAdmission(ctx, a.getSessionDir(), a.session.GetHeader().ID, agentruntime.ExecutionAdmissionOptions{})
+	handle, err := coordinator.Submit(context.Background(), runID, agentruntime.SubmitPolicy{QueueBehindLocal: true}, func(ctx context.Context) (func(), error) {
+		guard, acquireErr := agentruntime.AcquireExecutionAdmission(ctx, sessionDir, sessionID, agentruntime.ExecutionAdmissionOptions{})
 		if acquireErr != nil {
 			return nil, acquireErr
 		}
 		return guard.Release, nil
 	}, func(ctx context.Context) error {
-		var admitted *agentruntime.ExecutionHandle
 		select {
-		case admitted = <-handleReady:
+		case <-handleReady:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		a.program.Send(tuiSubmissionAdmittedMsg{handle: admitted, input: input, resources: resources, ctx: ctx, ready: ready})
+		a.notifyAsync(tuiSubmissionAdmittedMsg{submission: sub, ctx: ctx, ready: ready, echoInput: echoInput})
 		select {
 		case result := <-ready:
 			if result.err != nil {
@@ -761,35 +808,45 @@ func (a *App) enqueueRuntimeSubmission(input string, resources []agentruntime.Pr
 		}
 	})
 	if err != nil {
+		sub.discardPreparedResources()
 		return err
 	}
+	sub.handle = handle
+	a.addPendingSubmission(sub)
 	handleReady <- handle
-	go a.watchQueuedSubmission(handle)
-	// The Runtime submission closure owns prepared resources until admission or
-	// cancellation. The TUI keeps only text and the handle for projection.
-	a.queuedPrompts = append(a.queuedPrompts, queuedPrompt{text: input, handle: handle})
+	go a.watchSubmission(sub)
 	return nil
 }
 
 func (a *App) startAdmittedSubmission(msg tuiSubmissionAdmittedMsg) tea.Cmd {
-	if a == nil || msg.handle == nil || a.run != nil || a.manualCompactionActive {
+	if a == nil || msg.submission == nil || msg.submission.handle == nil || a.run != nil || a.manualCompactionActive {
+		if msg.submission != nil {
+			msg.submission.discardPreparedResources()
+		}
 		if msg.ready != nil {
 			msg.ready <- tuiSubmissionStartResult{err: fmt.Errorf("TUI cannot attach admitted submission")}
 		}
 		return nil
 	}
 	if err := a.ensureSession(); err != nil {
+		msg.submission.discardPreparedResources()
 		msg.ready <- tuiSubmissionStartResult{err: err}
 		return nil
 	}
 	if err := a.syncESMTools(); err != nil {
+		msg.submission.discardPreparedResources()
 		msg.ready <- tuiSubmissionStartResult{err: err}
 		return nil
 	}
-	run := newTUIRun(a.session.GetHeader().ID, a.getSessionDir())
-	run.id = msg.handle.RunID
+	if a.session == nil || a.session.GetHeader() == nil || a.session.GetHeader().ID != msg.submission.sessionID {
+		msg.submission.discardPreparedResources()
+		msg.ready <- tuiSubmissionStartResult{err: fmt.Errorf("admitted submission belongs to a different session")}
+		return nil
+	}
+	run := newTUIRun(msg.submission.sessionID, a.getSessionDir())
+	run.id = msg.submission.handle.RunID
 	run.coordinator = a.runtime.SubmissionCoordinator()
-	run.submission = msg.handle
+	run.submission = msg.submission.handle
 	run.admitted = true
 	run.submissionDone = make(chan error, 1)
 	run.model = ""
@@ -803,12 +860,15 @@ func (a *App) startAdmittedSubmission(msg tuiSubmissionAdmittedMsg) tea.Cmd {
 	a.runtime.SetDecisions(run.decisions)
 	var input agentruntime.InputSubmission
 	var err error
-	if len(msg.resources) > 0 {
-		input, err = a.runtime.AttachPreparedInput(msg.ctx, msg.input, msg.resources)
+	if len(msg.submission.resources) > 0 {
+		input, err = a.runtime.AttachPreparedInput(msg.ctx, msg.submission.text, msg.submission.resources)
 	} else {
-		input, err = a.runtime.AcceptInput(msg.ctx, run.id, msg.input, nil)
+		input, err = a.runtime.AcceptInput(msg.ctx, run.id, msg.submission.text, nil)
 	}
 	if err == nil {
+		// The Run now owns the staged resources; the completion watcher must not
+		// discard them if the submission later fails.
+		msg.submission.markStarted()
 		var artifacts *agentruntime.ArtifactCollector
 		artifacts, err = a.runtime.BeginArtifactCollection(run.id)
 		if err == nil {
@@ -832,10 +892,14 @@ func (a *App) startAdmittedSubmission(msg tuiSubmissionAdmittedMsg) tea.Cmd {
 					events, startErr := run.startAdmitted(msg.ctx, a.agent, input, userMessage)
 					err = startErr
 					if err == nil {
-						a.removeQueuedSubmission(msg.handle)
+						a.removePendingSubmission(msg.submission)
 						msg.ready <- tuiSubmissionStartResult{events: events, done: run.submissionDone}
+						streamInput := ""
+						if msg.echoInput {
+							streamInput = msg.submission.text
+						}
 						return func() tea.Msg {
-							return agentStreamStartMsg{input: msg.input, submission: input, eventCh: events, run: run}
+							return agentStreamStartMsg{input: streamInput, submission: input, eventCh: events, run: run}
 						}
 					}
 				}
@@ -847,48 +911,34 @@ func (a *App) startAdmittedSubmission(msg tuiSubmissionAdmittedMsg) tea.Cmd {
 	}
 	if err != nil {
 		a.runtime.DiscardInput(msg.ctx, input)
+		a.removePendingSubmission(msg.submission)
 		msg.ready <- tuiSubmissionStartResult{err: err}
-		a.removeQueuedSubmission(msg.handle)
 	}
 	return nil
 }
 
-func (a *App) removeQueuedSubmission(handle *agentruntime.ExecutionHandle) {
-	if a == nil || handle == nil {
+// echoUserPrompt renders the canonical user transcript line for a submission
+// accepted on an idle session. Queued submissions echo when they actually
+// start instead, so the transcript still follows execution order.
+func (a *App) echoUserPrompt(input string) {
+	if a == nil || input == "" {
 		return
 	}
-	for i, prompt := range a.queuedPrompts {
-		if prompt.handle == handle {
-			a.queuedPrompts = append(a.queuedPrompts[:i], a.queuedPrompts[i+1:]...)
-			return
-		}
-	}
+	a.addMessage(userStyle.Render(a.translator.Text(i18n.MsgYouPrefix)) + input)
 }
 
-// watchQueuedSubmission projects a terminal admission failure back to the UI.
-// The coordinator only sends tuiSubmissionAdmittedMsg after a successful
-// admission, so without this watcher an externally owned or closed session
-// would leave the queued row visible with no explanation and no retry.
-func (a *App) watchQueuedSubmission(handle *agentruntime.ExecutionHandle) {
-	if a == nil || handle == nil {
+func (a *App) discardPreparedResources(resources []agentruntime.PreparedInput) {
+	if a == nil || len(resources) == 0 || a.runtime == nil {
 		return
 	}
-	completion, ok := <-handle.Completed
-	if !ok {
-		completion = agentruntime.ExecutionCompletion{SubmissionID: handle.SubmissionID, RunID: handle.RunID, Error: agentruntime.ErrSubmissionClosed}
-	}
-	if completion.Error == nil || errors.Is(completion.Error, agentruntime.ErrSubmissionCancelled) || errors.Is(completion.Error, context.Canceled) {
-		return
-	}
-	if a.program != nil {
-		a.program.Send(tuiSubmissionFailedMsg{handle: handle, err: completion.Error})
-	}
+	a.runtime.DiscardPreparedResources(context.Background(), a.currentSessionID(), resources)
 }
 
-// startNextQueuedPrompt starts exactly one queued foreground submission after
-// the preceding run has reached its canonical terminal state.
+// startNextQueuedPrompt starts exactly one locally staged (pre-session or
+// headless) prompt. Runtime-owned submissions are never present in queuedPrompts
+// and are admitted by SubmissionCoordinator instead.
 func (a *App) startNextQueuedPrompt() tea.Cmd {
-	if a == nil || len(a.queuedPrompts) == 0 || a.run != nil || a.isThinking || a.preparingSession || a.manualCompactionActive {
+	if a == nil || len(a.queuedPrompts) == 0 || a.run != nil || a.isThinking || a.preparingSession || a.manualCompactionActive || a.hasPendingSubmissions() {
 		return nil
 	}
 	prompt := a.queuedPrompts[0]
@@ -898,10 +948,31 @@ func (a *App) startNextQueuedPrompt() tea.Cmd {
 }
 
 func (a *App) scheduleNextQueuedPrompt() tea.Cmd {
-	if a == nil || len(a.queuedPrompts) == 0 {
+	if a == nil || len(a.queuedPrompts) == 0 || a.hasPendingSubmissions() {
 		return nil
 	}
 	return func() tea.Msg { return queuedPromptStartMsg{} }
+}
+
+// flushSessionPreparedPrompts moves prompts staged during the session bootstrap
+// into the shared coordinator. The first prompt is already registered by
+// submitForeground, so these submissions queue behind it instead of racing it.
+func (a *App) flushSessionPreparedPrompts() {
+	if a == nil || len(a.queuedPrompts) == 0 {
+		return
+	}
+	if a.program == nil {
+		// Headless fixtures keep the compatibility queue for manual stepping.
+		return
+	}
+	prompts := a.queuedPrompts
+	a.queuedPrompts = nil
+	for _, prompt := range prompts {
+		if err := a.submitForeground(prompt.text, prompt.resources, true); err != nil {
+			a.discardPreparedResources(prompt.resources)
+			a.addCommandError(fmt.Sprintf("Failed to queue input: %v", err))
+		}
+	}
 }
 
 func (a *App) submitBackgroundInput(input string) tea.Cmd {

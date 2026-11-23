@@ -810,6 +810,35 @@ func TestVolcengineChannelsDeepSeekV41FlashDefaults(t *testing.T) {
 	}
 }
 
+func TestVolcengineChannelsDeepSeekV41FlashEconomyDefaults(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"volcengine", "volcengine-agentplan", "volcengine-codingplan"} {
+		model := s.GetModelConfig(providerName, "deepseek-v4.1-flash-economy")
+		if model == nil {
+			t.Fatalf("%s missing deepseek-v4.1-flash-economy", providerName)
+		}
+		if !model.Reasoning || model.ContextWindow != 1048576 {
+			t.Fatalf("%s deepseek-v4.1-flash-economy = %#v, want reasoning model with 1M context", providerName, model)
+		}
+		wantInput := []string{"text", "image"}
+		if len(model.Input) != len(wantInput) {
+			t.Fatalf("%s deepseek-v4.1-flash-economy input = %#v, want %#v", providerName, model.Input, wantInput)
+		}
+		for i := range wantInput {
+			if model.Input[i] != wantInput[i] {
+				t.Fatalf("%s deepseek-v4.1-flash-economy input = %#v, want %#v", providerName, model.Input, wantInput)
+			}
+		}
+		if providerName == "volcengine" {
+			if model.MaxTokens != 262144 {
+				t.Fatalf("%s deepseek-v4.1-flash-economy maxTokens = %d, want 262144", providerName, model.MaxTokens)
+			}
+		} else if model.MaxTokens != 100000 {
+			t.Fatalf("%s deepseek-v4.1-flash-economy maxTokens = %d, want 100000", providerName, model.MaxTokens)
+		}
+	}
+}
+
 func TestVolcenginePlanModelsUseSharedMaxTokens(t *testing.T) {
 	s := DefaultSettings()
 	for _, providerName := range []string{"volcengine-agentplan", "volcengine-codingplan"} {
@@ -818,7 +847,7 @@ func TestVolcenginePlanModelsUseSharedMaxTokens(t *testing.T) {
 			t.Fatalf("expected %s provider", providerName)
 		}
 		for _, model := range p.Models {
-			if model.ID == "glm-5.3" || model.ID == "glm-5.3-flash" {
+			if model.ID == "glm-5.3" || model.ID == "glm-5.3-flash" || model.ID == "glm-5.4" {
 				if model.MaxTokens != 0 {
 					t.Fatalf("%s %s MaxTokens = %d, want 0 (provider default)", providerName, model.ID, model.MaxTokens)
 				}
@@ -964,7 +993,7 @@ func TestVolcengineChannelsOmitRetiredModels(t *testing.T) {
 func TestVolcengineGLMModelsUseOneMillionContextAndProviderDefaultMaxTokens(t *testing.T) {
 	s := DefaultSettings()
 	for _, providerName := range []string{"volcengine", "volcengine-agentplan", "volcengine-codingplan"} {
-		for _, modelID := range []string{"glm-5.3", "glm-5.3-flash"} {
+		for _, modelID := range []string{"glm-5.3", "glm-5.3-flash", "glm-5.4"} {
 			model := s.GetModelConfig(providerName, modelID)
 			if model == nil {
 				t.Fatalf("%s %s is missing", providerName, modelID)
@@ -979,7 +1008,7 @@ func TestVolcengineGLMModelsUseOneMillionContextAndProviderDefaultMaxTokens(t *t
 				t.Fatalf("%s %s Reasoning = false, want true", providerName, modelID)
 			}
 			wantInput := []string{"text"}
-			if modelID == "glm-5.3-flash" {
+			if modelID == "glm-5.3-flash" || modelID == "glm-5.4" {
 				wantInput = []string{"text", "image"}
 			}
 			if len(model.Input) != len(wantInput) {

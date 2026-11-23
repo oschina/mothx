@@ -209,6 +209,8 @@ DAO/session 层可以继续使用低层 fenced CAS 错误；`internal/agentrunti
 
 `queuedPrompts`、`scheduleNextQueuedPrompt`、`startNextQueuedPrompt` 和 `tuiRun.releaseRuntime` 都是迁移桥。删除条件是 Runtime coordinator 覆盖普通完成、失败、取消、stream 无 terminal event、terminal persistence 重试、Session 切换和 shutdown 路径，并通过跨入口合同测试。
 
+> 后续（2026-11-23）：TUI 的 Runtime 队列已改为 `pendingSubmissions` 纯投影，`startNextQueuedPrompt`/`scheduleNextQueuedPrompt` 只服务首会话创建期和无 Bubble Tea Program 的测试兼容路径；所有交互输入在 run 启动前同步注册到 coordinator，session 切换会退役旧 coordinator 并清空投影。
+
 ## 6. 生命周期时序
 
 ### 6.1 正常连续输入

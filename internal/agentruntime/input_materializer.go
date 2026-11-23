@@ -898,6 +898,25 @@ func (r *SessionRuntime) DiscardInput(ctx context.Context, input InputSubmission
 	}
 }
 
+// DiscardPreparedResources discards staged resources that belong to a specific
+// session. Adapters capture the session identity when they accept a submission;
+// a later session switch must not redirect that cleanup into the new session's
+// materializer.
+func (r *SessionRuntime) DiscardPreparedResources(ctx context.Context, sessionID string, resources []PreparedInput) {
+	if r == nil || sessionID == "" || len(resources) == 0 {
+		return
+	}
+	r.mu.RLock()
+	inputs, currentID := r.Inputs, r.ID
+	r.mu.RUnlock()
+	if inputs == nil || currentID != sessionID {
+		return
+	}
+	for _, resource := range resources {
+		_ = inputs.Discard(ctx, sessionID, resource.ResourceID)
+	}
+}
+
 // CleanupInputResources runs the Runtime-owned draft/missing reconciliation.
 func (r *SessionRuntime) CleanupInputResources(ctx context.Context, now time.Time) (int, error) {
 	if r == nil {

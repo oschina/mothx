@@ -216,8 +216,9 @@ func (r *SessionRuntime) SetExecution(execution *ExecutionRuntime) {
 	r.mu.Unlock()
 }
 
-// SubmissionCoordinator returns the Runtime-owned local FIFO for this
-// Session. It is created once per SessionRuntime and closed by Shutdown.
+// SubmissionCoordinator returns the Runtime-owned local FIFO for the currently
+// bound Session. A session change retires the old coordinator in BindSession;
+// the coordinator is closed by Shutdown/Close and never reused across sessions.
 func (r *SessionRuntime) SubmissionCoordinator() *SubmissionCoordinator {
 	if r == nil {
 		return nil
@@ -470,14 +471,26 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 	}
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.closed {
+		r.mu.Unlock()
 		return fmt.Errorf("agent runtime is closed")
+	}
+	previousID := r.ID
+	// The submission queue is scoped to one session identity. Re-binding a
+	// different session must retire the old FIFO instead of admitting its queued
+	// items against the newly bound manager; otherwise an old-session prompt
+	// would run in the new session. A same-session rebind keeps the queue.
+	var staleSubmissions *SubmissionCoordinator
+	if previousID != header.ID {
+		staleSubmissions = r.Submissions
+		r.Submissions = nil
+		r.Execution = nil
+		r.Decisions = nil
 	}
 	// Active skills are session-scoped. Re-binding a different session must not
 	// carry one project's activated skills (or their stale prompt text) into
 	// another; a same-session rebind keeps the user's current activation set.
-	if r.ID != "" && r.ID != header.ID {
+	if previousID != "" && previousID != header.ID {
 		r.ActiveSkills = nil
 	}
 	r.ID = header.ID
@@ -493,6 +506,13 @@ func (r *SessionRuntime) BindSession(manager *session.Manager, requested Runtime
 		r.Mode = replayedMode
 	}
 	r.publishPreparedExpertResourcesLocked(prepared)
+	r.mu.Unlock()
+	// Retiring the old coordinator cancels submissions queued for the previous
+	// session. Close is called outside r.mu because it may wait for an adapter
+	// runner that reads Runtime state.
+	if staleSubmissions != nil {
+		releaseSubmissionCoordinator(staleSubmissions)
+	}
 	return nil
 }
 
@@ -1170,6 +1190,14 @@ func (r *SessionRuntime) UnbindSession() error {
 		r.mu.Unlock()
 		return fmt.Errorf("agent runtime is closed")
 	}
+	// A detached frontend must not keep admitting work against the session it
+	// just left. Retire the queue and the in-memory execution projection here;
+	// the adapter that owned any active loop remains responsible for its own
+	// terminal transition (resetAgent/Shutdown).
+	staleSubmissions := r.Submissions
+	r.Submissions = nil
+	r.Execution = nil
+	r.Decisions = nil
 	r.ID = ""
 	// Active skills are session-scoped. Unbinding must not leak them into the
 	// next session lazily created by the same frontend.
@@ -1179,6 +1207,9 @@ func (r *SessionRuntime) UnbindSession() error {
 	r.Manager = nil
 	r.LastUsed = time.Now()
 	r.mu.Unlock()
+	if staleSubmissions != nil {
+		releaseSubmissionCoordinator(staleSubmissions)
+	}
 	return r.rehydrateBoundResources()
 }
 

@@ -270,12 +270,11 @@ func (a *App) handleAgentEvent(event agent.Event) tea.Cmd {
 		// No tool can still be executing once the run is terminal.
 		a.finalizeInterruptedTools()
 		// The durable transition and lease release above complete before a
-		// queued prompt may create its successor run.
+		// queued prompt may create its successor run. The Runtime coordinator
+		// admits Runtime-owned submissions; only the local pre-session/headless
+		// bridge is resumed from here.
 		a.isThinking = false
-		nextPrompt := a.scheduleNextQueuedPrompt()
-		if completedRun != nil {
-			nextPrompt = completedRun.completionCommand()
-		}
+		nextPrompt := a.completionCommandForRun(completedRun)
 		switch event.Status {
 		case agent.TaskFailed:
 			a.commitActiveStream()

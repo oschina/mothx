@@ -143,7 +143,7 @@ func (a *App) sessionsCwd() string {
 }
 
 func (a *App) openSessionsDialog() {
-	if a.isThinking {
+	if a.isThinking || a.preparingSession || a.hasPendingSubmissions() {
 		a.addCommandError(a.translator.Text(i18n.MsgSessionsCannotSwitchRunning))
 		return
 	}
@@ -422,6 +422,11 @@ func (a *App) switchToSession(detail session.SessionDetail) error {
 		return fmt.Errorf("Error opening session: %v", err)
 	}
 	a.discardPendingInput()
+	// Staged prompts and Runtime submissions belong to the session that accepted
+	// them. Retire them before binding the new session so nothing can be
+	// admitted against the wrong session manager.
+	a.dropAllQueuedInput()
+	a.resetAgent(fmt.Errorf("session changed"))
 
 	// Side queries and status-line renders belong to the previous session.
 	// Cancel/invalidate them before replacing the session state so late events
@@ -436,7 +441,6 @@ func (a *App) switchToSession(detail session.SessionDetail) error {
 	a.historyLoaded = false
 	a.agentHistoryLoaded = false
 
-	a.resetAgent(fmt.Errorf("session changed"))
 	a.resetTranscriptState()
 	a.contextUsage = nil
 	a.totalInputTokens = 0
@@ -456,6 +460,8 @@ func (a *App) switchToSession(detail session.SessionDetail) error {
 func (a *App) sessionsClear() {
 	a.closeBtw()
 	a.invalidateStatusLineRequests()
+	a.dropAllQueuedInput()
+	a.resetAgent(fmt.Errorf("session changed"))
 	a.session = nil
 	if a.runtime != nil {
 		if err := a.runtime.UnbindSession(); err != nil {
@@ -468,7 +474,6 @@ func (a *App) sessionsClear() {
 	a.agentHistoryLoaded = false
 
 	// Reset agent and UI state
-	a.resetAgent(fmt.Errorf("session changed"))
 	a.resetTranscriptState()
 	a.contextUsage = nil
 	a.totalInputTokens = 0

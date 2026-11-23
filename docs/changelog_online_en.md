@@ -16,6 +16,12 @@ This file contains the changes for the **current version only**. The full histor
 - **New Gitee/Moark Model: `hy4`**
   - Added `hy4` to the `gitee` and `moark` providers: a reasoning model with a 1M context window and text-only input, using the `deepseek-v4.1` reasoning-effort scale with no default max_tokens.
 
+- **New Volcengine Model: `deepseek-v4.1-flash-economy`**
+  - Added `deepseek-v4.1-flash-economy` to all three Volcengine providers — `volcengine`, `volcengine-agentplan`, and `volcengine-codingplan` — with a 1M context window, reasoning support, and text+image input. The standard channel sends 262K max_tokens; the two plan channels send 100K.
+
+- **New Volcengine Model: `glm-5.4`**
+  - Added `glm-5.4` to all three Volcengine providers — `volcengine`, `volcengine-agentplan`, and `volcengine-codingplan` — with a 1M context window, reasoning support, and text+image input; it sends no default max_tokens, so the provider default applies.
+
 - **The Tencent Cloud plan now exposes only `hy4` and `hy4-flash`.**
   - The `tencent-hy-plan` and `tencent-hy-plan-anthropic` presets now list `hy4` and `hy4-flash` instead of `hy3`. `hy4` is text-only and `hy4-flash` accepts text and images; both support reasoning, carry a 1M context window, and keep a 65,536-token output ceiling.
 
@@ -38,3 +44,5 @@ This file contains the changes for the **current version only**. The full histor
 - **Thinking switches and reasoning effort now match each vendor's documented contract.** An explicit thinking-off now sends `thinking: {type: "disabled"}` for DeepSeek Chat Completions/Anthropic Messages and `enable_thinking: false` for Qwen hybrid models instead of silently leaving thinking on, DeepSeek V4.1 uses `reasoning_effort: "none"` on the Responses API, and GLM effort maps to `low`/`high`/`max` so `medium` is never sent. DeepSeek effort follows its documented scale (`minimal`/`low` → `low`, `medium`/`high`/`xhigh` → `high`, `max` → `max`), gateway Qwen3.5+ and GLM model IDs are detected for thinking-format resolution, and a configured model list no longer inherits `compat` from the built-in preset at the same slice index.
 
 - **MothX Native run and transport reliability fixes.** Session load and session-list responses now carry a connection generation, so a slow or failed load for a session the user already left cannot clear another session or reuse its cached transcript, and a session-list refresh requested while one is in flight is re-queued instead of silently dropped. The ACP client stores its child pointer atomically, bounds ordinary requests with a 5-minute deadline (`session/prompt` stays unbounded), and closes the child through the owned `os.Process` handle so a reused PID cannot be killed. Stale provider/draft-config responses are ignored after reconnect, and SkillHub icon fetches reject loopback/private/link-local targets at both URL validation and dial time. Native feature packages gained guard tests, and a cross-module wire test now executes the real management handlers and checks that every Native response key still matches the Runtime contract.
+
+- **TUI queued prompts now have one scheduler and a stable session binding.** The TUI no longer keeps a second queue/scheduler next to Runtime's `SubmissionCoordinator`: every interactive prompt is registered synchronously before the run starts, prompts staged during the first-session bootstrap are flushed into the coordinator once the session activates, slash commands are rejected while busy instead of being queued and sent to the model as text, and staged attachments stay with the prompt that owned them. A session change retires the old coordinator and clears its projections, so a queued prompt can never run in a different session.

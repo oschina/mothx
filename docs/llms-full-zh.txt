@@ -32,6 +32,7 @@ Source: https://mothx.net/zh/README.md
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://goreportcard.com/report/github.com/oschina/mothx"><img src="https://goreportcard.com/badge/github.com/oschina/mothx" alt="Go Report Card"></a>
   <a href="https://pkg.go.dev/github.com/oschina/mothx"><img src="https://pkg.go.dev/badge/github.com/oschina/mothx?status.svg" alt="GoDoc"></a>
+  <a href="https://awesomemygo.dev/apps/mothx-native"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo"></a>
 </p>
 
 <p align="center">
@@ -146,7 +147,8 @@ mothx/
 ├── agent/                 # 公共 SDK 类型（Agent、Provider、Builder）
 ├── bootstrap/             # 公共 SDK 到内部实现的接线
 ├── cmd/mothx/             # CLI 入口
-├── desktop/               # Electron ACP 桌面客户端
+├── desktop/               # Electron ACP 桌面客户端（已弃用，兼容保留）
+├── native/                # 主力纯 Go 自绘桌面客户端（MyGo + ACP）
 ├── ui/                    # Serve 内嵌的 Svelte Web UI
 ├── internal/
 │   ├── agent/             # 核心 Agent 循环
@@ -175,7 +177,8 @@ mothx/
 ### ✨ 核心特性
 - [核心特性详解](features-overview.md) — 多提供商、沙箱、会话、技能等
 - [主角团](expert-teams.md) — 可复用的 lead 身份与成员团队
-- [桌面客户端](desktop.md) — Electron ACP 桌面应用
+- [Native 桌面客户端](native.md) — 主力纯 Go 自绘桌面应用（纯 ACP）
+- [桌面客户端（已弃用）](desktop.md) — 旧版 Electron ACP 桌面应用
 - [知识库](knowledge-bases.md) — 索引目录并通过 MCP 搜索
 
 ### 🎯 使用场景
@@ -1028,7 +1031,8 @@ mothx/
 ├── agent/                       # 公共 SDK 类型（Agent、Provider、Builder）
 ├── bootstrap/                   # 将公共 SDK 接口接到内部实现
 ├── cmd/mothx/                   # CLI 入口与子命令
-├── desktop/                     # Electron 桌面客户端（纯 ACP 投影）
+├── desktop/                     # Electron 桌面客户端（纯 ACP 投影；已弃用）
+├── native/                      # 主力桌面客户端：纯 Go MyGo 应用（纯 ACP 投影）
 ├── ui/                          # 内嵌到 Serve 的 Svelte Web UI
 ├── internal/
 │   ├── agent/                   # 核心 Agent 循环、事件、提示词、子 Agent 工具
@@ -1602,6 +1606,51 @@ Source: https://mothx.net/zh/changelog.md
 
 # 更新日志
 
+## v1.3.109
+
+### 💥 行为变更
+
+- **Desktop（Electron）已弃用，MothX Native 成为主力桌面客户端。** `desktop-release.yml` 不再随版本 tag 自动运行，仅保留手动兼容构建桥，且不能再把 release 标记为 latest；`native-release.yml` 是桌面产物的唯一自动发布入口（Linux 二进制/deb/tar.gz/PKGBUILD、macOS dmg、Windows exe/setup）。根 Makefile help 将 Native 置前并把 Desktop targets 标记为弃用。新增双语指南（`docs/en/native.md`、`docs/zh/native.md`）覆盖安装、功能面与迁移；`desktop.md` 带弃用横幅与明确移除条件（完整一个发布周期不发布 Desktop 产物且无需手动兼容构建后删除 `desktop/` 及其入口）。没有任何权威数据需要搬移：会话、转录与配置都在共享 Runtime 中，Desktop 用户换壳即可，无需迁移。
+
+### ✨ 新功能
+
+- **Router 的 ACP profile 现在可以设置外部 worker 的默认模型。** `acpAgents` 新增可选 `model` 字段，由 Runtime 在创建远程 worker session 时应用。MothX 优先使用标准 ACP `configOptions` 的 model 选项（`category: "model"`）；只有当 worker 不提供现代选项时，才回退到已废弃的 `models`/`session/set_model` 协议。`model` 留空时保留第三方 Agent 自己的默认行为。若配置的模型不在 worker 提供列表中，委派会带着可用模型列表失败，而不是静默使用其他模型；恢复会话时若 Agent 不返回选项列表，则沿用其已保存的选择。该模型可从 TUI `/router` 面板、WebUI Router Worker 设置与 Desktop Router Workers 编辑，并投影在共享 Runtime 目录中。
+- **Router 收敛为单一 worker 管理签名，并新增 loopback MCP bridge。** Router 模式只注册一个工具 `delegate_worker_mgr`，其 `delegate`/`spawn`/`status`/`list`/`send`/`wait`/`destroy`/`integrate`/`answer` action 覆盖完整的外部 ACP worker 生命周期；本地 `delegate_subagent` 与 `subagent_*` 工具不再出现在 Router，也不再广告 Router 专用字段。本地 stdio worker 可在 `session/new|load|resume` 收到一个名为 `mothx-worker` 的 MCP server，使用仅存内存的 per-child bearer token 鉴权；唯一工具 `worker_mgr` 支持 `context`、`report`（notice/progress/finding）与 `ask`（durable `DecisionQuestion`，由 lead 通过 `delegate_worker_mgr(action=answer)` 回答），并有 body 上限、每 child 限流、dedupe key 与会话私有的 JSONL 证据（`worker-messages/<sessionId>/worker_messages.jsonl`，随会话删除）。finding 以 `[WORKER_FINDING]` 进入 lead 上下文并可唤醒空闲 lead；notice/progress 永不进入。bridge 惰性绑定 `tcp4 127.0.0.1:0`，不使用 stdio/SSE/public URL，以 `mcpBridge=unavailable|unreachable|disabled` 投影且不阻塞任务（bridge 注册或 listener 启动失败时同样降级），并在会话 shutdown 时撤销 token。token 的生命周期是 worker 的 remote session，而不是单个 turn：turn 结束后的 bridge 调用返回 `child_terminal` MCP tool error，下一次 `send` 会重新启用同一凭证；destroy/close、会话 shutdown 或进程退出时撤销。`delegate_worker_mgr` 的描述会发布由同一解析状态生成的简短能力摘要（report/ask、attachments、write、terminal、resume），并说明 bridge 不可用的原因。 worker 活动在 TUI `/router` 面板、ACP `mothx/worker/messages`、WebUI `GET /api/sessions/<id>/router` 与 Desktop Router composer 中只读投影；只有 lead 能回答问题。Profile 的 `driver`、`mcpBridge` 与 `capabilityOverrides` 可在 TUI 面板、WebUI 的 Router Worker 设置（`PATCH /api/acp/profiles`）与 Desktop 的 Router Workers 设置（`mothx/manage/acp/profiles/patch`）中编辑。`mothx doctor` 现在还会验证 listener 在最后一个 token 撤销后关闭。详见 `docs/zh/tools.md` 与 `docs/zh/configuration.md`。
+
+- **新增 Gitee/Moark 模型：`hy4`**
+  - 在 `gitee` 与 `moark` 供应商中新增 `hy4`：推理模型，1M 上下文，仅文本输入，使用 `deepseek-v4.1` 推理强度档位，不发送默认 max_tokens。
+
+- **火山引擎新增模型：`deepseek-v4.1-flash-economy`**
+  - `volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 三个火山引擎渠道均新增 `deepseek-v4.1-flash-economy`，支持思考、1M 上下文窗口与文本/图片输入；标准版 MaxTokens 为 262K，两个套餐版为 100K。
+
+- **火山引擎新增模型：`glm-5.4`**
+  - `volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 三个火山引擎渠道均新增 `glm-5.4`，支持思考、1M 上下文窗口与文本/图片输入；默认不发送 max_tokens，使用供应商默认值。
+
+- **腾讯云套餐现在只提供 `hy4` 与 `hy4-flash`。**
+  - `tencent-hy-plan` 与 `tencent-hy-plan-anthropic` 预设现在列出 `hy4` 与 `hy4-flash`，不再提供 `hy3`。`hy4` 仅支持文本，`hy4-flash` 支持文本与图片；两者均支持推理，上下文为 1M，并保留 65,536 输出上限。
+
+- **阿里云百炼 Token Plan 预设改用千问 AI 端点并刷新模型目录。**
+  - `alibaba-token-plan` 现在使用 `https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1`，提供 `auto`、`qwen4-max`、`qwen3.8-max`、`qwen3.8-flash`、`deepseek-v4.1-flash-1017`、`deepseek-v4.1-flash` 与 `glm-5.3`，替换原先的 Qwen/Kimi/DeepSeek/GLM/MiniMax 列表。Qwen 与 DeepSeek 条目支持文本与图片输入、1M 上下文；`qwen4-max` 使用原生 Qwen 思考开关；`glm-5.3` 保留 131,072 输出上限。内置 `bailian` 厂商适配器也会自动识别新域名。
+
+- **DeepSeek 会话可以使用原生会话标题。** 当解析后的供应商指向 `api.deepseek.com` 时，尚无标题的会话在第一次模型请求中会启用 DeepSeek 的内联 `title` 扩展，覆盖 Chat Completions、Responses 与 Anthropic Messages 三种协议。Agent Core 捕获响应中的标题；若拒答或出错导致没有标题，则回退到首条用户消息。共享 Runtime 只会将它持久化为一次 `auto` 会话标题。Serve 会发布 `title_updated`；TUI、CLI、WebUI/API、ACP/Desktop、渠道与公共 SDK 都复用同一条 Runtime 路径，因此没有任何适配器新增第二套标题请求或生成器。对于不支持该扩展的供应商，Serve 仍使用原有的独立标题请求。
+
+- **MothX Native 补齐剩余 Desktop parity 缺口并修复背景图层顺序。** Native 现在把 canonical `subagent` 生命周期事件投影为内联子代理卡、按会话的实时名册（上限 200、保留运行中子代理）与头部运行中/总数计数和失败红点，并在 terminal 事件与会话加载后重读权威 `mothx/subagent/list`；后台团队继续写入各自缓存会话。计划携带 Runtime 的 `mothx.dev` 标题/备注进入侧栏、卡片与导出；折叠的流式思考显示紧凑 live 尾部预览；工具文本/diff 入库按 Desktop 口径截断（20k/40k 字符）。外观新增全应用/仅首页背景作用域与可读的主题 veil、启动 quick-start 私有草稿目录与 Composer 工作区菜单中的最近目录历史、用户所选运行时二进制启动/初始化失败时自动回滚。在繁忙照片感背景上的验收渲染发现并修复了 paint-order bug（MyGo 默认把 absolute 子节点画在 flow 兄弟之上，背景层曾遮住整个外壳）；负 ZIndex 分层加像素探针与无头回归现在固定两种主题、两种作用域下图片/veil/外壳的顺序。
+- **MothX Native 对齐 Desktop 的新任务目录契约并补全 elicitation form。** 新任务草稿不再继承上一个目录：保持未设置直到原生选择器（或 worktree 动作）提供目录；创建时询问一次、发送时若仍未设置再问一次，取消则保留草稿而不是发往未知 cwd；启动 quick-start 私有目录仍是唯一免询问默认。草稿没有目录期间，供应商/模型菜单从 `mothx/manage/providers/list` 投影（已配置供应商优先、保持目录顺序、草稿 > 现有 > 默认偏好），因为 `draft-config-options` 需要 cwd。多 property 的 `elicitation/create` schema 现在按 property 渲染输入/枚举字段，并以 property 名 keyed content 应答；单 property 与 replay 的对象 enum schema 继续可用，空 form 走 decline。
+
+### ♻️ Runtime 与架构
+
+- **ACP worker 能力改为类型化解析模型。** `internal/agentruntime/workerdriver` 拥有 `WorkerCapabilities`、显式 `generic-acp` adapter 与 profile ∩ advertised ∩ policy 解析器；业务代码读取能力而不是探测原始 `agentCapabilities` map。Profile 新增可选 `driver`、`mcpBridge` 与只能收紧的 `capabilityOverrides`。解析结果、降级原因与 bridge 状态写入 `session_child_runs`（migration 58）并投影到 child metadata。`mothx doctor` 检查 loopback `tcp4` 可绑定性与 profile driver/bridge/override 合法性；`internal/architecture` 守护 workerdriver 叶子边界并禁止业务代码按 driver 身份分支。2026-11-10 的真实 interop 使用 OpenCode 2.0.16 与 codex-acp 0.16.0 验证了 loopback bridge（OpenCode 写入了真实 `worker_mgr` finding，codex-acp 完成了 MCP handshake）；两者均可由 `generic-acp` 描述，因此没有新增未经验证的 flavor。
+
+### 🐛 问题修复
+
+- **聚合商提供的 MiMo 模型会随 `tool_calls` 回传 `reasoning_content`。** MiMo 要求携带 `tool_calls` 的 assistant 消息在下一轮请求中原样回传 `reasoning_content`。此前仅根据 `xiaomimimo` base URL 判定，因此 B.AI、Gitee/Moark、OpenRouter 等聚合商提供的 `mimo-*` 模型在会话没有记录到 reasoning 时可能缺少该字段。现在也会按模型 ID 识别 MiMo（包括网关目录中未列出的模型），并在没有记录到 reasoning 的回放 assistant 消息上补空的 `reasoning_content` 占位。
+
+- **思考开关与 reasoning effort 现在严格按各厂商的文档契约发送。** 显式关闭思考时，DeepSeek Chat Completions/Anthropic Messages 现在发送 `thinking: {type: "disabled"}`，Qwen 混合思考模型发送 `enable_thinking: false`，不再静默保持思考开启；DeepSeek V4.1 在 Responses API 上使用 `reasoning_effort: "none"`；GLM 的 effort 映射为 `low`/`high`/`max`，不会再发送 `medium`。DeepSeek 的 effort 遵循官方映射（`minimal`/`low` → `low`，`medium`/`high`/`xhigh` → `high`，`max` → `max`），聚合商提供的 Qwen3.5+ 与 GLM 模型 ID 会被识别用于 thinking 格式解析，配置的模型列表也不再按相同下标继承内置预设的 `compat`。
+
+- **MothX Native 的运行与传输可靠性修复。** 会话加载与会话列表响应现在带连接代际：用户已离开的会话即使加载较慢或失败，也不会清空当前会话或复用其缓存 transcript；在途刷新期间请求的会话列表刷新会重新排队而不是静默丢弃。ACP 客户端以原子指针保存子进程，普通请求默认 5 分钟超时（仅 `session/prompt` 保持无界），并通过持有的 `os.Process` 句柄延迟关闭子进程，避免 PID 复用误杀。重连后过期供应商/草稿配置响应会被忽略；SkillHub 图标抓取在 URL 校验与拨号时都拒绝 loopback/私网/link-local 目标。Native 各 feature 包补齐 guard 测试，并新增跨模块 wire 测试：真实执行管理 handler，校验 Native 期望的每个响应 key 仍与 Runtime 契约一致。
+
+- **TUI 排队消息现在只有一个调度者和稳定的会话绑定。** TUI 不再在 Runtime 的 `SubmissionCoordinator` 之外维护第二套队列/调度：每条交互输入都会在 run 启动前同步注册；首会话创建期间暂存的输入会在会话激活后统一送入 coordinator；运行中的 slash command 会被拒绝，而不是入队后当作普通 prompt 发给模型；暂存附件也不会被后续消息抢走。会话切换会退役旧 coordinator 并清空投影，排队消息不会再跑到另一个会话里。
+
 ## v1.3.108
 
 ### 💥 行为变更
@@ -1642,6 +1691,7 @@ Source: https://mothx.net/zh/changelog.md
 
 ### 🐛 问题修复
 
+- **TUI `/settings` 中默认关闭的开关现在可以正常打开。** 设置面板此前会让可选布尔值在“自动”（`nil`）与显式值之间循环，但 `config.LoadSettings()` 会用 `DefaultSettings` 补齐缺失值，因此第一次切换写入的是 `nil`，重新加载后又变回默认的 `false`。`webSearch.enabled`（以及同样形态的 `imageGeneration.enabled` 与 `enableArtifact`）因此无法从 TUI 打开。现在每次切换都会翻转有效值并始终写入显式布尔值。
 - **激活 Router ACP profile 不再卡死 TUI。** 此前激活直接在 Bubble Tea 更新循环中同步执行 `SessionRuntime.ActivateRouter`，Runtime 为激活而做的会话 reload 与 binding/mode 写入会使输入、渲染和取消在整个 reload 期间全部阻塞，大体积 `sessions.db` 下可持续数秒。现在激活改为 `tea.Cmd`：更新循环保持响应，面板显示进行中状态并拒绝其他面板按键与并发提交，结果通过消息回到更新循环后才应用 Runtime 解析出的模式与工具面。校验、idle fence、source policy、持久化与写入顺序仍由 Runtime 独占。
 - **Router 会话现在可以正常 spawn 外部 ACP worker。** 此前只有当适配器开启了 multi-agent、delegate 或 workflow 能力时，lead agent 才会被注册进 `AgentManager`，但 Router 模式并不依赖这些开关就会装上同样的委派工具面。结果是每次 spawn 都会以 `create sub-agent: parent agent agent-master not found` 失败，已正确配置并激活的 worker 根本不会被执行到。现在该判定由 Runtime 通过 `ManagerBackedToolsEnabled` 独占，Router 与常规能力一并计入，所有入口（TUI、CLI、WebUI/API、ACP/Desktop）都据此注册 lead。此外，TUI、WebUI 与 ACP 的工具组同步现在从 Runtime 而非适配器自有字段解析模式，因此恢复或刚刚激活的 Router 会话装上的是 Router 委派工具面而不是错误的那一套；ACP/Desktop 下的 Router 会话也会获得其按会话绑定 worker 所需的会话级 manager。
 - **激活后的 manager 创建与工具组同步现在只有一个 Runtime 入口。** TUI、CLI、WebUI/API、ACP 与 channels 此前各自重复实现同一段“判断是否需要 manager、创建或复用、再安装/卸载 manager 绑定的工具组”逻辑，因此刚激活的 Router 会话可能装上 `delegate_subagent` 却没有一个真正拥有该会话的 manager（专家切换后也可能继续复用旧 manager）。现在 `SessionRuntime.ReconcileManagerBackedTools` 独占该决策：它使用共享能力判定（包含绑定团队与 Router），只在需要或显式重建时构造，构造失败时保留当前句柄，并始终针对最终返回的 manager 重新同步工具组。适配器只提供能力策略、当前句柄与构造工厂；TUI/CLI 通过显式的 `RequireManager` 策略保留 root agent、ESM 与 cron 所需的 manager，而不是再维护一套实现。
@@ -5833,17 +5883,6 @@ Source: https://mothx.net/zh/changelog.md
 
 **完整变更日志**: https://gitee.com/oschina/mothx/compare/v0.1.26...v0.1.27
 
-## v1.3.109
-
-### ✨ 新功能
-
-- **Router 的 ACP profile 现在可以设置外部 worker 的默认模型。** `acpAgents` 新增可选 `model` 字段，由 Runtime 在创建远程 worker session 时应用。MothX 优先使用标准 ACP `configOptions` 的 model 选项（`category: "model"`）；只有当 worker 不提供现代选项时，才回退到已废弃的 `models`/`session/set_model` 协议。`model` 留空时保留第三方 Agent 自己的默认行为。若配置的模型不在 worker 提供列表中，委派会带着可用模型列表失败，而不是静默使用其他模型；恢复会话时若 Agent 不返回选项列表，则沿用其已保存的选择。该模型可从 TUI `/router` 面板、WebUI Router Worker 设置与 Desktop Router Workers 编辑，并投影在共享 Runtime 目录中。
-- **Router 收敛为单一 worker 管理签名，并新增 loopback MCP bridge。** Router 模式只注册一个工具 `delegate_worker_mgr`，其 `delegate`/`spawn`/`status`/`list`/`send`/`wait`/`destroy`/`integrate`/`answer` action 覆盖完整的外部 ACP worker 生命周期；本地 `delegate_subagent` 与 `subagent_*` 工具不再出现在 Router，也不再广告 Router 专用字段。本地 stdio worker 可在 `session/new|load|resume` 收到一个名为 `mothx-worker` 的 MCP server，使用仅存内存的 per-child bearer token 鉴权；唯一工具 `worker_mgr` 支持 `context`、`report`（notice/progress/finding）与 `ask`（durable `DecisionQuestion`，由 lead 通过 `delegate_worker_mgr(action=answer)` 回答），并有 body 上限、每 child 限流、dedupe key 与会话私有的 JSONL 证据（`worker-messages/<sessionId>/worker_messages.jsonl`，随会话删除）。finding 以 `[WORKER_FINDING]` 进入 lead 上下文并可唤醒空闲 lead；notice/progress 永不进入。bridge 惰性绑定 `tcp4 127.0.0.1:0`，不使用 stdio/SSE/public URL，以 `mcpBridge=unavailable|unreachable|disabled` 投影且不阻塞任务（bridge 注册或 listener 启动失败时同样降级），并在会话 shutdown 时撤销 token。token 的生命周期是 worker 的 remote session，而不是单个 turn：turn 结束后的 bridge 调用返回 `child_terminal` MCP tool error，下一次 `send` 会重新启用同一凭证；destroy/close、会话 shutdown 或进程退出时撤销。`delegate_worker_mgr` 的描述会发布由同一解析状态生成的简短能力摘要（report/ask、attachments、write、terminal、resume），并说明 bridge 不可用的原因。 worker 活动在 TUI `/router` 面板、ACP `mothx/worker/messages`、WebUI `GET /api/sessions/<id>/router` 与 Desktop Router composer 中只读投影；只有 lead 能回答问题。Profile 的 `driver`、`mcpBridge` 与 `capabilityOverrides` 可在 TUI 面板、WebUI 的 Router Worker 设置（`PATCH /api/acp/profiles`）与 Desktop 的 Router Workers 设置（`mothx/manage/acp/profiles/patch`）中编辑。`mothx doctor` 现在还会验证 listener 在最后一个 token 撤销后关闭。详见 `docs/zh/tools.md` 与 `docs/zh/configuration.md`。
-
-### ♻️ Runtime 与架构
-
-- **ACP worker 能力改为类型化解析模型。** `internal/agentruntime/workerdriver` 拥有 `WorkerCapabilities`、显式 `generic-acp` adapter 与 profile ∩ advertised ∩ policy 解析器；业务代码读取能力而不是探测原始 `agentCapabilities` map。Profile 新增可选 `driver`、`mcpBridge` 与只能收紧的 `capabilityOverrides`。解析结果、降级原因与 bridge 状态写入 `session_child_runs`（migration 58）并投影到 child metadata。`mothx doctor` 检查 loopback `tcp4` 可绑定性与 profile driver/bridge/override 合法性；`internal/architecture` 守护 workerdriver 叶子边界并禁止业务代码按 driver 身份分支。2026-11-10 的真实 interop 使用 OpenCode 2.0.16 与 codex-acp 0.16.0 验证了 loopback bridge（OpenCode 写入了真实 `worker_mgr` finding，codex-acp 完成了 MCP handshake）；两者均可由 `generic-acp` 描述，因此没有新增未经验证的 flavor。
-
 ---
 
 ## 命令行参考
@@ -7042,10 +7081,13 @@ Google 原生 provider 可以直接配置：
 | `""` (空) | 根据 URL 自动检测 |
 | `"openai"` | 使用 OpenAI `reasoning_effort` 格式 |
 | `"anthropic"` | 使用 Anthropic `thinking` 带 `budget_tokens` |
-| `"deepseek"` | 使用 DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort` (OpenAI) 或 `output_config.effort` (Anthropic) |
+| `"deepseek"` | 使用 DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort`（OpenAI）或 `output_config.effort`（Anthropic）；显式关闭时发送 `thinking: {type: "disabled"}` |
 | `"xiaomi"` | 旧的 thinking-only 格式: `thinking: {type: "enabled"}` |
-| `"thinking-only"` | 只发送思考开关，不发送强度字段；用于让不兼容的 DeepSeek V4.1 部署退出 `reasoning_effort` |
+| `"thinking-only"` | 只发送思考开关，不发送强度字段；用于让不兼容的 DeepSeek V4.1 部署退出 `reasoning_effort`；显式关闭会发送 `thinking: {type: "disabled"}` |
 | `"deepseek-v4.1"` | DeepSeek V4.1 `reasoning_effort`: `none`（不思考）、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` |
+| `"kimi"` | Kimi `reasoning_effort`：`low`、`high`、`max` |
+| `"qwen"` | Qwen 混合思考：`enable_thinking` 与 `thinking_budget` |
+| `"zai"` | GLM/Z.ai 思考开关，以及映射为 `low`/`high`/`max` 的 `reasoning_effort` |
 | `"doubao-seed"` | 豆包 Seed 2.1 / Evolving `reasoning_effort`: `minimal`（不思考）、`low`、`medium`、`high`（默认） |
 
 未设置时自动检测：
@@ -7053,8 +7095,16 @@ Google 原生 provider 可以直接配置：
 - URL 包含 `xiaomimimo` → `"xiaomi"`
 - 模型 ID 匹配 `doubao-seed-2.1*` 或 `doubao-seed-evolving` → `"doubao-seed"`
 - 模型 ID 包含 `deepseek-v4.1` 或 `deepseek-v4-1` → `"deepseek-v4.1"`
+- 模型 ID 包含 `qwen3.5`、`qwen3.6`、`qwen3.7` 或 `qwen3.8` → `"qwen"`
+- 模型 ID 包含 `glm` → `"zai"`
 
 显式的 provider `thinkingFormat`（或模型的 `compat.thinkingFormat`）始终优先于上述自动检测。仅接受旧思考开关的部署可将 `thinkingFormat` 设为 `thinking-only`，退回不使用 `reasoning_effort`。
+
+DeepSeek 的 effort 取值遵循官方映射：`minimal`/`low` → `low`，`medium`/`high`/`xhigh` → `high`，`max` → `max`。显式关闭思考时，Chat Completions 与 Anthropic Messages 发送 `thinking: {type: "disabled"}`，DeepSeek V4.1 与 Responses API 发送 `reasoning_effort: "none"`。
+
+Qwen 混合思考模型在显式关闭时发送 `enable_thinking: false`。GLM 模型的 effort 映射为 `low`/`high`/`max`（`medium`/`high`/`xhigh` → `high`）；GLM-5.3 不支持关闭思考，因此显式关闭时保留厂商的常开默认值，而不发送会被拒绝的 `thinking.type: "disabled"`。
+
+Chat Completions 请求携带 tools 时，回放的 assistant 消息会携带真实记录的 `reasoning_content`。要求该字段的端点始终会收到它，即使没有记录到 reasoning：官方 DeepSeek、Kimi/Moonshot，以及 MiMo（包括 B.AI、Gitee/Moark、OpenRouter 等聚合商以 `mimo-*` 模型 ID 提供的 MiMo）。对不要求该字段的模型不会合成空占位。
 
 MothX 也会在运行时学习该能力：当 OpenAI 兼容网关拒绝 `reasoning_effort` 时，会立即去掉该参数重试，在重试提示中说明原因，并把该模型的 `thinkingFormat` 记录为 `thinking-only`、`supportsReasoningEffort` 记录为 `false`，后续运行不再发送该参数。
 
@@ -7131,7 +7181,7 @@ MothX 也会在运行时学习该能力：当 OpenAI 兼容网关拒绝 `reasoni
 | 字段 | 类型 | 描述 |
 |------|------|------|
 | `thinkingFormat` | string | 覆盖模型 thinking 格式（`openai`、`deepseek`、`xiaomi`、`anthropic` 等） |
-| `requiresReasoningContentOnAssistant` | bool | 回放 assistant 消息时发送空 `reasoning_content` |
+| `requiresReasoningContentOnAssistant` | bool | 回放 assistant 消息时发送空 `reasoning_content`（Kimi/MiMo 模型 ID 与 DeepSeek/MiMo/Moonshot 端点会自动推断） |
 | `requiresReasoningContentOnAssistantMessages` | bool | 参考实现中的别名，与上一项等价 |
 | `forceAdaptiveThinking` | bool | 强制使用 Anthropic adaptive thinking 格式 |
 | `supportsReasoningEffort` | bool | 模型是否接受 `reasoning_effort` |
@@ -8212,6 +8262,13 @@ Source: https://mothx.net/zh/desktop.md
 
 # MothX 桌面客户端
 
+> **已弃用。** MothX Native 现在是主力桌面客户端（[Native 指南](native.md)）。
+> Desktop（Electron）不再自动发布 release 产物；迁移窗口内仅保留手动兼容
+> 构建，代码除安全修复外冻结。会话与配置是共享 Runtime 状态，迁移到 Native
+> 不需要搬移任何数据——见[从 Desktop 迁移](native.md#从-desktop-迁移)。
+> 移除条件：完整一个发布周期不再发布 Desktop 产物、且无需手动兼容构建后，
+> 删除 `desktop/` 及其构建/发布入口。
+
 MothX Desktop 是 MothX 的图形客户端，也是一个**纯 ACP（Agent Client
 Protocol）客户端**：Electron 主进程启动内置的 `mothx acp` 运行时，通过 stdio
 上的 newline-delimited JSON-RPC 通信。它不会启动 `mothx serve`，不会嵌入
@@ -8393,6 +8450,20 @@ WebUI 冒烟测试用无头 Chromium 跑已构建的 UI 并配一个假 host，�
 `npm run build`。Desktop 往返测试需要从当前源码构建的 runtime，因为它断言的是
 宿主二进制携带的 Router 管理投影。
 
+### Native 桌面检查
+
+MothX Native（主力桌面客户端）是嵌套 Go module，用无头 UI 覆盖代替浏览器驱动：
+
+```bash
+make native-test    # 转录 reducer + 无头页面/i18n/像素测试
+make native-vet     # go vet + MyGo 生命周期/goroutine 检查
+make native-build   # native/build/ 下的 stripped 二进制
+```
+
+无头 tester 离线渲染全部设置页与主视图；英文扫描对未翻译中文 UI 直接失败，
+像素探针固定背景图/veil/外壳的绘制顺序。改动后台运行路由或面板失效逻辑时，
+在 `native/` 内跑 `go test -race ./...`。
+
 ## 项目结构
 
 ```
@@ -8400,7 +8471,8 @@ mothx/
 ├── agent/                     # 公共 SDK 类型（Agent、Provider、Builder）
 ├── bootstrap/                 # 将公共 SDK 接口接到内部实现
 ├── cmd/mothx/                 # CLI 入口与子命令
-├── desktop/                   # Electron 桌面客户端（纯 ACP）
+├── desktop/                   # Electron 桌面客户端（纯 ACP；已弃用）
+├── native/                    # 主力桌面客户端：纯 Go MyGo 应用（纯 ACP）
 ├── ui/                        # 内嵌到 Serve 的 Svelte Web UI
 ├── internal/
 │   ├── agent/                 # 核心 Agent 循环、事件、提示词、子 Agent 工具
@@ -10721,6 +10793,133 @@ Desktop 使用下列按能力 gate 的 ACP 投影进行管理；WebUI 则使用
   写、删除、网络或委派权限。
 - `mothx pure` 会归档共享 sessions 数据库，但保留
   `knowledge-bases/<id>.db` 文件。
+
+---
+
+## MothX Native 桌面客户端
+
+Source: https://mothx.net/zh/native.md
+
+# MothX Native 桌面客户端
+
+MothX Native 是 MothX 的**主力桌面客户端**。它是用
+[MyGo](https://github.com/egoist/mygo) 的 `ui` 包编写的纯 Go 应用：所有控件都由
+应用自绘——没有 HTML、没有 JavaScript、没有 webview、没有 Electron。与已弃用的
+Desktop 客户端一样，它是**纯 ACP（Agent Client Protocol）客户端**：通过 stdio
+启动 `mothx acp` 子进程，使用 ACP v1（newline-delimited JSON-RPC 2.0）与增量
+`mothx.dev` 扩展通信。会话、运行、设置、供应商、技能、知识库与全部管理面都由
+Runtime 持有；Native 只做投影。
+
+> **状态：** Native 取代 Electron [Desktop 客户端](desktop.md)，后者已弃用。
+> 版本 tag 的发布页自动发布 Native 桌面产物；迁移窗口内 Electron 构建仅保留
+> 手动兼容构建。
+
+## 安装
+
+从发布页下载对应平台产物（`mothx-native-<版本>-<平台>-<架构>`）：
+
+- **Linux amd64：** 裸二进制、`.deb`、`.tar.gz` 或 `PKGBUILD`。
+- **macOS universal：** `.dmg`。
+- **Windows amd64：** 便携 `.exe` 或 `-setup.exe` 安装包。
+
+Native 需要一个 `mothx` 运行时二进制。解析顺序：启动参数 `--mothx-bin`、
+设置 → 运行时中持久化的选择、`MOTHX_BIN`、`PATH`、仓库 `../bin/mothx`
+开发回退。持久化选择只是客户端外壳的启动状态，绝不写入
+`settings.json`/`serve.json`。所选二进制启动或初始化失败时，Native 会自动
+回退到之前的选择。
+
+也可以从源码构建：
+
+```sh
+make native-build        # native/build/ 下的 stripped 二进制
+make native-dist         # 当前平台打包
+make native-dist-linux   # linux/amd64（deb、tar.gz、PKGBUILD）
+make native-dist-darwin  # darwin/universal
+make native-dist-windows # windows/amd64
+```
+
+## 功能一览
+
+- **任务：** 项目/最近/未归类侧栏与会话菜单、cursor 分页、置顶、项目分组、
+  重命名、Fork、删除、改工作目录；带搜索与 scope 筛选的分页历史视图。
+- **聊天：** 流式 markdown、折叠时仍带 live 预览的思考、含输入/diff/输出的
+  工具卡、计划卡与计划进度侧栏（含 Runtime 提供的计划标题/备注）、带截止
+  时间的内联审批/提问卡（多 property elicitation form 按 schema 每 property
+  渲染一个字段，按 property 名 keyed content 应答）、内联子代理生命周期卡与
+  头部运行中/总数计数、结构化错误卡、内联图片、制品预览/保存、完整转录复制
+  与导出。
+- **输入区：** 模式、供应商/模型/思考级别选择（带能力徽标）、主角团绑定
+  （替换非空绑定会 fork）、沙箱/浏览器/Web 搜索能力、附件（工作区内文件走
+  link，工作区外文件与剪贴板图片内嵌）、斜杠指令、带最近目录历史的工作区菜单。
+- **页面：** 技能（指令卡 + SkillHub 市场）、自动化（cron）、资料库（知识库
+  状态），均带页面级管理对话框。
+- **设置：** 与 Desktop 完全相同的管理面——应用默认、供应商、MCP、技能、
+  SkillHub、主角团、ACP 工作器、环境变量、消息通道 + 投递、记忆、定时任务、
+  serve、知识库、统计——以及本地外观（主题、语言、首页预设/Logo/背景，背景
+  可选全应用或仅首页作用域）、运行时（连接、doctor、日志、二进制选择）、关于。
+- **协作：** 隔离 git worktree、Router 工作器选择与只读 worker 证据、只读
+  子代理名册/转录。
+- **外壳：** 深/浅/跟随系统主题、中英文界面、Toast、按会话缓存后台运行、
+  后台审批待处理徽标。
+
+与 Desktop 一致：新进程的首个草稿获得私有 `~/MothX/mothx_projects_*`
+quick-start 目录；显式选择过的目录只作为选择器历史被记住。**新任务**草稿不
+继承目录：创建任务时外壳会询问一次，发送时若仍未设置会再问一次（取消则保留
+草稿）。在目录存在之前，供应商/模型菜单按 Desktop 的做法直接从供应商目录
+投影（`draft-config-options` 需要 cwd）。两者都属于
+`native-preferences.json` 中的展示状态（主题、语言、首页外观、运行时二进制、
+目录历史）——绝不是会话或配置权威。
+
+## 从 Desktop 迁移
+
+没有任何权威数据需要搬移：会话、转录、供应商、MCP 服务器、技能、主角团、
+知识库、计划任务与通道配置都在共享 Runtime 中，在 Native 里与 Desktop
+（以及 TUI/WebUI）完全一致地出现。留在原地的只有 Electron 本地展示状态：
+
+| Desktop（Electron） | Native |
+|---|---|
+| `desktop-store.json` 主题/语言 | 设置 → 外观（重新选择一次） |
+| 首页 Logo/背景、透明度/模糊/fit/position | 设置 → 外观，另新增全应用/仅首页作用域 |
+| 内置/自定义运行时二进制 | 设置 → 运行时二进制选择（失败自动回滚） |
+| 上次/最近工作区选择历史 | Native 偏好自动记住 |
+| DevTools / 本地 CDP 调试 | 设置 → 运行时诊断与 ACP stderr 日志 |
+
+能力门控面板的行为不变：面板缺失说明运行时没有声明对应能力键——应更新
+运行时二进制，而不是外壳。
+
+## 故障排查
+
+- **Linux：** Native 自绘窗口，但仍需要显示服务器（X11/Wayland）。无显示器
+  主机请使用 TUI 或 `mothx serve` + Web UI。
+- **运行时无法启动：** 在设置 → 运行时查看解析到的二进制与来源；自定义
+  二进制切换失败会自动回滚。
+- **审批/提问一直不结束：** Runtime 决策超时
+  （`MOTHX_ACP_PERMISSION_TIMEOUT` / `MOTHX_ACP_QUESTION_TIMEOUT`）不变；
+  无法恢复的 pending decision 由 Runtime 终止化。
+
+## 开发
+
+```sh
+make native-dev    # 从源码运行
+make native-test   # 转录 reducer + 无头 UI 测试
+make native-vet    # go vet + MyGo 生命周期/goroutine 检查
+```
+
+无头 tester 离线渲染全部页面；英文扫描对任何未翻译中文 UI 直接失败，像素
+探针固定背景图层顺序。
+## 代码结构
+
+`native/main.go` 只是入口。实现位于私有 `internal/` 包：`internal/acp`
+（stdio JSON-RPC 传输与 wire payload）、`internal/i18n`、`internal/icons`、
+`internal/kit`（共享配色/控件），以及 `internal/feature/*` 下按 Runtime 管理
+业务拆分的包（供应商、技能、SkillHub、MCP、知识库、主角团、定时任务、通道、
+环境变量、记忆、统计、Serve、ACP 工作器）。`internal/desktop` 是组合外壳，
+负责应用生命周期、会话/运行状态、转录/输入区、任务树、历史、worktree、协作
+与页面布局。其实现按关注点拆分到 `app_*.go`（状态/生命周期、连接、会话目录与
+流程、输入区、决策、设置）与 `view_*.go`（根视图、窗口装饰、侧栏、页面、聊天、
+转录、消息卡片、输入区）；alias 文件只保留外壳的薄业务词汇，
+`internal/feature/hosttest` 为各业务包 guard 测试提供共享 fake Host。业务包不得
+反向 import 外壳；外壳实现各业务包声明的窄 `Host` 接口。
 
 ---
 

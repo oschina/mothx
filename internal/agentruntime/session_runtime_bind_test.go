@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/oschina/mothx/internal/dao"
@@ -151,5 +152,54 @@ func TestSessionRuntimeBindSessionRejectsClosedRuntime(t *testing.T) {
 	runtime.Close()
 	if err := runtime.BindSession(manager, SourceTUI); err == nil {
 		t.Fatal("BindSession on closed runtime unexpectedly succeeded")
+	}
+}
+
+func TestBindSessionRetiresSubmissionCoordinatorOnSessionChange(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+	first := session.New(workDir, sessionDir)
+	if err := first.Init(); err != nil {
+		t.Fatal(err)
+	}
+	second := session.New(workDir, sessionDir)
+	if err := second.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := &SessionRuntime{Source: SourceTUI, WorkDir: workDir}
+	if err := runtime.BindSession(first, SourceTUI); err != nil {
+		t.Fatalf("bind first session: %v", err)
+	}
+	firstCoordinator := runtime.SubmissionCoordinator()
+
+	if err := runtime.BindSession(second, SourceTUI); err != nil {
+		t.Fatalf("bind second session: %v", err)
+	}
+	secondCoordinator := runtime.SubmissionCoordinator()
+	if secondCoordinator == firstCoordinator {
+		t.Fatal("session change reused the previous session's submission coordinator")
+	}
+	if _, err := firstCoordinator.Submit(context.Background(), "stale", SubmitPolicy{}, func(context.Context) (func(), error) {
+		return func() {}, nil
+	}, func(context.Context) error { return nil }); !errors.Is(err, ErrSubmissionClosed) {
+		t.Fatalf("retired coordinator accepted a submission: %v", err)
+	}
+
+	// A same-session rebind must keep the live FIFO instead of retiring it.
+	if err := runtime.BindSession(second, SourceTUI); err != nil {
+		t.Fatalf("rebind same session: %v", err)
+	}
+	if runtime.SubmissionCoordinator() != secondCoordinator {
+		t.Fatal("same-session rebind replaced the submission coordinator")
+	}
+
+	if err := runtime.UnbindSession(); err != nil {
+		t.Fatalf("unbind session: %v", err)
+	}
+	if _, err := secondCoordinator.Submit(context.Background(), "detached", SubmitPolicy{}, func(context.Context) (func(), error) {
+		return func() {}, nil
+	}, func(context.Context) error { return nil }); !errors.Is(err, ErrSubmissionClosed) {
+		t.Fatalf("unbound runtime kept accepting submissions: %v", err)
 	}
 }

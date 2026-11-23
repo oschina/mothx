@@ -15,24 +15,44 @@ import (
 const maxVisibleQueuedPrompts = 3
 
 // renderQueuedPrompts projects the pending-submission queue into the managed
-// live view while a run owns the session. It is pure adapter rendering of
-// TUI-local queue state: the queue itself is filled and drained exclusively by
-// processInput/startNextQueuedPrompt, and each prompt still renders its
-// canonical "You:" transcript line when it actually starts.
+// live view while a run owns the session. Runtime-owned submissions are
+// projected from pendingSubmissions; queuedPrompts remains the explicit
+// pre-session/headless compatibility bridge. Rendering never starts work.
 func (a *App) renderQueuedPrompts(width int) string {
-	if a == nil || len(a.queuedPrompts) == 0 {
+	if a == nil {
+		return ""
+	}
+	total := len(a.pendingSubmissions) + len(a.queuedPrompts)
+	if total == 0 {
 		return ""
 	}
 	if width <= 0 {
 		width = 80
 	}
-	lines := []string{queuedPromptStyle.Render(a.translator.Text(i18n.MsgQueuedPromptsHeader, len(a.queuedPrompts)))}
+	lines := []string{queuedPromptStyle.Render(a.translator.Text(i18n.MsgQueuedPromptsHeader, total))}
+	visible := 0
+	appendPreview := func(idx int, text string) bool {
+		if visible >= maxVisibleQueuedPrompts {
+			return false
+		}
+		lines = append(lines, queuedPromptItemStyle.Render(fmt.Sprintf("  %d. %s", idx+1, queuedPromptPreview(text, width-8))))
+		visible++
+		return true
+	}
+	for i, sub := range a.pendingSubmissions {
+		if sub == nil {
+			continue
+		}
+		if !appendPreview(i, sub.text) {
+			lines = append(lines, statusStyle.Render(fmt.Sprintf("  +%d …", total-visible)))
+			return strings.Join(lines, "\n")
+		}
+	}
 	for i, prompt := range a.queuedPrompts {
-		if i >= maxVisibleQueuedPrompts {
-			lines = append(lines, statusStyle.Render(fmt.Sprintf("  +%d …", len(a.queuedPrompts)-maxVisibleQueuedPrompts)))
+		if !appendPreview(len(a.pendingSubmissions)+i, prompt.text) {
+			lines = append(lines, statusStyle.Render(fmt.Sprintf("  +%d …", total-visible)))
 			break
 		}
-		lines = append(lines, queuedPromptItemStyle.Render(fmt.Sprintf("  %d. %s", i+1, queuedPromptPreview(prompt.text, width-8))))
 	}
 	return strings.Join(lines, "\n")
 }

@@ -98,13 +98,13 @@ type InputEvent struct {
 	arrived time.Time
 }
 
-// queuedPrompt is a user submission received while the current foreground
-// execution still owns the session. It intentionally retains Runtime-prepared
-// attachments so delayed submission follows the same input contract.
+// queuedPrompt is a user submission accepted before the Runtime session exists
+// or before the TUI can hand it to the shared SubmissionCoordinator. Runtime
+// submissions live in pendingSubmissions instead; this type is the explicit
+// pre-session/headless compatibility bridge and never owns admission.
 type queuedPrompt struct {
 	text      string
 	resources []agentruntime.PreparedInput
-	handle    *agentruntime.ExecutionHandle
 }
 
 type queuedPromptStartMsg struct{}
@@ -123,17 +123,11 @@ type submissionCompletedMsg struct {
 	completion agentruntime.ExecutionCompletion
 }
 
-type tuiSubmissionFailedMsg struct {
-	handle *agentruntime.ExecutionHandle
-	err    error
-}
-
 type tuiSubmissionAdmittedMsg struct {
-	handle    *agentruntime.ExecutionHandle
-	input     string
-	resources []agentruntime.PreparedInput
-	ctx       context.Context
-	ready     chan tuiSubmissionStartResult
+	submission *tuiSubmission
+	ctx        context.Context
+	ready      chan tuiSubmissionStartResult
+	echoInput  bool
 }
 
 type tuiSubmissionStartResult struct {
@@ -239,6 +233,14 @@ type App struct {
 	manualCompactionActive bool
 	pendingAbortReason     string
 	queuedPrompts          []queuedPrompt
+	// pendingSubmissions is the adapter projection of Runtime-owned submission
+	// handles. It is not a scheduler: the shared SubmissionCoordinator admits
+	// the next item, and only this projection decides how the waiting rows render.
+	pendingSubmissions []*tuiSubmission
+	// sendHook lets headless tests receive asynchronous submission projections
+	// without a running Bubble Tea Program. Production leaves it unset and uses
+	// program.Send through notifyAsync.
+	sendHook func(tea.Msg)
 	// runTerminalHandled marks that the current run's canonical terminal event
 	// (EventRunFinished) was processed, so legacy EventDone/EventError that
 	// follow it are not handled twice.
@@ -263,6 +265,10 @@ type App struct {
 	fileOpener            FileOpener
 	lastPastedImagePath   string
 	pendingInputResources []agentruntime.PreparedInput
+	// preparingInputResources belongs to the first prompt of a session whose
+	// bootstrap is still in flight. Keeping it separate prevents a later prompt
+	// typed during that window from stealing the first prompt's attachments.
+	preparingInputResources []agentruntime.PreparedInput
 
 	// Input queue for batching
 	inputQueue           []InputEvent
@@ -1238,7 +1244,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.preparingSession {
 				return a, a.cancelSessionPreparation()
 			}
-			if a.isThinking || a.waitingForApproval || a.waitingForQuestion {
+			if a.isThinking || a.waitingForApproval || a.waitingForQuestion || a.hasPendingSubmissions() {
 				return a, a.abortPendingRequest("user pressed Esc")
 			} else {
 				a.input.Reset()
@@ -1349,22 +1355,44 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != a.sessionPrepSeq || !a.preparingSession {
 			return a, nil
 		}
+		firstResources := a.preparingInputResources
+		a.preparingInputResources = nil
 		a.preparingSession = false
 		if msg.err != nil {
 			a.failPromptStart()
 			a.discardPendingInput()
+			a.discardPreparedResources(firstResources)
 			a.addCommandError(sessionCreationError(a.translator, msg.err, a.getSessionDir()))
 			return a, a.timer.Stop()
 		}
 		if err := a.activateSession(msg.sess); err != nil {
 			a.failPromptStart()
 			a.discardPendingInput()
+			a.discardPreparedResources(firstResources)
 			a.addCommandError(sessionCreationError(a.translator, err, a.getSessionDir()))
 			return a, a.timer.Stop()
 		}
 		if a.backgroundSubmitter != nil && providerResponsesBackgroundEnabled(a.provider) {
+			a.pendingInputResources = firstResources
 			return a, a.submitBackgroundInput(msg.input)
 		}
+		if a.program != nil {
+			if err := a.submitForeground(msg.input, firstResources, false); err != nil {
+				a.discardPreparedResources(firstResources)
+				a.failPromptStart()
+				a.addCommandError(fmt.Sprintf("Failed to accept input: %v", err))
+				// The session is bound, so staged prompts can still run in order
+				// instead of being stranded behind the failed first submission.
+				a.flushSessionPreparedPrompts()
+				return a, a.timer.Stop()
+			}
+			// The first submission is already registered with the coordinator, so
+			// prompts staged during the bootstrap now queue behind it instead of
+			// racing it or remaining stranded in the TUI-local queue.
+			a.flushSessionPreparedPrompts()
+			return a, tea.Batch(a.tickSpinner(), a.timer.Reset(), a.timer.Start())
+		}
+		a.pendingInputResources = firstResources
 		return a, a.launchPromptRun(msg.input, false)
 
 	case agentStreamStartMsg:
@@ -1419,10 +1447,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
-	case tuiSubmissionFailedMsg:
-		a.removeQueuedSubmission(msg.handle)
-		a.addCommandError(fmt.Sprintf("Queued input failed: %v", msg.err))
-		return a, nil
+	case tuiSubmissionCompletedMsg:
+		return a, a.handleSubmissionCompleted(msg)
 
 	case agentEventMsg:
 		// Esc can cancel a run while its event channel still has terminal
@@ -2011,8 +2037,12 @@ func (a *App) abortPendingRequest(reason string) tea.Cmd {
 
 func (a *App) completionCommandForRun(run *tuiRun) tea.Cmd {
 	if run != nil && run.submission != nil {
-		return run.completionCommand()
+		if cmd := run.completionCommand(); cmd != nil {
+			return cmd
+		}
 	}
+	// Runtime-owned submissions are promoted by SubmissionCoordinator; this
+	// fallback only resumes the explicit pre-session/headless local queue.
 	return a.scheduleNextQueuedPrompt()
 }
 

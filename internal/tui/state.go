@@ -34,17 +34,11 @@ func (a *App) resetTranscriptState() {
 }
 
 func (a *App) clearQueuedInput() {
-	if len(a.queuedPrompts) > 0 {
-		legacy := a.queuedPrompts[:0]
-		for _, prompt := range a.queuedPrompts {
-			if prompt.handle == nil {
-				legacy = append(legacy, prompt)
-				continue
-			}
-			prompt.handle.Cancel()
-		}
-		a.queuedPrompts = legacy
-	}
+	// Aborting a run intentionally keeps the pre-session/headless prompts queued
+	// so they can still start in order. Runtime-owned submissions, however, are
+	// canceled through the coordinator; their watchers release any unbound input
+	// resources and collapse the projection rows.
+	a.cancelPendingSubmissions()
 	a.inputQueueMu.Lock()
 	a.inputQueue = a.inputQueue[:0]
 	a.lastInputTime = time.Time{}

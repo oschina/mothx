@@ -14,6 +14,12 @@
 - **新增 Gitee/Moark 模型：`hy4`**
   - 在 `gitee` 与 `moark` 供应商中新增 `hy4`：推理模型，1M 上下文，仅文本输入，使用 `deepseek-v4.1` 推理强度档位，不发送默认 max_tokens。
 
+- **火山引擎新增模型：`deepseek-v4.1-flash-economy`**
+  - `volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 三个火山引擎渠道均新增 `deepseek-v4.1-flash-economy`，支持思考、1M 上下文窗口与文本/图片输入；标准版 MaxTokens 为 262K，两个套餐版为 100K。
+
+- **火山引擎新增模型：`glm-5.4`**
+  - `volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 三个火山引擎渠道均新增 `glm-5.4`，支持思考、1M 上下文窗口与文本/图片输入；默认不发送 max_tokens，使用供应商默认值。
+
 - **腾讯云套餐现在只提供 `hy4` 与 `hy4-flash`。**
   - `tencent-hy-plan` 与 `tencent-hy-plan-anthropic` 预设现在列出 `hy4` 与 `hy4-flash`，不再提供 `hy3`。`hy4` 仅支持文本，`hy4-flash` 支持文本与图片；两者均支持推理，上下文为 1M，并保留 65,536 输出上限。
 
@@ -36,6 +42,8 @@
 - **思考开关与 reasoning effort 现在严格按各厂商的文档契约发送。** 显式关闭思考时，DeepSeek Chat Completions/Anthropic Messages 现在发送 `thinking: {type: "disabled"}`，Qwen 混合思考模型发送 `enable_thinking: false`，不再静默保持思考开启；DeepSeek V4.1 在 Responses API 上使用 `reasoning_effort: "none"`；GLM 的 effort 映射为 `low`/`high`/`max`，不会再发送 `medium`。DeepSeek 的 effort 遵循官方映射（`minimal`/`low` → `low`，`medium`/`high`/`xhigh` → `high`，`max` → `max`），聚合商提供的 Qwen3.5+ 与 GLM 模型 ID 会被识别用于 thinking 格式解析，配置的模型列表也不再按相同下标继承内置预设的 `compat`。
 
 - **MothX Native 的运行与传输可靠性修复。** 会话加载与会话列表响应现在带连接代际：用户已离开的会话即使加载较慢或失败，也不会清空当前会话或复用其缓存 transcript；在途刷新期间请求的会话列表刷新会重新排队而不是静默丢弃。ACP 客户端以原子指针保存子进程，普通请求默认 5 分钟超时（仅 `session/prompt` 保持无界），并通过持有的 `os.Process` 句柄延迟关闭子进程，避免 PID 复用误杀。重连后过期供应商/草稿配置响应会被忽略；SkillHub 图标抓取在 URL 校验与拨号时都拒绝 loopback/私网/link-local 目标。Native 各 feature 包补齐 guard 测试，并新增跨模块 wire 测试：真实执行管理 handler，校验 Native 期望的每个响应 key 仍与 Runtime 契约一致。
+
+- **TUI 排队消息现在只有一个调度者和稳定的会话绑定。** TUI 不再在 Runtime 的 `SubmissionCoordinator` 之外维护第二套队列/调度：每条交互输入都会在 run 启动前同步注册；首会话创建期间暂存的输入会在会话激活后统一送入 coordinator；运行中的 slash command 会被拒绝，而不是入队后当作普通 prompt 发给模型；暂存附件也不会被后续消息抢走。会话切换会退役旧 coordinator 并清空投影，排队消息不会再跑到另一个会话里。
 
 ## v1.3.108
 

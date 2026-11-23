@@ -2,7 +2,7 @@
 
 > 由 `docs/scripts/generate-models.py` 依据 `internal/config/settings.go`（`defaultProviderConfigs`）与 `internal/provider/vendor_*.go` 生成，请勿手工编辑；运行 `make docs-models` 重新生成。
 
-本文档是 MothX 内置供应商与模型的完整参考：共 **64 个供应商**、**595 个模型**。
+本文档是 MothX 内置供应商与模型的完整参考：共 **64 个供应商**、**601 个模型**。
 
 ## API 类型说明
 
@@ -39,9 +39,9 @@
 | 小米 MiMo Token Plan（AMS） | `xiaomi-token-plan-ams` | - | openai-chat | - | 2 |
 | 小米 MiMo Token Plan（CN） | `xiaomi-token-plan-cn` | - | openai-chat | - | 2 |
 | 小米 MiMo Token Plan（SGP） | `xiaomi-token-plan-sgp` | - | openai-chat | - | 2 |
-| 火山引擎（Volcengine） | `volcengine` | volcengine | openai-chat | - | 5 |
-| 火山引擎 Agent Plan | `volcengine-agentplan` | volcengine-agentplan | openai-chat | - | 12 |
-| 火山引擎 Coding Plan | `volcengine-codingplan` | volcengine-codingplan | openai-chat | - | 9 |
+| 火山引擎（Volcengine） | `volcengine` | volcengine | openai-chat | - | 7 |
+| 火山引擎 Agent Plan | `volcengine-agentplan` | volcengine-agentplan | openai-chat | - | 14 |
+| 火山引擎 Coding Plan | `volcengine-codingplan` | volcengine-codingplan | openai-chat | - | 11 |
 | OpenAI（官方） | `openai` | - | openai-responses | - | 45 |
 | Anthropic（官方） | `anthropic` | - | anthropic-messages | - | 25 |
 | LongCat（Anthropic） | `longcat-anthropic` | longcat | anthropic-messages | - | 1 |
@@ -225,7 +225,9 @@ Vendor `volcengine` · BaseURL `https://ark.cn-beijing.volces.com/api/v3` · API
 | `doubao-seed-2-1-pro-260628` | 262K | 262K | 否 | text,image | - | - | - | - |
 | `glm-5.3` | 1M | - | **是** | text | - | - | - | - |
 | `glm-5.3-flash` | 1M | - | **是** | text,image | - | - | - | - |
+| `glm-5.4` | 1M | - | **是** | text,image | - | - | - | - |
 | `deepseek-v4.1-flash` | 1M | 262K | **是** | text,image | - | - | - | - |
+| `deepseek-v4.1-flash-economy` | 1M | 262K | **是** | text,image | - | - | - | - |
 
 ---
 
@@ -241,9 +243,11 @@ Vendor `volcengine-agentplan` · BaseURL `https://ark.cn-beijing.volces.com/api/
 | `doubao-seed-2-0-mini` | 262K | 100K | **是** | text | - | - | - | - |
 | `glm-5.3` | 1M | - | **是** | text | - | - | - | - |
 | `glm-5.3-flash` | 1M | - | **是** | text,image | - | - | - | - |
+| `glm-5.4` | 1M | - | **是** | text,image | - | - | - | - |
 | `deepseek-v4-pro` | 1M | 100K | **是** | text | - | - | - | - |
 | `deepseek-v4-flash` | 1M | 100K | **是** | text,image | - | - | - | - |
 | `deepseek-v4.1-flash` | 1M | 100K | **是** | text,image | - | - | - | - |
+| `deepseek-v4.1-flash-economy` | 1M | 100K | **是** | text,image | - | - | - | - |
 | `minimax-m2.7` | 262K | 100K | **是** | text | - | - | - | - |
 | `kimi-k2.6` | 262K | 100K | **是** | text,image | - | - | - | - |
 | `kimi-k3` | 1M | 100K | **是** | text,image | - | - | - | - |
@@ -262,9 +266,11 @@ Vendor `volcengine-codingplan` · BaseURL `https://ark.cn-beijing.volces.com/api
 | `doubao-seed-2-0-mini` | 262K | 100K | **是** | text | - | - | - | - |
 | `glm-5.3` | 1M | - | **是** | text | - | - | - | - |
 | `glm-5.3-flash` | 1M | - | **是** | text,image | - | - | - | - |
+| `glm-5.4` | 1M | - | **是** | text,image | - | - | - | - |
 | `deepseek-v4-pro` | 1M | 100K | **是** | text | - | - | - | - |
 | `deepseek-v4-flash` | 1M | 100K | **是** | text,image | - | - | - | - |
 | `deepseek-v4.1-flash` | 1M | 100K | **是** | text,image | - | - | - | - |
+| `deepseek-v4.1-flash-economy` | 1M | 100K | **是** | text,image | - | - | - | - |
 
 ---
 
@@ -1302,13 +1308,13 @@ xhigh    // 最高
 
 ## 汇总统计
 
-- 支持推理（reasoning）的模型：**486**
+- 支持推理（reasoning）的模型：**492**
 
 ### 上下文长度分布
 
 | 区间 | 数量 |
 |------|------|
-| 1M+ | 252 |
+| 1M+ | 258 |
 | 500K-1M | 6 |
 | 200K-500K | 224 |
 | 100K-200K | 84 |
@@ -1320,7 +1326,7 @@ xhigh    // 最高
 
 | 模态 | 数量 |
 |------|------|
-| text/image | 334 |
+| text/image | 340 |
 | text | 223 |
 | text/image/video | 36 |
 | text/image/audio/video | 2 |

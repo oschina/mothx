@@ -225,6 +225,7 @@ const (
 	MsgThinkingPrefix                      MessageID = "transcript.thinking_prefix"
 	MsgThinkingStatus                      MessageID = "agent.thinking_status"
 	MsgQueuedPromptsHeader                 MessageID = "agent.queued_prompts_header"
+	MsgCommandsNotQueued                   MessageID = "agent.commands_not_queued"
 	MsgCancelHint                          MessageID = "agent.cancel_hint"
 	MsgFooterTokenRate                     MessageID = "footer.token_rate"
 	MsgFooterLastDuration                  MessageID = "footer.last_duration"
@@ -924,6 +925,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgThinkingPrefix:                   "think: ",
 		MsgThinkingStatus:                   "Thinking...",
 		MsgQueuedPromptsHeader:              "⏸ %d queued — will send in order after the current run finishes",
+		MsgCommandsNotQueued:                "Commands cannot be queued while a run or submission is active. Wait for it to finish, then run the command.",
 		MsgCancelHint:                       "esc to cancel",
 		MsgFooterTokenRate:                  "%s tok/s",
 		MsgFooterLastDuration:               "last %s",
@@ -1496,6 +1498,7 @@ var catalogs = map[Language]map[MessageID]string{
 		MsgThinkingPrefix:               "思考：",
 		MsgThinkingStatus:               "思考中...",
 		MsgQueuedPromptsHeader:          "⏸ 已排队 %d 条——当前运行结束后按序自动发送",
+		MsgCommandsNotQueued:            "运行或提交进行中不能排队执行命令。请等待结束后再执行。",
 		MsgCancelHint:                   "按 Esc 取消",
 		MsgFooterTokenRate:              "%s Token/s",
 		MsgFooterLastDuration:           "上次用时 %s",
