@@ -105,3 +105,13 @@ make native-vet    # go vet + MyGo 生命周期/goroutine 检查
 
 无头 tester 离线渲染全部页面；英文扫描对任何未翻译中文 UI 直接失败，像素
 探针固定背景图层顺序。
+## 代码结构
+
+`native/main.go` 只是入口。实现位于私有 `internal/` 包：`internal/acp`
+（stdio JSON-RPC 传输与 wire payload）、`internal/i18n`、`internal/icons`、
+`internal/kit`（共享配色/控件），以及 `internal/feature/*` 下按 Runtime 管理
+业务拆分的包（供应商、技能、SkillHub、MCP、知识库、主角团、定时任务、通道、
+环境变量、记忆、统计、Serve、ACP 工作器）。`internal/desktop` 是组合外壳，
+负责应用生命周期、会话/运行状态、转录/输入区、任务树、历史、worktree、协作
+与页面布局。业务包不得反向 import 外壳；外壳实现各业务包声明的窄 `Host`
+接口。

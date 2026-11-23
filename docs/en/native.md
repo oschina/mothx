@@ -120,3 +120,14 @@ make native-vet    # go vet + MyGo lifetime/goroutine checks
 
 The headless tester renders every page offline; English scans fail on any
 untranslated Chinese UI, and pixel probes pin the background layering.
+## Code layout
+
+`native/main.go` is only the entry point. The implementation lives in private
+`internal/` packages: `internal/acp` (stdio JSON-RPC transport and wire payloads),
+`internal/i18n`, `internal/icons`, `internal/kit` (shared palette/widgets), and
+one package per Runtime-managed domain under `internal/feature/*` (providers,
+skills, SkillHub, MCP, knowledge, experts, cron, channels, env, memory, stats,
+serve, and ACP workers). `internal/desktop` is the composition shell for the app
+lifecycle, session/run state, transcript/composer, task tree, History, worktree,
+collaboration, and page layout. Business packages never import the shell; the
+shell implements the narrow `Host` interface each feature declares.

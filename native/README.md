@@ -52,7 +52,7 @@ entry and main page offline and fails on untranslated Chinese UI leaking through
 The Home view ports the Desktop presets (Office/Code/Create), their execution
 protocols, quick cards, custom logo, and background image with opacity, blur,
 fit, and position. The sidebar, empty state, and app icon use the MothX brand
-mark from `docs/assets/mothx.png` (a cleaned copy lives in `assets/mothx.png`).
+mark from `docs/assets/mothx.png` (a cleaned copy lives in `internal/icons/assets/mothx.png`).
 
 ## Run
 
@@ -156,44 +156,47 @@ server echoes accepted user
 content as `user_message_chunk`; the optimistic bubble is replaced by that
 echo instead of duplicated.
 
-## Files
+## Layout
 
-- `main.go` — window and lifecycle.
-- `app.go` — ACP connection, session/run operations, decisions.
-- `acp.go` — stdio JSON-RPC transport and process management.
-- `acp_types.go` — ACP wire payloads.
-- `model.go` — transcript reducer, message formatting, tool input/diff projection, and decision deadlines.
-- `task_tree.go` — shared project/recent/ungrouped task-tree projection and project catalog refresh.
-- `session_menu.go` — compact per-session and per-project action menus.
-- `session_state.go` — per-session transcript/run/config cache for background runs.
-- `decision_view.go` — inline approval/question cards with deadlines, resolved state, and multi-property elicitation form fields.
-- `artifact_preview.go` — canonical artifact fetch, image preview, and attachment save.
-- `i18n.go` / `i18n_extra.go` — native zh/en locale projection and translation table.
-- `composer_config.go` — draft-config selection, provider model projection, menu controls, and post-create flush.
-- `transcript_paging.go` — bounded transcript pages and older-message prepend.
-- `runtime_model.go` — Runtime connection/diagnostics projection.
-- `providers_model.go` — ACP provider wire types, draft validation, and panel actions.
-- `providers_view.go` — native provider defaults/catalog/editor and dialogs.
-- `skills_model.go` — ACP skills wire types, selected-workspace cwd resolution, and panel actions.
-- `skills_view.go` — native skill list with enable/disable toggles, loading, and error states.
-- `skillhub_model.go` — ACP SkillHub config/catalogue wire types, token-safe patch builders, session-bound market actions, and dual-sequence invalidation.
-- `skillhub_view.go` — native SkillHub browser, detail/add-market/uninstall dialogs, and token-free market editor.
-- `mcp_model.go` — ACP MCP wire types, full-replacement request builders, validation, and panel actions.
-- `knowledge_model.go` — ACP knowledge-base wire types, defaults, draft normalization, polling, schedule/MCP actions, and async invalidation.
-- `knowledge_view.go` — Native knowledge-base cards, directory picker, run/source insights, query preview, and confirmations.
-- `mcp_view.go` — native MCP server card list, add/edit dialog, and delete confirmation.
-- `serve_model.go` — ACP Serve wire types, grouped editor validation, full patch builder, and async panel actions.
-- `serve_view.go` — native grouped Serve configuration editor with load/save states.
-- `acp_workers_model.go` — ACP worker profile wire types, draft projections, gated list/patch actions, and async invalidation.
-- `acp_workers_view.go` — native ACP worker profile editor for model, driver, MCP bridge, and capability overrides.
-- `env_model.go` / `env_view.go` — write-only environment variable drafts and the atomic set/unset patch surface.
-- `stats_model.go` / `stats_view.go` — usage summary windows, bucketed trend projection, and the bar chart.
-- `history_model.go` / `history_view.go` — paginated task library, project/scope filters, compact session menus, session mutations, and dialogs.
-- `worktree_model.go` / `worktree_view.go` — isolated worktree list/create/remove/reset with readiness notifications.
-- `collab_model.go` / `collab_view.go` — Router worker selection and the read-only subagent roster/transcript.
-- `delivery_model.go` / `delivery_view.go` — delivery-failure projection on the Channels panel.
-- `view.go` — the native UI, palette, task tree, transcript, composer, and components.
-- `icons.go` — inline SVG icons.
+The root package is only the desktop entry point. All implementation lives in
+private `internal/` packages, split by business domain, so a single folder never
+holds the whole application.
 
-Session and provider state remain Runtime-owned; this app only projects ACP
-state and never reads `settings.json` or a database directly.
+- `main.go` — thin launcher: injects the release version and calls `desktop.Run`.
+- `internal/desktop/` — the private composition shell. It owns the `nativeApp`
+  lifecycle, ACP connection/session/run state, the self-drawn page layout,
+  transcript/composer core, project/recent task tree, History, worktree, and
+  collaboration projections. It composes business panels; it does not own their
+  wire contracts or actions.
+- `internal/desktop/*_alias.go` / `host.go` — narrow aliases and exported host
+  methods that let the shell call private feature packages without leaking the
+  old flat-package vocabulary.
+- `internal/acp/` — ACP v1 stdio transport plus canonical wire payload types.
+- `internal/i18n/` — locale state and the zh/en dictionaries.
+- `internal/icons/` — embedded brand asset and the inline SVG icon set.
+- `internal/kit/` — shared palette, settings widgets, status pills, and
+  formatting helpers used by every panel.
+- `internal/feature/` — one private package per Runtime-managed business domain:
+  - `acpworkers/` — ACP worker profile editor.
+  - `channels/` — WeChat/Feishu configuration and delivery failures.
+  - `cron/` — cron job list/editor and run status.
+  - `env/` — write-only environment variables and atomic set/unset patches.
+  - `experts/` — Expert/Expert Team bundles and editors.
+  - `host/` — the shared narrow host interface implemented by the shell.
+  - `knowledge/` — knowledge-base configuration, runs, sources, schedules, and
+    Knowledge MCP wiring.
+  - `mcp/` — MCP server list/editor and full-replacement patches.
+  - `memory/` — global memory text projection.
+  - `providers/` — provider catalog, defaults, editor, discovery, and tests.
+  - `serve/` — grouped Serve configuration editor.
+  - `skillhub/` — SkillHub config, catalogue, search, install, and activation.
+  - `skills/` — workspace skill list and enable/disable toggles.
+  - `stats/` — usage summary and bucketed trend projection.
+
+Business packages may import `acp`, `i18n`, `icons`, `kit`, and other feature
+packages, but never the shell. The shell implements the small `Host` interface
+each feature declares (`Dispatch`, `FeatureEnabled`, `ACP`, settings state,
+current session/page, dialogs, and panel-specific lookups).
+
+Session/provider state remain Runtime-owned; this app only projects ACP state
+and never reads `settings.json` or a database directly.
