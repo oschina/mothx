@@ -20,10 +20,8 @@ var (
 	iconFile         = icons.IconFile
 	iconFolder       = icons.IconFolder
 	iconGlobe        = icons.IconGlobe
-	iconHome         = icons.IconHome
 	iconImage        = icons.IconImage
 	iconList         = icons.IconList
-	iconLogo         = icons.IconLogo
 	iconMaximize     = icons.IconMaximize
 	iconMinimize     = icons.IconMinimize
 	iconMoon         = icons.IconMoon

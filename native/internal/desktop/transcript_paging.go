@@ -74,7 +74,7 @@ func (a *nativeApp) loadOlderTranscript() {
 	if sessionID == "" || cursor == "" || a.transcriptLoading || !a.transcriptPagingEnabled() {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		return
 	}

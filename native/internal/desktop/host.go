@@ -22,8 +22,16 @@ func (a *nativeApp) FeatureEnabled(name string) bool {
 	return a.featureEnabled(name)
 }
 
+func (a *nativeApp) client() *acpClient {
+	return a.acpPtr.Load()
+}
+
+func (a *nativeApp) setClient(client *acpClient) {
+	a.acpPtr.Store(client)
+}
+
 func (a *nativeApp) ACP() *acp.Client {
-	return a.acp
+	return a.client()
 }
 
 func (a *nativeApp) SettingsOpen() bool {

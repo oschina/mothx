@@ -3,6 +3,7 @@ package acp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -210,9 +211,47 @@ func (c *Client) StderrTail(n int) []string {
 	return out
 }
 
+// defaultRequestTimeout bounds ordinary ACP requests. A wedged child must fail
+// a management/load call visibly instead of leaving a panel loading forever. A
+// prompt is the only request whose Runtime work has no safe client-side
+// deadline, so it keeps the unbounded path.
+const defaultRequestTimeout = 5 * time.Minute
+
+var unboundedACPMethods = map[string]struct{}{
+	"session/prompt": {},
+}
+
+// requestTimeout reports the deadline for one method. The bool is false for
+// requests that intentionally have no client-side deadline.
+func requestTimeout(method string) (time.Duration, bool) {
+	if _, ok := unboundedACPMethods[method]; ok {
+		return 0, false
+	}
+	return defaultRequestTimeout, true
+}
+
 // call sends a request and waits for its response. It may be called from any
 // goroutine; the UI must run it off the main thread.
 func (c *Client) Call(method string, params any) (json.RawMessage, error) {
+	timeout, bounded := requestTimeout(method)
+	if !bounded {
+		return c.CallContext(context.Background(), method, params)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return c.CallContext(ctx, method, params)
+}
+
+// CallContext is Call with a caller-owned deadline. It is used for requests
+// such as initialize where a wedged child must fail visibly instead of blocking
+// a worker forever; long-running prompts keep the unbounded Call.
+func (c *Client) CallContext(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -225,18 +264,27 @@ func (c *Client) Call(method string, params any) (json.RawMessage, error) {
 	c.pending[key] = p
 	c.mu.Unlock()
 
+	dropPending := func() {
+		c.mu.Lock()
+		delete(c.pending, key)
+		c.mu.Unlock()
+	}
+
 	req := map[string]any{"jsonrpc": "2.0", "id": id, "method": method}
 	if params != nil {
 		req["params"] = params
 	}
 	if err := c.writeJSON(req); err != nil {
-		c.mu.Lock()
-		delete(c.pending, key)
-		c.mu.Unlock()
+		dropPending()
 		return nil, err
 	}
-	res := <-p.ch
-	return res.result, res.err
+	select {
+	case res := <-p.ch:
+		return res.result, res.err
+	case <-ctx.Done():
+		dropPending()
+		return nil, ctx.Err()
+	}
 }
 
 // notify sends a notification, which has no response.
@@ -295,12 +343,14 @@ func (c *Client) Close() {
 	}
 	cmd := c.cmd
 	if cmd != nil && cmd.Process != nil {
-		go func(pid int) {
+		// Kill through the same *os.Process that cmd.Wait owns. A delayed
+		// os.FindProcess(pid).Kill() could target an unrelated process if the
+		// PID was reused after the child was reaped; Process.Kill reports
+		// ErrProcessDone instead of signalling a bare PID.
+		go func(process *os.Process) {
 			time.Sleep(2 * time.Second)
-			if p, err := os.FindProcess(pid); err == nil {
-				_ = p.Kill()
-			}
-		}(cmd.Process.Pid)
+			_ = process.Kill()
+		}(cmd.Process)
 	}
 }
 

@@ -78,7 +78,7 @@ func (a *nativeApp) refreshDraftProviderModels(provider string) {
 	if provider == "" || a.currentSession != "" || !a.featureEnabled("manageProviders") {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		return
 	}
@@ -364,7 +364,7 @@ func (a *nativeApp) chooseSessionExpert(value string) {
 }
 
 func (a *nativeApp) forkSessionWithExpert(session listedSession, expertID string) {
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		return
 	}
@@ -557,6 +557,7 @@ func (a *nativeApp) refreshModelCatalog(client *acpClient, features map[string]b
 	if client == nil || !(features["manageProviders"] || a.featureEnabled("manageProviders")) {
 		return
 	}
+	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 	raw, err := client.Call("mothx/manage/providers/list", map[string]any{})
 	if err != nil {
 		addDiagnostic("warn", "model catalog: "+err.Error())
@@ -566,7 +567,12 @@ func (a *nativeApp) refreshModelCatalog(client *acpClient, features map[string]b
 	if err := json.Unmarshal(raw, &catalog); err != nil {
 		return
 	}
-	a.dispatch(func() { a.applyProviderCatalog(catalog) })
+	a.dispatch(func() {
+		if startReloadSeq != atomic.LoadInt64(&a.reloadSeq) {
+			return
+		}
+		a.applyProviderCatalog(catalog)
+	})
 }
 
 // applyProviderCatalog keeps the safe provider/model projection shared by the
@@ -630,13 +636,17 @@ func (a *nativeApp) openModelPicker() {
 	a.modelPickerOpen = true
 	a.modelPickerQuery = ""
 	a.modelPickerProvider = ""
-	if len(a.modelCatalog) == 0 && a.acp != nil {
+	if len(a.modelCatalog) == 0 && a.client() != nil {
 		a.modelPickerLoading = true
 		a.modelPickerErr = ""
-		client := a.acp
+		client := a.client()
+		startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
 		go func() {
 			raw, err := client.Call("mothx/manage/providers/list", map[string]any{})
 			a.dispatch(func() {
+				if startReloadSeq != atomic.LoadInt64(&a.reloadSeq) {
+					return
+				}
 				a.modelPickerLoading = false
 				if err != nil {
 					a.modelPickerErr = "读取供应商模型失败：" + err.Error()
@@ -689,26 +699,6 @@ func (a *nativeApp) filteredPickerModels() []providerCatalogModel {
 	return out
 }
 
-func (a *nativeApp) currentModelMeta() *providerCatalogModel {
-	provider := ""
-	if option := a.configOptionByID("provider"); option != nil {
-		provider = option.CurrentValue
-	}
-	model := a.modelValue
-	if model == "" {
-		if option := a.configOptionByID("model"); option != nil {
-			model = option.CurrentValue
-		}
-	}
-	for i := range a.modelCatalog {
-		candidate := &a.modelCatalog[i]
-		if candidate.ID == model && (provider == "" || strings.EqualFold(candidate.Provider, provider)) {
-			return candidate
-		}
-	}
-	return nil
-}
-
 func modelCapabilityBadgeList(model *providerCatalogModel) []string {
 	if model == nil {
 		return nil
@@ -727,20 +717,6 @@ func modelCapabilityBadgeList(model *providerCatalogModel) []string {
 	return badges
 }
 
-func (a *nativeApp) modelCapabilityBadges(c *ui.Context, p palette) {
-	badges := modelCapabilityBadgeList(a.currentModelMeta())
-	if len(badges) == 0 {
-		return
-	}
-	ui.Row(c).AlignItems(ui.Center).Gap(3).Children(func() {
-		for _, label := range badges {
-			ui.Box(c).Padding(0, 4).Radius(4).Background(p.Chip).Border(1, p.T.Border).Children(func() {
-				ui.Text(c, T(label)).FontSize(8).TextColor(p.T.TextMuted)
-			})
-		}
-	})
-}
-
 func (a *nativeApp) selectModelFromPicker(provider, model string) {
 	a.modelPickerOpen = false
 	provider = strings.TrimSpace(provider)
@@ -755,7 +731,7 @@ func (a *nativeApp) selectModelFromPicker(provider, model string) {
 		a.applyDraftConfigOption("model", model)
 		return
 	}
-	client := a.acp
+	client := a.client()
 	sessionID := a.currentSession
 	if client == nil {
 		return

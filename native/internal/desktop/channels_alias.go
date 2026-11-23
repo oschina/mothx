@@ -12,11 +12,6 @@ type channelsConfigView = channels.ConfigView
 type channelsPanelState = channels.State
 type deliveryFailureView = channels.DeliveryFailureView
 type deliveryListResult = channels.DeliveryListResult
-type deliveryRetryResult = channels.DeliveryRetryResult
-
-func channelsWorkDirValid(workDir string) bool {
-	return channels.WorkDirValid(workDir)
-}
 
 func buildChannelsArtifactRequest(artifact bool) map[string]any {
 	return channels.BuildArtifactRequest(artifact)
@@ -46,10 +41,6 @@ func deliveryTargetLabel(failure channels.DeliveryFailureView) string {
 func deliveryFailureMeta(failure channels.DeliveryFailureView) string {
 	return channels.DeliveryFailureMeta(failure)
 }
-func channelsConfiguredLabel(configured bool, configuredText, unsetText string) string {
-	return channels.ConfiguredLabel(configured, configuredText, unsetText)
-}
-
 func (a *nativeApp) channelsCapable() bool {
 	return a.channels.Capable(a)
 }
@@ -74,14 +65,6 @@ func (a *nativeApp) saveChannelsSection(section string) {
 	a.channels.SaveSection(a, section)
 }
 
-func (a *nativeApp) deliveriesCapable() bool {
-	return a.channels.DeliveriesCapable(a)
-}
-
-func (a *nativeApp) channelsDeliveriesCurrent(seq, reloadSeq int64) bool {
-	return a.channels.DeliveriesCurrent(a, seq, reloadSeq)
-}
-
 func (a *nativeApp) startChannelDeliveriesLoad() {
 	a.channels.StartDeliveriesLoad(a)
 }
@@ -92,8 +75,4 @@ func (a *nativeApp) retryChannelDelivery(operationID string) {
 
 func (a *nativeApp) settingsChannelsPane(c *ui.Context, p palette) {
 	a.channels.View(a, c, p)
-}
-
-func (a *nativeApp) settingsChannelDeliveriesCard(c *ui.Context, p palette) {
-	a.channels.DeliveriesCard(a, c, p)
 }

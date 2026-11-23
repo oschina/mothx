@@ -626,7 +626,7 @@ func TestEnglishTranscriptSystemMessagesHaveNoUntranslatedChinese(t *testing.T) 
 		a.currentSession = "s1"
 		// send() authors this notice exactly as the disconnected composer does.
 		a.conn = connFailed
-		a.acp = nil
+		a.setClient(nil)
 		a.draft = "hello"
 		a.send()
 		if len(a.messages) != 1 || a.messages[0].Kind != messageSystem {

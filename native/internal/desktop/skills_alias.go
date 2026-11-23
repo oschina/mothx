@@ -8,10 +8,8 @@ import (
 
 type skillView = skills.SkillView
 type skillListView = skills.ListView
-type skillsPanelState = skills.State
 
 func skillEnabled(skill skills.SkillView) bool       { return skills.Enabled(skill) }
-func skillName(skill skills.SkillView) string        { return skills.Name(skill) }
 func skillDescription(skill skills.SkillView) string { return skills.Description(skill) }
 func skillsRequestCwd(workspace, draftCwd, processCwd string) string {
 	return skills.RequestCwd(workspace, draftCwd, processCwd)
@@ -24,10 +22,6 @@ func skillToggleStatus(name string, target bool) string { return skills.ToggleSt
 
 func (a *nativeApp) SelectedWorkspaceCwd() string {
 	return skills.RequestCwd(a.workspace, a.draftCwd, a.cwd)
-}
-
-func (a *nativeApp) selectedWorkspaceCwd() string {
-	return a.SelectedWorkspaceCwd()
 }
 
 func (a *nativeApp) skillsCapable() bool {
@@ -44,10 +38,6 @@ func (a *nativeApp) invalidateSkillsPanel() {
 
 func (a *nativeApp) startSkillsPanelLoad() {
 	a.skills.StartLoad(a)
-}
-
-func (a *nativeApp) applySkillsListView(view *skills.ListView) {
-	a.skills.ApplyListView(view, a.selectedWorkspaceCwd())
 }
 
 func (a *nativeApp) applySkillToggleLocally(name string, enabled bool) {

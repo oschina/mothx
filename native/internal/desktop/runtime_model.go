@@ -40,7 +40,7 @@ func (a *nativeApp) runDoctor() {
 	if !a.doctorCapable() || a.runtime.DoctorLoading {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		a.runtime.DoctorErr = "尚未连接到 MothX ACP。"
 		return
@@ -87,8 +87,8 @@ func (a *nativeApp) reconnectACP() {
 	if a.closing.Load() {
 		return
 	}
-	old := a.acp
-	a.acp = nil
+	old := a.client()
+	a.setClient(nil)
 	a.conn = connStarting
 	a.connErr = ""
 	a.stderr = nil

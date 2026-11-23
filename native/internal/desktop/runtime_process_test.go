@@ -173,6 +173,96 @@ func TestACPProcessManagementContracts(t *testing.T) {
 		t.Fatalf("deliveries/list must return an array: %s", raw)
 	}
 
+	// Read-only management projections: call the same methods Native panels use
+	// and decode them with the same wire types. Gate every block on the
+	// advertised feature so a runtime that does not offer an extension still
+	// validates the contract it does expose instead of failing the smoke test.
+	if features["manageProviders"] {
+		raw = callWithin(t, client, "mothx/manage/providers/list", map[string]any{})
+		var catalog providerCatalogView
+		if err := json.Unmarshal(raw, &catalog); err != nil {
+			t.Fatalf("providers/list: %v", err)
+		}
+		if catalog.Providers == nil || catalog.Models == nil {
+			t.Fatalf("providers/list must return arrays: %s", raw)
+		}
+	}
+	if features["manageSettings"] {
+		raw = callWithin(t, client, "mothx/manage/settings/get", map[string]any{})
+		var settings providerSettingsView
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			t.Fatalf("settings/get: %v", err)
+		}
+	}
+	if features["manageSkills"] {
+		raw = callWithin(t, client, "mothx/manage/skills/list", buildSkillsListRequest(dir))
+		var list skillListView
+		if err := json.Unmarshal(raw, &list); err != nil {
+			t.Fatalf("skills/list: %v", err)
+		}
+		if list.Skills == nil {
+			t.Fatalf("skills/list must return an array: %s", raw)
+		}
+	}
+	if features["manageMcp"] {
+		raw = callWithin(t, client, "mothx/manage/mcp/list", map[string]any{})
+		var list mcpListView
+		if err := json.Unmarshal(raw, &list); err != nil {
+			t.Fatalf("mcp/list: %v", err)
+		}
+		if list.Servers == nil {
+			t.Fatalf("mcp/list must return an array: %s", raw)
+		}
+	}
+	if features["manageMemory"] {
+		raw = callWithin(t, client, "mothx/manage/memory/get", map[string]any{})
+		var view memoryView
+		if err := json.Unmarshal(raw, &view); err != nil {
+			t.Fatalf("memory/get: %v", err)
+		}
+	}
+	if features["manageCron"] {
+		raw = callWithin(t, client, "mothx/manage/cron/list", map[string]any{})
+		var list cronListView
+		if err := json.Unmarshal(raw, &list); err != nil {
+			t.Fatalf("cron/list: %v", err)
+		}
+		if list.Jobs == nil {
+			t.Fatalf("cron/list must return an array: %s", raw)
+		}
+	}
+	if features["manageChannels"] {
+		raw = callWithin(t, client, "mothx/manage/channels/get", map[string]any{})
+		var config channelsConfigView
+		if err := json.Unmarshal(raw, &config); err != nil {
+			t.Fatalf("channels/get: %v", err)
+		}
+	}
+	if features["manageServeConfig"] {
+		raw = callWithin(t, client, "mothx/manage/serve/get", map[string]any{})
+		var config serveConfigView
+		if err := json.Unmarshal(raw, &config); err != nil {
+			t.Fatalf("serve/get: %v", err)
+		}
+	}
+	if features["manageKnowledgeBases"] {
+		raw = callWithin(t, client, "mothx/manage/knowledge-bases/list", map[string]any{})
+		var list knowledgeListView
+		if err := json.Unmarshal(raw, &list); err != nil {
+			t.Fatalf("knowledge-bases/list: %v", err)
+		}
+		if list.KnowledgeBases == nil {
+			t.Fatalf("knowledge-bases/list must return an array: %s", raw)
+		}
+	}
+	if features["manageApplicationSettings"] {
+		raw = callWithin(t, client, "mothx/manage/application/get", map[string]any{})
+		var view applicationSettingsView
+		if err := json.Unmarshal(raw, &view); err != nil {
+			t.Fatalf("application/get: %v", err)
+		}
+	}
+
 	// Worktree lifecycle against a real git repository. Creation is
 	// asynchronous, so poll the canonical list until the manager reports ready.
 	repo := filepath.Join(t.TempDir(), "repo")

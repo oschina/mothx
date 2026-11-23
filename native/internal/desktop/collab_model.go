@@ -148,7 +148,7 @@ func (a *nativeApp) loadRouterState() {
 	if !p.Open || p.Loading || !a.routerCapable() {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		p.Loaded = true
 		p.Err = "尚未连接到 MothX ACP。"
@@ -278,7 +278,7 @@ func (a *nativeApp) startWorkerMessagesLoad() {
 	if !a.routerWorkerMessagesCapable() || p.WorkerLoading || p.SessionID == "" {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		p.WorkerLoaded = true
 		return
@@ -320,7 +320,7 @@ func (a *nativeApp) activateRouter() {
 	if !a.routerCapable() || p.Busy || p.Loading {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		p.Err = "尚未连接到 MothX ACP。"
 		return
@@ -348,7 +348,7 @@ func (a *nativeApp) deactivateRouter() {
 
 func (a *nativeApp) runRouterMutation(method string, request map[string]any, okMessage string) {
 	p := &a.router
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		p.Err = "尚未连接到 MothX ACP。"
 		return
@@ -486,7 +486,7 @@ func (a *nativeApp) loadSubagents() {
 	if !p.Open || p.Loading || !a.subagentCapable() {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		p.Loaded = true
 		p.Err = "尚未连接到 MothX ACP。"
@@ -594,7 +594,7 @@ func (a *nativeApp) loadSubagentMessages() {
 	if !p.Open || p.LoadingMsg || p.Selected == "" {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		return
 	}
@@ -923,7 +923,7 @@ func (a *nativeApp) refreshSubagentRoster(sessionID string) {
 	if sessionID == "" || !a.subagentCapable() {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		return
 	}

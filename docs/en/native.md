@@ -129,5 +129,10 @@ one package per Runtime-managed domain under `internal/feature/*` (providers,
 skills, SkillHub, MCP, knowledge, experts, cron, channels, env, memory, stats,
 serve, and ACP workers). `internal/desktop` is the composition shell for the app
 lifecycle, session/run state, transcript/composer, task tree, History, worktree,
-collaboration, and page layout. Business packages never import the shell; the
+collaboration, and page layout. Its implementation is split by concern across
+`app_*.go` (state/lifecycle, connection, session catalog and flow, composer,
+decisions, settings) and `view_*.go` (root view, chrome, sidebar, pages, chat,
+transcript, message cards, composer); the alias files keep the shell's feature
+vocabulary thin, and `internal/feature/hosttest` provides the shared fake Host
+for feature-package guard tests. Business packages never import the shell; the
 shell implements the narrow `Host` interface each feature declares.

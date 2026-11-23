@@ -113,5 +113,8 @@ make native-vet    # go vet + MyGo 生命周期/goroutine 检查
 业务拆分的包（供应商、技能、SkillHub、MCP、知识库、主角团、定时任务、通道、
 环境变量、记忆、统计、Serve、ACP 工作器）。`internal/desktop` 是组合外壳，
 负责应用生命周期、会话/运行状态、转录/输入区、任务树、历史、worktree、协作
-与页面布局。业务包不得反向 import 外壳；外壳实现各业务包声明的窄 `Host`
-接口。
+与页面布局。其实现按关注点拆分到 `app_*.go`（状态/生命周期、连接、会话目录与
+流程、输入区、决策、设置）与 `view_*.go`（根视图、窗口装饰、侧栏、页面、聊天、
+转录、消息卡片、输入区）；alias 文件只保留外壳的薄业务词汇，
+`internal/feature/hosttest` 为各业务包 guard 测试提供共享 fake Host。业务包不得
+反向 import 外壳；外壳实现各业务包声明的窄 `Host` 接口。

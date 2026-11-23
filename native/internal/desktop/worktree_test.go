@@ -193,7 +193,8 @@ func TestWorktreePendingOpenConsumedAfterSessionLoad(t *testing.T) {
 		t.Fatalf("ready during load must defer the open: workspace=%q pending=%q", a.workspace, a.worktree.PendingOpenDirectory)
 	}
 
-	a.finishSessionLoad("s9", sessionResult{SessionID: "s9"}, "old")
+	a.sessionLoadSeq = 1
+	a.finishSessionLoad("s9", sessionResult{SessionID: "s9"}, "old", 1, a.reloadSeq)
 	if a.worktree.PendingOpenDirectory != "" || a.workspace != "/repo/wt/join" || a.draftCwd != "/repo/wt/join" {
 		t.Fatalf("load completion must consume the deferred intent: workspace=%q pending=%q", a.workspace, a.worktree.PendingOpenDirectory)
 	}
@@ -225,7 +226,8 @@ func TestWorktreePendingOpenConsumedAfterFailedSessionLoad(t *testing.T) {
 	a.loadingSession = "s9"
 	a.queuePendingWorktreeOpen(worktreeView{ID: "w2", Directory: "/repo/wt/join"})
 	a.applyWorktreeStatus(worktreeStatusEvent("w2", "/repo/wt/join", "ready", ""))
-	a.failSessionLoad(errors.New("load failed"))
+	a.sessionLoadSeq = 1
+	a.failSessionLoad("s9", errors.New("load failed"), 1, a.reloadSeq)
 	if a.worktree.PendingOpenDirectory != "" || a.workspace != "/repo/wt/join" {
 		t.Fatalf("failed load must consume the intent: workspace=%q pending=%q", a.workspace, a.worktree.PendingOpenDirectory)
 	}

@@ -182,7 +182,7 @@ func (a *nativeApp) loadWorktrees() {
 	if !a.worktreeCapable() || p.Loading {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		p.Err = "尚未连接到 MothX ACP。"
 		p.Loaded = true
@@ -306,7 +306,7 @@ func (a *nativeApp) createWorktree() {
 	if !a.worktreeCapable() || p.Creating || p.Loading {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		p.Err = "尚未连接到 MothX ACP。"
 		return
@@ -420,7 +420,7 @@ func (a *nativeApp) confirmWorktreeAction() {
 	if p.ConfirmBusy || strings.TrimSpace(p.ConfirmTree.Directory) == "" {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		p.ConfirmErr = "尚未连接到 MothX ACP。"
 		return

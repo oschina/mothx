@@ -20,7 +20,6 @@ var (
 	formatThoughtDuration = kit.FormatThoughtDuration
 	thoughtPreview        = kit.ThoughtPreview
 	humanCount            = kit.HumanCount
-	mediaLabel            = kit.MediaLabel
 	humanBytes            = kit.HumanBytes
 	relativeTime          = kit.RelativeTime
 	truncateOneLine       = kit.TruncateOneLine

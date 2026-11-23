@@ -183,7 +183,7 @@ func (a *nativeApp) loadMoreProjectSessions(projectID string) {
 // main thread; failures stay scoped to their branch so one project cannot make
 // the whole task tree unusable.
 func (a *nativeApp) loadSessionScopePage(key, scope, projectID, cursor string, appendPage bool) {
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		return
 	}

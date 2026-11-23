@@ -353,7 +353,7 @@ func TestServeCapabilityGatePreventsLoadAndHidesTab(t *testing.T) {
 
 func TestServeSaveValidatesAndReportsOfflineErrors(t *testing.T) {
 	a := serveTestApp(t, map[string]bool{"manageServeConfig": true})
-	a.acp = nil
+	a.setClient(nil)
 
 	a.serve.Form.Listen = "   "
 	a.saveServeSettings()
@@ -389,7 +389,7 @@ func TestServeSaveValidatesAndReportsOfflineErrors(t *testing.T) {
 
 func TestServeSaveIsIgnoredWhileLoadingOrSaving(t *testing.T) {
 	a := serveTestApp(t, map[string]bool{"manageServeConfig": true})
-	a.acp = nil
+	a.setClient(nil)
 	a.serve.Status = ""
 	a.serve.Loading = true
 	a.saveServeSettings()

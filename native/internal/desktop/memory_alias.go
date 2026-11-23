@@ -16,8 +16,6 @@ func validateMemoryContent(content string) error { return memory.ValidateContent
 func buildMemoryPutRequest(content string) map[string]any {
 	return memory.BuildPutRequest(content)
 }
-func memoryUpdatedAtLabel(updatedAt string) string { return memory.UpdatedAtLabel(updatedAt) }
-
 func (a *nativeApp) memoryCapable() bool {
 	return a.memory.Capable(a)
 }
@@ -32,10 +30,6 @@ func (a *nativeApp) invalidateMemoryPanel() {
 
 func (a *nativeApp) startMemoryPanelLoad() {
 	a.memory.StartLoad(a)
-}
-
-func (a *nativeApp) applyMemoryGetView(view *memory.View) {
-	a.memory.ApplyGetView(view)
 }
 
 func (a *nativeApp) applyMemoryPutView(view *memory.View, content string) {

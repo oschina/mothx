@@ -30,7 +30,7 @@ func (a *nativeApp) openArtifactPreview(message *chatMessage) {
 	if message == nil || strings.TrimSpace(message.ArtifactID) == "" {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	sessionID := a.currentSession
 	if client == nil || sessionID == "" {
 		a.status = "尚未连接到 MothX ACP"

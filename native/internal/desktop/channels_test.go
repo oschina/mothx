@@ -246,7 +246,7 @@ func TestChannelsCapabilityGatePreventsLoadAndHidesTab(t *testing.T) {
 
 func TestChannelsSaveValidatesWorkDirAndReportsOfflineErrors(t *testing.T) {
 	a := channelsTestApp(t, map[string]bool{"manageChannels": true})
-	a.acp = nil
+	a.setClient(nil)
 
 	a.channels.WechatWorkDir = "   "
 	a.saveChannelsSection("wechat")

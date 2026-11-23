@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -974,9 +975,30 @@ func TestSkillIconURLRestrictionAndCache(t *testing.T) {
 	if _, ok := validSkillIconURL("https://cdn.example/icon.png"); !ok {
 		t.Fatal("https icon URL rejected")
 	}
-	for _, raw := range []string{"file:///tmp/icon.png", "javascript:alert(1)", "data:image/png;base64,AAAA", "not a url"} {
+	for _, raw := range []string{
+		"file:///tmp/icon.png",
+		"javascript:alert(1)",
+		"data:image/png;base64,AAAA",
+		"not a url",
+		"http://localhost/icon.png",
+		"http://localhost:8080/icon.png",
+		"http://127.0.0.1/icon.png",
+		"http://[::1]/icon.png",
+		"http://10.0.0.1/icon.png",
+		"http://192.168.1.1/icon.png",
+		"http://169.254.169.254/latest/meta-data",
+		"http://100.64.0.1/icon.png",
+	} {
 		if _, ok := validSkillIconURL(raw); ok {
 			t.Fatalf("invalid icon URL accepted: %q", raw)
+		}
+	}
+	if !skillIconIPAllowed(net.ParseIP("8.8.8.8")) {
+		t.Fatal("public resolver address rejected")
+	}
+	for _, ip := range []string{"127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "::1", "fe80::1"} {
+		if skillIconIPAllowed(net.ParseIP(ip)) {
+			t.Fatalf("private/link-local icon address allowed: %s", ip)
 		}
 	}
 

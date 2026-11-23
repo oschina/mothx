@@ -223,7 +223,7 @@ func (a *nativeApp) startHistoryLoad(appendPage bool) {
 }
 
 func (a *nativeApp) loadHistoryPage(seq, startReloadSeq int64, appendPage bool, cursor, scope, projectID, query string) {
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		a.dispatch(func() {
 			if !a.historyPanelCurrent(seq) || startReloadSeq != atomic.LoadInt64(&a.reloadSeq) {
@@ -638,7 +638,7 @@ func (a *nativeApp) confirmHistoryDialog() {
 }
 
 func (a *nativeApp) runHistoryRename(session listedSession, title string) {
-	client := a.acp
+	client := a.client()
 	p := &a.historyPanel
 	if client == nil {
 		p.DialogErr = "尚未连接到 MothX ACP。"
@@ -668,7 +668,7 @@ func (a *nativeApp) runHistoryRename(session listedSession, title string) {
 }
 
 func (a *nativeApp) runHistoryProjectAssignment(session listedSession, projectID string) {
-	client := a.acp
+	client := a.client()
 	p := &a.historyPanel
 	if client == nil {
 		p.DialogErr = "尚未连接到 MothX ACP。"
@@ -710,7 +710,7 @@ func (a *nativeApp) runHistoryProjectAssignment(session listedSession, projectID
 }
 
 func (a *nativeApp) runHistoryDelete(session listedSession) {
-	client := a.acp
+	client := a.client()
 	p := &a.historyPanel
 	if client == nil {
 		p.DialogErr = "尚未连接到 MothX ACP。"
@@ -775,7 +775,7 @@ func removeListedSession(sessions []listedSession, sessionID string) []listedSes
 }
 
 func (a *nativeApp) toggleHistoryPin(session listedSession) {
-	client := a.acp
+	client := a.client()
 	if client == nil || !a.historySessionMetaCapable() {
 		return
 	}
@@ -804,7 +804,7 @@ func (a *nativeApp) toggleHistoryPin(session listedSession) {
 }
 
 func (a *nativeApp) forkHistorySession(session listedSession) {
-	client := a.acp
+	client := a.client()
 	if client == nil || !a.historyForkCapable() {
 		return
 	}
@@ -875,7 +875,7 @@ func (a *nativeApp) runHistoryWorkDir(session listedSession, cwd string) {
 	if cwd == "" {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	p := &a.historyPanel
 	if client == nil {
 		p.Status = "尚未连接到 MothX ACP。"
@@ -963,7 +963,7 @@ func (a *nativeApp) confirmProjectDialog() {
 	if p.ProjectDialogBusy {
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		p.ProjectDialogErr = "尚未连接到 MothX ACP。"
 		return

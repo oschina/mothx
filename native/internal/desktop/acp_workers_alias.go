@@ -8,11 +8,7 @@ import (
 
 type acpWorkerProfileView = acpworkers.ProfileView
 type acpWorkerCatalogView = acpworkers.CatalogView
-type acpWorkerProfilesView = acpworkers.ProfilesView
 type acpWorkerDraft = acpworkers.Draft
-type acpWorkersPanelState = acpworkers.State
-
-var acpWorkerMCPBridges = acpworkers.MCPBridges
 
 func acpWorkerDraftFromProfile(profile acpworkers.ProfileView) acpworkers.Draft {
 	return acpworkers.DraftFromProfile(profile)
@@ -48,14 +44,6 @@ func (a *nativeApp) applyACPWorkerProfiles(profiles []acpworkers.ProfileView) {
 
 func (a *nativeApp) acpWorkerDraft(id string) (acpworkers.Draft, bool) {
 	return a.acpWorkers.Draft(id)
-}
-
-func (a *nativeApp) acpWorkerProfile(id string) (acpworkers.ProfileView, bool) {
-	return a.acpWorkers.Profile(id)
-}
-
-func (a *nativeApp) toggleACPWorkerCapability(id, name string) {
-	a.acpWorkers.ToggleCapability(id, name)
 }
 
 func (a *nativeApp) saveACPWorkerProfile(id string) {

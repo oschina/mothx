@@ -13,11 +13,9 @@ type expertManifest = experts.Manifest
 type expertBundle = experts.Bundle
 type expertSummary = experts.Summary
 type expertListView = experts.ListView
-type expertMutationView = experts.MutationView
 type expertMemberDraft = experts.MemberDraft
 type expertAgentDraft = experts.AgentDraft
 type expertDraft = experts.Draft
-type expertsPanelState = experts.State
 
 const (
 	expertScopeGlobal  = experts.ScopeGlobal
@@ -32,18 +30,12 @@ const (
 	expertRoleMember = experts.RoleMember
 )
 
-var (
-	expertTypes = experts.Types
-	expertRoles = experts.Roles
-)
+var ()
 
 func newExpertsPanelState() experts.Panel { return experts.NewPanel() }
 
 func expertsWorkspaceCwd(workspace, draftCwd string) string {
 	return experts.WorkspaceCwd(workspace, draftCwd)
-}
-func expertRequestScoped(scope, cwd string, extra map[string]any) map[string]any {
-	return experts.RequestScoped(scope, cwd, extra)
 }
 func buildExpertsListRequest(scope, cwd string) map[string]any {
 	return experts.BuildListRequest(scope, cwd)
@@ -78,10 +70,6 @@ func expertDraftBundle(draft *experts.Draft) (map[string]any, error) {
 func expertScopeHint(item experts.Summary, scope string) string {
 	return experts.ScopeHint(item, scope)
 }
-func expertFieldKey(draftKey, field string) string { return experts.FieldKey(draftKey, field) }
-
-func (a *nativeApp) expertsWorkspace() string { return a.ExpertsWorkspace() }
-
 func (a *nativeApp) expertsCapable() bool { return a.experts.Capable(a) }
 
 func (a *nativeApp) expertsRequestCwd() string { return a.experts.RequestCwd(a) }
@@ -108,19 +96,11 @@ func (a *nativeApp) requestDeleteExpert(name string) { a.experts.RequestDelete(n
 
 func (a *nativeApp) cancelDeleteExpert() { a.experts.CancelDelete() }
 
-func (a *nativeApp) confirmDeleteExpert() { a.experts.ConfirmDelete(a) }
-
 func (a *nativeApp) addExpertMember()         { a.experts.AddMember() }
 func (a *nativeApp) removeExpertMember(i int) { a.experts.RemoveMember(i) }
 func (a *nativeApp) addExpertAgent()          { a.experts.AddAgent() }
 func (a *nativeApp) removeExpertAgent(i int)  { a.experts.RemoveAgent(i) }
 func (a *nativeApp) startNewExpert()          { a.experts.StartNew(a) }
-func (a *nativeApp) cancelExpertEditor()      { a.experts.CancelEditor() }
-
-func (a *nativeApp) expertSummaryByName(name string) *experts.Summary {
-	return a.experts.SummaryByName(name)
-}
-
 func (a *nativeApp) settingsExpertsPane(c *ui.Context, p palette) {
 	a.experts.View(a, c, p)
 }

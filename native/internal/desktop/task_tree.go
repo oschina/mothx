@@ -323,12 +323,17 @@ func (a *nativeApp) refreshProjects() {
 // refresh after initialize does not race the UI-thread feature update.
 func (a *nativeApp) refreshProjectsWith(features map[string]bool) {
 	if !features["projects"] {
-		a.projects = nil
-		a.projectsLoaded = true
-		a.projectsErr = ""
+		// This branch is reached both from the UI thread and from
+		// refreshSessions' worker goroutine, so project state must only be
+		// published on the UI thread.
+		a.dispatch(func() {
+			a.projects = nil
+			a.projectsLoaded = true
+			a.projectsErr = ""
+		})
 		return
 	}
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		return
 	}
@@ -360,7 +365,7 @@ func (a *nativeApp) refreshProjectsWith(features map[string]bool) {
 // replace the caller's current page state; the history view keeps its own
 // paging sequence and refreshes explicitly when it is visible.
 func (a *nativeApp) refreshTaskLibrary() {
-	client := a.acp
+	client := a.client()
 	if client == nil {
 		return
 	}

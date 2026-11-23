@@ -12,10 +12,8 @@ type acpClient = acp.Client
 
 var newACPClient = acp.NewClient
 
-type clientInfo = acp.ClientInfo
 type initializeResult = acp.InitializeResult
 type sessionMode = acp.SessionMode
-type sessionModeState = acp.SessionModeState
 type configChoice = acp.ConfigChoice
 type configOption = acp.ConfigOption
 type sessionResult = acp.SessionResult
@@ -30,13 +28,10 @@ type contentBlock = acp.ContentBlock
 type promptResult = acp.PromptResult
 type sessionUpdate = acp.SessionUpdate
 type toolLocation = acp.ToolLocation
-type usageCost = acp.UsageCost
 type planEntry = acp.PlanEntry
 type command = acp.Command
 type sessionUpdateNotification = acp.SessionUpdateNotification
 type sessionEvent = acp.SessionEvent
-type permissionToolCall = acp.PermissionToolCall
-type permissionOption = acp.PermissionOption
 type permissionParams = acp.PermissionParams
 type questionOption = acp.QuestionOption
 type questionParams = acp.QuestionParams

@@ -253,7 +253,7 @@ func TestACPWorkersPanelSequenceGuardsAndInvalidation(t *testing.T) {
 
 func TestACPWorkersSaveGuardsAndOfflineErrors(t *testing.T) {
 	a := acpWorkersTestApp(t, map[string]bool{"manageACPProfiles": true})
-	a.acp = nil
+	a.setClient(nil)
 
 	a.saveACPWorkerProfile("codex")
 	if a.acpWorkers.SavingID != "" || !a.acpWorkers.StatusIsError ||
