@@ -11,7 +11,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsMCPPane renders the native MCP server manager inside the Settings
+// View renders the native MCP server manager inside the Settings
 // View. It is capability-gated by manageMcp and only calls
 // mothx/manage/mcp/list and mothx/manage/mcp/set; the panel never reads
 // mcp.json directly.
@@ -39,7 +39,7 @@ func (p *Panel) View(h Host, c *ui.Context, pal kit.Palette) {
 		}
 	}
 	if p.Status != "" {
-		p.StatusBanner(h, c, pal)
+		p.StatusBanner(c, pal)
 	}
 	if p.Loading && p.Loaded {
 		ui.Text(c, i18n.T("正在刷新 MCP 服务器配置…")).FontSize(10.5).TextColor(pal.T.TextMuted)
@@ -73,7 +73,7 @@ func (p *Panel) View(h Host, c *ui.Context, pal kit.Palette) {
 				ui.Column(c).Gap(6).Children(func() {
 					for index := range p.Servers {
 						index := index
-						p.ServerRow(h, c, pal, index)
+						p.ServerRow(c, pal, index)
 					}
 				})
 			}
@@ -106,7 +106,7 @@ func (p *Panel) ErrCard(h Host, c *ui.Context, pal kit.Palette, message string) 
 	})
 }
 
-func (p *Panel) StatusBanner(h Host, c *ui.Context, pal kit.Palette) {
+func (p *Panel) StatusBanner(c *ui.Context, pal kit.Palette) {
 	color := pal.T.TextMuted
 	bg := pal.Thought
 	if p.StatusIsError {
@@ -124,7 +124,7 @@ func (p *Panel) StatusBanner(h Host, c *ui.Context, pal kit.Palette) {
 	})
 }
 
-func (p *Panel) ServerRow(h Host, c *ui.Context, pal kit.Palette, index int) {
+func (p *Panel) ServerRow(c *ui.Context, pal kit.Palette, index int) {
 	if index < 0 || index >= len(p.Servers) {
 		return
 	}
@@ -260,7 +260,7 @@ func (p *Panel) EditorDialog(h Host, c *ui.Context, pal kit.Palette) {
 				FontSize(10.5).TextColor(pal.T.TextMuted).LineHeight(1.4)
 			ui.Scroll(c).Height(430).Children(func() {
 				ui.Column(c).Gap(10).Children(func() {
-					p.LabeledInput(h, c, pal, "mcp-name", "名称", &p.Draft.Name)
+					p.LabeledInput(c, pal, "mcp-name", "名称", &p.Draft.Name)
 					ui.Column(c).Gap(3).Children(func() {
 						ui.Text(c, i18n.T("类型")).FontSize(10.5).FontWeight(600).TextColor(pal.T.TextMuted)
 						ui.Select(c.Key("mcp-type"), &p.Draft.Type, mcpServerTypes).
@@ -270,16 +270,16 @@ func (p *Panel) EditorDialog(h Host, c *ui.Context, pal kit.Palette) {
 					})
 					ui.Checkbox(c, &p.Draft.Enabled, i18n.T("启用该服务器")).FontSize(11.5)
 					if p.Draft.Type == "stdio" {
-						p.LabeledInput(h, c, pal, "mcp-command", "命令", &p.Draft.Command)
-						p.LabeledInput(h, c, pal, "mcp-args", "参数（空格分隔）", &p.Draft.ArgsInput)
+						p.LabeledInput(c, pal, "mcp-command", "命令", &p.Draft.Command)
+						p.LabeledInput(c, pal, "mcp-args", "参数（空格分隔）", &p.Draft.ArgsInput)
 					} else {
-						p.LabeledInput(h, c, pal, "mcp-url", "URL", &p.Draft.URL)
+						p.LabeledInput(c, pal, "mcp-url", "URL", &p.Draft.URL)
 						if p.Draft.Type == "sse" {
-							p.LabeledInput(h, c, pal, "mcp-message-url", "消息 URL", &p.Draft.MessageURL)
+							p.LabeledInput(c, pal, "mcp-message-url", "消息 URL", &p.Draft.MessageURL)
 						}
 					}
-					p.PairEditor(h, c, pal, "headers", "请求头", "添加请求头", p.Draft.Headers)
-					p.PairEditor(h, c, pal, "env", "环境变量", "添加环境变量", p.Draft.Env)
+					p.PairEditor(c, pal, "headers", "请求头", "添加请求头", p.Draft.Headers)
+					p.PairEditor(c, pal, "env", "环境变量", "添加环境变量", p.Draft.Env)
 				})
 			})
 			if p.DialogErr != "" {
@@ -305,7 +305,7 @@ func (p *Panel) EditorDialog(h Host, c *ui.Context, pal kit.Palette) {
 	}
 }
 
-func (p *Panel) LabeledInput(h Host, c *ui.Context, pal kit.Palette, key, label string, value *string) {
+func (p *Panel) LabeledInput(c *ui.Context, pal kit.Palette, key, label string, value *string) {
 	ui.Column(c).Gap(3).Children(func() {
 		ui.Text(c, i18n.T(label)).FontSize(10.5).FontWeight(600).TextColor(pal.T.TextMuted)
 		ui.TextInput(c.Key(key), value).FontSize(12).Height(32).Padding(0, 8).
@@ -313,7 +313,7 @@ func (p *Panel) LabeledInput(h Host, c *ui.Context, pal kit.Palette, key, label 
 	})
 }
 
-func (p *Panel) PairEditor(h Host, c *ui.Context, pal kit.Palette, kind, label, addLabel string, pairs []PairDraft) {
+func (p *Panel) PairEditor(c *ui.Context, pal kit.Palette, kind, label, addLabel string, pairs []PairDraft) {
 	ui.Column(c).Gap(6).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, i18n.T(label)).FontSize(10.5).FontWeight(600).TextColor(pal.T.TextMuted).Grow(1)

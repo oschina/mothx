@@ -10,7 +10,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsCronPane renders the Native equivalent of the Desktop CronPanel in
+// View renders the Native equivalent of the Desktop CronPanel in
 // the Settings View. It is capability-gated by manageCron and only calls
 // mothx/manage/cron/list, create, update, remove, and run; schedules and run
 // state remain Runtime-owned and this panel never starts a local scheduler.
@@ -38,7 +38,7 @@ func (p *Panel) View(h Host, c *ui.Context, pal kit.Palette) {
 		}
 	}
 	if p.Status != "" {
-		p.StatusBanner(h, c, pal)
+		p.StatusBanner(c, pal)
 	}
 	if p.Loading && p.Loaded {
 		ui.Text(c, i18n.T("正在刷新定时任务…")).FontSize(10.5).TextColor(pal.T.TextMuted)
@@ -108,7 +108,7 @@ func (p *Panel) ErrCard(h Host, c *ui.Context, pal kit.Palette, message string) 
 	})
 }
 
-func (p *Panel) StatusBanner(h Host, c *ui.Context, pal kit.Palette) {
+func (p *Panel) StatusBanner(c *ui.Context, pal kit.Palette) {
 	color := pal.T.TextMuted
 	bg := pal.Thought
 	if p.StatusIsError {
@@ -274,8 +274,8 @@ func (p *Panel) editorDialog(h Host, c *ui.Context, pal kit.Palette) {
 				FontSize(10.5).TextColor(pal.T.TextMuted).LineHeight(1.4)
 			ui.Scroll(c).Height(380).Children(func() {
 				ui.Column(c).Gap(10).Children(func() {
-					p.labeledInput(h, c, pal, "cron-name", "名称", &p.Draft.Name)
-					p.labeledInput(h, c, pal, "cron-schedule", "Cron 表达式", &p.Draft.Schedule)
+					p.labeledInput(c, pal, "cron-name", "名称", &p.Draft.Name)
+					p.labeledInput(c, pal, "cron-schedule", "Cron 表达式", &p.Draft.Schedule)
 					ui.Text(c, i18n.T("示例：@once、@every 30m、@hourly、@daily、@weekly、@monthly 或 5 段 cron。")).
 						FontSize(9.5).TextColor(pal.T.TextMuted).LineHeight(1.4)
 					ui.Column(c).Gap(3).Children(func() {
@@ -319,7 +319,7 @@ func (p *Panel) editorDialog(h Host, c *ui.Context, pal kit.Palette) {
 	}
 }
 
-func (p *Panel) labeledInput(h Host, c *ui.Context, pal kit.Palette, key, label string, value *string) {
+func (p *Panel) labeledInput(c *ui.Context, pal kit.Palette, key, label string, value *string) {
 	ui.Column(c).Gap(3).Children(func() {
 		ui.Text(c, i18n.T(label)).FontSize(10.5).FontWeight(600).TextColor(pal.T.TextMuted)
 		ui.TextInput(c.Key(key), value).FontSize(12).Height(32).Padding(0, 8).

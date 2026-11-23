@@ -78,7 +78,7 @@ func (a *nativeApp) cronErrorCard(c *ui.Context, p palette, message string) {
 }
 
 func (a *nativeApp) cronStatusBanner(c *ui.Context, p palette) {
-	a.cron.StatusBanner(a, c, p)
+	a.cron.StatusBanner(c, p)
 }
 
 func (a *nativeApp) cronJobRow(c *ui.Context, p palette, index int) {

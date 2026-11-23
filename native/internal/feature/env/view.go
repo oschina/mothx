@@ -58,7 +58,7 @@ func (p *Panel) View(h Host, c *ui.Context, pal kit.Palette) {
 				return
 			}
 			for _, name := range names {
-				p.variableRow(h, c, pal, name, p.Drafts[name], busy)
+				p.variableRow(c, pal, name, p.Drafts[name], busy)
 			}
 		})
 	})
@@ -94,7 +94,7 @@ func (p *Panel) View(h Host, c *ui.Context, pal kit.Palette) {
 	})
 }
 
-func (p *Panel) variableRow(h Host, c *ui.Context, pal kit.Palette, name string, draft *Draft, busy bool) {
+func (p *Panel) variableRow(c *ui.Context, pal kit.Palette, name string, draft *Draft, busy bool) {
 	if draft == nil {
 		return
 	}

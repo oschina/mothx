@@ -348,10 +348,16 @@ func RelativeTime(iso string) string {
 
 // TruncateOneLine keeps a single-line metadata preview bounded by runes.
 func TruncateOneLine(s string, n int) string {
-	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
-	if len([]rune(s)) <= n {
-		return s
+	s = strings.Join(strings.Fields(s), " ")
+	if n <= 0 {
+		if s == "" {
+			return ""
+		}
+		return "…"
 	}
 	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
 	return string(runes[:n]) + "…"
 }

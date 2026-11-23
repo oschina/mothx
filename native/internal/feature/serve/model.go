@@ -503,7 +503,7 @@ func (p *Panel) Current(h host.Base, seq, reloadSeq int64) bool {
 		reloadSeq == h.ReloadSequence()
 }
 
-// invalidateServePanel drops transient state and makes every in-flight Serve
+// Invalidate drops transient state and makes every in-flight Serve
 // response stale. Loaded is reset so re-entering the tab reloads.
 func (p *Panel) Invalidate() {
 	atomic.AddInt64(&p.Seq, 1)
@@ -516,7 +516,7 @@ func (p *Panel) Invalidate() {
 	p.StatusIsError = false
 }
 
-// startServePanelLoad starts one capability-gated Serve read. It is called
+// StartLoad starts one capability-gated Serve read. It is called
 // from the UI thread on tab entry.
 func (p *Panel) StartLoad(h host.Base) {
 	if !h.SettingsOpen() || h.SettingsTab() != "serve" {
@@ -580,7 +580,7 @@ func (p *Panel) ApplyView(view *ConfigView) {
 	p.Err = ""
 }
 
-// saveServeSettings writes the full grouped editor through serve/patch. It is
+// Save writes the full grouped editor through serve/patch. It is
 // the only write path; the panel never touches serve.json directly.
 func (p *Panel) Save(h host.Base) {
 	if !p.Capable(h) {

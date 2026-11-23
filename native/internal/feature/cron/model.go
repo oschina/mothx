@@ -360,7 +360,7 @@ func (p *Panel) Current(h Host, seq, reloadSeq int64) bool {
 		reloadSeq == h.ReloadSequence()
 }
 
-// invalidateCronPanel drops transient state and makes every in-flight cron
+// Invalidate drops transient state and makes every in-flight cron
 // response stale. Loaded is reset so re-entering the tab reloads.
 func (p *Panel) Invalidate() {
 	atomic.AddInt64(&p.Seq, 1)
@@ -385,7 +385,7 @@ func (p *Panel) Invalidate() {
 	p.PendingDeleteID = ""
 }
 
-// startCronPanelLoad starts one capability-gated cron list load. It is called
+// StartLoad starts one capability-gated cron list load. It is called
 // from the UI thread on tab entry.
 func (p *Panel) StartLoad(h Host) {
 	if !h.PanelVisible("automation", "cron") {
@@ -408,7 +408,7 @@ func (p *Panel) StartLoad(h Host) {
 	go p.load(h, seq, startReloadSeq)
 }
 
-// startCronPanelRefresh reloads the list without clearing the visible rows.
+// StartRefresh reloads the list without clearing the visible rows.
 // It is used by run completion events and manual refresh.
 func (p *Panel) StartRefresh(h Host) {
 	if !h.PanelVisible("automation", "cron") || !p.Capable(h) {
@@ -474,7 +474,7 @@ func (p *Panel) ApplyListView(view *ListView) {
 	p.Err = ""
 }
 
-// applyCronSavedJob merges one create/update response into the visible list.
+// ApplySavedJob merges one create/update response into the visible list.
 // New jobs are prepended because the server orders jobs by creation time
 // descending; existing rows keep their position when edited.
 func (p *Panel) ApplySavedJob(job *JobView) {

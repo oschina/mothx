@@ -124,7 +124,7 @@ func (p *Panel) Current(h host.Base, seq, reloadSeq int64) bool {
 		reloadSeq == h.ReloadSequence()
 }
 
-// invalidateACPWorkersPanel drops transient state and makes every in-flight
+// Invalidate drops transient state and makes every in-flight
 // ACP worker response stale. Loaded is reset so re-entering the tab reloads.
 func (p *Panel) Invalidate() {
 	atomic.AddInt64(&p.Seq, 1)
@@ -139,7 +139,7 @@ func (p *Panel) Invalidate() {
 	p.StatusIsError = false
 }
 
-// startACPWorkersPanelLoad starts one capability-gated profile catalog read.
+// StartLoad starts one capability-gated profile catalog read.
 // It is called from the UI thread on tab entry.
 func (p *Panel) StartLoad(h host.Base) {
 	if !h.SettingsOpen() || h.SettingsTab() != "acpWorkers" {
@@ -213,7 +213,7 @@ func (p *Panel) ApplyCatalog(view *CatalogView) {
 	p.Err = ""
 }
 
-// applyACPWorkerProfiles adopts the patched catalog while keeping the
+// ApplyProfiles adopts the patched catalog while keeping the
 // capability vocabulary from the list response.
 func (p *Panel) ApplyProfiles(profiles []ProfileView) {
 	if profiles == nil {

@@ -364,7 +364,7 @@ func (p *Panel) Current(h Host, seq, reloadSeq int64) bool {
 		reloadSeq == h.ReloadSequence()
 }
 
-// invalidateMCPPanel drops transient state and makes every in-flight MCP
+// Invalidate drops transient state and makes every in-flight MCP
 // response stale. Loaded is reset so re-entering the tab reloads.
 func (p *Panel) Invalidate() {
 	atomic.AddInt64(&p.Seq, 1)
@@ -385,7 +385,7 @@ func (p *Panel) Invalidate() {
 	p.PendingDeleteIndex = 0
 }
 
-// startMCPPanelLoad starts one capability-gated global MCP load. It is called
+// StartLoad starts one capability-gated global MCP load. It is called
 // from the UI thread on tab entry.
 func (p *Panel) StartLoad(h Host) {
 	if !h.SettingsOpen() || h.SettingsTab() != "mcp" {

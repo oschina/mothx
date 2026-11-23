@@ -606,7 +606,7 @@ func (p *Panel) Current(h host.Base, seq, reloadSeq int64) bool {
 		reloadSeq == h.ReloadSequence()
 }
 
-// invalidateProviderPanel drops transient state and makes every in-flight
+// Invalidate drops transient state and makes every in-flight
 // provider response stale. Loaded is reset so re-entering the tab reloads.
 func (p *Panel) Invalidate() {
 	atomic.AddInt64(&p.Seq, 1)
@@ -629,7 +629,7 @@ func (p *Panel) Invalidate() {
 	p.CloseFallbackKey()
 }
 
-// startProviderPanelLoad starts one capability-gated load. It is called from
+// StartLoad starts one capability-gated load. It is called from
 // the UI thread on tab entry.
 func (p *Panel) StartLoad(h host.Base) {
 	if !h.SettingsOpen() || h.SettingsTab() != "providers" {
@@ -715,14 +715,14 @@ func (p *Panel) load(h host.Base, seq, startReloadSeq int64, caps CapabilitySet)
 		p.Catalog = catalog
 		p.Loaded = true
 		p.Err = ""
-		p.NormalizeDefaults(h)
+		p.NormalizeDefaults()
 		if p.Draft == nil {
-			p.SelectInitial(h, false)
+			p.SelectInitial(false)
 		}
 	})
 }
 
-func (p *Panel) NormalizeDefaults(h host.Base) {
+func (p *Panel) NormalizeDefaults() {
 	providers := p.ConfigIDs()
 	if len(providers) == 0 {
 		p.DefaultsProvider = ""
@@ -794,7 +794,7 @@ func (p *Panel) ConfigIDs() []string {
 	return nil
 }
 
-func (p *Panel) SelectInitial(h host.Base, invalidate bool) {
+func (p *Panel) SelectInitial(invalidate bool) {
 	candidates := p.ConfigIDs()
 	if len(candidates) == 0 {
 		p.ActiveID = ""
@@ -820,10 +820,10 @@ func (p *Panel) SelectInitial(h host.Base, invalidate bool) {
 	if initial == "" {
 		initial = candidates[0]
 	}
-	p.SelectDraft(h, initial, invalidate)
+	p.SelectDraft(initial, invalidate)
 }
 
-func (p *Panel) SelectDraft(h host.Base, id string, invalidate bool) {
+func (p *Panel) SelectDraft(id string, invalidate bool) {
 	config := ConfigByID(p.Catalog, id)
 	if config == nil {
 		return
@@ -923,20 +923,20 @@ func (p *Panel) Save(h host.Base) {
 			p.Catalog = &catalog
 			p.Loaded = true
 			p.Err = ""
-			p.ApplyCatalogDefaults(h)
+			p.ApplyCatalogDefaults()
 			if p.Settings != nil {
 				p.Settings.DefaultProvider = catalog.DefaultProvider
 				p.Settings.DefaultModel = catalog.DefaultModel
 			}
-			p.SelectDraft(h, savedID, false)
+			p.SelectDraft(savedID, false)
 			p.Status = "供应商已保存"
 			p.StatusIsError = false
-			p.NormalizeDefaults(h)
+			p.NormalizeDefaults()
 		})
 	}()
 }
 
-func (p *Panel) ApplyCatalogDefaults(h host.Base) {
+func (p *Panel) ApplyCatalogDefaults() {
 	if p.Catalog == nil {
 		return
 	}
@@ -1021,13 +1021,13 @@ func (p *Panel) ConfirmDelete(h host.Base) {
 			p.Catalog = &catalog
 			p.Loaded = true
 			p.Err = ""
-			p.ApplyCatalogDefaults(h)
+			p.ApplyCatalogDefaults()
 			p.ActiveID = ""
 			p.OriginalID = ""
 			p.Draft = nil
 			p.Secret = SecretDraft{}
-			p.NormalizeDefaults(h)
-			p.SelectInitial(h, false)
+			p.NormalizeDefaults()
+			p.SelectInitial(false)
 			p.Status = "供应商配置已移除"
 			p.StatusIsError = false
 		})
@@ -1274,7 +1274,7 @@ func (p *Panel) CloseDiscover() {
 	p.DiscoverSearch = ""
 }
 
-func (p *Panel) AddDiscoveredModels(h host.Base) {
+func (p *Panel) AddDiscoveredModels() {
 	if p.Draft == nil {
 		p.CloseDiscover()
 		return
@@ -1476,7 +1476,7 @@ func (p *Panel) SetDefault(h host.Base, name string) {
 	}()
 }
 
-// openProviderFallbackKey starts the degraded-panel quick key prompt. The key
+// OpenFallbackKey starts the degraded-panel quick key prompt. The key
 // stays write-only: it lives in this transient dialog state and is cleared on
 // success, cancel, or page invalidation.
 func (p *Panel) OpenFallbackKey(name string) {

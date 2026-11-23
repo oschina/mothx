@@ -8,7 +8,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsServePane renders the Native equivalent of the Desktop ServePanel
+// View renders the Native equivalent of the Desktop ServePanel
 // inside the Settings View. It is capability-gated by manageServeConfig and
 // only calls mothx/manage/serve/get and mothx/manage/serve/patch. It never
 // reads serve.json directly, starts a server, or changes the running ACP

@@ -117,7 +117,7 @@ func (p *Panel) Current(h host.Base, seq, reloadSeq int64) bool {
 		reloadSeq == h.ReloadSequence()
 }
 
-// invalidateChannelsPanel drops transient state and makes every in-flight
+// Invalidate drops transient state and makes every in-flight
 // channels response stale. Loaded is reset so re-entering the tab reloads.
 func (p *Panel) Invalidate() {
 	atomic.AddInt64(&p.Seq, 1)
@@ -150,7 +150,7 @@ func (p *Panel) Invalidate() {
 	p.RetryingDelivery = ""
 }
 
-// startChannelsPanelLoad starts one capability-gated channels read. It is
+// StartLoad starts one capability-gated channels read. It is
 // called from the UI thread on tab entry.
 func (p *Panel) StartLoad(h Host) {
 	if !h.SettingsOpen() || h.SettingsTab() != "channels" {
@@ -205,7 +205,7 @@ func (p *Panel) load(h Host, seq, startReloadSeq int64) {
 	})
 }
 
-// applyChannelsView replaces the local projection with a server response and
+// ApplyView replaces the local projection with a server response and
 // clears every write-only input. Stored credentials and app secrets are not
 // part of the response, and Native never reconstructs them from a configured
 // flag.
@@ -299,7 +299,7 @@ func BuildFeishuRequest(panel *State) (map[string]any, error) {
 	return map[string]any{"patch": map[string]any{"feishu": feishu}}, nil
 }
 
-// saveChannelsSection submits one card's patch. Only one save is allowed at a
+// SaveSection submits one card's patch. Only one save is allowed at a
 // time so a second section cannot overwrite the first response's hydration.
 func (p *Panel) SaveSection(h Host, section string) {
 	if !p.Capable(h) {

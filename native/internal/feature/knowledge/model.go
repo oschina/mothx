@@ -774,7 +774,7 @@ func (p *Panel) EnsureDraft(key string) *BaseDraft {
 	return draft
 }
 
-func (p *Panel) OpenNew(h Host) {
+func (p *Panel) OpenNew() {
 	p.Creating = true
 	if _, ok := p.Drafts[NewDraftKey]; !ok {
 		p.Drafts[NewDraftKey] = p.NewDraft()
@@ -953,6 +953,16 @@ func (p *Panel) RemoveView(id string) {
 	delete(p.Busy, id)
 }
 
+// SaveParams builds the create/update request envelope. The wire key stays
+// "knowledgeBase" so ACP create/update handlers can decode it.
+func SaveParams(id string, draft *BaseDraft) map[string]any {
+	params := map[string]any{"knowledgeBase": DraftPayload(draft)}
+	if trimmed := strings.TrimSpace(id); trimmed != "" {
+		params["id"] = trimmed
+	}
+	return params
+}
+
 func (p *Panel) Save(h Host, id string) {
 	if !p.Capable(h) {
 		p.Status = "当前运行时不支持知识库管理（manageKnowledgeBases）。"
@@ -978,13 +988,10 @@ func (p *Panel) Save(h Host, id string) {
 	}
 	creating := strings.TrimSpace(id) == ""
 	method := "mothx/manage/knowledge-bases/update"
-	params := map[string]any{
-		"id":   strings.TrimSpace(id),
-		"Base": DraftPayload(draft),
-	}
+	params := SaveParams(id, draft)
 	if creating {
 		method = "mothx/manage/knowledge-bases/create"
-		params = map[string]any{"Base": DraftPayload(draft)}
+		params = SaveParams("", draft)
 	}
 	seq := atomic.LoadInt64(&p.Seq)
 	startReloadSeq := h.ReloadSequence()

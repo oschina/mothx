@@ -96,7 +96,7 @@ func (a *nativeApp) startProviderPanelLoad() {
 }
 
 func (a *nativeApp) normalizeProviderDefaults() {
-	a.providers.NormalizeDefaults(a)
+	a.providers.NormalizeDefaults()
 }
 
 func (a *nativeApp) providerConfigIDs() []string {
@@ -104,11 +104,11 @@ func (a *nativeApp) providerConfigIDs() []string {
 }
 
 func (a *nativeApp) selectInitialProvider(invalidate bool) {
-	a.providers.SelectInitial(a, invalidate)
+	a.providers.SelectInitial(invalidate)
 }
 
 func (a *nativeApp) selectProviderDraft(id string, invalidate bool) {
-	a.providers.SelectDraft(a, id, invalidate)
+	a.providers.SelectDraft(id, invalidate)
 }
 
 func (a *nativeApp) startNewProviderDraft() {
@@ -120,7 +120,7 @@ func (a *nativeApp) saveProviderDraft() {
 }
 
 func (a *nativeApp) applyCatalogDefaults() {
-	a.providers.ApplyCatalogDefaults(a)
+	a.providers.ApplyCatalogDefaults()
 }
 
 func (a *nativeApp) requestDeleteProvider() {
@@ -152,7 +152,7 @@ func (a *nativeApp) closeDiscoverDialog() {
 }
 
 func (a *nativeApp) addDiscoveredModels() {
-	a.providers.AddDiscoveredModels(a)
+	a.providers.AddDiscoveredModels()
 }
 
 func (a *nativeApp) providerFilteredConfigs() []providers.ConfigView {

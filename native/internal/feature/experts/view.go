@@ -10,7 +10,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsExpertsPane renders the Native expert-team manager inside the
+// View renders the Native expert-team manager inside the
 // Settings View. Every fact comes from the ACP experts projection: bundles are
 // resolved and persisted by the Runtime, builtins are read-only, and the
 // project layer is bound to the selected workspace.

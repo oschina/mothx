@@ -117,7 +117,7 @@ func (a *nativeApp) applySkillHubConfigView(v *skillhub.ConfigView) { a.skillhub
 func (a *nativeApp) saveSkillHubConfig()                            { a.skillhub.SaveConfig(a) }
 func (a *nativeApp) openSkillHubAddMarket()                         { a.skillhub.OpenAddMarket(a) }
 func (a *nativeApp) closeSkillHubAddMarket()                        { a.skillhub.CloseAddMarket() }
-func (a *nativeApp) confirmSkillHubAddMarket()                      { a.skillhub.ConfirmAddMarket(a) }
+func (a *nativeApp) confirmSkillHubAddMarket()                      { a.skillhub.ConfirmAddMarket() }
 func (a *nativeApp) removeSkillHubMarket(i int)                     { a.skillhub.RemoveMarket(i) }
 func (a *nativeApp) startSkillHubCatalogLoad()                      { a.skillhub.StartCatalogLoad(a) }
 func (a *nativeApp) applySkillHubCatalogViews(sessionID string, markets *skillhub.MarketsView, targets *skillhub.TargetsView, installed *skillhub.InstalledView) {
@@ -158,7 +158,7 @@ func (a *nativeApp) skillHubCatalogErrorCard(c *ui.Context, p palette, message s
 	a.skillhub.CatalogErrorCard(a, c, p, message)
 }
 func (a *nativeApp) skillHubStatusBanner(c *ui.Context, p palette, status string, isError, busy bool) {
-	a.skillhub.StatusBanner(a, c, p, status, isError, busy)
+	a.skillhub.StatusBanner(c, p, status, isError, busy)
 }
 func (a *nativeApp) skillHubCategoryRow(c *ui.Context, p palette) { a.skillhub.CategoryRow(a, c, p) }
 func (a *nativeApp) skillHubSortRow(c *ui.Context, p palette)     { a.skillhub.SortRow(a, c, p) }

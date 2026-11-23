@@ -128,7 +128,7 @@ type PromptResult struct {
 }
 
 type SessionUpdate struct {
-	SessionUpdate string                     `json:"SessionUpdate"`
+	SessionUpdate string                     `json:"sessionUpdate"`
 	MessageID     string                     `json:"messageId,omitempty"`
 	ConfigID      string                     `json:"configId,omitempty"`
 	Value         string                     `json:"value,omitempty"`
@@ -320,7 +320,7 @@ type ApplicationRetryView struct {
 type ApplicationStatusLineView struct {
 	Enabled         bool   `json:"enabled"`
 	Type            string `json:"type"`
-	Command         string `json:"Command"`
+	Command         string `json:"command"`
 	Padding         int    `json:"padding"`
 	RefreshInterval int    `json:"refreshInterval"`
 	TimeoutMs       int    `json:"timeoutMs"`

@@ -11,7 +11,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsKnowledgePane renders the native knowledge-base manager inside the
+// View renders the native knowledge-base manager inside the
 // Settings View. Every fact comes from the ACP management projection: the
 // source directory is read-only and is never scanned by this client, and
 // deletion never removes the user's files.
@@ -24,7 +24,7 @@ func (p *Panel) View(h Host, c *ui.Context, pal kit.Palette) {
 		return
 	}
 
-	p.PaneHeader(h, c, pal)
+	p.PaneHeader(c, pal)
 
 	if p.Loading && !p.Loaded {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
@@ -40,7 +40,7 @@ func (p *Panel) View(h Host, c *ui.Context, pal kit.Palette) {
 		}
 	}
 	if p.Status != "" {
-		p.StatusBanner(h, c, pal)
+		p.StatusBanner(c, pal)
 	}
 	if p.Loading && p.Loaded {
 		ui.Text(c, i18n.T("正在刷新知识库投影…")).FontSize(10.5).TextColor(pal.T.TextMuted)
@@ -61,7 +61,7 @@ func (p *Panel) View(h Host, c *ui.Context, pal kit.Palette) {
 	}
 }
 
-func (p *Panel) PaneHeader(h Host, c *ui.Context, pal kit.Palette) {
+func (p *Panel) PaneHeader(c *ui.Context, pal kit.Palette) {
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
 		ui.Icon(c, icons.IconBook).FontSize(18).TextColor(pal.T.Accent)
 		ui.Column(c).Gap(2).Grow(1).Children(func() {
@@ -73,7 +73,7 @@ func (p *Panel) PaneHeader(h Host, c *ui.Context, pal kit.Palette) {
 		add.Label(i18n.T("新建知识库")).Tooltip(i18n.T("创建目录知识库"))
 		add.Disabled(!p.Loaded || p.Loading || p.Creating || p.Defaults == nil)
 		if add.Clicked() && p.Loaded && !p.Loading && !p.Creating && p.Defaults != nil {
-			p.OpenNew(h)
+			p.OpenNew()
 		}
 	})
 }
@@ -95,7 +95,7 @@ func (p *Panel) ErrCard(h Host, c *ui.Context, pal kit.Palette, message string) 
 	})
 }
 
-func (p *Panel) StatusBanner(h Host, c *ui.Context, pal kit.Palette) {
+func (p *Panel) StatusBanner(c *ui.Context, pal kit.Palette) {
 	color := pal.T.TextMuted
 	bg := pal.Thought
 	if p.StatusIsError {
@@ -158,14 +158,14 @@ func (p *Panel) BaseCard(h Host, c *ui.Context, pal kit.Palette, view *BaseView,
 			})
 		})
 
-		p.TextInput(h, c, pal, knowledgeFieldKey(key, "name"), "名称", "", &draft.Name)
+		p.TextInput(c, pal, knowledgeFieldKey(key, "name"), "名称", "", &draft.Name)
 		p.RootField(h, c, pal, key, draft)
-		p.SelectField(h, c, pal, knowledgeFieldKey(key, "profile"), "预处理类型", Profiles, &draft.PreprocessProfile)
-		p.ProviderField(h, c, pal, key, draft)
-		p.ModelField(h, c, pal, key, draft)
-		p.SelectField(h, c, pal, knowledgeFieldKey(key, "mode"), "模式", Modes, &draft.Mode)
-		p.TextInput(h, c, pal, knowledgeFieldKey(key, "thinking"), "思考等级（可选）", "", &draft.ThinkingLevel)
-		p.TextInput(h, c, pal, knowledgeFieldKey(key, "schedule"), "扫描周期",
+		p.SelectField(c, pal, knowledgeFieldKey(key, "profile"), "预处理类型", Profiles, &draft.PreprocessProfile)
+		p.ProviderField(c, pal, key, draft)
+		p.ModelField(c, pal, key, draft)
+		p.SelectField(c, pal, knowledgeFieldKey(key, "mode"), "模式", Modes, &draft.Mode)
+		p.TextInput(c, pal, knowledgeFieldKey(key, "thinking"), "思考等级（可选）", "", &draft.ThinkingLevel)
+		p.TextInput(c, pal, knowledgeFieldKey(key, "schedule"), "扫描周期",
 			"manual / hourly / daily / @every 6h / 5 段 cron", &draft.Schedule)
 		ui.Checkbox(c.Key(knowledgeFieldKey(key, "enabled")), &draft.Enabled, i18n.T("启用知识库")).FontSize(11.5)
 
@@ -243,7 +243,7 @@ func (p *Panel) RootField(h Host, c *ui.Context, pal kit.Palette, key string, dr
 	})
 }
 
-func (p *Panel) ProviderField(h Host, c *ui.Context, pal kit.Palette, key string, draft *BaseDraft) {
+func (p *Panel) ProviderField(c *ui.Context, pal kit.Palette, key string, draft *BaseDraft) {
 	options := []string{}
 	if p.Defaults != nil {
 		options = p.Defaults.Providers
@@ -255,10 +255,10 @@ func (p *Panel) ProviderField(h Host, c *ui.Context, pal kit.Palette, key string
 		})
 		return
 	}
-	p.SelectField(h, c, pal, knowledgeFieldKey(key, "provider"), "供应商", options, &draft.Provider)
+	p.SelectField(c, pal, knowledgeFieldKey(key, "provider"), "供应商", options, &draft.Provider)
 }
 
-func (p *Panel) ModelField(h Host, c *ui.Context, pal kit.Palette, key string, draft *BaseDraft) {
+func (p *Panel) ModelField(c *ui.Context, pal kit.Palette, key string, draft *BaseDraft) {
 	var models []providers.CatalogModel
 	if p.Defaults != nil {
 		models = p.Defaults.Models
@@ -274,12 +274,12 @@ func (p *Panel) ModelField(h Host, c *ui.Context, pal kit.Palette, key string, d
 	}
 	for _, choice := range choices {
 		if choice == draft.Model {
-			p.SelectField(h, c, pal, knowledgeFieldKey(key, "model"), "模型", choices, &draft.Model)
+			p.SelectField(c, pal, knowledgeFieldKey(key, "model"), "模型", choices, &draft.Model)
 			return
 		}
 	}
 	draft.Model = choices[0]
-	p.SelectField(h, c, pal, knowledgeFieldKey(key, "model"), "模型", choices, &draft.Model)
+	p.SelectField(c, pal, knowledgeFieldKey(key, "model"), "模型", choices, &draft.Model)
 }
 
 func (p *Panel) ScheduleStatus(h Host, c *ui.Context, pal kit.Palette, id, key string) {
@@ -406,7 +406,7 @@ func (p *Panel) InsightsPanel(h Host, c *ui.Context, pal kit.Palette, id, key st
 			case "runs":
 				p.RunsTab(h, c, pal, id, key, ins)
 			case "sources":
-				p.SourcesTab(h, c, pal, ins)
+				p.SourcesTab(c, pal, ins)
 			}
 		}
 		p.QueryPreview(h, c, pal, id, key, ins)
@@ -467,7 +467,7 @@ func (p *Panel) RunsTab(h Host, c *ui.Context, pal kit.Palette, id, key string, 
 	}
 }
 
-func (p *Panel) SourcesTab(h Host, c *ui.Context, pal kit.Palette, ins *InsightsState) {
+func (p *Panel) SourcesTab(c *ui.Context, pal kit.Palette, ins *InsightsState) {
 	if len(ins.Sources) == 0 {
 		ui.Text(c, i18n.T("当前快照暂无来源文件")).FontSize(11).TextColor(pal.T.TextMuted)
 		return
@@ -524,12 +524,12 @@ func (p *Panel) QueryPreview(h Host, c *ui.Context, pal kit.Palette, id, key str
 			ui.Text(c, i18n.T(ins.QueryErr)).FontSize(10.5).TextColor(pal.T.Danger).LineHeight(1.35)
 		}
 		if ins.QueryResult != nil {
-			p.QueryResult(h, c, pal, ins.QueryResult)
+			p.QueryResult(c, pal, ins.QueryResult)
 		}
 	})
 }
 
-func (p *Panel) QueryResult(h Host, c *ui.Context, pal kit.Palette, result *GraphQuery) {
+func (p *Panel) QueryResult(c *ui.Context, pal kit.Palette, result *GraphQuery) {
 	ui.Column(c).Gap(3).Children(func() {
 		summary := i18n.Tf("返回 %d 个分块 · %d 个节点", len(result.Chunks), len(result.Nodes))
 		if result.Truncated {
@@ -559,7 +559,7 @@ func (p *Panel) QueryResult(h Host, c *ui.Context, pal kit.Palette, result *Grap
 	})
 }
 
-func (p *Panel) TextInput(h Host, c *ui.Context, pal kit.Palette, key, label, placeholder string, value *string) {
+func (p *Panel) TextInput(c *ui.Context, pal kit.Palette, key, label, placeholder string, value *string) {
 	ui.Column(c).Gap(3).Children(func() {
 		ui.Text(c, i18n.T(label)).FontSize(10.5).FontWeight(600).TextColor(pal.T.TextMuted)
 		input := ui.TextInput(c.Key(key), value).FontSize(12).Height(32).Padding(0, 8).
@@ -570,7 +570,7 @@ func (p *Panel) TextInput(h Host, c *ui.Context, pal kit.Palette, key, label, pl
 	})
 }
 
-func (p *Panel) SelectField(h Host, c *ui.Context, pal kit.Palette, key, label string, options []string, value *string) {
+func (p *Panel) SelectField(c *ui.Context, pal kit.Palette, key, label string, options []string, value *string) {
 	ui.Column(c).Gap(3).Children(func() {
 		ui.Text(c, i18n.T(label)).FontSize(10.5).FontWeight(600).TextColor(pal.T.TextMuted)
 		ui.Select(c.Key(key), value, options).FontSize(12).Height(32).Padding(0, 8).
@@ -582,7 +582,7 @@ func knowledgeFieldKey(draftKey, field string) string {
 	return "knowledge:" + draftKey + ":" + field
 }
 
-// settingsKnowledgeDialogs renders Native delete/clear confirmations above the
+// Dialogs renders Native delete/clear confirmations above the
 // settings page. Neither action deletes the source directory.
 func (p *Panel) Dialogs(h Host, c *ui.Context, pal kit.Palette) {
 	if !h.SettingsOpen() && h.Page() != "library" {

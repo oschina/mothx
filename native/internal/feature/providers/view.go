@@ -11,7 +11,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsProvidersPane renders the real provider manager inside the Native
+// View renders the real provider manager inside the Native
 // three-pane Settings view. The full catalog/editor requires manageProviders
 // plus manageProviderConfig; when the latter is absent the panel degrades to
 // the legitimate settings/providers-list operations (defaults, set default,
@@ -62,7 +62,7 @@ func (p *Panel) View(h host.Base, c *ui.Context, pal kit.Palette) {
 	}
 
 	ui.Row(c).AlignItems(ui.Start).Gap(12).Children(func() {
-		p.catalogColumn(h, c, pal)
+		p.catalogColumn(c, pal)
 		p.editorColumn(h, c, pal)
 	})
 }
@@ -230,7 +230,7 @@ func FallbackDescription(provider Summary) string {
 	return strings.Join(parts, " · ")
 }
 
-func (p *Panel) catalogColumn(h host.Base, c *ui.Context, pal kit.Palette) {
+func (p *Panel) catalogColumn(c *ui.Context, pal kit.Palette) {
 	ui.Column(c).WidthPercent(42).MaxWidth(260).Padding(10).Radius(12).Background(pal.T.Surface).
 		Border(1, pal.T.Border).Gap(8).Children(func() {
 		ui.Text(c, i18n.T("供应商目录")).FontSize(12).FontWeight(650).TextColor(pal.T.Text)
@@ -254,7 +254,7 @@ func (p *Panel) catalogColumn(h host.Base, c *ui.Context, pal kit.Palette) {
 				ui.Column(c).Gap(3).Children(func() {
 					for _, config := range configs {
 						config := config
-						p.catalogRow(h, c, pal, config)
+						p.catalogRow(c, pal, config)
 					}
 				})
 			})
@@ -289,7 +289,7 @@ func (p *Panel) scopeButton(c *ui.Context, pal kit.Palette, key, label, scope st
 	}
 }
 
-func (p *Panel) catalogRow(h host.Base, c *ui.Context, pal kit.Palette, config ConfigView) {
+func (p *Panel) catalogRow(c *ui.Context, pal kit.Palette, config ConfigView) {
 	active := config.ID == p.ActiveID
 	b := ui.ButtonBase(c.Key("provider-catalog:"+config.ID)).Padding(6, 7).Radius(8).
 		AlignItems(ui.Center).Gap(7).Border(1, pal.T.Border)
@@ -319,7 +319,7 @@ func (p *Panel) catalogRow(h host.Base, c *ui.Context, pal kit.Palette, config C
 	})
 	b.Label(i18n.T("编辑供应商 ") + config.ID).Tooltip(config.Provider.BaseURL)
 	if b.Clicked() {
-		p.SelectDraft(h, config.ID, true)
+		p.SelectDraft(config.ID, true)
 	}
 }
 
@@ -354,9 +354,9 @@ func (p *Panel) editorColumn(h host.Base, c *ui.Context, pal kit.Palette) {
 		case EditorModels:
 			p.modelsTab(h, c, pal)
 		case providerEditorAdvanced:
-			p.advancedTab(h, c, pal)
+			p.advancedTab(c, pal)
 		default:
-			p.connectionTab(h, c, pal)
+			p.connectionTab(c, pal)
 		}
 	})
 }
@@ -401,7 +401,7 @@ func (p *Panel) editorHeader(h host.Base, c *ui.Context, pal kit.Palette) {
 	})
 }
 
-func (p *Panel) connectionTab(h host.Base, c *ui.Context, pal kit.Palette) {
+func (p *Panel) connectionTab(c *ui.Context, pal kit.Palette) {
 	draft := p.Draft
 	isNew := p.OriginalID == "" && ConfigByID(p.Catalog, draft.ID) == nil
 	canRename := isNew || draft.GlobalOverride
@@ -517,7 +517,7 @@ func (p *Panel) modelRow(c *ui.Context, pal kit.Palette, index int) {
 	})
 }
 
-func (p *Panel) advancedTab(h host.Base, c *ui.Context, pal kit.Palette) {
+func (p *Panel) advancedTab(c *ui.Context, pal kit.Palette) {
 	draft := p.Draft
 	ui.Column(c).Gap(10).Children(func() {
 		if draft.GlobalOverride {
@@ -567,7 +567,7 @@ func (p *Panel) Dialogs(h host.Base, c *ui.Context, pal kit.Palette) {
 		p.deleteDialog(h, c, pal)
 	}
 	if p.DiscoverOpen {
-		p.discoverDialog(h, c, pal)
+		p.discoverDialog(c, pal)
 	}
 	if p.FallbackKeyOpen {
 		p.fallbackKeyDialog(h, c, pal)
@@ -655,7 +655,7 @@ func (p *Panel) deleteDialog(h host.Base, c *ui.Context, pal kit.Palette) {
 	}
 }
 
-func (p *Panel) discoverDialog(h host.Base, c *ui.Context, pal kit.Palette) {
+func (p *Panel) discoverDialog(c *ui.Context, pal kit.Palette) {
 	dialog := ui.DialogBase(c, &p.DiscoverOpen, func(backdrop, dialog ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.55))
 		dialog.Width(560).Padding(18).Radius(14).Background(pal.T.Background).
@@ -716,7 +716,7 @@ func (p *Panel) discoverDialog(h host.Base, c *ui.Context, pal kit.Palette) {
 				add.Label(i18n.T("添加选中的发现模型"))
 				add.Disabled(selectedCount == 0)
 				if add.Clicked() && selectedCount > 0 {
-					p.AddDiscoveredModels(h)
+					p.AddDiscoveredModels()
 				}
 			})
 		})

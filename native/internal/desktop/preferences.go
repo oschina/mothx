@@ -448,7 +448,3 @@ const nativeBackgroundVeilAlpha = 0.66
 func (a *nativeApp) appBackgroundActive() bool {
 	return a.home.backgroundScope != "home" && a.home.backgroundImage != nil
 }
-
-// veiled projects the translucent chrome surfaces Desktop uses over an
-// app-wide background so text stays readable on any image. Dialogs and menus
-// keep their opaque theme surfaces.

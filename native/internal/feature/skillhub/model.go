@@ -648,7 +648,7 @@ func (p *Panel) CloseAddMarket() {
 	p.AddMarketErr = ""
 }
 
-func (p *Panel) ConfirmAddMarket(h Host) {
+func (p *Panel) ConfirmAddMarket() {
 	id := strings.TrimSpace(p.AddMarketID)
 	if id == "" {
 		p.AddMarketErr = "市场 ID 不能为空"

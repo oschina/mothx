@@ -122,7 +122,7 @@ func (p *Panel) Current(h Host, seq, reloadSeq int64) bool {
 		reloadSeq == h.ReloadSequence()
 }
 
-// invalidateSkillsPanel drops transient state and makes every in-flight skills
+// Invalidate drops transient state and makes every in-flight skills
 // response stale. Loaded is reset so re-entering the tab reloads.
 func (p *Panel) Invalidate() {
 	atomic.AddInt64(&p.Seq, 1)
@@ -136,7 +136,7 @@ func (p *Panel) Invalidate() {
 	p.StatusIsError = false
 }
 
-// startSkillsPanelLoad starts one capability-gated skills load for the
+// StartLoad starts one capability-gated skills load for the
 // selected workspace. It is called from the UI thread on tab entry.
 func (p *Panel) StartLoad(h Host) {
 	if !h.PanelVisible("skills", "skills") {
@@ -215,7 +215,7 @@ func (p *Panel) ApplyListView(view *ListView, workspaceCwd string) {
 	p.Err = ""
 }
 
-// toggleSkill flips one skill through mothx/manage/skills/set, then reloads
+// Toggle flips one skill through mothx/manage/skills/set, then reloads
 // the list so descriptions and source stay Runtime-authoritative. Only one
 // toggle can be in flight at a time because the Runtime persists a single
 // disabled-skill list.
@@ -310,7 +310,7 @@ func (p *Panel) Toggle(h Host, index int) {
 	}()
 }
 
-// applySkillToggleLocally keeps the visible row in sync when skills/set
+// ApplyToggleLocally keeps the visible row in sync when skills/set
 // succeeded but the follow-up list refresh failed.
 func (p *Panel) ApplyToggleLocally(name string, enabled bool) {
 	for index := range p.Skills {

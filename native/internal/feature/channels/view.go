@@ -7,7 +7,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsChannelsPane renders the Native equivalent of the Desktop
+// View renders the Native equivalent of the Desktop
 // ChannelsPanel inside the Settings View. It is capability-gated by
 // manageChannels and only calls mothx/manage/channels/get and
 // mothx/manage/channels/patch. It never reads serve.json directly, starts a

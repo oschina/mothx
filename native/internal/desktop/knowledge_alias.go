@@ -86,7 +86,7 @@ func (a *nativeApp) normalizeKnowledgeDraft(draft *knowledge.BaseDraft) {
 func (a *nativeApp) ensureKnowledgeDraft(key string) *knowledge.BaseDraft {
 	return a.knowledge.EnsureDraft(key)
 }
-func (a *nativeApp) openKnowledgeNew()   { a.knowledge.OpenNew(a) }
+func (a *nativeApp) openKnowledgeNew()   { a.knowledge.OpenNew() }
 func (a *nativeApp) cancelKnowledgeNew() { a.knowledge.CancelNew() }
 func (a *nativeApp) knowledgeMCPEntry(id string) (mcp.ServerView, bool) {
 	return a.knowledge.MCPEntry(id)
@@ -118,7 +118,7 @@ func (a *nativeApp) knowledgeErrorCard(c *ui.Context, p palette, message string)
 	a.knowledge.ErrCard(a, c, p, message)
 }
 func (a *nativeApp) knowledgeStatusBanner(c *ui.Context, p palette) {
-	a.knowledge.StatusBanner(a, c, p)
+	a.knowledge.StatusBanner(c, p)
 }
 func (a *nativeApp) settingsKnowledgeDialogs(c *ui.Context, p palette) {
 	a.knowledge.Dialogs(a, c, p)

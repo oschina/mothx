@@ -12,7 +12,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsSkillHubPane renders the Native SkillHub manager. Configuration and
+// View renders the Native SkillHub manager. Configuration and
 // catalogue capabilities are gated independently: manageSkillHub owns the
 // global token-free market configuration, while manageSkillHubCatalog owns the
 // session-bound marketplace browser. No panel reads settings.json or a skill
@@ -58,7 +58,7 @@ func (p *Panel) ConfigPane(h Host, c *ui.Context, pal kit.Palette) {
 		}
 	}
 	if p.ConfigStatus != "" {
-		p.StatusBanner(h, c, pal, p.ConfigStatus, p.ConfigStatusIsError, p.ConfigSaving)
+		p.StatusBanner(c, pal, p.ConfigStatus, p.ConfigStatusIsError, p.ConfigSaving)
 	}
 	if p.ConfigLoading && p.ConfigLoaded {
 		ui.Text(c, i18n.T("正在刷新 SkillHub 配置…")).FontSize(10.5).TextColor(pal.T.TextMuted)
@@ -73,10 +73,10 @@ func (p *Panel) ConfigPane(h Host, c *ui.Context, pal kit.Palette) {
 			if len(ids) > 0 {
 				kit.SettingsSelect(c, pal, "skillhub-default-market", "默认市场", ids, &p.DefaultMarket)
 			} else {
-				p.LabeledInput(h, c, pal, "skillhub-default-market-text", "默认市场", &p.DefaultMarket, p.ConfigSaving)
+				p.LabeledInput(c, pal, "skillhub-default-market-text", "默认市场", &p.DefaultMarket, p.ConfigSaving)
 			}
 			kit.SettingsSelect(c, pal, "skillhub-default-scope", "默认安装范围", []string{"project", "global"}, &p.DefaultInstallScope)
-			p.LabeledTextArea(h, c, pal, "skillhub-official-handles", "官方推荐 Handles（每行一个）", &p.OfficialHandles, 3, p.ConfigSaving)
+			p.LabeledTextArea(c, pal, "skillhub-official-handles", "官方推荐 Handles（每行一个）", &p.OfficialHandles, 3, p.ConfigSaving)
 			ui.Text(c, i18n.T("Token 只写入服务端；已配置状态只会显示为布尔标记，从不回显。")).
 				FontSize(9.5).TextColor(pal.T.TextMuted)
 		})
@@ -92,7 +92,7 @@ func (p *Panel) ConfigPane(h Host, c *ui.Context, pal kit.Palette) {
 			} else {
 				for index := range p.Markets {
 					index := index
-					p.MarketEditor(h, c, pal, index)
+					p.MarketEditor(c, pal, index)
 				}
 			}
 			ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Gap(8).Children(func() {
@@ -122,7 +122,7 @@ func Contains(values []string, want string) bool {
 	return false
 }
 
-func (p *Panel) MarketEditor(h Host, c *ui.Context, pal kit.Palette, index int) {
+func (p *Panel) MarketEditor(c *ui.Context, pal kit.Palette, index int) {
 	if index < 0 || index >= len(p.Markets) {
 		return
 	}
@@ -147,15 +147,15 @@ func (p *Panel) MarketEditor(h Host, c *ui.Context, pal kit.Palette, index int) 
 		})
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Column(c).Grow(1).Children(func() {
-				p.LabeledInput(h, c, pal, fmt.Sprintf("skillhub-market-name:%d", index), "名称", &market.Name, busy)
+				p.LabeledInput(c, pal, fmt.Sprintf("skillhub-market-name:%d", index), "名称", &market.Name, busy)
 			})
 			ui.Column(c).Grow(1).Children(func() {
-				p.LabeledInput(h, c, pal, fmt.Sprintf("skillhub-market-site:%d", index), "站点 URL", &market.SiteURL, busy)
+				p.LabeledInput(c, pal, fmt.Sprintf("skillhub-market-site:%d", index), "站点 URL", &market.SiteURL, busy)
 			})
 		})
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Column(c).Grow(1).Children(func() {
-				p.LabeledInput(h, c, pal, fmt.Sprintf("skillhub-market-api:%d", index), "API URL", &market.APIURL, busy)
+				p.LabeledInput(c, pal, fmt.Sprintf("skillhub-market-api:%d", index), "API URL", &market.APIURL, busy)
 			})
 			ui.Column(c).Grow(1).Children(func() {
 				status := "尚未配置 Token"
@@ -220,7 +220,7 @@ func (p *Panel) BrowsePane(h Host, c *ui.Context, pal kit.Palette) {
 		}
 	}
 	if p.CatalogStatus != "" {
-		p.StatusBanner(h, c, pal, p.CatalogStatus, p.CatalogStatusIsError, p.ActionBusy != "" || p.SearchBusy)
+		p.StatusBanner(c, pal, p.CatalogStatus, p.CatalogStatusIsError, p.ActionBusy != "" || p.SearchBusy)
 	}
 	if p.CatalogLoading && p.CatalogLoaded {
 		ui.Text(c, i18n.T("正在刷新市场目录…")).FontSize(10.5).TextColor(pal.T.TextMuted)
@@ -535,7 +535,7 @@ func PrettyJSON(raw json.RawMessage) string {
 	return strings.TrimSpace(buf.String())
 }
 
-func (p *Panel) StatusBanner(h Host, c *ui.Context, pal kit.Palette, status string, isError, busy bool) {
+func (p *Panel) StatusBanner(c *ui.Context, pal kit.Palette, status string, isError, busy bool) {
 	color := pal.T.TextMuted
 	bg := pal.Thought
 	if isError {
@@ -588,7 +588,7 @@ func (p *Panel) CatalogErrorCard(h Host, c *ui.Context, pal kit.Palette, message
 	})
 }
 
-func (p *Panel) LabeledInput(h Host, c *ui.Context, pal kit.Palette, key, label string, value *string, disabled bool) {
+func (p *Panel) LabeledInput(c *ui.Context, pal kit.Palette, key, label string, value *string, disabled bool) {
 	ui.Column(c).Gap(3).Children(func() {
 		ui.Text(c, i18n.T(label)).FontSize(10.5).FontWeight(600).TextColor(pal.T.TextMuted)
 		input := ui.TextInput(c.Key(key), value).FontSize(12).Height(32).Padding(0, 8).
@@ -597,7 +597,7 @@ func (p *Panel) LabeledInput(h Host, c *ui.Context, pal kit.Palette, key, label 
 	})
 }
 
-func (p *Panel) LabeledTextArea(h Host, c *ui.Context, pal kit.Palette, key, label string, value *string, lines int, disabled bool) {
+func (p *Panel) LabeledTextArea(c *ui.Context, pal kit.Palette, key, label string, value *string, lines int, disabled bool) {
 	ui.Column(c).Gap(3).Children(func() {
 		ui.Text(c, i18n.T(label)).FontSize(10.5).FontWeight(600).TextColor(pal.T.TextMuted)
 		area := ui.TextAreaBase(c.Key(key), value).FontSize(12).Lines(lines, lines*3).
@@ -617,14 +617,14 @@ func (p *Panel) Dialogs(h Host, c *ui.Context, pal kit.Palette) {
 		p.DetailDialog(h, c, pal)
 	}
 	if p.AddMarketOpen {
-		p.AddMarketDialog(h, c, pal)
+		p.AddMarketDialog(c, pal)
 	}
 	if p.UninstallOpen {
 		p.UninstallDialog(h, c, pal)
 	}
 }
 
-func (p *Panel) AddMarketDialog(h Host, c *ui.Context, pal kit.Palette) {
+func (p *Panel) AddMarketDialog(c *ui.Context, pal kit.Palette) {
 	dialog := ui.DialogBase(c, &p.AddMarketOpen, func(backdrop, dialog ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.55))
 		dialog.Width(430).Padding(18).Radius(14).Background(pal.T.Background).
@@ -636,7 +636,7 @@ func (p *Panel) AddMarketDialog(h Host, c *ui.Context, pal kit.Palette) {
 			})
 			ui.Text(c, i18n.T("市场 ID 是持久化配置键，例如 yuandun、skillhub.cn 或 clawhub.ai。")).
 				FontSize(10.5).TextColor(pal.T.TextMuted).LineHeight(1.4)
-			p.LabeledInput(h, c, pal, "skillhub-add-market-id", "市场 ID", &p.AddMarketID, false)
+			p.LabeledInput(c, pal, "skillhub-add-market-id", "市场 ID", &p.AddMarketID, false)
 			if p.AddMarketErr != "" {
 				ui.Text(c, i18n.T(p.AddMarketErr)).FontSize(10.5).TextColor(pal.T.Danger).Selectable()
 			}
@@ -649,7 +649,7 @@ func (p *Panel) AddMarketDialog(h Host, c *ui.Context, pal kit.Palette) {
 				add := ui.PrimaryButton(c.Key("skillhub-add-market-confirm"), i18n.T("添加"))
 				add.Label(i18n.T("添加市场到草稿列表"))
 				if add.Clicked() {
-					p.ConfirmAddMarket(h)
+					p.ConfirmAddMarket()
 				}
 			})
 		})
@@ -688,7 +688,7 @@ func (p *Panel) DetailDialog(h Host, c *ui.Context, pal kit.Palette) {
 				ui.Text(c, i18n.T(p.DetailErr)).FontSize(10.5).TextColor(pal.T.Danger).Selectable()
 			}
 			if detail != nil {
-				p.DetailBody(h, c, pal, detail)
+				p.DetailBody(c, pal, detail)
 			}
 			ui.Row(c).AlignItems(ui.Center).Justify(ui.End).Gap(8).Children(func() {
 				close := ui.Button(c.Key("skillhub-detail-close"), i18n.T("关闭"))
@@ -707,7 +707,7 @@ func (p *Panel) DetailDialog(h Host, c *ui.Context, pal kit.Palette) {
 	}
 }
 
-func (p *Panel) DetailBody(h Host, c *ui.Context, pal kit.Palette, detail *Detail) {
+func (p *Panel) DetailBody(c *ui.Context, pal kit.Palette, detail *Detail) {
 	skill := detail.Skill
 	state := detail.Installed
 	ui.Row(c).AlignItems(ui.Center).Gap(5).Children(func() {

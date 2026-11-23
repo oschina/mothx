@@ -10,7 +10,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsSkillsPane renders the Native skills manager inside the Settings
+// View renders the Native skills manager inside the Settings
 // View. It is capability-gated by manageSkills and only calls
 // mothx/manage/skills/list and mothx/manage/skills/set for the selected
 // workspace; the panel never reads settings.json or skill directories.

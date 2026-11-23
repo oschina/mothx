@@ -9,7 +9,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsChannelDeliveriesCard renders the additive delivery-failure
+// DeliveriesCard renders the additive delivery-failure
 // projection on the Channels panel, mirroring Desktop's ChannelsPanel section.
 // Only Runtime-marked retryable failures expose a retry action.
 func (p *Panel) DeliveriesCard(h Host, c *ui.Context, pal kit.Palette) {

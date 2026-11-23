@@ -11,7 +11,7 @@ import (
 	"github.com/oschina/mothx/native/internal/kit"
 )
 
-// settingsACPWorkersPane renders the Native equivalent of the Desktop
+// View renders the Native equivalent of the Desktop
 // AcpWorkersPanel. It is capability-gated by manageACPProfiles and only calls
 // mothx/manage/acp/profiles/list and mothx/manage/acp/profiles/patch.
 //
