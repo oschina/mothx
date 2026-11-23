@@ -35,6 +35,8 @@
 
 - **Thinking switches and reasoning effort now match each vendor's documented contract.** An explicit thinking-off now sends `thinking: {type: "disabled"}` for DeepSeek Chat Completions/Anthropic Messages and `enable_thinking: false` for Qwen hybrid models instead of silently leaving thinking on, DeepSeek V4.1 uses `reasoning_effort: "none"` on the Responses API, and GLM effort maps to `low`/`high`/`max` so `medium` is never sent. DeepSeek effort follows its documented scale (`minimal`/`low` → `low`, `medium`/`high`/`xhigh` → `high`, `max` → `max`), gateway Qwen3.5+ and GLM model IDs are detected for thinking-format resolution, and a configured model list no longer inherits `compat` from the built-in preset at the same slice index.
 
+- **MothX Native run and transport reliability fixes.** Session load and session-list responses now carry a connection generation, so a slow or failed load for a session the user already left cannot clear another session or reuse its cached transcript, and a session-list refresh requested while one is in flight is re-queued instead of silently dropped. The ACP client stores its child pointer atomically, bounds ordinary requests with a 5-minute deadline (`session/prompt` stays unbounded), and closes the child through the owned `os.Process` handle so a reused PID cannot be killed. Stale provider/draft-config responses are ignored after reconnect, and SkillHub icon fetches reject loopback/private/link-local targets at both URL validation and dial time. Native feature packages gained guard tests, and a cross-module wire test now executes the real management handlers and checks that every Native response key still matches the Runtime contract.
+
 ## v1.3.108
 
 ### 💥 Behavior Changes

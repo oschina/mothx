@@ -35,6 +35,8 @@
 
 - **思考开关与 reasoning effort 现在严格按各厂商的文档契约发送。** 显式关闭思考时，DeepSeek Chat Completions/Anthropic Messages 现在发送 `thinking: {type: "disabled"}`，Qwen 混合思考模型发送 `enable_thinking: false`，不再静默保持思考开启；DeepSeek V4.1 在 Responses API 上使用 `reasoning_effort: "none"`；GLM 的 effort 映射为 `low`/`high`/`max`，不会再发送 `medium`。DeepSeek 的 effort 遵循官方映射（`minimal`/`low` → `low`，`medium`/`high`/`xhigh` → `high`，`max` → `max`），聚合商提供的 Qwen3.5+ 与 GLM 模型 ID 会被识别用于 thinking 格式解析，配置的模型列表也不再按相同下标继承内置预设的 `compat`。
 
+- **MothX Native 的运行与传输可靠性修复。** 会话加载与会话列表响应现在带连接代际：用户已离开的会话即使加载较慢或失败，也不会清空当前会话或复用其缓存 transcript；在途刷新期间请求的会话列表刷新会重新排队而不是静默丢弃。ACP 客户端以原子指针保存子进程，普通请求默认 5 分钟超时（仅 `session/prompt` 保持无界），并通过持有的 `os.Process` 句柄延迟关闭子进程，避免 PID 复用误杀。重连后过期供应商/草稿配置响应会被忽略；SkillHub 图标抓取在 URL 校验与拨号时都拒绝 loopback/私网/link-local 目标。Native 各 feature 包补齐 guard 测试，并新增跨模块 wire 测试：真实执行管理 handler，校验 Native 期望的每个响应 key 仍与 Runtime 契约一致。
+
 ## v1.3.108
 
 ### 💥 行为变更
