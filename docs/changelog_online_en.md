@@ -16,6 +16,9 @@ This file contains the changes for the **current version only**. The full histor
 - **New Gitee/Moark Model: `hy4`**
   - Added `hy4` to the `gitee` and `moark` providers: a reasoning model with a 1M context window and text-only input, using the `deepseek-v4.1` reasoning-effort scale with no default max_tokens.
 
+- **New Xiaomi MiMo Token Plan Model: `mimo-v2.6-pro-ultraspeed`**
+  - Added `mimo-v2.6-pro-ultraspeed` to all three MiMo token-plan channels (`xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`). The faster variant of `mimo-v2.6-pro` keeps a 1M-token context window, a 128K-token maximum output, reasoning support, and multimodal (`text,image`) input.
+
 - **New Volcengine Model: `deepseek-v4.1-flash-economy`**
   - Added `deepseek-v4.1-flash-economy` to all three Volcengine providers — `volcengine`, `volcengine-agentplan`, and `volcengine-codingplan` — with a 1M context window, reasoning support, and text+image input. The standard channel sends 262K max_tokens; the two plan channels send 100K.
 

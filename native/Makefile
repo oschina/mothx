@@ -31,7 +31,7 @@ help:
 	@echo "  make dist-linux    Package linux/amd64 (deb, tar.gz, PKGBUILD)"
 	@echo "  make dist-darwin   Package darwin/universal"
 	@echo "  make dist-windows  Package windows/amd64"
-	@echo "  make clean         Remove $(OUT)/"
+	@echo "  make clean         Remove $(OUT)/, .mygo/, and stray binaries"
 	@echo ""
 	@echo "Runtime selection: --mothx-bin, the persisted Settings > Runtime choice,"
 	@echo "MOTHX_BIN, PATH, or the repository's ../bin/mothx fallback."
@@ -75,4 +75,6 @@ dist-windows:
 	MYGO_LDFLAGS="-X main.NativeBuildVersion=$(VERSION)" $(MYGO) build -platform windows/amd64
 
 clean:
-	rm -rf $(OUT)
+	@rm -rf $(OUT)
+	@rm -rf .mygo
+	@rm -f native native.exe

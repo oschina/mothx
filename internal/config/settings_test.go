@@ -606,6 +606,26 @@ func TestAlibabaTokenPlanCatalog(t *testing.T) {
 	}
 }
 
+func TestXiaomiTokenPlanUltraSpeedModel(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp"} {
+		if s.Providers[providerName] == nil {
+			t.Fatalf("expected %s provider", providerName)
+		}
+		model := s.GetModelConfig(providerName, "mimo-v2.6-pro-ultraspeed")
+		if model == nil {
+			t.Fatalf("%s missing mimo-v2.6-pro-ultraspeed", providerName)
+		}
+		if !model.Reasoning || model.ContextWindow != 1048576 || model.MaxTokens != 131072 {
+			t.Fatalf("%s mimo-v2.6-pro-ultraspeed = %#v, want reasoning model with 1M context and 131072 max output", providerName, model)
+		}
+		wantInput := []string{"text", "image"}
+		if !slices.Equal(model.Input, wantInput) {
+			t.Fatalf("%s mimo-v2.6-pro-ultraspeed input = %#v, want %#v", providerName, model.Input, wantInput)
+		}
+	}
+}
+
 func TestGiteeMoarkQwen3827BDefaults(t *testing.T) {
 	s := DefaultSettings()
 	for _, providerName := range []string{"gitee", "moark"} {

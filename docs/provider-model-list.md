@@ -2,7 +2,7 @@
 
 > 由 `docs/scripts/generate-models.py` 依据 `internal/config/settings.go`（`defaultProviderConfigs`）与 `internal/provider/vendor_*.go` 生成，请勿手工编辑；运行 `make docs-models` 重新生成。
 
-本文档是 MothX 内置供应商与模型的完整参考：共 **64 个供应商**、**603 个模型**。
+本文档是 MothX 内置供应商与模型的完整参考：共 **64 个供应商**、**606 个模型**。
 
 ## API 类型说明
 
@@ -36,9 +36,9 @@
 | DeepSeek（官方 · Anthropic） | `deepseek-anthropic` | - | anthropic-messages | - | 3 |
 | DeepSeek（官方） | `deepseek-openai` | - | openai-chat | - | 3 |
 | 小米 MiMo | `xiaomi` | - | openai-chat | xiaomi | 2 |
-| 小米 MiMo Token Plan（AMS） | `xiaomi-token-plan-ams` | - | openai-chat | - | 2 |
-| 小米 MiMo Token Plan（CN） | `xiaomi-token-plan-cn` | - | openai-chat | - | 2 |
-| 小米 MiMo Token Plan（SGP） | `xiaomi-token-plan-sgp` | - | openai-chat | - | 2 |
+| 小米 MiMo Token Plan（AMS） | `xiaomi-token-plan-ams` | - | openai-chat | - | 3 |
+| 小米 MiMo Token Plan（CN） | `xiaomi-token-plan-cn` | - | openai-chat | - | 3 |
+| 小米 MiMo Token Plan（SGP） | `xiaomi-token-plan-sgp` | - | openai-chat | - | 3 |
 | 火山引擎（Volcengine） | `volcengine` | volcengine | openai-chat | - | 7 |
 | 火山引擎 Agent Plan | `volcengine-agentplan` | volcengine-agentplan | openai-chat | - | 14 |
 | 火山引擎 Coding Plan | `volcengine-codingplan` | volcengine-codingplan | openai-chat | - | 11 |
@@ -191,6 +191,7 @@ BaseURL `https://token-plan-ams.xiaomimimo.com/v1` · API `openai-chat` · API K
 |------|---------|-----------|------|------|-----------|----------------|----------------|-----------------|
 | `mimo-v2.6-flash` | 1M | 131K | **是** | text,image | - | - | - | - |
 | `mimo-v2.6-pro` | 1M | 131K | **是** | text,image | - | - | - | - |
+| `mimo-v2.6-pro-ultraspeed` | 1M | 131K | **是** | text,image | - | - | - | - |
 
 ---
 
@@ -202,6 +203,7 @@ BaseURL `https://token-plan-cn.xiaomimimo.com/v1` · API `openai-chat` · API Ke
 |------|---------|-----------|------|------|-----------|----------------|----------------|-----------------|
 | `mimo-v2.6-flash` | 1M | 131K | **是** | text,image | - | - | - | - |
 | `mimo-v2.6-pro` | 1M | 131K | **是** | text,image | - | - | - | - |
+| `mimo-v2.6-pro-ultraspeed` | 1M | 131K | **是** | text,image | - | - | - | - |
 
 ---
 
@@ -213,6 +215,7 @@ BaseURL `https://token-plan-sgp.xiaomimimo.com/v1` · API `openai-chat` · API K
 |------|---------|-----------|------|------|-----------|----------------|----------------|-----------------|
 | `mimo-v2.6-flash` | 1M | 131K | **是** | text,image | - | - | - | - |
 | `mimo-v2.6-pro` | 1M | 131K | **是** | text,image | - | - | - | - |
+| `mimo-v2.6-pro-ultraspeed` | 1M | 131K | **是** | text,image | - | - | - | - |
 
 ---
 
@@ -1310,13 +1313,13 @@ xhigh    // 最高
 
 ## 汇总统计
 
-- 支持推理（reasoning）的模型：**494**
+- 支持推理（reasoning）的模型：**497**
 
 ### 上下文长度分布
 
 | 区间 | 数量 |
 |------|------|
-| 1M+ | 260 |
+| 1M+ | 263 |
 | 500K-1M | 6 |
 | 200K-500K | 224 |
 | 100K-200K | 84 |
@@ -1328,7 +1331,7 @@ xhigh    // 最高
 
 | 模态 | 数量 |
 |------|------|
-| text/image | 342 |
+| text/image | 345 |
 | text | 223 |
 | text/image/video | 36 |
 | text/image/audio/video | 2 |
