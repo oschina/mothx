@@ -272,3 +272,71 @@ func TestQueuedPromptsRunInOrderThroughCoordinator(t *testing.T) {
 		}
 	}
 }
+
+// A single prompt on an idle session is admitted at once. Its projection row
+// exists until the admitted hand-off is processed, but it is starting rather
+// than waiting behind a run, so it must never render as "queued".
+func TestIdleSinglePromptDoesNotRenderQueueIndicator(t *testing.T) {
+	app, _, _, msgs := newSubmissionQueueTestApp(t)
+
+	if cmd := app.processInput("first"); cmd == nil {
+		t.Fatal("first prompt returned no waiting command")
+	}
+	if len(app.pendingSubmissions) != 1 {
+		t.Fatalf("pending submissions = %d, want the head-of-line projection", len(app.pendingSubmissions))
+	}
+	if got := stripANSI(app.renderQueuedPrompts(80)); got != "" {
+		t.Fatalf("idle prompt rendered the queue indicator: %q", got)
+	}
+
+	// Only input submitted behind it is really queued, and still renders.
+	if cmd := app.processInput("second"); cmd != nil {
+		t.Fatal("second prompt started a parallel local submission")
+	}
+	wantHeader := stripANSI(app.translator.Text(i18n.MsgQueuedPromptsHeader, 1))
+	got := stripANSI(app.renderQueuedPrompts(80))
+	if !strings.Contains(got, wantHeader) || !strings.Contains(got, "1. second") {
+		t.Fatalf("prompt queued behind the active run was not rendered: %q", got)
+	}
+	if strings.Contains(got, "first") {
+		t.Fatalf("head-of-line prompt listed as queued: %q", got)
+	}
+
+	app.cancelPendingSubmissions()
+	waitForSubmissionCompletions(t, app, msgs, 2)
+}
+
+// The first prompt of a new session takes the same admitted hand-off. Prompts
+// staged during the bootstrap really queue behind it; the first prompt itself
+// is never listed.
+func TestSessionBootstrapListsOnlyStagedPromptsAsQueued(t *testing.T) {
+	app, workDir, sessionDir, msgs := newSubmissionQueueTestApp(t)
+	app.session = nil
+
+	if cmd := app.processInput("first"); cmd == nil {
+		t.Fatal("first prompt did not start session preparation")
+	}
+	if cmd := app.processInput("second"); cmd != nil {
+		t.Fatal("second prompt started work while the session was preparing")
+	}
+	wantHeader := stripANSI(app.translator.Text(i18n.MsgQueuedPromptsHeader, 1))
+	if got := stripANSI(app.renderQueuedPrompts(80)); !strings.Contains(got, wantHeader) || strings.Contains(got, "first") {
+		t.Fatalf("staged prompt projection = %q, want only the prompt staged during bootstrap", got)
+	}
+
+	sess := session.New(workDir, sessionDir)
+	if err := sess.Init(); err != nil {
+		t.Fatalf("init prepared session: %v", err)
+	}
+	app.Update(tuiSessionReadyMsg{seq: app.sessionPrepSeq, sess: sess, input: "first"})
+	got := stripANSI(app.renderQueuedPrompts(80))
+	if !strings.Contains(got, wantHeader) || !strings.Contains(got, "1. second") {
+		t.Fatalf("prompt staged behind the first submission was not rendered: %q", got)
+	}
+	if strings.Contains(got, "first") {
+		t.Fatalf("first prompt listed as queued after activation: %q", got)
+	}
+
+	app.cancelPendingSubmissions()
+	waitForSubmissionCompletions(t, app, msgs, 2)
+}

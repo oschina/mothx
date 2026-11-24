@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	xansi "github.com/charmbracelet/x/ansi"
 
+	"github.com/oschina/mothx/internal/agentruntime"
 	"github.com/oschina/mothx/internal/tui/i18n"
 )
 
@@ -58,6 +61,87 @@ func TestRenderQueuedPromptsCapsVisibleItems(t *testing.T) {
 	}
 	if !strings.Contains(out, "+2 …") {
 		t.Fatalf("overflow line missing: %q", out)
+	}
+}
+
+// Only a submission the coordinator holds behind another execution is
+// "queued". The head-of-line submission keeps its projection row until the
+// admitted hand-off, but it is starting (admitting/running), so a single prompt
+// must never flash the queue indicator.
+func TestRenderQueuedPromptsOmitsHeadOfLineSubmissions(t *testing.T) {
+	// Admission never completes on its own, so this handle stays "admitting".
+	admitting := agentruntime.NewSubmissionCoordinator()
+	defer admitting.Close()
+	admittingHandle, err := admitting.Submit(context.Background(), "admitting", agentruntime.SubmitPolicy{QueueBehindLocal: true},
+		func(ctx context.Context) (func(), error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		func(context.Context) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("submit admitting: %v", err)
+	}
+
+	// This runner is admitted at once and then blocks, so later submissions
+	// really queue behind it.
+	running := agentruntime.NewSubmissionCoordinator()
+	defer running.Close()
+	entered := make(chan struct{})
+	runningHandle, err := running.Submit(context.Background(), "running", agentruntime.SubmitPolicy{QueueBehindLocal: true},
+		func(context.Context) (func(), error) { return func() {}, nil },
+		func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	)
+	if err != nil {
+		t.Fatalf("submit running: %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner was not started")
+	}
+	queuedHandle, err := running.Submit(context.Background(), "queued", agentruntime.SubmitPolicy{QueueBehindLocal: true},
+		func(context.Context) (func(), error) { return func() {}, nil },
+		func(context.Context) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("submit queued: %v", err)
+	}
+	wantStates := map[*agentruntime.ExecutionHandle]agentruntime.SubmissionState{
+		admittingHandle: agentruntime.SubmissionAdmitting,
+		runningHandle:   agentruntime.SubmissionRunning,
+		queuedHandle:    agentruntime.SubmissionQueued,
+	}
+	for handle, want := range wantStates {
+		if got := handle.State(); got != want {
+			t.Fatalf("handle %s state = %q, want %q", handle.RunID, got, want)
+		}
+	}
+
+	a := &App{translator: i18n.New(i18n.LanguageEN)}
+	// Rows without a coordinator handle, and nil rows, are never "queued" either.
+	a.pendingSubmissions = []*tuiSubmission{nil, {text: "orphan"}}
+	a.pendingSubmissions = append(a.pendingSubmissions,
+		&tuiSubmission{text: "admitting prompt", handle: admittingHandle},
+		&tuiSubmission{text: "running prompt", handle: runningHandle},
+	)
+	if got := a.renderQueuedPrompts(80); got != "" {
+		t.Fatalf("head-of-line submissions rendered as queued: %q", stripANSI(got))
+	}
+
+	a.pendingSubmissions = append(a.pendingSubmissions, &tuiSubmission{text: "queued prompt", handle: queuedHandle})
+	got := stripANSI(a.renderQueuedPrompts(80))
+	if !strings.Contains(got, "1 queued") || !strings.Contains(got, "1. queued prompt") {
+		t.Fatalf("queued submission not rendered: %q", got)
+	}
+	for _, unexpected := range []string{"admitting prompt", "running prompt", "orphan", "2."} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("queue indicator lists %q: %q", unexpected, got)
+		}
 	}
 }
 

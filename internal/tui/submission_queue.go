@@ -50,6 +50,14 @@ func (s *tuiSubmission) markStarted() {
 	}
 }
 
+// waitingBehindRun reports whether the shared coordinator is holding this
+// submission behind another execution. The head-of-line submission is admitted
+// at once (admitting/running) and is not queued, even though its projection
+// row stays in pendingSubmissions until the admitted hand-off removes it.
+func (s *tuiSubmission) waitingBehindRun() bool {
+	return s != nil && s.handle != nil && s.handle.State() == agentruntime.SubmissionQueued
+}
+
 // tuiSubmissionCompletedMsg is the single terminal projection for a submission.
 // A zero-error completion means the Run finished normally; the row was already
 // removed when the run started.

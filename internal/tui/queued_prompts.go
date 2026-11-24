@@ -14,15 +14,28 @@ import (
 // stays fully discoverable without pushing the input field off screen.
 const maxVisibleQueuedPrompts = 3
 
-// renderQueuedPrompts projects the pending-submission queue into the managed
-// live view while a run owns the session. Runtime-owned submissions are
-// projected from pendingSubmissions; queuedPrompts remains the explicit
-// pre-session/headless compatibility bridge. Rendering never starts work.
+// renderQueuedPrompts projects the submissions the Runtime is genuinely
+// holding in its queue into the managed live view. pendingSubmissions also
+// carries the head-of-line submission until its admitted hand-off is processed,
+// but that one is starting now rather than waiting behind a run: it is
+// acknowledged by its transcript echo and the loading indicator, and listing it
+// here made a single prompt flash "1 queued" between registration and
+// admission. queuedPrompts remains the explicit pre-session/headless
+// compatibility bridge. Rendering never starts work.
 func (a *App) renderQueuedPrompts(width int) string {
 	if a == nil {
 		return ""
 	}
-	total := len(a.pendingSubmissions) + len(a.queuedPrompts)
+	waiting := make([]string, 0, len(a.pendingSubmissions)+len(a.queuedPrompts))
+	for _, sub := range a.pendingSubmissions {
+		if sub.waitingBehindRun() {
+			waiting = append(waiting, sub.text)
+		}
+	}
+	for _, prompt := range a.queuedPrompts {
+		waiting = append(waiting, prompt.text)
+	}
+	total := len(waiting)
 	if total == 0 {
 		return ""
 	}
@@ -30,29 +43,12 @@ func (a *App) renderQueuedPrompts(width int) string {
 		width = 80
 	}
 	lines := []string{queuedPromptStyle.Render(a.translator.Text(i18n.MsgQueuedPromptsHeader, total))}
-	visible := 0
-	appendPreview := func(idx int, text string) bool {
+	for visible, text := range waiting {
 		if visible >= maxVisibleQueuedPrompts {
-			return false
-		}
-		lines = append(lines, queuedPromptItemStyle.Render(fmt.Sprintf("  %d. %s", idx+1, queuedPromptPreview(text, width-8))))
-		visible++
-		return true
-	}
-	for i, sub := range a.pendingSubmissions {
-		if sub == nil {
-			continue
-		}
-		if !appendPreview(i, sub.text) {
-			lines = append(lines, statusStyle.Render(fmt.Sprintf("  +%d …", total-visible)))
-			return strings.Join(lines, "\n")
-		}
-	}
-	for i, prompt := range a.queuedPrompts {
-		if !appendPreview(len(a.pendingSubmissions)+i, prompt.text) {
 			lines = append(lines, statusStyle.Render(fmt.Sprintf("  +%d …", total-visible)))
 			break
 		}
+		lines = append(lines, queuedPromptItemStyle.Render(fmt.Sprintf("  %d. %s", visible+1, queuedPromptPreview(text, width-8))))
 	}
 	return strings.Join(lines, "\n")
 }
