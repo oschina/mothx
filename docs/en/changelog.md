@@ -14,6 +14,9 @@
 - **New Gitee/Moark Model: `hy4`**
   - Added `hy4` to the `gitee` and `moark` providers: a reasoning model with a 1M context window and text-only input, using the `deepseek-v4.1` reasoning-effort scale with no default max_tokens.
 
+- **New Xiaomi MiMo Token Plan Model: `mimo-v2.6-pro-ultraspeed`**
+  - Added `mimo-v2.6-pro-ultraspeed` to all three MiMo token-plan channels (`xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`). The faster variant of `mimo-v2.6-pro` keeps a 1M-token context window, a 128K-token maximum output, reasoning support, and multimodal (`text,image`) input.
+
 - **New Volcengine Model: `deepseek-v4.1-flash-economy`**
   - Added `deepseek-v4.1-flash-economy` to all three Volcengine providers — `volcengine`, `volcengine-agentplan`, and `volcengine-codingplan` — with a 1M context window, reasoning support, and text+image input. The standard channel sends 262K max_tokens; the two plan channels send 100K.
 
@@ -455,9 +458,6 @@
 
 - **Xiaomi MiMo Channels Now Ship V2.6 Only**
   - The `xiaomi` provider and the three MiMo token-plan channels (`xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`) now list only `mimo-v2.6-flash` and `mimo-v2.6-pro`, with `mimo-v2.6-flash` first. The `mimo-v2.5`, `mimo-v2.5-pro`, and `mimo-v2.5-pro-ultraspeed` entries were removed, so an unconfigured Xiaomi session defaults to `mimo-v2.6-flash`.
-
-- **New Xiaomi MiMo Token Plan Model: `mimo-v2.6-pro-ultraspeed`**
-  - Added `mimo-v2.6-pro-ultraspeed` to all three MiMo token-plan channels (`xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`). The faster variant of `mimo-v2.6-pro` keeps a 1M-token context window, a 128K-token maximum output, reasoning support, and multimodal (`text,image`) input.
 
 - **New Provider Channel: B.AI (`bai`)**
   - Added a built-in `bai` provider preset for the OpenAI-compatible B.AI aggregator at `https://api.b.ai/v1` (API key `${BAI_API_KEY}`) with automatic base-URL vendor detection. The model catalog mirrors the live `https://api.b.ai/v1/models` listing — 49 chat models across OpenAI, Claude, Gemini, DeepSeek, Kimi, GLM, Qwen, MiniMax, Hunyuan, and MiMo families (the image-generation-only `gpt-image-2` is excluded) — with capability fields (context window, max output, input modalities) filled from known model specs.
