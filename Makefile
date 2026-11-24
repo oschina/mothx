@@ -8,7 +8,7 @@
 .PHONY: dist-freebsd dist-openbsd dist-netbsd
 .PHONY: dist-linux-loong64
 .PHONY: dist-deb dist-tarball dist-zip dist-installers
-.PHONY: clean-all checksums
+.PHONY: desktop-clean npm-clean clean-all checksums
 .PHONY: npm-version npm-binaries npm-packages npm-pack npm-verify-platforms npm-publish-all npm-publish-pre npm-publish
 .PHONY: pypi-version pypi-packages pypi-pack pypi-publish pypi-publish-pre
 
@@ -94,6 +94,7 @@ help:
 	@echo "  npm-publish-pre   Publish pre-release packages"
 	@echo "  npm-binaries      [Legacy] Build all binaries into single package"
 	@echo "  npm-publish       [Legacy] Publish main package only"
+	@echo "  npm-clean         Remove npm package build artifacts"
 	@echo ""
 	@echo "MothX Native targets (primary desktop app):"
 	@echo "  native-build       Build the native UI app for the current platform"
@@ -115,6 +116,7 @@ help:
 	@echo "  desktop-dist-dev-mac Build unsigned macOS development package"
 	@echo "  desktop-dist-dev-win Build Windows portable development package"
 	@echo "  desktop-dist-dev-linux Build Linux AppImage development package"
+	@echo "  desktop-clean      Remove desktop build artifacts"
 	@echo ""
 	@echo "Serve UI targets:"
 	@echo "  ui-install        Install Serve Web UI dependencies"
@@ -141,8 +143,8 @@ help:
 	@echo "  fuzz           Run fuzz targets (set FUZZTIME to change duration)"
 	@echo "  lint           Run linter"
 	@echo "  fmt            Format code"
-	@echo "  clean          Remove build artifacts"
-	@echo "  clean-all      Remove everything including dist"
+	@echo "  clean          Remove Go build artifacts (bin/)"
+	@echo "  clean-all      Remove everything including dist, npm, desktop, and native output"
 	@echo "  checksums      Generate checksums for all dist files"
 	@echo "  run            Build and run"
 	@echo "  serve          Build and start serve mode"
@@ -363,10 +365,22 @@ fmt:
 clean:
 	rm -rf bin/
 
-# Clean all
-clean-all: clean
+# Desktop build output: compiled Electron shell, packaged releases, vendored
+# runtime binaries, installed node_modules, and local dev state.
+desktop-clean:
+	rm -rf desktop/dist desktop/release desktop/vendor desktop/node_modules desktop/.dev-user-data
+	rm -f desktop/*.log
+
+# NPM package build output: packed tarballs, platform package binaries,
+# the generated postinstall wrapper, and installed dependencies.
+npm-clean:
+	rm -f npm/*.tgz npm/mothx/*.tgz npm/packages/*/*.tgz
+	rm -rf npm/packages/*/bin npm/mothx/bin npm/node_modules npm/mothx/node_modules
+
+# Clean all build output, including the npm, desktop, and native artifacts.
+clean-all: clean native-clean desktop-clean npm-clean
 	rm -rf $(DIST_DIR)
-	rm -f npm/*.tgz
+	rm -f debug.log
 	rm -rf pypi/dist pypi/build pypi/*.egg-info $(PYPI_VENV)
 
 # Run
