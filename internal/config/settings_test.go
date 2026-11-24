@@ -413,6 +413,7 @@ func TestMoarkModelMaxTokens(t *testing.T) {
 		"qwen3.8-omni-flash":       131072,
 		"glm-5.3":                  131072,
 		"glm-5.3-flash":            131072,
+		"glm-5.4":                  131072,
 		"ernie-5.0-thinking":       65536,
 		"kimi-k2.5":                262144,
 		"kimi-k2.6":                262144,
@@ -493,6 +494,25 @@ func TestGiteeMoarkHy4FlashAndQwen4MaxDefaults(t *testing.T) {
 			if model.Compat == nil || model.Compat.ThinkingFormat != "deepseek-v4.1" {
 				t.Fatalf("%s %s compat = %#v, want deepseek-v4.1 effort scale", providerName, modelID, model.Compat)
 			}
+		}
+	}
+}
+
+func TestGiteeMoarkGLM54Defaults(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"gitee", "moark"} {
+		model := s.GetModelConfig(providerName, "glm-5.4")
+		if model == nil {
+			t.Fatalf("%s missing glm-5.4", providerName)
+		}
+		if !model.Reasoning || model.ContextWindow != 1000000 {
+			t.Fatalf("%s glm-5.4 = %#v, want reasoning model with 1M context", providerName, model)
+		}
+		if model.MaxTokens != 131072 {
+			t.Fatalf("%s glm-5.4 maxTokens = %d, want 131072", providerName, model.MaxTokens)
+		}
+		if len(model.Input) != 2 || model.Input[0] != "text" || model.Input[1] != "image" {
+			t.Fatalf("%s glm-5.4 input = %#v, want text,image", providerName, model.Input)
 		}
 	}
 }

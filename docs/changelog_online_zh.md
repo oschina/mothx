@@ -22,6 +22,9 @@
 - **火山引擎新增模型：`glm-5.4`**
   - `volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 三个火山引擎渠道均新增 `glm-5.4`，支持思考、1M 上下文窗口与文本/图片输入；默认不发送 max_tokens，使用供应商默认值。
 
+- **Gitee/Moark 新增模型：`glm-5.4`**
+  - `gitee` 与 `moark` 供应商均新增 `glm-5.4`：推理模型，1M 上下文窗口，支持文本与图片输入，最大输出 131,072 tokens。
+
 - **腾讯云套餐现在只提供 `hy4` 与 `hy4-flash`。**
   - `tencent-hy-plan` 与 `tencent-hy-plan-anthropic` 预设现在列出 `hy4` 与 `hy4-flash`，不再提供 `hy3`。`hy4` 仅支持文本，`hy4-flash` 支持文本与图片；两者均支持推理，上下文为 1M，并保留 65,536 输出上限。
 
