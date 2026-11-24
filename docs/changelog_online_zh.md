@@ -16,6 +16,9 @@
 - **新增 Gitee/Moark 模型：`hy4`**
   - 在 `gitee` 与 `moark` 供应商中新增 `hy4`：推理模型，1M 上下文，仅文本输入，使用 `deepseek-v4.1` 推理强度档位，不发送默认 max_tokens。
 
+- **小米 MiMo Token Plan 新增模型：`mimo-v2.6-pro-ultraspeed`**
+  - 三个 MiMo Token Plan 渠道（`xiaomi-token-plan-ams`、`xiaomi-token-plan-cn`、`xiaomi-token-plan-sgp`）均新增 `mimo-v2.6-pro-ultraspeed`，作为 `mimo-v2.6-pro` 的极速版本，保持 1M tokens 上下文窗口、128K tokens 最大输出、思考（reasoning）与多模态（`text,image`）输入。
+
 - **火山引擎新增模型：`deepseek-v4.1-flash-economy`**
   - `volcengine`、`volcengine-agentplan`、`volcengine-codingplan` 三个火山引擎渠道均新增 `deepseek-v4.1-flash-economy`，支持思考、1M 上下文窗口与文本/图片输入；标准版 MaxTokens 为 262K，两个套餐版为 100K。
 

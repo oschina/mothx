@@ -456,6 +456,9 @@
 - **小米 MiMo 渠道仅保留 V2.6 模型**
   - `xiaomi` 提供商及三个 MiMo Token Plan 渠道（`xiaomi-token-plan-ams`、`xiaomi-token-plan-cn`、`xiaomi-token-plan-sgp`）现在仅保留 `mimo-v2.6-flash` 与 `mimo-v2.6-pro`，并将 `mimo-v2.6-flash` 放在首位。已移除 `mimo-v2.5`、`mimo-v2.5-pro` 与 `mimo-v2.5-pro-ultraspeed`，因此未配置的小米会话默认使用 `mimo-v2.6-flash`。
 
+- **小米 MiMo Token Plan 新增模型：`mimo-v2.6-pro-ultraspeed`**
+  - 三个 MiMo Token Plan 渠道（`xiaomi-token-plan-ams`、`xiaomi-token-plan-cn`、`xiaomi-token-plan-sgp`）均新增 `mimo-v2.6-pro-ultraspeed`，作为 `mimo-v2.6-pro` 的极速版本，保持 1M tokens 上下文窗口、128K tokens 最大输出、思考（reasoning）与多模态（`text,image`）输入。
+
 - **新增渠道：B.AI（`bai`）**
   - 新增内置 `bai` 供应商预设，指向 OpenAI 兼容的 B.AI 聚合平台 `https://api.b.ai/v1`（API Key `${BAI_API_KEY}`），并支持按 baseUrl 自动识别厂商。模型清单与 `https://api.b.ai/v1/models` 实时接口一致——涵盖 OpenAI、Claude、Gemini、DeepSeek、Kimi、GLM、Qwen、MiniMax、混元与 MiMo 系列共 49 个聊天模型（已排除仅用于图像生成的 `gpt-image-2`），上下文窗口 / MaxTokens / 输入能力字段参考各模型公开规格填写。
 
