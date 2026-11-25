@@ -28,6 +28,9 @@ This file contains the changes for the **current version only**. The full histor
 - **New Gitee/Moark Model: `glm-5.4`**
   - Added `glm-5.4` to the `gitee` and `moark` providers: a reasoning model with a 1M context window, text+image input, and a 131,072-token output ceiling.
 
+- **New Gitee/Moark Model: `mimo-v2.6-pro-ultraspeed`**
+  - Added `mimo-v2.6-pro-ultraspeed` to the `gitee` and `moark` providers: the faster variant of `mimo-v2.6-pro` keeps a 1M-token context window, a 128K-token maximum output, reasoning support, and multimodal (`text,image`) input.
+
 - **The Tencent Cloud plan now exposes only `hy4` and `hy4-flash`.**
   - The `tencent-hy-plan` and `tencent-hy-plan-anthropic` presets now list `hy4` and `hy4-flash` instead of `hy3`. `hy4` is text-only and `hy4-flash` accepts text and images; both support reasoning, carry a 1M context window, and keep a 65,536-token output ceiling.
 

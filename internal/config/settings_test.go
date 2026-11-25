@@ -427,6 +427,7 @@ func TestMoarkModelMaxTokens(t *testing.T) {
 		"minimax-m3":               128000,
 		"MiniMax-M3.1-Flash":       0,
 		"mimo-v2.5-pro":            131072,
+		"mimo-v2.6-pro-ultraspeed": 131072,
 		"gemma-4-26b-a4b-it":       32768,
 		"deepseek-v4-flash":        384000,
 		"deepseek-v4-flash-0731":   0,
@@ -513,6 +514,25 @@ func TestGiteeMoarkGLM54Defaults(t *testing.T) {
 		}
 		if len(model.Input) != 2 || model.Input[0] != "text" || model.Input[1] != "image" {
 			t.Fatalf("%s glm-5.4 input = %#v, want text,image", providerName, model.Input)
+		}
+	}
+}
+
+func TestGiteeMoarkMiMoV26ProUltraSpeedDefaults(t *testing.T) {
+	s := DefaultSettings()
+	for _, providerName := range []string{"gitee", "moark"} {
+		model := s.GetModelConfig(providerName, "mimo-v2.6-pro-ultraspeed")
+		if model == nil {
+			t.Fatalf("%s missing mimo-v2.6-pro-ultraspeed", providerName)
+		}
+		if !model.Reasoning || model.ContextWindow != 1048576 {
+			t.Fatalf("%s mimo-v2.6-pro-ultraspeed = %#v, want reasoning model with 1M context", providerName, model)
+		}
+		if model.MaxTokens != 131072 {
+			t.Fatalf("%s mimo-v2.6-pro-ultraspeed maxTokens = %d, want 131072", providerName, model.MaxTokens)
+		}
+		if len(model.Input) != 2 || model.Input[0] != "text" || model.Input[1] != "image" {
+			t.Fatalf("%s mimo-v2.6-pro-ultraspeed input = %#v, want text,image", providerName, model.Input)
 		}
 	}
 }

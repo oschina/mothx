@@ -28,6 +28,9 @@
 - **Gitee/Moark 新增模型：`glm-5.4`**
   - `gitee` 与 `moark` 供应商均新增 `glm-5.4`：推理模型，1M 上下文窗口，支持文本与图片输入，最大输出 131,072 tokens。
 
+- **Gitee/Moark 新增模型：`mimo-v2.6-pro-ultraspeed`**
+  - `gitee` 与 `moark` 供应商均新增 `mimo-v2.6-pro-ultraspeed`，作为 `mimo-v2.6-pro` 的极速版本，保持 1M tokens 上下文窗口、128K tokens 最大输出、思考（reasoning）与多模态（`text,image`）输入。
+
 - **腾讯云套餐现在只提供 `hy4` 与 `hy4-flash`。**
   - `tencent-hy-plan` 与 `tencent-hy-plan-anthropic` 预设现在列出 `hy4` 与 `hy4-flash`，不再提供 `hy3`。`hy4` 仅支持文本，`hy4-flash` 支持文本与图片；两者均支持推理，上下文为 1M，并保留 65,536 输出上限。
 

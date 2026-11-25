@@ -2,7 +2,7 @@
 
 > 由 `docs/scripts/generate-models.py` 依据 `internal/config/settings.go`（`defaultProviderConfigs`）与 `internal/provider/vendor_*.go` 生成，请勿手工编辑；运行 `make docs-models` 重新生成。
 
-本文档是 MothX 内置供应商与模型的完整参考：共 **64 个供应商**、**606 个模型**。
+本文档是 MothX 内置供应商与模型的完整参考：共 **64 个供应商**、**608 个模型**。
 
 ## API 类型说明
 
@@ -32,7 +32,7 @@
 
 | 供应商 | Provider | Vendor | API 协议 | Thinking 格式 | 模型数 |
 |--------|----------|--------|----------|--------------|--------|
-| Moark | `moark` | gitee | openai-chat | - | 38 |
+| Moark | `moark` | gitee | openai-chat | - | 39 |
 | DeepSeek（官方 · Anthropic） | `deepseek-anthropic` | - | anthropic-messages | - | 3 |
 | DeepSeek（官方） | `deepseek-openai` | - | openai-chat | - | 3 |
 | 小米 MiMo | `xiaomi` | - | openai-chat | xiaomi | 2 |
@@ -65,7 +65,7 @@
 | CodeOK | `codeok` | codeok | openai-responses | - | 4 |
 | 天翼云 Coding Plan | `ctyun-plan` | ctyun-plan | openai-chat | - | 3 |
 | Fireworks AI | `fireworks` | - | anthropic-messages | - | 7 |
-| Gitee AI | `gitee` | gitee | openai-chat | - | 38 |
+| Gitee AI | `gitee` | gitee | openai-chat | - | 39 |
 | GitHub Copilot | `github-copilot` | github-copilot | openai-chat | - | 10 |
 | Groq | `groq` | - | openai-chat | - | 7 |
 | 华为云（ModelArts） | `huawei` | huawei | openai-chat | - | 8 |
@@ -135,6 +135,7 @@ Vendor `gitee` · BaseURL `https://api.moark.com/v1` · API `openai-chat` · API
 | `kimi-k3.1-pro` | 1M | 262K | **是** | text,image | - | - | - | - |
 | `kimi-k3.1-pro-highspeed` | 1M | 262K | **是** | text,image | - | - | - | - |
 | `mimo-v2.5-pro` | 1M | 131K | **是** | text,image | - | - | - | - |
+| `mimo-v2.6-pro-ultraspeed` | 1M | 131K | **是** | text,image | - | - | - | - |
 | `minimax-m2.7` | 262K | 131K | **是** | text | - | - | - | - |
 | `minimax-m3` | 1M | 128K | **是** | text,image | - | - | - | - |
 | `qwen3.5-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
@@ -748,6 +749,7 @@ Vendor `gitee` · BaseURL `https://ai.gitee.com/v1` · API `openai-chat` · API 
 | `kimi-k3.1-pro` | 1M | 262K | **是** | text,image | - | - | - | - |
 | `kimi-k3.1-pro-highspeed` | 1M | 262K | **是** | text,image | - | - | - | - |
 | `mimo-v2.5-pro` | 1M | 131K | **是** | text,image | - | - | - | - |
+| `mimo-v2.6-pro-ultraspeed` | 1M | 131K | **是** | text,image | - | - | - | - |
 | `minimax-m2.7` | 262K | 131K | **是** | text | - | - | - | - |
 | `minimax-m3` | 1M | 128K | **是** | text,image | - | - | - | - |
 | `qwen3.5-flash` | 1M | 66K | **是** | text,image | - | - | - | - |
@@ -1313,13 +1315,13 @@ xhigh    // 最高
 
 ## 汇总统计
 
-- 支持推理（reasoning）的模型：**497**
+- 支持推理（reasoning）的模型：**499**
 
 ### 上下文长度分布
 
 | 区间 | 数量 |
 |------|------|
-| 1M+ | 263 |
+| 1M+ | 265 |
 | 500K-1M | 6 |
 | 200K-500K | 224 |
 | 100K-200K | 84 |
@@ -1331,7 +1333,7 @@ xhigh    // 最高
 
 | 模态 | 数量 |
 |------|------|
-| text/image | 345 |
+| text/image | 347 |
 | text | 223 |
 | text/image/video | 36 |
 | text/image/audio/video | 2 |
