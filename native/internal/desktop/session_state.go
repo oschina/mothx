@@ -26,15 +26,17 @@ type sessionSnapshot struct {
 	UsageCost            float64
 	UsageCurrency        string
 	UsageCache           *usageCacheProjection
-	ConfigOptions        []configOption
-	ModelLabel           string
-	ModelValue           string
-	ThinkingLabel        string
-	ThinkingValue        string
-	Mode                 string
-	AvailableModes       []sessionMode
-	Commands             []command
-	List                 ui.ListState
+	// PromptToken is the send this task is waiting on; zero when none.
+	PromptToken    int64
+	ConfigOptions  []configOption
+	ModelLabel     string
+	ModelValue     string
+	ThinkingLabel  string
+	ThinkingValue  string
+	Mode           string
+	AvailableModes []sessionMode
+	Commands       []command
+	List           ui.ListState
 }
 
 func (a *nativeApp) snapshotSession() sessionSnapshot {
@@ -56,6 +58,7 @@ func (a *nativeApp) snapshotSession() sessionSnapshot {
 		UsageCost:            a.usageCost,
 		UsageCurrency:        a.usageCurrency,
 		UsageCache:           a.usageCache,
+		PromptToken:          a.promptToken,
 		ConfigOptions:        a.configOptions,
 		ModelLabel:           a.modelLabel,
 		ModelValue:           a.modelValue,
@@ -90,6 +93,7 @@ func (a *nativeApp) restoreSession(s sessionSnapshot) {
 	a.usageCost = s.UsageCost
 	a.usageCurrency = s.UsageCurrency
 	a.usageCache = s.UsageCache
+	a.promptToken = s.PromptToken
 	a.configOptions = s.ConfigOptions
 	a.modelLabel = s.ModelLabel
 	a.modelValue = s.ModelValue
@@ -120,6 +124,7 @@ func (a *nativeApp) clearSessionState(id string) {
 	a.usageCost = 0
 	a.usageCurrency = ""
 	a.usageCache = nil
+	a.promptToken = 0
 	a.configOptions = nil
 	a.modelLabel = ""
 	a.modelValue = ""

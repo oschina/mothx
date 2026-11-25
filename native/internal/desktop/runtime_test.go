@@ -39,14 +39,20 @@ func TestLaunchBinaryOverrideWinsAndStaysLocal(t *testing.T) {
 	setLaunchBinaryOverride("/launch/mothx")
 	bin, source := resolveMothxBinarySource()
 	abs, _ := filepath.Abs("/launch/mothx")
-	if bin != abs || source != "启动参数 --mothx-bin" {
+	if bin != abs || source != sourceLaunchArg {
 		t.Fatalf("launch override resolution = %q, %q", bin, source)
+	}
+	if runtimeSourceLabel(source) != "启动参数 --mothx-bin" {
+		t.Fatalf("launch override label = %q", runtimeSourceLabel(source))
 	}
 
 	setLaunchBinaryOverride("")
 	bin, source = resolveMothxBinarySource()
-	if bin != "/env/mothx" || source != "MOTHX_BIN" {
+	if bin != "/env/mothx" || source != sourceEnv {
 		t.Fatalf("env fallback resolution = %q, %q", bin, source)
+	}
+	if runtimeSourceLabel(source) != "MOTHX_BIN" {
+		t.Fatalf("env fallback label = %q", runtimeSourceLabel(source))
 	}
 }
 

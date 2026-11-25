@@ -173,14 +173,18 @@ func applicationSettingsFormFromView(view *applicationSettingsView) applicationS
 	return f
 }
 
+// applicationLines splits a textarea into entries. Each entry keeps its exact
+// text: an approval prefix such as "go " is a different rule from "go", so
+// only the line terminator is trimmed. Blank lines are dropped.
 func applicationLines(s string) []string {
 	lines := strings.Split(s, "\n")
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			out = append(out, line)
+		line = strings.TrimSuffix(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
 		}
+		out = append(out, line)
 	}
 	return out
 }

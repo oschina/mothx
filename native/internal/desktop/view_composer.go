@@ -53,7 +53,10 @@ func (a *nativeApp) composer(c *ui.Context, p palette) {
 				in.OnTextKey(func(k ui.TextKey) bool {
 					if k.Key == ui.KeyEnter && k.Mods == 0 {
 						text := strings.TrimSpace(k.Text())
-						if text == "" || a.running {
+						if text == "" && len(a.attachments) == 0 {
+							return true
+						}
+						if a.running {
 							return true
 						}
 						k.SetText("")
@@ -122,7 +125,7 @@ func (a *nativeApp) sendButton(c *ui.Context, p palette) {
 		}
 		return
 	}
-	empty := strings.TrimSpace(a.draft) == "" || a.conn != connReady
+	empty := (strings.TrimSpace(a.draft) == "" && len(a.attachments) == 0) || a.conn != connReady
 	b := ui.ButtonBase(c.Key("send")).Size(30, 30).Radius(999).Justify(ui.Center).AlignItems(ui.Center).
 		Background(p.T.Accent).Disabled(empty)
 	if b.Hovered() && !empty {

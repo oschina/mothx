@@ -60,12 +60,15 @@ type PairDraft struct {
 	Value string
 }
 
-// ServerDraft is the editable state of the add/edit dialog. Args are held
-// as a shell-style word list so the native input can stay a single line.
+// ServerDraft is the editable state of the add/edit dialog.
 type ServerDraft struct {
-	Name       string
-	Type       string
-	Command    string
+	Name    string
+	Type    string
+	Command string
+	// ArgsInput is the single-line form of the arguments. Fill it with JoinArgs
+	// and read it back with SplitArgs: joining with plain spaces and splitting
+	// on whitespace used to break any argument that contains a space, such as
+	// a path under "Program Files".
 	ArgsInput  string
 	URL        string
 	MessageURL string
@@ -143,7 +146,7 @@ func DraftFromServer(view ServerView) ServerDraft {
 		Name:       view.Name,
 		Type:       ServerType(view),
 		Command:    view.Command,
-		ArgsInput:  strings.Join(view.Args, " "),
+		ArgsInput:  JoinArgs(view.Args),
 		URL:        view.URL,
 		MessageURL: view.MessageURL,
 		Enabled:    ServerEnabled(view),
@@ -159,8 +162,83 @@ func DraftFromServer(view ServerView) ServerDraft {
 	return draft
 }
 
+// SplitArgs parses the single-line arguments field: unquoted whitespace
+// separates arguments, while single quotes, double quotes, and a backslash
+// before a quote keep whitespace and quotes inside one argument. A backslash
+// on its own is literal, so a Windows path such as C:\tools\server.exe reads
+// as written. It is the inverse of JoinArgs.
 func SplitArgs(input string) []string {
-	return strings.Fields(input)
+	var args []string
+	var current strings.Builder
+	started := false
+	flush := func() {
+		if started {
+			args = append(args, current.String())
+			current.Reset()
+			started = false
+		}
+	}
+	var quote byte
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+		switch quote {
+		case '\'':
+			if ch == '\'' {
+				quote = 0
+				continue
+			}
+			current.WriteByte(ch)
+			continue
+		case '"':
+			if ch == '"' {
+				quote = 0
+				continue
+			}
+			if ch == '\\' && i+1 < len(input) && input[i+1] == '"' {
+				i++
+				current.WriteByte('"')
+				continue
+			}
+			current.WriteByte(ch)
+			continue
+		}
+		switch ch {
+		case ' ', '\t', '\r', '\n':
+			flush()
+		case '\'', '"':
+			quote = ch
+			started = true
+		case '\\':
+			started = true
+			if i+1 < len(input) && (input[i+1] == '\'' || input[i+1] == '"') {
+				i++
+				current.WriteByte(input[i])
+				continue
+			}
+			current.WriteByte(ch)
+		default:
+			started = true
+			current.WriteByte(ch)
+		}
+	}
+	flush()
+	return args
+}
+
+// JoinArgs renders arguments back into the field so SplitArgs(JoinArgs(args))
+// is the identity. An argument that needs no quoting is written as is, so an
+// existing server reads naturally; any other argument is single-quoted, where
+// every character is literal.
+func JoinArgs(args []string) string {
+	parts := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg != "" && !strings.ContainsAny(arg, " \t\r\n'\"") {
+			parts = append(parts, arg)
+			continue
+		}
+		parts = append(parts, "'"+strings.ReplaceAll(arg, "'", `'\''`)+"'")
+	}
+	return strings.Join(parts, " ")
 }
 
 func PairNameExists(pairs []PairDraft, name string, skip int) bool {

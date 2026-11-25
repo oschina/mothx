@@ -173,7 +173,8 @@ func SettingsTokenInput(c *ui.Context, p Palette, key, label string, value *stri
 			}
 			ui.Text(c, "["+i18n.T(status)+"]").FontSize(9.5).TextColor(p.T.TextMuted)
 		})
-		ui.TextInput(c.Key(key), value).FontSize(12).Height(32).Padding(0, 8).
+		// A token is masked while it is typed, like every other secret field.
+		ui.TextInput(c.Key(key), value).Password().FontSize(12).Height(32).Padding(0, 8).
 			Placeholder(i18n.T("输入新 Token…")).Background(p.T.Background).Radius(8).Border(1, p.T.Border)
 	})
 }

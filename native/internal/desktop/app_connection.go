@@ -3,7 +3,7 @@ package desktop
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -64,7 +64,7 @@ func (a *nativeApp) maybeScheduleAutoRestart() {
 	attempt := a.autoRestartAttempts
 	interval := nativeAutoRestartDelay(attempt)
 	a.autoRestartPending = true
-	a.status = fmt.Sprintf("ACP 已退出，%s后自动重连（%d/%d）", interval, attempt, nativeMaxAutoRestartAttempts)
+	a.status = Tf("ACP 已退出，%s后自动重连（%d/%d）", interval, attempt, nativeMaxAutoRestartAttempts)
 	go func() {
 		time.Sleep(interval)
 		a.dispatch(func() {
@@ -104,21 +104,71 @@ func nativeACPEnvironment() []string {
 	)
 }
 
+// connectAttempt is one in-flight connection attempt. A newer request
+// supersedes it. The signal is separate from the attempt's own context: work
+// posted to the UI thread still has to tell "replaced by a newer attempt"
+// apart from "finished and released its context".
+type connectAttempt struct {
+	seq        int64
+	superseded chan struct{}
+	cancel     context.CancelFunc
+}
+
 func (a *nativeApp) connect() {
 	if a.closing.Load() {
 		return
 	}
 	seq := atomic.AddInt64(&a.reloadSeq, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	attempt := &connectAttempt{seq: seq, superseded: make(chan struct{}), cancel: cancel}
+	a.connectMu.Lock()
+	previous := a.activeConnect
+	a.activeConnect = attempt
+	a.connectMu.Unlock()
+	// One attempt owns the connection at a time. A request that arrives while
+	// another attempt is still handshaking (a binary switch during a hung
+	// start) aborts that attempt instead of racing it for the shell state.
+	if previous != nil {
+		close(previous.superseded)
+		previous.cancel()
+	}
+	defer func() {
+		cancel()
+		a.connectMu.Lock()
+		if a.activeConnect == attempt {
+			a.activeConnect = nil
+		}
+		a.connectMu.Unlock()
+	}()
+	// superseded reports whether a newer connect() replaced this attempt. A
+	// superseded attempt closes its own child and must not touch connection
+	// state: its failures belong to a binary nobody selected any more, and its
+	// child is not the one the shell now uses.
+	superseded := func() bool {
+		select {
+		case <-attempt.superseded:
+			return true
+		default:
+		}
+		return seq != atomic.LoadInt64(&a.reloadSeq)
+	}
+
 	bin, source := resolveMothxBinarySource()
 	addDiagnostic("info", "connect: binary="+bin+" source="+source)
 	if bin == "" {
 		addDiagnostic("error", "connect: no mothx binary resolved")
 		a.dispatch(func() {
+			if superseded() {
+				return
+			}
 			a.setConn(connFailed, "找不到 mothx 可执行文件。请设置 MOTHX_BIN，或把 mothx 放进 PATH。")
 		})
 		return
 	}
 	a.dispatch(func() {
+		if superseded() {
+			return
+		}
 		a.setConn(connStarting, "")
 		a.stderr = nil
 		a.setStartupError(nativeStartupError{})
@@ -159,7 +209,12 @@ func (a *nativeApp) connect() {
 				return
 			}
 			text := "ACP 进程已退出"
-			if err != nil {
+			if errors.Is(err, acpStreamFailed) {
+				// The child may still be alive here: its stdout stream became
+				// unreadable (for example one line over the reader's limit), so the
+				// client tore the connection down. The restart path recovers it.
+				text = "ACP 数据流读取失败：" + err.Error()
+			} else if err != nil {
 				text += "：" + err.Error()
 			}
 			a.dispatch(func() {
@@ -184,14 +239,32 @@ func (a *nativeApp) connect() {
 	if err := client.Start(bin, a.cwd, nativeACPEnvironment()); err != nil {
 		addDiagnostic("error", "ACP start failed: "+err.Error())
 		a.dispatch(func() {
+			if superseded() {
+				return
+			}
 			a.setConn(connFailed, "无法启动 ACP："+err.Error())
 			a.scheduleAutoRestartOrRollback()
 		})
 		return
 	}
-	a.dispatch(func() { a.setClient(client) })
+	a.dispatch(func() {
+		if superseded() {
+			return
+		}
+		// A replaced child must not outlive its connection: nothing reads its
+		// output any more, and an orphaned `mothx acp` keeps the Runtime's
+		// scheduler running unseen.
+		if replaced := a.client(); replaced != nil && replaced != client {
+			replaced.Close()
+		}
+		a.setClient(client)
+	})
+	if superseded() {
+		client.Close()
+		return
+	}
 
-	initializeCtx, cancelInitialize := context.WithTimeout(context.Background(), nativeACPInitializeTimeout)
+	initializeCtx, cancelInitialize := context.WithTimeout(ctx, nativeACPInitializeTimeout)
 	raw, err := client.CallContext(initializeCtx, "initialize", map[string]any{
 		"protocolVersion": 1,
 		"clientCapabilities": map[string]any{
@@ -209,8 +282,14 @@ func (a *nativeApp) connect() {
 	cancelInitialize()
 	if err != nil {
 		client.Close()
+		if ctx.Err() != nil {
+			return
+		}
 		addDiagnostic("error", "ACP initialize failed: "+err.Error())
 		a.dispatch(func() {
+			if superseded() {
+				return
+			}
 			a.failConnection("ACP 初始化失败：" + err.Error())
 			a.scheduleAutoRestartOrRollback()
 		})
@@ -219,8 +298,14 @@ func (a *nativeApp) connect() {
 	var init initializeResult
 	if err := json.Unmarshal(raw, &init); err != nil {
 		client.Close()
+		if ctx.Err() != nil {
+			return
+		}
 		addDiagnostic("error", "ACP initialize response invalid: "+err.Error())
 		a.dispatch(func() {
+			if superseded() {
+				return
+			}
 			a.failConnection("ACP initialize 响应无效：" + err.Error())
 			a.scheduleAutoRestartOrRollback()
 		})
@@ -228,7 +313,7 @@ func (a *nativeApp) connect() {
 	}
 	features := parseFeatures(init)
 	a.dispatch(func() {
-		if seq != atomic.LoadInt64(&a.reloadSeq) {
+		if superseded() {
 			return
 		}
 		if version := strings.TrimSpace(init.AgentInfo.Version); version != "" {
@@ -241,7 +326,7 @@ func (a *nativeApp) connect() {
 		a.binaryRollbackPending = false
 		a.binaryRollbackPrevious = ""
 	})
-	if seq != atomic.LoadInt64(&a.reloadSeq) {
+	if superseded() {
 		client.Close()
 		return
 	}

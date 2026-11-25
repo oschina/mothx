@@ -181,7 +181,18 @@ func (a *nativeApp) selectSession(s listedSession) {
 	a.invalidateSubagentPanel()
 	a.closeArtifactPreview()
 	a.page = ""
-	a.selectSessionState(s.SessionID)
+	features := a.featureSnapshot()
+	if a.transcriptPagingEnabled() || features["sessionHistoryPaging"] {
+		a.selectSessionState(s.SessionID)
+	} else {
+		// Without transcript paging the Runtime replays the whole transcript as
+		// live notifications under ids it derives from the text, and that
+		// replay is only idempotent on an empty transcript. Like Desktop, the
+		// task then starts from a clean transcript rather than its cached one.
+		delete(a.sessionStates, s.SessionID)
+		a.clearSessionState(s.SessionID)
+		a.running = a.sessionRunActive(s)
+	}
 	a.loadingSession = s.SessionID
 	a.currentTitle = s.Title
 	a.workspace = s.Cwd
@@ -204,7 +215,6 @@ func (a *nativeApp) selectSession(s listedSession) {
 	}
 	seq := atomic.AddInt64(&a.sessionLoadSeq, 1)
 	startReloadSeq := atomic.LoadInt64(&a.reloadSeq)
-	features := a.featureSnapshot()
 	params := map[string]any{
 		"sessionId": s.SessionID,
 		"cwd":       s.Cwd,

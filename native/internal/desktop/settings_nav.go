@@ -866,7 +866,7 @@ func (a *nativeApp) settingsRuntimePane(c *ui.Context, p palette) {
 	bin, origin := resolveMothxBinarySource()
 	a.settingsCard(c, p, "当前解析的运行时", "Native 可以持久化选择一个本地 mothx 二进制；--mothx-bin 启动参数和 MOTHX_BIN 仍可覆盖它。ACP 与 settings.json 都不拥有这个选择。", func() {
 		ui.Column(c).Gap(10).Children(func() {
-			a.settingsRuntimeRow(c, p, "解析来源", origin)
+			a.settingsRuntimeRow(c, p, "解析来源", runtimeSourceLabel(origin))
 			a.settingsRuntimeRow(c, p, "可执行文件", bin)
 			if preference := getRuntimeBinaryPreference(); preference != "" {
 				a.settingsRuntimeRow(c, p, "持久化选择", preference)
@@ -1007,7 +1007,7 @@ func (a *nativeApp) settingsAboutPane(c *ui.Context, p palette) {
 			a.settingsRuntimeRow(c, p, "平台", runtime.GOOS+"/"+runtime.GOARCH)
 			bin, origin := resolveMothxBinarySource()
 			a.settingsRuntimeRow(c, p, "运行时二进制", bin)
-			a.settingsRuntimeRow(c, p, "运行时来源", origin)
+			a.settingsRuntimeRow(c, p, "运行时来源", runtimeSourceLabel(origin))
 		})
 	})
 }

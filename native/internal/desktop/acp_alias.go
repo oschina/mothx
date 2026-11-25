@@ -10,6 +10,10 @@ type rpcError = acp.RPCError
 type incoming = acp.Incoming
 type acpClient = acp.Client
 
+// acpStreamFailed marks an onExit cause that left the child alive with an
+// unreadable stdout stream, as opposed to a real process exit.
+var acpStreamFailed = acp.ErrStreamFailed
+
 var newACPClient = acp.NewClient
 
 type initializeResult = acp.InitializeResult

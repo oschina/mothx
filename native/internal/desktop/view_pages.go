@@ -282,7 +282,7 @@ func (a *nativeApp) libraryPage(c *ui.Context, p palette) {
 					}
 				}
 				ui.Row(c).Wrap().Gap(10).Children(func() {
-					a.pageStat(c, p, "知识库", fmt.Sprintf("%d", len(a.knowledge.Views)), "Desktop 管理的索引")
+					a.pageStat(c, p, "知识库", fmt.Sprintf("%d", len(a.knowledge.Views)), "本机管理的索引")
 					a.pageStat(c, p, "已就绪", fmt.Sprintf("%d", indexed), "可查询快照")
 					a.pageStat(c, p, "索引文件", fmt.Sprintf("%d", files), "当前活动快照")
 				})

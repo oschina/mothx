@@ -526,6 +526,10 @@ func (a *nativeApp) attachClipboardImage() bool {
 		a.showErrorToast("剪贴板图片过大，未附加")
 		return true
 	}
+	if embeddedAttachmentBytes(a.attachments)+int64(len(payload)) > nativeMaxEmbeddedAttachment {
+		a.showErrorToast("内嵌附件总大小超出上限，未附加")
+		return true
+	}
 	preview, _ := ui.DecodeImage(payload)
 	name := "clipboard.png"
 	a.attachments = append(a.attachments, attachment{

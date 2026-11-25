@@ -178,7 +178,7 @@ func ServerDescription(server ServerView) string {
 			transport += " → " + server.MessageURL
 		}
 	default:
-		command := strings.TrimSpace(strings.Join(append([]string{server.Command}, server.Args...), " "))
+		command := strings.TrimSpace(server.Command + " " + JoinArgs(server.Args))
 		transport = "stdio: " + command
 	}
 	parts := []string{transport}
@@ -271,7 +271,7 @@ func (p *Panel) EditorDialog(h Host, c *ui.Context, pal kit.Palette) {
 					ui.Checkbox(c, &p.Draft.Enabled, i18n.T("启用该服务器")).FontSize(11.5)
 					if p.Draft.Type == "stdio" {
 						p.LabeledInput(c, pal, "mcp-command", "命令", &p.Draft.Command)
-						p.LabeledInput(c, pal, "mcp-args", "参数（空格分隔）", &p.Draft.ArgsInput)
+						p.LabeledInput(c, pal, "mcp-args", "参数（空格分隔；含空格的参数用引号包住）", &p.Draft.ArgsInput)
 					} else {
 						p.LabeledInput(c, pal, "mcp-url", "URL", &p.Draft.URL)
 						if p.Draft.Type == "sse" {

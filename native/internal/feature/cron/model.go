@@ -385,6 +385,16 @@ func (p *Panel) Invalidate() {
 	p.PendingDeleteID = ""
 }
 
+// releaseBusy drops the busy marks of the actions a new load made stale.
+// Their answers are about to be dropped, and a mark left behind would keep
+// every action disabled until the panel was reopened.
+func (p *Panel) releaseBusy() {
+	p.Saving = false
+	p.Deleting = false
+	p.TogglingID = ""
+	p.RunningJobID = ""
+}
+
 // StartLoad starts one capability-gated cron list load. It is called
 // from the UI thread on tab entry.
 func (p *Panel) StartLoad(h Host) {
@@ -400,6 +410,7 @@ func (p *Panel) StartLoad(h Host) {
 		return
 	}
 	seq := atomic.AddInt64(&p.Seq, 1)
+	p.releaseBusy()
 	p.Loading = true
 	p.Err = ""
 	p.Status = ""
@@ -418,6 +429,7 @@ func (p *Panel) StartRefresh(h Host) {
 		return
 	}
 	seq := atomic.AddInt64(&p.Seq, 1)
+	p.releaseBusy()
 	p.Loading = true
 	p.RefreshPending = false
 	startReloadSeq := h.ReloadSequence()

@@ -606,6 +606,27 @@ func (p *Panel) Current(h host.Base, seq, reloadSeq int64) bool {
 		reloadSeq == h.ReloadSequence()
 }
 
+// beginOperation starts one asynchronous provider action. It makes every
+// earlier action stale and releases the busy flags those actions still hold:
+// their answers are about to be dropped, so a flag left set would keep Save,
+// Test, or Discover disabled until the provider was selected again. The flag
+// of the action being started is set afterwards by its caller.
+func (p *Panel) beginOperation(h host.Base) (seq, startReloadSeq int64) {
+	atomic.AddInt64(&p.Seq, 1)
+	p.releaseOperations()
+	return atomic.LoadInt64(&p.Seq), h.ReloadSequence()
+}
+
+// releaseOperations clears the busy flags of every asynchronous action.
+func (p *Panel) releaseOperations() {
+	p.Saving = false
+	p.Deleting = false
+	p.Testing = false
+	p.Discovering = false
+	p.DefaultsSaving = false
+	p.FallbackKeySaving = false
+}
+
 // Invalidate drops transient state and makes every in-flight
 // provider response stale. Loaded is reset so re-entering the tab reloads.
 func (p *Panel) Invalidate() {
@@ -645,6 +666,8 @@ func (p *Panel) StartLoad(h host.Base) {
 		return
 	}
 	seq := atomic.AddInt64(&p.Seq, 1)
+	// This load makes every action in flight stale; release their flags too.
+	p.releaseOperations()
 	p.Loading = true
 	p.Err = ""
 	p.SettingsErr = ""
@@ -896,8 +919,7 @@ func (p *Panel) Save(h host.Base) {
 		p.StatusIsError = true
 		return
 	}
-	seq := atomic.AddInt64(&p.Seq, 1)
-	startReloadSeq := h.ReloadSequence()
+	seq, startReloadSeq := p.beginOperation(h)
 	p.Saving = true
 	p.Status = "正在保存供应商…"
 	p.StatusIsError = false
@@ -995,8 +1017,7 @@ func (p *Panel) ConfirmDelete(h host.Base) {
 		return
 	}
 	id := strings.TrimSpace(p.Draft.ID)
-	seq := atomic.AddInt64(&p.Seq, 1)
-	startReloadSeq := h.ReloadSequence()
+	seq, startReloadSeq := p.beginOperation(h)
 	p.Deleting = true
 	p.Status = "正在移除供应商覆盖…"
 	p.StatusIsError = false
@@ -1069,8 +1090,7 @@ func (p *Panel) TestDraft(h host.Base) {
 	if modelID != "" {
 		params["model"] = modelID
 	}
-	seq := atomic.AddInt64(&p.Seq, 1)
-	startReloadSeq := h.ReloadSequence()
+	seq, startReloadSeq := p.beginOperation(h)
 	p.Testing = true
 	p.Status = "正在测试连接…"
 	p.StatusIsError = false
@@ -1126,8 +1146,7 @@ func (p *Panel) SaveDefaults(h host.Base) {
 		p.StatusIsError = true
 		return
 	}
-	seq := atomic.AddInt64(&p.Seq, 1)
-	startReloadSeq := h.ReloadSequence()
+	seq, startReloadSeq := p.beginOperation(h)
 	p.DefaultsSaving = true
 	p.Status = "正在保存默认供应商与模型…"
 	p.StatusIsError = false
@@ -1208,8 +1227,7 @@ func (p *Panel) DiscoverModels(h host.Base) {
 			existing[id] = true
 		}
 	}
-	seq := atomic.AddInt64(&p.Seq, 1)
-	startReloadSeq := h.ReloadSequence()
+	seq, startReloadSeq := p.beginOperation(h)
 	p.Discovering = true
 	p.Status = "正在发现模型…"
 	p.StatusIsError = false
@@ -1381,8 +1399,7 @@ func (p *Panel) TestByName(h host.Base, name string) {
 	if modelID := DefaultModelFor(p.Catalog, name, ""); modelID != "" {
 		params["model"] = modelID
 	}
-	seq := atomic.AddInt64(&p.Seq, 1)
-	startReloadSeq := h.ReloadSequence()
+	seq, startReloadSeq := p.beginOperation(h)
 	p.Testing = true
 	p.Status = i18n.Tf("正在测试 %s 的连接…", name)
 	p.StatusIsError = false
@@ -1436,8 +1453,7 @@ func (p *Panel) SetDefault(h host.Base, name string) {
 		p.StatusIsError = true
 		return
 	}
-	seq := atomic.AddInt64(&p.Seq, 1)
-	startReloadSeq := h.ReloadSequence()
+	seq, startReloadSeq := p.beginOperation(h)
 	p.Status = "正在设置默认供应商…"
 	p.StatusIsError = false
 	go func() {
@@ -1516,8 +1532,7 @@ func (p *Panel) SaveFallbackKey(h host.Base) {
 		p.FallbackKeyErr = "保存供应商密钥失败：尚未连接到 MothX ACP。"
 		return
 	}
-	seq := atomic.AddInt64(&p.Seq, 1)
-	startReloadSeq := h.ReloadSequence()
+	seq, startReloadSeq := p.beginOperation(h)
 	p.FallbackKeySaving = true
 	p.FallbackKeyErr = ""
 	go func() {

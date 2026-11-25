@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -86,6 +87,11 @@ type chatMessage struct {
 	// Decision messages are canonical reverse requests projected inline.
 	Decision *decision
 
+	// FromHistory marks a message projected from a canonical history page.
+	// Live streaming and history identify the same block differently, so the
+	// flag is what lets a page tell its own earlier replay from a live message.
+	FromHistory bool
+
 	// Status/error transcript entries.
 	ErrorCode      string
 	ErrorRetryable bool
@@ -132,7 +138,25 @@ func attachmentChatImages(attachments []attachment) []chatImage {
 	return images
 }
 
-const nativeMaxEmbeddedAttachment = 20 << 20
+// nativeMaxEmbeddedAttachment bounds the raw bytes of all attachments a
+// single prompt embeds. The ACP Runtime rejects any request line over 10 MiB
+// (internal/acp maxRequestBytes) with an error that carries no id, so an
+// oversized session/prompt would never be answered. Base64 grows the payload
+// by 4/3, which leaves about 7.5 MiB of raw content; 7 MiB keeps room for the
+// prompt text.
+const nativeMaxEmbeddedAttachment = 7 << 20
+
+// embeddedAttachmentBytes totals the raw size of the attachments one prompt
+// carries inline.
+func embeddedAttachmentBytes(attachments []attachment) int64 {
+	var total int64
+	for _, f := range attachments {
+		if f.Embedded {
+			total += f.Size
+		}
+	}
+	return total
+}
 
 type decision struct {
 	ID            json.RawMessage
@@ -200,6 +224,9 @@ func (a *nativeApp) appendMessage(m *chatMessage) *chatMessage {
 	if m.At.IsZero() {
 		m.At = time.Now()
 	}
+	if a.replayingHistory {
+		m.FromHistory = true
+	}
 	if a.messageIndex == nil {
 		a.messageIndex = make(map[string]*chatMessage)
 	}
@@ -209,6 +236,22 @@ func (a *nativeApp) appendMessage(m *chatMessage) *chatMessage {
 	a.messages = append(a.messages, m)
 	a.messageIndex[m.ID] = m
 	return m
+}
+
+// removeMessage drops one local transcript message, such as an optimistic
+// bubble for a prompt the Runtime never accepted.
+func (a *nativeApp) removeMessage(id string) {
+	if id == "" || a.messageByID(id) == nil {
+		return
+	}
+	kept := a.messages[:0]
+	for _, m := range a.messages {
+		if m.ID != id {
+			kept = append(kept, m)
+		}
+	}
+	a.messages = kept
+	delete(a.messageIndex, id)
 }
 
 func (a *nativeApp) upsertMessage(id string, kind messageKind) *chatMessage {
@@ -272,7 +315,7 @@ func (a *nativeApp) applyUpdate(n sessionUpdateNotification) {
 		m := a.upsertMessage(id, messageUser)
 		m.Done = true
 		if text := contentText(u.Content); text != "" {
-			m.Text = appendChunk(m.Text, text)
+			m.Text = a.mergeChunk(m.Text, text)
 		}
 		for _, image := range contentImages(u.Content) {
 			m.Images = appendUniqueImage(m.Images, image)
@@ -285,7 +328,7 @@ func (a *nativeApp) applyUpdate(n sessionUpdateNotification) {
 		}
 		m := a.upsertMessage(id, messageAssistant)
 		if text := contentText(u.Content); text != "" {
-			m.Text = appendChunk(m.Text, text)
+			m.Text = a.mergeChunk(m.Text, text)
 		}
 		for _, image := range contentImages(u.Content) {
 			m.Images = appendUniqueImage(m.Images, image)
@@ -301,7 +344,7 @@ func (a *nativeApp) applyUpdate(n sessionUpdateNotification) {
 			m.Collapsed = true
 		}
 		if text := contentText(u.Content); text != "" {
-			m.Text = appendChunk(m.Text, text)
+			m.Text = a.mergeChunk(m.Text, text)
 		}
 	case "tool_call", "tool_call_update":
 		if u.ToolCallID == "" {
@@ -615,9 +658,24 @@ func (a *nativeApp) markRunDone(stopReason string) {
 	for _, m := range a.messages {
 		m.Done = true
 	}
+	// A finished run has no live decision left: the Runtime terminalized them
+	// with the run. Their cards must close, or a late click would report a
+	// choice that nothing will act on.
+	a.closePendingDecisions()
 	// A queued worktree "open in new session" intent may have become ready
 	// while this run was still held; consume it now that the shell is idle.
 	a.settleWorktreeOpen()
+}
+
+// closePendingDecisions marks every unanswered decision card as cancelled.
+func (a *nativeApp) closePendingDecisions() {
+	for _, m := range a.messages {
+		if m.Decision == nil || m.Decision.Resolved {
+			continue
+		}
+		m.Decision.Resolved = true
+		m.Decision.ResolvedValue = T("已取消")
+	}
 }
 
 func (a *nativeApp) handleSessionEvent(ev sessionEvent) {
@@ -929,25 +987,52 @@ func toolTitle(title string, input map[string]any) string {
 	return T("工具调用")
 }
 
-func appendChunk(current, chunk string) string {
+// mergeChunk folds one text chunk into a message. A live stream delivers
+// deltas, so chunks append. A history page carries each block's complete text
+// under a stable id, and the same page can be applied more than once
+// (switching back to a cached task), so replay replaces instead of doubling.
+func (a *nativeApp) mergeChunk(current, chunk string) string {
 	if chunk == "" {
 		return current
 	}
-	if current == "" {
-		return chunk
-	}
-	// History replay sometimes re-emits the whole text; avoid duplicating it.
-	if strings.HasPrefix(chunk, current) {
+	if a.replayingHistory {
 		return chunk
 	}
 	return current + chunk
 }
 
+// absorbReplay refreshes a message from its canonical replay. History carries
+// a block's complete text, so text is replaced; local presentation state (a
+// fold, an expansion, images that history does not replay) is kept.
+func (m *chatMessage) absorbReplay(message *chatMessage) {
+	switch m.Kind {
+	case messageUser, messageAssistant, messageThought:
+		if message.Text != "" {
+			m.Text = message.Text
+		}
+	case messageTool:
+		if message.ToolStatus != "" {
+			m.ToolStatus = message.ToolStatus
+		}
+		if message.ToolText != "" {
+			m.ToolText = message.ToolText
+		}
+		if message.Done {
+			m.Done = true
+		}
+	}
+}
+
+// truncate bounds a text by bytes without splitting a multi-byte character.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "\n…"
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "\n…"
 }
 
 func sessionDisplayTitle(title string) string {

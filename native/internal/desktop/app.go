@@ -48,6 +48,16 @@ type nativeApp struct {
 	win    *mygo.Window
 	acpPtr atomic.Pointer[acpClient]
 
+	// post, when set, delivers work to the UI thread in place of the window
+	// loop. Headless tests install it to drive asynchronous lifecycle code;
+	// production always goes through the window.
+	post func(func())
+
+	// connectMu guards activeConnect: the connection attempt that owns the
+	// handshake right now. A newer connect() supersedes it.
+	connectMu     sync.Mutex
+	activeConnect *connectAttempt
+
 	conn            connState
 	connErr         string
 	connFix         string
@@ -123,11 +133,17 @@ type nativeApp struct {
 	status             string
 	awaitingUserEcho   bool
 	localUserMessageID string
-	usageUsed          int
-	usageSize          int
-	usageCost          float64
-	usageCurrency      string
-	usageCache         *usageCacheProjection
+	// sendSeq numbers sends; promptToken is the send the visible task is
+	// waiting on. It is snapshotted with the task, so a prompt answered while
+	// another task is open is applied there rather than here.
+	sendSeq     int64
+	promptToken int64
+
+	usageUsed     int
+	usageSize     int
+	usageCost     float64
+	usageCurrency string
+	usageCache    *usageCacheProjection
 
 	draft       string
 	attachments []attachment
@@ -289,11 +305,18 @@ func newNativeApp() *nativeApp {
 	return a
 }
 
+// dispatch runs fn on the UI thread. Without a window or a test hook there is
+// no UI thread to run it on, so the work is dropped: headless tests that only
+// exercise synchronous reducers rely on that.
 func (a *nativeApp) dispatch(fn func()) {
-	if a.win == nil {
+	switch {
+	case a.post != nil:
+		a.post(fn)
+	case a.win == nil:
 		return
+	default:
+		a.win.Update(fn)
 	}
-	a.win.Update(fn)
 }
 
 func (a *nativeApp) setConn(state connState, errText string) {

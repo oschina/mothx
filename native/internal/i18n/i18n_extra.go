@@ -999,4 +999,10 @@ var nativeEnglishExtra = map[string]string{
 	"会话空闲超时":       "Session idle timeout",
 	"附件：":          "Attachments:",
 	"、":            ", ",
+
+	"ACP 已退出，正在自动重连…":        "ACP exited, reconnecting automatically…",
+	"ACP 已退出，%s后自动重连（%d/%d）": "ACP exited, reconnecting in %s (%d/%d)",
+	"内嵌附件总大小超出上限，未附加":        "Embedded attachments exceed the size limit and were not attached",
+	"内嵌附件总大小超出上限，请移除部分附件":    "Embedded attachments exceed the size limit; remove some attachments",
+	"参数（空格分隔；含空格的参数用引号包住）":   "Arguments (space-separated; quote arguments containing spaces)",
 }

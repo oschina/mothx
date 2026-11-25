@@ -390,6 +390,11 @@ func (p *Panel) StartLoad(h Host) {
 	atomic.AddInt64(&p.PollSeq, 1)
 	p.Polling = false
 	p.Loading = true
+	// Loads and mutations share the sequence, so this load makes every
+	// mutation in flight stale. Release the busy marks those mutations hold:
+	// their answers are about to be dropped, and a mark left behind would keep
+	// every action disabled until the panel was reopened.
+	p.Busy = make(map[string]string)
 	p.Err = ""
 	startReloadSeq := h.ReloadSequence()
 	go p.load(h, seq, startReloadSeq)

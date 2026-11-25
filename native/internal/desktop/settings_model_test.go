@@ -221,8 +221,10 @@ func TestWebSearchBackendSwitchClearsEndpointAndToken(t *testing.T) {
 }
 
 func TestApplicationLinesFiltersBlankLines(t *testing.T) {
-	got := applicationLines("  a  \n\nb\n\n  \nc ")
-	want := []string{"a", "b", "c"}
+	got := applicationLines("  a  \n\nb\n\n  \nc \r\n")
+	// Entry text is preserved exactly; only blank lines and the line
+	// terminator are dropped.
+	want := []string{"  a  ", "b", "c "}
 	if len(got) != len(want) {
 		t.Fatalf("lines = %#v", got)
 	}
@@ -336,5 +338,48 @@ func TestFormRoundTripResetsTokenFields(t *testing.T) {
 	}
 	if !form2.WebSearchTokenConfigured || !form2.ImageTokenConfigured {
 		t.Error("tokenConfigured flags should persist")
+	}
+}
+
+// An approval prefix keeps its trailing space: "go " and "go " without it are
+// different rules for the Runtime's HasPrefix match. The form must not report
+// an untouched list as dirty, or every unrelated save would widen the rules.
+func TestApprovalEntriesKeepTrailingSpaces(t *testing.T) {
+	view := fullApplicationSettingsView()
+	view.Approval.BashWhitelist = []string{"go ", "npm "}
+	view.Approval.BashBlacklist = []string{"git push", "rm "}
+	view.Sandbox.AllowedRead = []string{"/srv/data "}
+	form := applicationSettingsFormFromView(view)
+	if form.BashWhitelist != "go \nnpm " {
+		t.Fatalf("whitelist textarea = %q", form.BashWhitelist)
+	}
+	if approvalDirty(view.Approval, &form) {
+		t.Fatal("an untouched approval list must not be dirty")
+	}
+	if sandboxDirty(view.Sandbox, &form) {
+		t.Fatal("an untouched path list must not be dirty")
+	}
+
+	// An unrelated change must not rewrite the approval list.
+	form.EnablePlanTool = !form.EnablePlanTool
+	patch := applicationSettingsPatch(view, &form)
+	if _, ok := patch["approval"]; ok {
+		t.Fatalf("unrelated save rewrote the approval list: %#v", patch["approval"])
+	}
+
+	// An explicit edit sends every entry unchanged, spaces included.
+	form.BashWhitelist = "go \nnpm \ngit status"
+	patch = applicationSettingsPatch(view, &form)
+	approval, ok := patch["approval"].(map[string]any)
+	if !ok {
+		t.Fatalf("edited approval list missing from patch: %#v", patch)
+	}
+	whitelist, _ := approval["bashWhitelist"].([]string)
+	if !applicationStringListsEqual([]string{"go ", "npm ", "git status"}, whitelist) {
+		t.Fatalf("whitelist patch = %#v, want trailing spaces preserved", whitelist)
+	}
+	blacklist, _ := approval["bashBlacklist"].([]string)
+	if !applicationStringListsEqual([]string{"git push", "rm "}, blacklist) {
+		t.Fatalf("blacklist patch = %#v, want trailing spaces preserved", blacklist)
 	}
 }

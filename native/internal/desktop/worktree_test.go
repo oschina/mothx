@@ -208,7 +208,7 @@ func TestWorktreePendingOpenConsumedAfterPromptFailure(t *testing.T) {
 	a.running = true
 	a.creatingSession = true
 	a.queuePendingWorktreeOpen(worktreeView{ID: "w1", Directory: "/repo/wt/login"})
-	a.applyPromptFailure(errors.New("rpc closed"))
+	a.applyPromptFailure("", 0, unsentPrompt{}, errors.New("rpc closed"))
 	if a.worktree.PendingOpenDirectory != "" || a.workspace != "/repo/wt/login" {
 		t.Fatalf("failed send must not strand the intent: workspace=%q pending=%q", a.workspace, a.worktree.PendingOpenDirectory)
 	}

@@ -95,7 +95,7 @@ func (a *nativeApp) openArtifactMessage(m *chatMessage) {
 		return
 	}
 	if strings.TrimSpace(m.ArtifactID) == "" || m.ArtifactFromToolCall {
-		a.showToast(T("当前运行时未提供制品获取（mothx/attachment/fetch），等待 P0 补全"))
+		a.showToast(T("当前运行时未提供制品获取（mothx/attachment/fetch）"))
 		return
 	}
 	a.openArtifactPreview(m)

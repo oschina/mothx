@@ -29,6 +29,30 @@ func (e *RPCError) Error() string {
 	return fmt.Sprintf("%s (%d)", e.Message, e.Code)
 }
 
+// ErrStreamFailed is the cause reported through onExit when the ACP stdout
+// stream becomes unreadable while the child may still be running, for example
+// a line longer than the reader accepts. The stream cannot be resumed past
+// such a line, so the connection fails like a crash and its owner restarts it.
+var ErrStreamFailed = errors.New("ACP stream failed")
+
+// errNotConnected is returned once the connection is closed or has failed.
+var errNotConnected = errors.New("ACP runtime is not connected")
+
+// acpMaxLineBytes bounds one ACP stdio line. The Runtime rejects a request
+// over 10 MiB and caps an attachment fetch at the same raw size, whose base64
+// form is about 13.4 MiB, so 64 MiB keeps ample headroom. A longer line is a
+// protocol violation: the reader fails the connection instead of silently
+// stopping and leaving a live child that nothing listens to.
+const acpMaxLineBytes = 64 << 20
+
+// acpMaxStderrLineBytes bounds one diagnostics line; stderr is only shown in
+// the connection error card.
+const acpMaxStderrLineBytes = 1 << 20
+
+// acpDrainGrace bounds how long an exited child's last lines may take to
+// drain. A pipe that some other process inherited would never reach EOF.
+const acpDrainGrace = 2 * time.Second
+
 // Incoming is one line of the ACP stdio channel: a response, a notification,
 // or a request the agent sends to its client.
 type Incoming struct {
@@ -59,6 +83,15 @@ type Client struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
 
+	// maxLineBytes is the largest stdout line the reader accepts before it
+	// fails the connection. Tests lower it to exercise that path cheaply.
+	maxLineBytes int
+
+	// stdout and readDone belong to the reader goroutine: readDone closes once
+	// it has returned, which is how the exit path knows the pipe was drained.
+	stdout   io.ReadCloser
+	readDone chan struct{}
+
 	writeMu sync.Mutex
 	mu      sync.Mutex
 	pending map[string]pendingCall
@@ -75,10 +108,12 @@ type Client struct {
 
 func NewClient(handler func(Incoming), onStderr func(string), onExit func(error)) *Client {
 	return &Client{
-		pending:  make(map[string]pendingCall),
-		handler:  handler,
-		onStderr: onStderr,
-		onExit:   onExit,
+		pending:      make(map[string]pendingCall),
+		handler:      handler,
+		onStderr:     onStderr,
+		onExit:       onExit,
+		maxLineBytes: acpMaxLineBytes,
+		readDone:     make(chan struct{}),
 	}
 }
 
@@ -94,19 +129,39 @@ func (c *Client) Start(binary, dir string, env []string) error {
 	if err != nil {
 		return err
 	}
-	stdout, err := cmd.StdoutPipe()
+	// stdout and stderr use pipes this client owns rather than cmd.StdoutPipe:
+	// cmd.Wait closes those read ends as soon as the process exits, which races
+	// the readers and drops the last lines a child writes before exiting. With
+	// owned pipes the readers see every byte through EOF.
+	stdout, stdoutWrite, err := os.Pipe()
 	if err != nil {
+		_ = stdin.Close()
 		return err
 	}
-	stderr, err := cmd.StderrPipe()
+	stderr, stderrWrite, err := os.Pipe()
 	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stdoutWrite.Close()
 		return err
 	}
+	cmd.Stdout = stdoutWrite
+	cmd.Stderr = stderrWrite
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stdoutWrite.Close()
+		_ = stderr.Close()
+		_ = stderrWrite.Close()
 		return err
 	}
+	// The child inherited its own copies. Closing ours is what makes the
+	// readers see EOF once the child exits.
+	_ = stdoutWrite.Close()
+	_ = stderrWrite.Close()
 	c.cmd = cmd
 	c.stdin = stdin
+	c.stdout = stdout
 
 	go c.readLoop(stdout)
 	go c.readStderr(stderr)
@@ -120,6 +175,16 @@ func (c *Client) Start(binary, dir string, env []string) error {
 		if cause == nil {
 			cause = errors.New("process exited")
 		}
+		// The child is gone, but the lines it wrote last may still be in the
+		// pipe. Let the reader reach EOF before pending calls are failed, so a
+		// response written just before the exit is still delivered. A process
+		// that inherited the pipe would keep EOF from ever coming, so the drain
+		// is bounded and the pipe is closed instead.
+		select {
+		case <-c.readDone:
+		case <-time.After(acpDrainGrace):
+			_ = stdout.Close()
+		}
 		c.mu.Lock()
 		alreadyClosed := c.closed
 		c.closed = true
@@ -128,6 +193,8 @@ func (c *Client) Start(binary, dir string, env []string) error {
 			delete(c.pending, key)
 		}
 		c.mu.Unlock()
+		// A stream failure already reported the exit; the kill that follows it
+		// must not report a second one.
 		if !alreadyClosed && c.onExit != nil {
 			c.onExit(err)
 		}
@@ -135,9 +202,11 @@ func (c *Client) Start(binary, dir string, env []string) error {
 	return nil
 }
 
-func (c *Client) readLoop(r io.Reader) {
+func (c *Client) readLoop(r io.ReadCloser) {
+	defer close(c.readDone)
+	defer r.Close()
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 16<<20)
+	scanner.Buffer(make([]byte, 64*1024), c.maxLineBytes)
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
@@ -171,13 +240,20 @@ func (c *Client) readLoop(r io.Reader) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		// A closed pipe is the bounded drain above ending on purpose; the exit
+		// path reports the real cause.
+		if errors.Is(err, os.ErrClosed) {
+			return
+		}
 		c.addStderr("ACP stdout reader: " + err.Error())
+		c.fail(err)
 	}
 }
 
-func (c *Client) readStderr(r io.Reader) {
+func (c *Client) readStderr(r io.ReadCloser) {
+	defer r.Close()
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 1<<20)
+	scanner.Buffer(make([]byte, 64*1024), acpMaxStderrLineBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -255,7 +331,7 @@ func (c *Client) CallContext(ctx context.Context, method string, params any) (js
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return nil, errors.New("ACP runtime is not connected")
+		return nil, errNotConnected
 	}
 	c.nextID++
 	id := c.nextID
@@ -316,14 +392,21 @@ func (c *Client) writeJSON(v any) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.stdin == nil {
-		return errors.New("ACP runtime is not connected")
+		return errNotConnected
 	}
 	data = append(data, '\n')
 	_, err = c.stdin.Write(data)
 	return err
 }
 
-// close ends the child's stdin so it can flush sessions and exit. A delayed
+// Closed reports whether the connection has been closed or has failed.
+func (c *Client) Closed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
+// Close ends the child's stdin so it can flush sessions and exit. A delayed
 // kill makes sure a wedged process cannot outlive the app.
 func (c *Client) Close() {
 	c.mu.Lock()
@@ -338,6 +421,36 @@ func (c *Client) Close() {
 	for _, p := range pending {
 		p.ch <- callResult{err: errors.New("ACP runtime closed")}
 	}
+	c.stopChild()
+}
+
+// fail tears the connection down after a transport failure that leaves the
+// stream unusable while the child may still be running. It does what a crash
+// would: pending calls fail, the child is asked to stop and is killed if it
+// lingers, and onExit reports the cause exactly once.
+func (c *Client) fail(cause error) {
+	streamErr := fmt.Errorf("%w: %w", ErrStreamFailed, cause)
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.closed = true
+	pending := c.pending
+	c.pending = make(map[string]pendingCall)
+	c.mu.Unlock()
+	for _, p := range pending {
+		p.ch <- callResult{err: streamErr}
+	}
+	c.stopChild()
+	if c.onExit != nil {
+		c.onExit(streamErr)
+	}
+}
+
+// stopChild closes the child's stdin so it can flush sessions and exit, and
+// kills it after a grace period so a wedged process cannot outlive the app.
+func (c *Client) stopChild() {
 	if c.stdin != nil {
 		_ = c.stdin.Close()
 	}

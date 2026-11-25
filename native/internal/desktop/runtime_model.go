@@ -61,11 +61,17 @@ func (a *nativeApp) runDoctor() {
 	go func() {
 		raw, err := client.Call("mothx/doctor", params)
 		a.dispatch(func() {
-			if seq != atomic.LoadInt64(&a.runtime.Seq) || startReloadSeq != atomic.LoadInt64(&a.reloadSeq) {
+			r := &a.runtime
+			if seq == atomic.LoadInt64(&r.Seq) {
+				// Only one doctor run is in flight at a time, so the latest run
+				// owns the loading flag even when its answer is stale because
+				// the connection changed. Left set, the flag disabled the
+				// button until the app restarted.
+				r.DoctorLoading = false
+			}
+			if seq != atomic.LoadInt64(&r.Seq) || startReloadSeq != atomic.LoadInt64(&a.reloadSeq) {
 				return
 			}
-			r := &a.runtime
-			r.DoctorLoading = false
 			if err != nil {
 				r.DoctorErr = "诊断失败：" + err.Error()
 				r.DoctorStatus = ""
@@ -116,10 +122,18 @@ func (a *nativeApp) reconnectACP() {
 	a.closeArtifactPreview()
 	a.closeWorktreePanel()
 	a.invalidateMCPPanel()
+	a.invalidateDoctorPanel()
 	if old != nil {
 		old.Close()
 	}
 	go a.connect()
+}
+
+// invalidateDoctorPanel drops the previous connection's diagnostics and makes
+// an in-flight doctor run stale, so reconnecting never leaves the button busy.
+func (a *nativeApp) invalidateDoctorPanel() {
+	atomic.AddInt64(&a.runtime.Seq, 1)
+	a.runtime = runtimePanelState{}
 }
 
 // rollbackRuntimeBinaryIfPending restores the previous runtime binary when

@@ -77,30 +77,58 @@ func resolveMothxBinary() string {
 	return bin
 }
 
+// Runtime binary sources are stable identifiers rather than display text: the
+// connection diagnostics log them verbatim, and that log is shown as it is in
+// every locale. runtimeSourceLabel projects them for the UI.
+const (
+	sourceLaunchArg   = "launch-arg"
+	sourcePreferences = "native-settings"
+	sourceEnv         = "MOTHX_BIN"
+	sourcePath        = "PATH"
+	sourceRepo        = "repo-bin"
+)
+
+// runtimeSourceLabel is the dictionary key for one runtime binary source.
+func runtimeSourceLabel(source string) string {
+	switch source {
+	case sourceLaunchArg:
+		return "启动参数 --mothx-bin"
+	case sourcePreferences:
+		return "Native 设置"
+	case sourceEnv:
+		return "MOTHX_BIN"
+	case sourcePath:
+		return "PATH"
+	case sourceRepo:
+		return "仓库 bin/"
+	}
+	return source
+}
+
 // resolveMothxBinarySource returns the executable and the launch-time source
 // that selected it. The settings Runtime page renders this verbatim instead of
 // pretending the choice is a persistent Native preference.
 func resolveMothxBinarySource() (bin, source string) {
 	if launchBinaryOverride != "" {
 		if abs, err := filepath.Abs(launchBinaryOverride); err == nil {
-			return abs, "启动参数 --mothx-bin"
+			return abs, sourceLaunchArg
 		}
-		return launchBinaryOverride, "启动参数 --mothx-bin"
+		return launchBinaryOverride, sourceLaunchArg
 	}
 	if preference := getRuntimeBinaryPreference(); preference != "" {
 		if abs, err := filepath.Abs(preference); err == nil {
-			return abs, "Native 设置"
+			return abs, sourcePreferences
 		}
-		return preference, "Native 设置"
+		return preference, sourcePreferences
 	}
 	if p := os.Getenv("MOTHX_BIN"); p != "" {
 		if abs, err := filepath.Abs(p); err == nil {
-			return abs, "MOTHX_BIN"
+			return abs, sourceEnv
 		}
-		return p, "MOTHX_BIN"
+		return p, sourceEnv
 	}
 	if p, err := exec.LookPath("mothx"); err == nil {
-		return p, "PATH"
+		return p, sourcePath
 	}
 	candidates := []string{"bin/mothx", "../bin/mothx", "../../bin/mothx", "../../../bin/mothx"}
 	for _, candidate := range candidates {
@@ -109,7 +137,7 @@ func resolveMothxBinarySource() (bin, source string) {
 			continue
 		}
 		if info, err := os.Stat(abs); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
-			return abs, "仓库 bin/"
+			return abs, sourceRepo
 		}
 	}
 	return "", ""

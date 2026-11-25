@@ -286,7 +286,7 @@ func TestMCPEditorDialogRendersTransportFields(t *testing.T) {
 	a.openMCPNewDraft()
 	tt := ui.NewTester(a.view, 1180, 900)
 	for _, text := range []string{
-		"新建 MCP 服务器", "名称", "类型", "启用该服务器", "命令", "参数（空格分隔）",
+		"新建 MCP 服务器", "名称", "类型", "启用该服务器", "命令", "参数（空格分隔；含空格的参数用引号包住）",
 		"请求头", "环境变量", "添加请求头", "添加环境变量", "保存", "取消",
 	} {
 		if !textPresent(tt, text) {
@@ -304,7 +304,7 @@ func TestMCPEditorDialogRendersTransportFields(t *testing.T) {
 			t.Fatalf("sse dialog missing %q: %q", text, tt.Texts())
 		}
 	}
-	if tt.HasText("参数（空格分隔）") {
+	if tt.HasText("参数（空格分隔；含空格的参数用引号包住）") {
 		t.Fatalf("sse draft must not show stdio arguments: %q", tt.Texts())
 	}
 
