@@ -138,7 +138,7 @@ jobs:
         shell: bash
         env:
           CGO_ENABLED: "0"
-          MYGO_LDFLAGS: "-X main.nativeBuildVersion=${{ env.VERSION }}"
+          MYGO_LDFLAGS: "-X main.NativeBuildVersion=${{ env.VERSION }}"
         run: |
           go tool mygo build \
             -platform "${{ matrix.target }}" \
