@@ -1005,4 +1005,11 @@ var nativeEnglishExtra = map[string]string{
 	"内嵌附件总大小超出上限，未附加":        "Embedded attachments exceed the size limit and were not attached",
 	"内嵌附件总大小超出上限，请移除部分附件":    "Embedded attachments exceed the size limit; remove some attachments",
 	"参数（空格分隔；含空格的参数用引号包住）":   "Arguments (space-separated; quote arguments containing spaces)",
+	// mothx/database/integrity: the outcome of a session database integrity check.
+	"会话数据库完整性检查失败：":                      "The session database failed its integrity check: ",
+	"请停止 MothX，备份数据库并恢复一份已知正常的副本；不要删除它。": "Stop MothX, back up the database, and restore a known-good copy; do not delete it.",
+	"会话数据库有一个失效索引未能重建：":                  "A stale index in the session database could not be rebuilt: ",
+	"经该索引的查询可能缺失结果；重启 MothX 会再次尝试重建。":    "Queries answered from that index may miss rows; restarting MothX tries the rebuild again.",
+	"会话数据库完整性检查未能完成：":                    "The session database integrity check could not finish: ",
+	"请运行 mothx doctor 检查数据库。":            "Run mothx doctor to examine the database.",
 }

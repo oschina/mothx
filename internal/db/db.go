@@ -117,7 +117,7 @@ func OpenWithOptions(path string, migrate Migrator, opts Options) (*bun.DB, erro
 	if existing := state.dbs[canonical]; existing != nil {
 		return existing, nil
 	}
-	db, err := open(canonical, migrate, opts)
+	db, _, err := open(canonical, migrate, opts, StartupQuickCheckMode())
 	if err != nil {
 		return nil, err
 	}
@@ -127,13 +127,20 @@ func OpenWithOptions(path string, migrate Migrator, opts Options) (*bun.DB, erro
 
 // OpenStandalone opens an uncached connection for callers that explicitly own
 // its lifecycle, such as offline integrity checks. Foreign key enforcement
-// stays disabled to match the canonical session database policy.
+// stays disabled to match the canonical session database policy. The caller
+// owns the connection, so the startup integrity check is never left running in
+// the background for it: it runs to completion before the handle is returned.
 func OpenStandalone(path string, migrate Migrator) (*bun.DB, error) {
 	canonical, err := CanonicalPath(path)
 	if err != nil {
 		return nil, err
 	}
-	return open(canonical, migrate, Options{})
+	mode := StartupQuickCheckMode()
+	if mode != StartupCheckOff {
+		mode = StartupCheckSync
+	}
+	connection, _, err := open(canonical, migrate, Options{}, mode)
+	return connection, err
 }
 
 // OpenReadOnlyStandalone opens an uncached, read-only connection without
@@ -178,6 +185,9 @@ func Write(ctx context.Context, path string, migrate Migrator, fn func(context.C
 
 // CloseAll checkpoints and closes all process-owned connections.
 func CloseAll() error {
+	// A background startup check holds a pooled connection until its statement
+	// returns, so interrupt it before the connections are closed.
+	stopAllStartupChecks()
 	state.Lock()
 	defer state.Unlock()
 	var errs []error
@@ -226,6 +236,7 @@ func Close(path string) error {
 		delete(state.dbs, canonical)
 	}
 	state.Unlock()
+	stopStartupCheckFor(canonical)
 	if connection == nil {
 		return nil
 	}
@@ -251,39 +262,39 @@ func Close(path string) error {
 // was not classified as incompatible and a classified failure that a rebuild
 // must not "fix" (writer contention, a cancelled migration, a read-only file).
 // Those are reported with the reason appended so the distinction stays visible.
-func open(path string, migrate Migrator, opts Options) (*bun.DB, error) {
-	connection, err := openOnce(path, migrate, opts)
+func open(path string, migrate Migrator, opts Options, mode StartupCheckMode) (*bun.DB, *startupCheck, error) {
+	connection, check, err := openOnce(path, migrate, opts, mode)
 	if err == nil {
-		return connection, nil
+		return connection, check, nil
 	}
 	var failed *migrationFailedError
 	if !errors.As(err, &failed) {
-		return nil, err
+		return nil, nil, err
 	}
 	if !IsSchemaIncompatible(failed.err) {
 		// A migration failure nobody classified: report it and release the
 		// connection that openOnce intentionally left open.
 		_ = failed.sqlDB.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	if reason := unrebuildableReason(failed.err); reason != "" {
 		_ = failed.sqlDB.Close()
-		return nil, fmt.Errorf("%w (%s; the database was left untouched)", err, reason)
+		return nil, nil, fmt.Errorf("%w (%s; the database was left untouched)", err, reason)
 	}
 	recovery, recoveryErr := recoverFromMigrationFailure(failed.sqlDB, path, failed.err)
 	if recoveryErr != nil {
-		return nil, errors.Join(err, fmt.Errorf("rebuild database after migration failure: %w", recoveryErr))
+		return nil, nil, errors.Join(err, fmt.Errorf("rebuild database after migration failure: %w", recoveryErr))
 	}
-	rebuilt, rebuildErr := openOnce(path, migrate, opts)
+	rebuilt, check, rebuildErr := openOnce(path, migrate, opts, mode)
 	if rebuildErr != nil {
 		var retried *migrationFailedError
 		if errors.As(rebuildErr, &retried) {
 			_ = retried.sqlDB.Close()
 		}
-		return nil, errors.Join(err, fmt.Errorf("open database rebuilt from %s: %w", recovery.BackupPath, rebuildErr))
+		return nil, nil, errors.Join(err, fmt.Errorf("open database rebuilt from %s: %w", recovery.BackupPath, rebuildErr))
 	}
 	recordMigrationRecovery(recovery)
-	return rebuilt, nil
+	return rebuilt, check, nil
 }
 
 // unrebuildableReason reports why a migration failure must not trigger a
@@ -310,13 +321,19 @@ func unrebuildableReason(err error) string {
 // recovery. A migration failure is returned as a migrationFailedError so the
 // caller can snapshot the database through the connection that produced it, so
 // that connection stays open on that one error path and is closed by the caller.
-func openOnce(path string, migrate Migrator, opts Options) (*bun.DB, error) {
+//
+// The startup integrity check runs in the requested mode. A check that is still
+// running when the open returns is handed back so its owner can stop it before
+// closing the connection; every failure here stops it first. A failing schema
+// migration waits for a running check before it is reported, so a damaged
+// database is never rebuilt on the strength of a migration error.
+func openOnce(path string, migrate Migrator, opts Options, mode StartupCheckMode) (*bun.DB, *startupCheck, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, fmt.Errorf("create db dir: %w", err)
+		return nil, nil, fmt.Errorf("create db dir: %w", err)
 	}
 	sqlDB, err := sql.Open("sqlite", dsn(path, opts.ForeignKeys))
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite db: %w", err)
+		return nil, nil, fmt.Errorf("open sqlite db: %w", err)
 	}
 	// WAL permits readers to proceed while one connection holds the writer lock.
 	// Keep a small pool so a write transaction waiting for that lock cannot block
@@ -326,46 +343,87 @@ func openOnce(path string, migrate Migrator, opts Options) (*bun.DB, error) {
 	sqlDB.SetMaxIdleConns(4)
 	if err := sqlDB.Ping(); err != nil {
 		_ = sqlDB.Close()
-		return nil, fmt.Errorf("initialize sqlite connection: %w", err)
+		return nil, nil, fmt.Errorf("initialize sqlite connection: %w", err)
 	}
-	if StartupQuickCheckEnabled() {
-		if err := checkIntegrity(sqlDB, path); err != nil {
+	if mode == StartupCheckBounded || mode == StartupCheckAsync {
+		// Switching a database to WAL needs the exclusive access a running reader
+		// denies, so a check that may outlive the open is only started for a
+		// database that is already in WAL mode. Any other database keeps the
+		// original order: verdict first, then WAL, then migrations.
+		if wal, err := journalModeIsWAL(sqlDB); err != nil || !wal {
+			mode = StartupCheckSync
+		}
+	}
+	if mode == StartupCheckSync {
+		if _, err := runStartupCheck(context.Background(), sqlDB, path, indexRepairBudget); err != nil {
 			_ = sqlDB.Close()
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if err := enableWAL(sqlDB); err != nil {
 		_ = sqlDB.Close()
-		return nil, err
+		return nil, nil, err
+	}
+	var check *startupCheck
+	switch mode {
+	case StartupCheckBounded, StartupCheckAsync:
+		started := startStartupCheck(sqlDB, path, mode == StartupCheckAsync)
+		if mode == StartupCheckAsync {
+			check = started
+			break
+		}
+		if finished, err := started.wait(startupCheckWait); finished {
+			// The verdict arrived inside the budget: apply it exactly like a
+			// synchronous check and leave nothing running in the background.
+			// A cancelled check is not a verdict (a closing connection
+			// interrupted it), so it decides nothing.
+			started.stop()
+			if err != nil && !errors.Is(err, context.Canceled) {
+				_ = sqlDB.Close()
+				return nil, nil, err
+			}
+			break
+		}
+		check = started
+	}
+	if check != nil {
+		startupCheckCounters.handedOff.Add(1)
 	}
 	if migrate != nil {
 		if err := migrate(sqlDB); err != nil {
-			return nil, &migrationFailedError{sqlDB: sqlDB, err: fmt.Errorf("apply database migration: %w", err)}
+			migrationErr := fmt.Errorf("apply database migration: %w", err)
+			if check != nil {
+				// The startup check has not said yet whether this database is
+				// intact, and a damaged file makes a migration fail for reasons a
+				// rebuild must never "fix": that path moves every session into a
+				// backup. The verdict comes first. Damage fails the open exactly like
+				// a synchronous check, and only a database that passed keeps the
+				// rebuild decision. An index the check has just rebuilt gets the
+				// migration one more try before that.
+				outcome, verdictErr := check.verdict()
+				if verdictErr != nil && !errors.Is(verdictErr, context.Canceled) {
+					check.stop()
+					_ = sqlDB.Close()
+					return nil, nil, verdictErr
+				}
+				if outcome.repaired {
+					if err := migrate(sqlDB); err == nil {
+						return bun.NewDB(sqlDB, sqlitedialect.New()), check, nil
+					}
+				}
+			}
+			check.stop()
+			return nil, nil, &migrationFailedError{sqlDB: sqlDB, err: migrationErr}
 		}
 	}
-	return bun.NewDB(sqlDB, sqlitedialect.New()), nil
+	return bun.NewDB(sqlDB, sqlitedialect.New()), check, nil
 }
 
 // indexRepairBudget bounds how long opening a database keeps retrying a lost
-// index repair. It is the same per-statement stall budget every managed
-// connection already carries, and it is a variable only so the contention path
-// can be tested without a full-budget stall.
+// index repair before the open reports it. It is the same per-statement stall
+// budget every managed connection already carries, and it is a variable only so
+// the contention path can be tested without a full-budget stall.
 var indexRepairBudget = BusyTimeout
-
-// StartupQuickCheckEnabled reports whether opening a managed database performs
-// the startup quick_check. The check stays enabled by default because it is the
-// only barrier that stops a structurally damaged database before migrations or
-// queries touch it. MOTHX_SQLITE_QUICK_CHECK=off is an explicit availability
-// escape hatch for very large databases; it never disables on-demand
-// VerifyIntegrity checks such as `mothx doctor`.
-func StartupQuickCheckEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MOTHX_SQLITE_QUICK_CHECK"))) {
-	case "off", "false", "0", "skip", "disabled":
-		return false
-	default:
-		return true
-	}
-}
 
 // VerifyIntegrity runs an uncached, read-only SQLite quick_check for an existing
 // database. It never repairs or configures the file, so diagnostic entry points
@@ -394,6 +452,16 @@ func VerifyIntegrity(path string) error {
 	return nil
 }
 
+// integrityOutcome reports what one startup integrity check found and did.
+type integrityOutcome struct {
+	// report is the quick_check output that named a stale index, or "" when the
+	// check found nothing to repair.
+	report string
+	// repaired is true when a stale secondary index was rebuilt and the
+	// follow-up check passed.
+	repaired bool
+}
+
 // checkIntegrity validates the database before it is used. SQLite can report a
 // stale secondary-index entry after an interrupted write even when every table
 // page remains intact. Rebuilding indexes is lossless because their contents
@@ -405,40 +473,52 @@ func VerifyIntegrity(path string) error {
 // another MothX process is alive against this file, and the error has to say so
 // instead of reporting a failed repair of a corrupted database.
 func checkIntegrity(sqlDB *sql.DB, path string) error {
-	integrity, err := quickCheck(sqlDB)
+	_, err := checkIntegrityWithBudget(context.Background(), sqlDB, path, indexRepairBudget)
+	return err
+}
+
+// checkIntegrityWithBudget is checkIntegrity under a cancellable context, with
+// the writer-lock budget the index rebuild may spend.
+func checkIntegrityWithBudget(ctx context.Context, sqlDB *sql.DB, path string, repairBudget time.Duration) (integrityOutcome, error) {
+	var outcome integrityOutcome
+	integrity, err := quickCheckContext(ctx, sqlDB)
 	if err != nil {
-		return fmt.Errorf("run sqlite integrity check: %w", err)
+		return outcome, fmt.Errorf("run sqlite integrity check: %w", err)
 	}
 	if integrity == "ok" {
-		return nil
+		return outcome, nil
 	}
 	if !isStaleIndexReport(integrity) {
-		return &IntegrityError{Path: path, Report: integrity}
+		return outcome, &IntegrityError{Path: path, Report: integrity}
 	}
 	cause := integrity
+	outcome.report = cause
 
-	if err := attemptWhileBusy(indexRepairBudget, func() error {
-		_, err := sqlDB.Exec("REINDEX")
+	if err := attemptWhileBusyContext(ctx, repairBudget, func() error {
+		_, err := sqlDB.ExecContext(ctx, "REINDEX")
 		return err
 	}); err != nil {
 		switch {
+		case ctx.Err() != nil:
+			return outcome, ctx.Err()
 		case isSQLiteBusy(err):
-			return fmt.Errorf("sqlite reported a stale index (%s) but the writer lock was unavailable for %s, so it was not repaired: another process still holds the SQLite writer lock on %s; stop it and retry: %w", cause, indexRepairBudget, path, err)
+			return outcome, fmt.Errorf("sqlite reported a stale index (%s) but the writer lock was unavailable for %s, so it was not repaired: another process still holds the SQLite writer lock on %s; stop it and retry: %w", cause, repairBudget, path, err)
 		case isSQLiteReadOnly(err):
-			return fmt.Errorf("sqlite reported a stale index (%s) but %s is read-only, so it could not be repaired: %w", cause, path, err)
+			return outcome, fmt.Errorf("sqlite reported a stale index (%s) but %s is read-only, so it could not be repaired: %w", cause, path, err)
 		default:
-			return fmt.Errorf("repair SQLite indexes after integrity check %q: %w", cause, err)
+			return outcome, fmt.Errorf("repair SQLite indexes after integrity check %q: %w", cause, err)
 		}
 	}
-	integrity, err = quickCheck(sqlDB)
+	integrity, err = quickCheckContext(ctx, sqlDB)
 	if err != nil {
-		return fmt.Errorf("run sqlite integrity check after index repair: %w", err)
+		return outcome, fmt.Errorf("run sqlite integrity check after index repair: %w", err)
 	}
 	if integrity != "ok" {
-		return &IntegrityError{Path: path, Report: integrity}
+		return outcome, &IntegrityError{Path: path, Report: integrity}
 	}
 	recordIndexRepair(IndexRepair{Path: path, Cause: cause, At: time.Now()})
-	return nil
+	outcome.repaired = true
+	return outcome, nil
 }
 
 // isStaleIndexReport reports whether a quick_check line describes only a
@@ -449,8 +529,12 @@ func isStaleIndexReport(integrity string) bool {
 }
 
 func quickCheck(sqlDB *sql.DB) (string, error) {
+	return quickCheckContext(context.Background(), sqlDB)
+}
+
+func quickCheckContext(ctx context.Context, sqlDB *sql.DB) (string, error) {
 	var integrity string
-	if err := sqlDB.QueryRow("PRAGMA quick_check").Scan(&integrity); err != nil {
+	if err := sqlDB.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&integrity); err != nil {
 		return "", err
 	}
 	return integrity, nil
@@ -561,13 +645,23 @@ const sqliteRetryDelay = 25 * time.Millisecond
 // a stall, and exhausting the budget returns the last transient error so the
 // caller keeps the driver's diagnostic.
 func attemptWhileBusy(budget time.Duration, statement func() error) error {
+	return attemptWhileBusyContext(context.Background(), budget, statement)
+}
+
+// attemptWhileBusyContext is attemptWhileBusy under a cancellable context: a
+// cancelled wait returns the context error instead of retrying.
+func attemptWhileBusyContext(ctx context.Context, budget time.Duration, statement func() error) error {
 	deadline := time.Now().Add(budget)
 	for {
 		err := statement()
 		if err == nil || !isSQLiteBusy(err) || !time.Now().Add(sqliteRetryDelay).Before(deadline) {
 			return err
 		}
-		time.Sleep(sqliteRetryDelay)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sqliteRetryDelay):
+		}
 	}
 }
 

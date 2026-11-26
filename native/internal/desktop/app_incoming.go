@@ -27,6 +27,12 @@ func (a *nativeApp) handleIncoming(client *acpClient, msg incoming) {
 			return
 		}
 		a.dispatch(func() { a.applyWorktreeStatus(payload) })
+	case "mothx/database/integrity":
+		var payload databaseIntegrityPayload
+		if err := json.Unmarshal(msg.Params, &payload); err != nil {
+			return
+		}
+		a.dispatch(func() { a.applyDatabaseIntegrity(payload) })
 	case "$/cancel_request":
 		return
 	default:

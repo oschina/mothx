@@ -44,6 +44,8 @@
 
 ### ♻️ Runtime 与架构
 
+- **启动时的 SQLite 完整性检查不再阻塞大体积会话库。** `internal/db` 此前在数据库可用之前同步执行 `PRAGMA quick_check`，在大库上这段扫描主导了启动耗时：一个 1.24 GB 的 `sessions.db` 会让 `mothx acp` 约 17 秒才响应 `initialize`，其中几乎全部时间都在重新校验 trigram 搜索索引。现在打开数据库最多等待结论 1 秒，超时后检查转入后台继续，同一个库的启动降到约 1 秒。结论本身没有变化：失效的二级索引会被重建，表数据损坏永远不会被自动修改，`MOTHX_SQLITE_QUICK_CHECK=sync` 恢复完全阻塞的检查（`async` 完全不等待，`off` 仍然跳过）。由于后台得出的结论无法再让打开失败，它改为被报告出来：TUI 显示提示，一次性命令打印到 stderr，ACP 发送附加的 `mothx/database/integrity` 通知（特性键 `databaseIntegrity`），Native 对数据损坏和未能重建的索引在对话中显示系统行。检查尚未出结论时失败的 schema 迁移会先等结论，因此损坏的数据库会让打开失败，而不是被备份后重建成空库；关闭连接会中断检查而不是等待它。
+
 - **ACP worker 能力改为类型化解析模型。** `internal/agentruntime/workerdriver` 拥有 `WorkerCapabilities`、显式 `generic-acp` adapter 与 profile ∩ advertised ∩ policy 解析器；业务代码读取能力而不是探测原始 `agentCapabilities` map。Profile 新增可选 `driver`、`mcpBridge` 与只能收紧的 `capabilityOverrides`。解析结果、降级原因与 bridge 状态写入 `session_child_runs`（migration 58）并投影到 child metadata。`mothx doctor` 检查 loopback `tcp4` 可绑定性与 profile driver/bridge/override 合法性；`internal/architecture` 守护 workerdriver 叶子边界并禁止业务代码按 driver 身份分支。2026-11-10 的真实 interop 使用 OpenCode 2.0.16 与 codex-acp 0.16.0 验证了 loopback bridge（OpenCode 写入了真实 `worker_mgr` finding，codex-acp 完成了 MCP handshake）；两者均可由 `generic-acp` 描述，因此没有新增未经验证的 flavor。
 
 ### 🐛 问题修复

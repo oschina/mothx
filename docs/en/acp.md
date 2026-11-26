@@ -165,6 +165,7 @@ MothX keeps non-standard interactions separate from ACP. Clients use these metho
 |------|------|
 | `mothx/requestQuestion` | Multiple-choice question request; clients return `{ "answer": "option text" }`. Pre-initialize replay uses the legacy `_mothx/request_question` name. |
 | `_mothx/session_event` | MothX runtime status, turn, context-compaction, retry, and artifact events |
+| `mothx/database/integrity` | Server notification (feature key `databaseIntegrity`): the outcome of a startup session database integrity check that finished after the handshake. `params.kind` is `index_repaired`, `index_unrepaired`, `corrupt`, or `check_failed`; the Runtime has already done what it can, so the client only informs the user |
 
 ### Management projections
 

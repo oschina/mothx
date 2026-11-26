@@ -55,6 +55,38 @@ func TakeDatabaseRecoveries() []DatabaseRecovery {
 	return append(recoveries, takePeerDatabaseRebuilds()...)
 }
 
+// DatabaseIntegrityFinding reports the outcome of a startup integrity check that
+// finished after its database had already been opened (the check of a large
+// database runs on in the background, see database.StartupCheckMode). A rebuilt
+// stale index lost nothing; damage, an index that could not be rebuilt, or a
+// check that could not complete must reach the user.
+type DatabaseIntegrityFinding = database.IntegrityFinding
+
+// The kinds of a DatabaseIntegrityFinding.
+const (
+	DatabaseIntegrityIndexRepaired   = database.IntegrityIndexRepaired
+	DatabaseIntegrityIndexUnrepaired = database.IntegrityIndexUnrepaired
+	DatabaseIntegrityCorrupt         = database.IntegrityCorrupt
+	DatabaseIntegrityCheckFailed     = database.IntegrityCheckFailed
+)
+
+// TakeDatabaseIntegrityFailures returns and clears the integrity failures
+// recorded since the last call, so a one-shot front-end can report them exactly
+// once. internal/db also logs each one. A repaired index is not a failure:
+// TakeDatabaseIndexRepairs already reports it.
+func TakeDatabaseIntegrityFailures() []DatabaseIntegrityFinding {
+	return database.TakeIntegrityFailures()
+}
+
+// WatchDatabaseIntegrity registers a callback that receives every startup
+// integrity finding from now on, a repaired index included. A long-running
+// front-end needs it because the check finishes after startup: draining the
+// records once would miss it. The callback runs on the check's goroutine and
+// must not block. The returned function unsubscribes it.
+func WatchDatabaseIntegrity(onFinding func(DatabaseIntegrityFinding)) func() {
+	return database.SubscribeIntegrityFindings(onFinding)
+}
+
 // QueryRootDatabase runs a read operation against a session root's DAO-owned
 // database. The callback must not retain the handle after it returns.
 func QueryRootDatabase(sessionDir string, fn func(*dao.Database) error) error {

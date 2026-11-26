@@ -165,6 +165,7 @@ MothX 将非 ACP 标准的交互隔离为扩展。客户端仅在 `initialize` �
 |------|------|
 | `mothx/requestQuestion` | 多选问题请求；客户端响应 `{ "answer": "选项文本" }`。initialize 之前的重放使用旧名 `_mothx/request_question`。 |
 | `_mothx/session_event` | 状态、回合、上下文压缩、重试与制品等 MothX 运行时事件 |
+| `mothx/database/integrity` | 服务端通知（特性键 `databaseIntegrity`）：握手之后才完成的会话库启动完整性检查结论。`params.kind` 为 `index_repaired`、`index_unrepaired`、`corrupt` 或 `check_failed`；Runtime 已做完它能做的修复，客户端只需告知用户 |
 
 ### 管理投影
 
