@@ -366,5 +366,5 @@ const nativeBackgroundVeilAlpha = 0.66
 // appBackgroundActive reports whether the user background paints the whole
 // shell (Desktop's homeBackgroundScope=app) instead of only the Home view.
 func (a *nativeApp) appBackgroundActive() bool {
-	return a.home.backgroundScope != "home" && a.home.backgroundImage != nil
+	return a.home.backgroundScope != "home" && a.home.backgroundImage != nil && a.home.backgroundOpacity > 0
 }

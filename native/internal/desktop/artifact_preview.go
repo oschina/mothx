@@ -151,7 +151,23 @@ func (a *nativeApp) artifactPreviewDialog(c *ui.Context, p palette) {
 			}
 			if a.previewImage != nil {
 				if w, h := ui.ImageSize(a.previewImage); w > 0 && h > 0 {
-					ui.Image(c, a.previewImage).MaxWidthPercent(100).AspectRatio(w / h).Radius(10)
+					maxW := float32(680)
+					maxH := float32(560)
+					if cw, ch := c.Size(); cw > 0 && ch > 0 {
+						// Keep the picture inside the 760-DIP dialog and its window,
+						// leaving room for the title row and dialog padding.
+						if limit := cw*0.94 - 32; limit < maxW {
+							maxW = limit
+						}
+						if limit := ch - 190; limit > 0 && limit < maxH {
+							maxH = limit
+						}
+					}
+					displayW, displayH := boundedImageSize(w, h, maxW, maxH)
+					ui.Row(c).Justify(ui.Center).Children(func() {
+						ui.Image(c, a.previewImage).Size(displayW, displayH).Fit(ui.Contain).
+							Radius(10).Label(T("图片"))
+					})
 				}
 				return
 			}

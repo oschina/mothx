@@ -4,8 +4,12 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// nativeSidebarWidth is the shell's fixed sidebar column width; the transcript
+// width estimate subtracts it when the sidebar is open.
+const nativeSidebarWidth float32 = 220
+
 func (a *nativeApp) sidebarView(c *ui.Context, p palette) {
-	ui.Column(c).Width(220).FillHeight().Background(p.Sidebar).
+	ui.Column(c).Width(nativeSidebarWidth).FillHeight().Background(p.Sidebar).
 		BorderWidth(0, 1, 0, 0).BorderColor(p.T.Border).Children(func() {
 		ui.Column(c).Padding(10, 12, 8, 12).Grow(1).Children(func() {
 			a.brandRow(c, p)

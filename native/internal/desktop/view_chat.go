@@ -64,7 +64,7 @@ func (a *nativeApp) header(c *ui.Context, p palette) {
 
 func (a *nativeApp) emptyState(c *ui.Context, p palette) {
 	ui.Column(c).Grow(1).FillHeight().Children(func() {
-		if a.home.backgroundImage != nil && !a.appBackgroundActive() {
+		if a.home.backgroundImage != nil && a.home.backgroundOpacity > 0 && !a.appBackgroundActive() {
 			opacity := float32(a.home.backgroundOpacity)
 			if opacity < 0 {
 				opacity = 0
@@ -91,7 +91,7 @@ func (a *nativeApp) emptyState(c *ui.Context, p palette) {
 			}
 			if a.home.logoVisible {
 				if a.home.logoImage != nil {
-					ui.Image(c, a.home.logoImage).Size(58, 58).Radius(14).Fit(ui.Cover)
+					ui.Image(c, a.home.logoImage).Size(58, 58).Radius(14).Fit(ui.Contain)
 				} else {
 					mothxLogoView(c, 58)
 				}

@@ -13,7 +13,7 @@ func (a *nativeApp) transcriptWithPlan(c *ui.Context, p palette) {
 		return
 	}
 	ui.Row(c).Grow(1).Children(func() {
-		ui.Column(c).Grow(1).Children(func() { a.transcript(c, p) })
+		ui.Column(c).Grow(1).FillHeight().Children(func() { a.transcript(c, p) })
 		a.planProgressPanel(c, p, plan)
 	})
 }
@@ -67,6 +67,20 @@ func (a *nativeApp) transcript(c *ui.Context, p palette) {
 	})
 }
 
+// planPanelWidth is the width reserved by the progress panel, shared with the
+// transcript's inline-image width estimate.
+const (
+	nativePlanPanelWidth          float32 = 288
+	nativePlanPanelCollapsedWidth float32 = 200
+)
+
+func (a *nativeApp) planPanelWidth(plan *chatMessage) float32 {
+	if plan != nil && a.planCollapsed && a.planCollapsedID == plan.ID {
+		return nativePlanPanelCollapsedWidth
+	}
+	return nativePlanPanelWidth
+}
+
 func (a *nativeApp) planProgressPanel(c *ui.Context, p palette, plan *chatMessage) {
 	entries := plan.Plan
 	completed := 0
@@ -80,10 +94,7 @@ func (a *nativeApp) planProgressPanel(c *ui.Context, p palette, plan *chatMessag
 		title = T("计划进度")
 	}
 	collapsed := a.planCollapsed && a.planCollapsedID == plan.ID
-	width := float32(288)
-	if collapsed {
-		width = 200
-	}
+	width := a.planPanelWidth(plan)
 	ui.Column(c).Width(width).FillHeight().Padding(12, 12).Gap(8).
 		BorderWidth(0, 0, 0, 1).BorderColor(p.T.Border).Background(p.T.Background).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {

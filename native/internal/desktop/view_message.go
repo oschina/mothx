@@ -16,7 +16,7 @@ func (a *nativeApp) messageRow(c *ui.Context, p palette, m *chatMessage) {
 			ui.Column(c).MaxWidthPercent(78).MaxWidth(560).Padding(9, 13).Radius(15).
 				Background(p.Bubble).Children(func() {
 				ui.Text(c, m.Text).FontSize(12.8).LineHeight(1.5).Selectable()
-				renderChatImages(c, p, m.Images, 360)
+				a.renderChatImages(c, p, m.Images, a.userImageMaxWidth(c))
 			})
 		})
 	case messageAssistant:
@@ -27,9 +27,12 @@ func (a *nativeApp) messageRow(c *ui.Context, p palette, m *chatMessage) {
 				} else {
 					markdown.Stream(c, m.Text, &a.md)
 				}
-			} else if !m.Done {
+			} else if len(m.Images) == 0 && !m.Done {
 				ui.Text(c, T("正在生成…")).FontSize(12).TextColor(p.T.TextMuted)
 			}
+			// Assistant content can carry inline image blocks too; project them
+			// below the text instead of leaving the decoded content invisible.
+			a.renderChatImages(c, p, m.Images, a.assistantImageMaxWidth(c, 520, 0))
 			if m.Done && m.Text != "" {
 				ui.Row(c).AlignItems(ui.Center).Gap(4).Children(func() {
 					copyButton(c, p, m.Text)
@@ -215,7 +218,9 @@ func (a *nativeApp) toolCard(c *ui.Context, p palette, m *chatMessage) {
 			}
 			if len(m.ToolImages) > 0 {
 				ui.Box(c).Height(1).Background(p.T.Border)
-				ui.Column(c).Padding(8, 10).Children(func() { renderChatImages(c, p, m.ToolImages, 520) })
+				ui.Column(c).Padding(8, 10).Children(func() {
+					a.renderChatImages(c, p, m.ToolImages, a.assistantImageMaxWidth(c, 520, 20))
+				})
 			}
 		}
 	})
@@ -251,9 +256,30 @@ func (a *nativeApp) planCard(c *ui.Context, p palette, m *chatMessage) {
 	})
 }
 
+// chatImageMaxHeight bounds an inline image's thumbnail so a tall portrait
+// cannot dominate the transcript.
+const chatImageMaxHeight = 260
+
+// boundedImageSize scales w×h into maxW×maxH while preserving its aspect
+// ratio. It never upscales: a 16×16 icon stays 16×16 instead of becoming a
+// blurry 260×260 block.
+func boundedImageSize(w, h, maxW, maxH float32) (displayW, displayH float32) {
+	if w <= 0 || h <= 0 {
+		return maxW, maxH
+	}
+	scale := float32(1)
+	if maxW > 0 && w > maxW {
+		scale = maxW / w
+	}
+	if maxH > 0 && h*scale > maxH {
+		scale = maxH / h
+	}
+	return w * scale, h * scale
+}
+
 // renderChatImages projects bounded inline images carried by canonical content.
 // No path scanning or artifact inference happens here.
-func renderChatImages(c *ui.Context, p palette, images []chatImage, maxWidth float32) {
+func (a *nativeApp) renderChatImages(c *ui.Context, p palette, images []chatImage, maxWidth float32) {
 	if len(images) == 0 {
 		return
 	}
@@ -263,20 +289,61 @@ func renderChatImages(c *ui.Context, p palette, images []chatImage, maxWidth flo
 				continue
 			}
 			w, h := ui.ImageSize(image.Image)
-			displayW := maxWidth
-			displayH := float32(220)
-			if w > 0 && h > 0 {
-				scale := displayW / float32(w)
-				displayH = float32(h) * scale
-				if displayH > 260 {
-					displayH = 260
-					displayW = float32(w) * (260 / float32(h))
-				}
+			if w <= 0 || h <= 0 {
+				ui.Image(c, image.Image).Size(maxWidth, 220).Fit(ui.Cover).Radius(8).
+					Border(1, p.T.Border)
+				continue
 			}
-			ui.Image(c, image.Image).Size(displayW, displayH).Fit(ui.Cover).Radius(8).
-				Border(1, p.T.Border)
+			displayW, displayH := boundedImageSize(w, h, maxWidth, chatImageMaxHeight)
+			ui.Image(c, image.Image).Size(displayW, displayH).Fit(ui.Contain).Radius(8).
+				Border(1, p.T.Border).Label(T("图片"))
 		}
 	})
+}
+
+// transcriptContentWidth estimates the usable transcript row width from the
+// window and the shell's fixed chrome. Inline images get an explicit size from
+// it instead of a percentage width: a virtualized List measures a row before
+// the sibling plan panel settles, and a percentage width plus AspectRatio can
+// cache a squashed image height from that probe pass.
+func (a *nativeApp) transcriptContentWidth(c *ui.Context) float32 {
+	width, _ := c.Size()
+	if a.sidebar {
+		width -= nativeSidebarWidth
+	}
+	if plan := a.activePlanMessage(); plan != nil {
+		width -= a.planPanelWidth(plan)
+	}
+	// Transcript list horizontal padding and scrollbar/rounding headroom.
+	width -= 48 + 12
+	if width < 160 {
+		width = 160
+	}
+	return width
+}
+
+func (a *nativeApp) userImageMaxWidth(c *ui.Context) float32 {
+	// The user bubble is at most 78% of the row (and 560 DIP), with 13 DIP
+	// padding on either side.
+	width := min(a.transcriptContentWidth(c)*0.78, 560) - 26
+	return clampWidth(width, 80, 360)
+}
+
+func (a *nativeApp) assistantImageMaxWidth(c *ui.Context, requested, inset float32) float32 {
+	avail := min(a.transcriptContentWidth(c), 780) - inset
+	return clampWidth(min(avail, requested), 80, 0)
+}
+
+// clampWidth clamps value into [lower, upper], where a non-positive upper means
+// no upper bound.
+func clampWidth(value, lower, upper float32) float32 {
+	if value < lower {
+		value = lower
+	}
+	if upper > 0 && value > upper {
+		value = upper
+	}
+	return value
 }
 
 // formatThoughtDuration renders reasoning time compactly: 0.4s, 12s, or
