@@ -40,5 +40,13 @@ func sqliteStatsSnapshot() any {
 		"checkpointDoneFrames": checkpointed,
 		"wal":                  WalStats(),
 		"pool":                 PoolStats(),
+		// Startup integrity checks handed to the background, cancelled by a
+		// closing connection, passed, and reported as findings.
+		"startupCheck": map[string]any{
+			"handedOff": startupCheckCounters.handedOff.Load(),
+			"cancelled": startupCheckCounters.cancelled.Load(),
+			"passed":    startupCheckCounters.passed.Load(),
+			"findings":  startupCheckCounters.findings.Load(),
+		},
 	}
 }

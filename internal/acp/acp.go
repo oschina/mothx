@@ -1144,6 +1144,20 @@ func Run(opts RunOptions) (runErr error) {
 	// converges even when this process remains alive and receives no UDP notice.
 	recoveryCtx, stopRecovery := context.WithCancel(context.Background())
 	recoveryCoordinator := agentruntime.NewRecoveryCoordinator(settings.GetSessionDir(), agentruntime.RecoveryCoordinatorOptions{})
+	// The coordinator's startup scan is the first database open, so the startup
+	// integrity check of a large session database begins before the transport
+	// exists and reports after the handshake rather than through it. Subscribe
+	// now, ahead of that open, or a fast verdict would find no subscriber; a
+	// finding that arrives first waits for the transport instead of being lost.
+	transportReady := make(chan struct{})
+	var releaseTransportOnce sync.Once
+	releaseTransport := func() { releaseTransportOnce.Do(func() { close(transportReady) }) }
+	defer releaseTransport()
+	stopIntegrityWatch := session.WatchDatabaseIntegrity(func(finding session.DatabaseIntegrityFinding) {
+		<-transportReady
+		srv.notifyDatabaseIntegrity(finding)
+	})
+	defer stopIntegrityWatch()
 	if err := recoveryCoordinator.Start(recoveryCtx); err != nil {
 		stopRecovery()
 		stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
@@ -1185,6 +1199,7 @@ func Run(opts RunOptions) (runErr error) {
 		permissionTimeout: opts.PermissionTimeout,
 		questionTimeout:   opts.QuestionTimeout,
 	}
+	releaseTransport()
 	// Other Runtime hosts publish only advisory UDP lease-bus wake-ups. ACP
 	// re-reads the durable Run before projecting its standard run_status event;
 	// it never trusts notification fields as execution state. The coalescer
@@ -2123,6 +2138,10 @@ func (s *server) handleInitialize(req rpcRequest) {
 				// subagentPanel advertises the read-only child-agent list and
 				// transcript projections (mothx/subagent/list|messages).
 				"subagentPanel",
+				// databaseIntegrity advertises the additive mothx/database/integrity
+				// notification: the outcome of a startup database integrity check
+				// that finished after the handshake.
+				"databaseIntegrity",
 				"toolResultImages",
 				// usage_update carries the cumulative prompt-cache totals under
 				// _meta["mothx.dev"] only while this key is advertised.

@@ -516,6 +516,11 @@ func run(args []string, opts runOptions) error {
 		if notice := databaseMaintenanceNotice(); notice != "" {
 			fmt.Fprintln(os.Stderr, notice)
 		}
+		// A one-shot run exits before a watcher could deliver anything, so the
+		// integrity failures the startup check already recorded are read here.
+		if notice := databaseIntegrityFailuresNotice(session.TakeDatabaseIntegrityFailures()); notice != "" {
+			fmt.Fprintln(os.Stderr, notice)
+		}
 		return runPrint(args, p, selection.name, model, selection.mode, provider.ThinkingLevel(selection.thinkingLevel), settings, registry, sessionSetup.manager, extraContext, ruleContent, opts.multiAgent, opts.delegate, opts.workflows, opts.json, runtime.agentManager, sharedRuntime)
 	}
 
@@ -742,6 +747,51 @@ func databaseMaintenanceNotice() string {
 	return strings.Join(lines, "\n")
 }
 
+// databaseIntegrityNotice renders one startup integrity finding. A rebuilt index
+// is information; damage, an index that stayed stale, or a check that could not
+// finish needs the user, so each kind says what to do next.
+func databaseIntegrityNotice(finding session.DatabaseIntegrityFinding) string {
+	switch finding.Kind {
+	case session.DatabaseIntegrityIndexRepaired:
+		return "ℹ️ SQLite reported a stale index while checking the sessions database; it was rebuilt from the table rows.\n   " +
+			finding.Describe() + "\n   No data was changed: the notice means an earlier write was interrupted."
+	case session.DatabaseIntegrityIndexUnrepaired:
+		return "⚠️ SQLite reported a stale index in the sessions database, but it could not be rebuilt.\n   " +
+			finding.Describe() + "\n   Queries answered from that index may miss rows until a later start rebuilds it."
+	case session.DatabaseIntegrityCorrupt:
+		return "⚠️ The sessions database failed its SQLite integrity check.\n   " + finding.Describe() +
+			"\n   Stop MothX, back up the database, and restore a known-good copy; do not delete it."
+	default:
+		return "⚠️ The SQLite integrity check of the sessions database could not finish.\n   " + finding.Describe() +
+			"\n   Run mothx doctor to examine the database."
+	}
+}
+
+// databaseIntegrityFailuresNotice renders the integrity failures drained from
+// the record.
+func databaseIntegrityFailuresNotice(findings []session.DatabaseIntegrityFinding) string {
+	if len(findings) == 0 {
+		return ""
+	}
+	notices := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		notices = append(notices, databaseIntegrityNotice(finding))
+	}
+	return strings.Join(notices, "\n")
+}
+
+// appendNotice joins two startup notices, either of which may be empty.
+func appendNotice(notice, addition string) string {
+	switch {
+	case addition == "":
+		return notice
+	case notice == "":
+		return addition
+	default:
+		return notice + "\n" + addition
+	}
+}
+
 func registerA2AMasterTool(registry *tools.Registry, opts runOptions) error {
 	if !opts.enableA2AMaster {
 		return nil
@@ -949,6 +999,11 @@ func runInteractive(cfg runInteractiveConfig) error {
 		cfg.runtime.allow,
 	)
 	app.SetRuntime(cfg.runtime.runtime)
+	// The startup integrity check of a large sessions database finishes after
+	// startup. A failure already recorded joins the initial message; one that
+	// finishes from now on is pushed by the watcher below, because a notice sent
+	// before the program runs would block. Each failure takes one route only.
+	cfg.databaseNotice = appendNotice(cfg.databaseNotice, databaseIntegrityFailuresNotice(session.TakeDatabaseIntegrityFailures()))
 	if initialMsg := buildInitialMessage(cfg); initialMsg != "" {
 		app.SetInitialMessage(initialMsg)
 	}
@@ -966,6 +1021,10 @@ func runInteractive(cfg runInteractiveConfig) error {
 		app.ShowNotice("\u26a0\ufe0f " + recovery.Describe() + "\n   The database was replaced and will be reopened; fix the migration error before relying on the previous data.")
 	})
 	defer stopDatabaseWatch()
+	stopIntegrityWatch := session.WatchDatabaseIntegrity(func(finding session.DatabaseIntegrityFinding) {
+		app.ShowNotice(databaseIntegrityNotice(finding))
+	})
+	defer stopIntegrityWatch()
 	if _, err := p2.Run(); err != nil {
 		return fmt.Errorf("run TUI: %w", err)
 	}
