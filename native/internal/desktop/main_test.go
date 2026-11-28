@@ -190,10 +190,10 @@ func TestChatViewRendersMessages(t *testing.T) {
 }
 
 func TestNativeWindowOptionsHideSystemTitleBar(t *testing.T) {
-	old := nativeIsMac
-	t.Cleanup(func() { nativeIsMac = old })
+	oldMac, oldLinux := nativeIsMac, nativeIsLinux
+	t.Cleanup(func() { nativeIsMac, nativeIsLinux = oldMac, oldLinux })
 
-	nativeIsMac = true
+	nativeIsMac, nativeIsLinux = true, false
 	mac := nativeWindowOptions()
 	if mac.TitleBarStyle != mygo.TitleBarHidden {
 		t.Fatalf("macOS title bar style = %q, want hidden", mac.TitleBarStyle)
@@ -204,8 +204,23 @@ func TestNativeWindowOptionsHideSystemTitleBar(t *testing.T) {
 	if mac.TrafficLightPosition == nil || mac.TrafficLightPosition.X != 12 || mac.TrafficLightPosition.Y != 12 {
 		t.Fatalf("macOS traffic light position = %+v", mac.TrafficLightPosition)
 	}
+	if mac.Frameless || mac.DisableShadow {
+		t.Fatalf("macOS window = frameless %v, disable shadow %v; want native frame", mac.Frameless, mac.DisableShadow)
+	}
 
-	nativeIsMac = false
+	nativeIsMac, nativeIsLinux = false, true
+	linux := nativeWindowOptions()
+	if !linux.Frameless {
+		t.Fatal("Linux window must be frameless so no compositor decoration is added")
+	}
+	if !linux.DisableShadow {
+		t.Fatal("Linux window must disable GTK's client-side decoration shadow")
+	}
+	if linux.TitleBarStyle != "" {
+		t.Fatalf("Linux title bar style = %q, want empty for a frameless window", linux.TitleBarStyle)
+	}
+
+	nativeIsMac, nativeIsLinux = false, false
 	other := nativeWindowOptions()
 	if other.TitleBarStyle != mygo.TitleBarHidden {
 		t.Fatalf("non-macOS title bar style = %q, want hidden", other.TitleBarStyle)
@@ -215,6 +230,9 @@ func TestNativeWindowOptionsHideSystemTitleBar(t *testing.T) {
 	}
 	if other.TitleBarHeight != nativeTitleBarHeightOther {
 		t.Fatalf("non-macOS title bar height = %d, want %d", other.TitleBarHeight, nativeTitleBarHeightOther)
+	}
+	if other.Frameless || other.DisableShadow {
+		t.Fatalf("non-Linux window = frameless %v, disable shadow %v; want a hidden title bar", other.Frameless, other.DisableShadow)
 	}
 }
 
