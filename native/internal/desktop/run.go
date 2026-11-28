@@ -13,6 +13,10 @@ import (
 // traffic lights, every other platform gets app-drawn window controls.
 var nativeIsMac = runtime.GOOS == "darwin"
 
+// nativeIsLinux selects a frameless Linux window: no window manager or
+// compositor decoration (SSD) and no GTK client-side decoration shadow (CSD).
+var nativeIsLinux = runtime.GOOS == "linux"
+
 const (
 	nativeTitleBarHeightMac   = 42
 	nativeTitleBarHeightOther = 40
@@ -27,11 +31,22 @@ func nativeWindowOptions() mygo.WindowOptions {
 		MinHeight:       560,
 		StateKey:        "main",
 		BackgroundColor: "#191a1f",
-		TitleBarStyle:   mygo.TitleBarHidden,
 	}
-	if nativeIsMac {
+	switch {
+	case nativeIsMac:
+		opts.TitleBarStyle = mygo.TitleBarHidden
 		opts.TrafficLightPosition = &mygo.Point{X: 12, Y: 12}
-	} else {
+	case nativeIsLinux:
+		// A frameless window tells a Wayland compositor that the app decorates
+		// itself, so it adds no server-side title bar. DisableShadow keeps GTK
+		// from drawing its client-side decorations, the transparent shadow and
+		// border ring around the page that resizes the window instead of the
+		// app. The app draws its own title bar and window controls, and the
+		// content edges still resize the window.
+		opts.Frameless = true
+		opts.DisableShadow = true
+	default:
+		opts.TitleBarStyle = mygo.TitleBarHidden
 		opts.HideWindowButtons = true
 		opts.TitleBarHeight = nativeTitleBarHeightOther
 	}
